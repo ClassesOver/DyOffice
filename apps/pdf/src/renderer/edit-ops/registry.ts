@@ -23,6 +23,7 @@ export interface OpContext {
   readOnly: boolean
   /** Every addressable page: the document's pages plus the session's pending blank pages */
   pageCount: number
+  blankPageLimit?: { maxPages: number; message: string }
   deleted: ReadonlySet<number>
   /** `pageIndex:rectKey` of existing images already claimed by a pending edit */
   claimedImages: ReadonlySet<string>

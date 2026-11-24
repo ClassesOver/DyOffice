@@ -2,6 +2,17 @@ import { certSignStringsFor } from './cert-sign-strings'
 import { protectStringsFor } from './protect-strings'
 import { redactFindStringsFor } from './redact-find-strings'
 
+const signatureGalleryStrings = {
+  signGalleryUnavailable: 'Saved signatures are unavailable. You can still place a signature.',
+  signGallerySaveFailed: 'Could not save the signature for reuse. Try again or clear the checkbox to place it.',
+  signGalleryDeleteFailed: 'Could not delete the saved signature. Try again.',
+}
+
+const blankPageLimitStrings = {
+  insertBlankPageWebLimit: 'Web PDF editing supports up to {limit} pages. Delete a page and save before inserting a blank page.',
+  insertBlankPageDraftLimit: 'You can insert up to {limit} blank pages before saving. Save to insert more.',
+}
+
 const fillFormStrings = {
   ribbonTabFillForm: 'Fill Form',
   formPreviousField: 'Previous field',
@@ -429,6 +440,8 @@ const fillFormStringsFor = (lang: string) => ({
 export const strings = {
   zh: {
     ...fillFormStringsFor('zh'),
+    insertBlankPageWebLimit: 'Web PDF 最多支持 {limit} 页。请先删除一页并保存，再插入空白页。',
+    insertBlankPageDraftLimit: '每次保存前最多插入 {limit} 个空白页。请保存后继续插入。',
     ...certSignStringsFor('zh'),
     ...protectStringsFor('zh'),
     ...redactFindStringsFor('zh'),
@@ -810,7 +823,11 @@ export const strings = {
     signHint: '确认后点击页面任意位置落下签名（Esc 取消）',
     signSaved: '我的签名',
     signSave: '保存签名，下次可直接使用',
+    ...signatureGalleryStrings,
     signSavedDelete: '删除签名',
+    signGalleryUnavailable: '暂时无法使用签名库。仍可放置当前签名。',
+    signGallerySaveFailed: '未能保存签名以供重用。请重试，或取消勾选后放置签名。',
+    signGalleryDeleteFailed: '未能删除已保存的签名。请重试。',
     exportImages: '导出为 PNG',
     exportImagesAll: '将全部页面分别导出为 PNG',
     exportImagesJpg: '导出为 JPG',
@@ -862,6 +879,7 @@ export const strings = {
   },
   en: {
     ...fillFormStringsFor('en'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('en'),
     ...protectStringsFor('en'),
     ...redactFindStringsFor('en'),
@@ -1256,6 +1274,7 @@ export const strings = {
     signHint: 'Then click anywhere on a page to drop it (Esc to cancel)',
     signSaved: 'My signatures',
     signSave: 'Save signature for reuse',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Delete signature',
     exportImages: 'Export as PNG',
     exportImagesAll: 'Export every page as a separate PNG',
@@ -1308,6 +1327,7 @@ export const strings = {
   },
   vi: {
     ...fillFormStringsFor('vi'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('vi'),
     ...protectStringsFor('vi'),
     ...redactFindStringsFor('vi'),
@@ -1705,6 +1725,7 @@ export const strings = {
     signHint: 'Sau đó nhấp vào bất kỳ đâu trên trang để đặt vào (Esc để hủy)',
     signSaved: 'Chữ ký của tôi',
     signSave: 'Lưu chữ ký để sử dụng lại',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Xóa chữ ký',
     exportImages: 'Xuất thành PNG',
     exportImagesAll: 'Xuất mỗi trang thành một tệp PNG riêng biệt',
@@ -1757,6 +1778,7 @@ export const strings = {
   },
   tr: {
     ...fillFormStringsFor('tr'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('tr'),
     ...protectStringsFor('tr'),
     ...redactFindStringsFor('tr'),
@@ -2152,6 +2174,7 @@ export const strings = {
     signHint: 'Sonra bırakmak için bir sayfada herhangi bir yere tıklayın (iptal için Esc)',
     signSaved: 'İmzalarım',
     signSave: 'İmzayı yeniden kullanmak için kaydet',
+    ...signatureGalleryStrings,
     signSavedDelete: 'İmzayı sil',
     exportImages: 'PNG olarak dışa aktar',
     exportImagesAll: 'Her sayfayı ayrı bir PNG olarak dışa aktar',
@@ -2204,6 +2227,7 @@ export const strings = {
   },
   ja: {
     ...fillFormStringsFor('ja'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('ja'),
     ...protectStringsFor('ja'),
     ...redactFindStringsFor('ja'),
@@ -2597,6 +2621,7 @@ export const strings = {
     signHint: '確定後、ページ上をクリックして配置（Esc で取消）',
     signSaved: '保存済みの署名',
     signSave: '署名を保存して次回も使用',
+    ...signatureGalleryStrings,
     signSavedDelete: '署名を削除',
     exportImages: 'PNG を書き出す',
     exportImagesAll: '各ページを個別の PNG として書き出す',
@@ -2649,6 +2674,7 @@ export const strings = {
   },
   ko: {
     ...fillFormStringsFor('ko'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('ko'),
     ...protectStringsFor('ko'),
     ...redactFindStringsFor('ko'),
@@ -3040,6 +3066,7 @@ export const strings = {
     signHint: '확인 후 페이지를 클릭해 배치 (Esc 취소)',
     signSaved: '내 서명',
     signSave: '서명을 저장해 다음에도 사용',
+    ...signatureGalleryStrings,
     signSavedDelete: '서명 삭제',
     exportImages: 'PNG로 내보내기',
     exportImagesAll: '모든 페이지를 각각 PNG로 내보내기',
@@ -3092,6 +3119,7 @@ export const strings = {
   },
   fr: {
     ...fillFormStringsFor('fr'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('fr'),
     ...protectStringsFor('fr'),
     ...redactFindStringsFor('fr'),
@@ -3496,6 +3524,7 @@ export const strings = {
     signHint: 'Cliquez ensuite sur une page pour la déposer (Échap pour annuler)',
     signSaved: 'Mes signatures',
     signSave: 'Enregistrer la signature pour la réutiliser',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Supprimer la signature',
     exportImages: 'Exporter en PNG',
     exportImagesAll: 'Exporter chaque page dans un fichier PNG distinct',
@@ -3548,6 +3577,7 @@ export const strings = {
   },
   de: {
     ...fillFormStringsFor('de'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('de'),
     ...protectStringsFor('de'),
     ...redactFindStringsFor('de'),
@@ -3950,6 +3980,7 @@ export const strings = {
     signHint: 'Danach auf eine Seite klicken zum Platzieren (Esc zum Abbrechen)',
     signSaved: 'Meine Signaturen',
     signSave: 'Signatur für spätere Verwendung speichern',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Signatur löschen',
     exportImages: 'Als PNG exportieren',
     exportImagesAll: 'Jede Seite als separate PNG-Datei exportieren',
@@ -4002,6 +4033,7 @@ export const strings = {
   },
   es: {
     ...fillFormStringsFor('es'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('es'),
     ...protectStringsFor('es'),
     ...redactFindStringsFor('es'),
@@ -4403,6 +4435,7 @@ export const strings = {
     signHint: 'Luego haz clic en una página para colocarla (Esc para cancelar)',
     signSaved: 'Mis firmas',
     signSave: 'Guardar la firma para reutilizarla',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Eliminar firma',
     exportImages: 'Exportar como PNG',
     exportImagesAll: 'Exportar cada página como un PNG independiente',
@@ -4455,6 +4488,7 @@ export const strings = {
   },
   th: {
     ...fillFormStringsFor('th'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('th'),
     ...protectStringsFor('th'),
     ...redactFindStringsFor('th'),
@@ -4845,6 +4879,7 @@ export const strings = {
     signHint: 'จากนั้นคลิกบนหน้าเพื่อวาง (Esc เพื่อยกเลิก)',
     signSaved: 'ลายเซ็นของฉัน',
     signSave: 'บันทึกลายเซ็นเพื่อใช้ครั้งถัดไป',
+    ...signatureGalleryStrings,
     signSavedDelete: 'ลบลายเซ็น',
     exportImages: 'ส่งออกเป็น PNG',
     exportImagesAll: 'ส่งออกแต่ละหน้าเป็นไฟล์ PNG แยกกัน',
@@ -4897,6 +4932,7 @@ export const strings = {
   },
   id: {
     ...fillFormStringsFor('id'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('id'),
     ...protectStringsFor('id'),
     ...redactFindStringsFor('id'),
@@ -5294,6 +5330,7 @@ export const strings = {
     signHint: 'Lalu klik halaman untuk menempatkannya (Esc batal)',
     signSaved: 'Tanda tangan saya',
     signSave: 'Simpan tanda tangan untuk digunakan lagi',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Hapus tanda tangan',
     exportImages: 'Ekspor sebagai PNG',
     exportImagesAll: 'Ekspor setiap halaman sebagai file PNG terpisah',
@@ -5346,6 +5383,7 @@ export const strings = {
   },
   ru: {
     ...fillFormStringsFor('ru'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('ru'),
     ...protectStringsFor('ru'),
     ...redactFindStringsFor('ru'),
@@ -5744,6 +5782,7 @@ export const strings = {
     signHint: 'Затем щёлкните по странице для размещения (Esc — отмена)',
     signSaved: 'Мои подписи',
     signSave: 'Сохранить подпись для повторного использования',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Удалить подпись',
     exportImages: 'Экспортировать в PNG',
     exportImagesAll: 'Экспортировать каждую страницу в отдельный PNG',
@@ -5796,6 +5835,7 @@ export const strings = {
   },
   ar: {
     ...fillFormStringsFor('ar'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('ar'),
     ...protectStringsFor('ar'),
     ...redactFindStringsFor('ar'),
@@ -6185,6 +6225,7 @@ export const strings = {
     signHint: 'ثم انقر على الصفحة لوضعه (Esc للإلغاء)',
     signSaved: 'توقيعاتي',
     signSave: 'حفظ التوقيع لإعادة استخدامه',
+    ...signatureGalleryStrings,
     signSavedDelete: 'حذف التوقيع',
     exportImages: 'تصدير كـ PNG',
     exportImagesAll: 'تصدير كل صفحة كصورة PNG منفصلة',
@@ -6237,6 +6278,7 @@ export const strings = {
   },
   pt: {
     ...fillFormStringsFor('pt'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('pt'),
     ...protectStringsFor('pt'),
     ...redactFindStringsFor('pt'),
@@ -6636,6 +6678,7 @@ export const strings = {
     signHint: 'Depois clique em qualquer lugar da página para posicioná-la (Esc para cancelar)',
     signSaved: 'Minhas assinaturas',
     signSave: 'Salvar assinatura para reutilizar',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Excluir assinatura',
     exportImages: 'Exportar como PNG',
     exportImagesAll: 'Exportar cada página como um PNG separado',
@@ -6688,6 +6731,7 @@ export const strings = {
   },
   it: {
     ...fillFormStringsFor('it'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('it'),
     ...protectStringsFor('it'),
     ...redactFindStringsFor('it'),
@@ -7091,6 +7135,7 @@ export const strings = {
       'Poi fai clic in un punto qualsiasi della pagina per posizionarla (Esc per annullare)',
     signSaved: 'Le mie firme',
     signSave: 'Salva la firma per riutilizzarla',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Elimina firma',
     exportImages: 'Esporta come PNG',
     exportImagesAll: 'Esporta ogni pagina come PNG separato',
@@ -7143,6 +7188,7 @@ export const strings = {
   },
   pl: {
     ...fillFormStringsFor('pl'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('pl'),
     ...protectStringsFor('pl'),
     ...redactFindStringsFor('pl'),
@@ -7541,6 +7587,7 @@ export const strings = {
     signHint: 'Następnie kliknij dowolne miejsce na stronie, aby go umieścić (Esc — anuluj)',
     signSaved: 'Moje podpisy',
     signSave: 'Zapisz podpis do ponownego użycia',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Usuń podpis',
     exportImages: 'Eksportuj jako PNG',
     exportImagesAll: 'Eksportuj każdą stronę jako osobny plik PNG',
@@ -7593,6 +7640,7 @@ export const strings = {
   },
   cs: {
     ...fillFormStringsFor('cs'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('cs'),
     ...protectStringsFor('cs'),
     ...redactFindStringsFor('cs'),
@@ -7988,6 +8036,7 @@ export const strings = {
     signHint: 'Poté klikněte kamkoli na stránku pro umístění (Esc zruší)',
     signSaved: 'Moje podpisy',
     signSave: 'Uložit podpis pro další použití',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Odstranit podpis',
     exportImages: 'Exportovat jako PNG',
     exportImagesAll: 'Exportovat každou stránku jako samostatný PNG',
@@ -8040,6 +8089,7 @@ export const strings = {
   },
   nl: {
     ...fillFormStringsFor('nl'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('nl'),
     ...protectStringsFor('nl'),
     ...redactFindStringsFor('nl'),
@@ -8439,6 +8489,7 @@ export const strings = {
     signHint: 'Klik daarna ergens op een pagina om deze te plaatsen (Esc om te annuleren)',
     signSaved: 'Mijn handtekeningen',
     signSave: 'Handtekening opslaan voor hergebruik',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Handtekening verwijderen',
     exportImages: 'Exporteren als PNG',
     exportImagesAll: 'Elke pagina als afzonderlijk PNG-bestand exporteren',
@@ -8491,6 +8542,7 @@ export const strings = {
   },
   ms: {
     ...fillFormStringsFor('ms'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('ms'),
     ...protectStringsFor('ms'),
     ...redactFindStringsFor('ms'),
@@ -8888,6 +8940,7 @@ export const strings = {
     signHint: 'Kemudian klik pada mana-mana bahagian halaman untuk meletakkannya (Esc untuk batal)',
     signSaved: 'Tandatangan saya',
     signSave: 'Simpan tandatangan untuk digunakan semula',
+    ...signatureGalleryStrings,
     signSavedDelete: 'Padam tandatangan',
     exportImages: 'Eksport sebagai PNG',
     exportImagesAll: 'Eksport setiap halaman sebagai fail PNG berasingan',
@@ -8940,6 +8993,7 @@ export const strings = {
   },
   he: {
     ...fillFormStringsFor('he'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('he'),
     ...protectStringsFor('he'),
     ...redactFindStringsFor('he'),
@@ -9323,6 +9377,7 @@ export const strings = {
     signHint: 'לאחר מכן לחצו במקום כלשהו בעמוד כדי להניח אותה (Esc לביטול)',
     signSaved: 'החתימות שלי',
     signSave: 'שמירת החתימה לשימוש חוזר',
+    ...signatureGalleryStrings,
     signSavedDelete: 'מחיקת החתימה',
     exportImages: 'ייצוא כ-PNG',
     exportImagesAll: 'ייצוא כל עמוד כקובץ PNG נפרד',
@@ -9375,6 +9430,7 @@ export const strings = {
   },
   hi: {
     ...fillFormStringsFor('hi'),
+    ...blankPageLimitStrings,
     ...certSignStringsFor('hi'),
     ...protectStringsFor('hi'),
     ...redactFindStringsFor('hi'),
@@ -9769,6 +9825,7 @@ export const strings = {
     signHint: 'फिर उसे रखने के लिए पृष्ठ पर कहीं भी क्लिक करें (रद्द करने के लिए Esc)',
     signSaved: 'मेरे हस्ताक्षर',
     signSave: 'हस्ताक्षर सहेजें ताकि अगली बार उपयोग हो सके',
+    ...signatureGalleryStrings,
     signSavedDelete: 'हस्ताक्षर हटाएं',
     exportImages: 'PNG के रूप में निर्यात करें',
     exportImagesAll: 'प्रत्येक पृष्ठ को अलग PNG के रूप में निर्यात करें',
@@ -9821,6 +9878,8 @@ export const strings = {
   },
   'zh-TW': {
     ...fillFormStringsFor('zh-TW'),
+    insertBlankPageWebLimit: 'Web PDF 最多支援 {limit} 頁。請先刪除一頁並儲存，再插入空白頁。',
+    insertBlankPageDraftLimit: '每次儲存前最多插入 {limit} 個空白頁。請儲存後繼續插入。',
     ...certSignStringsFor('zh-TW'),
     ...protectStringsFor('zh-TW'),
     ...redactFindStringsFor('zh-TW'),
@@ -10202,6 +10261,7 @@ export const strings = {
     signHint: '確認後點一下頁面任意位置放置簽名（Esc 取消）',
     signSaved: '我的簽名',
     signSave: '儲存簽名，下次可直接使用',
+    ...signatureGalleryStrings,
     signSavedDelete: '刪除簽名',
     exportImages: '匯出為 PNG',
     exportImagesAll: '將全部頁面分別匯出為 PNG',

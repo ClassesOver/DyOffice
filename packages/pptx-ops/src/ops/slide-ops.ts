@@ -19,6 +19,7 @@ import {
   reparseDeck,
   deleteSlide,
   deleteSlideComment,
+  getSections,
   duplicateSlide,
   insertBlankSlide,
   insertSlideWithLayout,
@@ -27,6 +28,7 @@ import {
   mergeSlideFromSource,
   moveSection,
   moveSlide,
+  normalizeSections,
   pasteSlide,
   promoteSlideBackground,
   removeSection,
@@ -213,6 +215,7 @@ register({
       op.bundle as Parameters<typeof pasteSlide>[2],
       {
         keepSourceFormatting: op.mode === 'source',
+        ...(op.plan ? {plan: op.plan as import('@genoffice/pptx-engine').SlidePastePlan} : {}),
       },
     )
     if (!slide) throw new GuidedError('op "pasteSlide": the copied slide could not be pasted.')
@@ -664,6 +667,26 @@ sectionOp('removeSection', (op, ctx) =>
 )
 sectionOp('moveSection', (op, ctx) =>
   moveSection(ctx.opened, op.id as string, op.dir as 'up' | 'down'),
+)
+
+sectionOp(
+  'removeSectionSlides',
+  (op, { opened }) => {
+    const id = op.id as string | null
+    const total = opened.deck.slides.length
+    const { lead, sections } = normalizeSections(getSections(opened), total)
+    const indices = id === null ? lead : sections.find(section => section.id === id)?.slideIndices
+    if (!indices || indices.length >= total || (id === null && !indices.length)) return null
+    for (const index of [...indices].reverse()) {
+      if (!deleteSlide(opened, index)) return null
+    }
+    return id === null ? getSections(opened) : removeSection(opened, id)
+  },
+  op => {
+    if (op.id !== null && typeof op.id !== 'string') {
+      throw new GuidedError('op "removeSectionSlides" needs a section id or null.')
+    }
+  },
 )
 
 // ── notes / comments ────────────────────────────────────────────────────

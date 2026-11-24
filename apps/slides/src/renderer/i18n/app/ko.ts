@@ -256,6 +256,8 @@ export const ko = {
   appOutlineNoText: '(텍스트 없음)',
   appSectionHeaderTitle: '클릭하여 축소/확장, 마우스 오른쪽 단추로 구역 관리',
   appNotesLabel: '노트',
+  appNotesTooLong: "슬라이드 {slide}의 발표자 노트가 {limit}자 제한을 초과했습니다. 노트를 줄인 후 저장하세요.",
+  appNotesWriteFailed: "슬라이드 {slide}의 발표자 노트를 기록하지 못했습니다. 다시 저장해 보세요.",
   appNotesClickToAdd: '클릭하여 노트 추가',
   appNotesPlaceholder: '클릭하여 발표자 노트 추가(문서와 함께 pptx에 저장됨)',
   appNotesShow: '노트 표시',

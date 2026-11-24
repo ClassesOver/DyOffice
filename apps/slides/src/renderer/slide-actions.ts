@@ -126,7 +126,7 @@ export async function cutSlides(ctx: ActionCtx, indexes: number[]): Promise<void
   } catch {
     pngs = undefined
   }
-  const ok = await window.slidesApi.copySlides({ slideIndexes: sel, ...(pngs ? { pngs } : {}) })
+  const ok = await window.slidesApi.copySlides({ slideIndexes: sel, cut: true, ...(pngs ? { pngs } : {}) })
   if (!ok) {
     ctx.setStatus(t('appStatusSlideCopyFailed'))
     return

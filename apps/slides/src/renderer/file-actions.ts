@@ -74,6 +74,15 @@ export function adoptSavedSlides(ctx: ActionCtx, next: RenderSlide[]): void {
  */
 let saveTail: Promise<unknown> | null = null
 
+async function flushNotesForSave(ctx: ActionCtx): Promise<boolean> {
+  const error = await ctx.flushNotes()
+  if (!error) return true
+  const failed = t('appStatusSaveFailed', { error })
+  ctx.setStatus(failed)
+  showToast(failed, 'error')
+  return false
+}
+
 /**
  * Runs `pass` after the in-flight save (if any) finishes, and becomes the
  * tail subsequent saves wait on. A pass that throws still releases the
@@ -106,7 +115,7 @@ export async function save(getCtx: () => ActionCtx, quiet = false): Promise<bool
     // resolved only now: a queued pass must remap selection against the tree the prior save adopted
     const ctx = getCtx()
     if (!await flushActiveEdit(ctx)) return false
-    await ctx.flushNotes()
+    if (!await flushNotesForSave(ctx)) return false
     // No name is proposed here: a save never waits on a model round-trip. An
     // untitled deck keeps the app's own name, the localized "Untitled
     // presentation" the main process produces in `pickDraftPath`.
@@ -115,6 +124,10 @@ export async function save(getCtx: () => ActionCtx, quiet = false): Promise<bool
       if (r.slides) adoptSavedSlides(ctx, r.slides)
       if (r.path) ctx.setPath(r.path)
       ctx.setDirty(false)
+      if (ctx.notesDraftsPending()) {
+        ctx.setStatus(t('appEditCommitPending'))
+        return false
+      }
       const saved = t('appStatusSaved')
       ctx.setStatus(saved)
       if (!quiet) showToast(saved)
@@ -161,7 +174,7 @@ export async function nameWithAi(getCtx: () => ActionCtx, copy?: SlidesNamedCopy
     await runSerialized(async () => {
       const current = getCtx()
       if (!await flushActiveEdit(current)) return
-      await current.flushNotes()
+      if (!await flushNotesForSave(current)) return
       await copy.save(stem)
     })
     return
@@ -181,13 +194,17 @@ export async function saveAsWithName(getCtx: () => ActionCtx, name: string | nul
   await runSerialized(async () => {
     const ctx = getCtx()
     if (!await flushActiveEdit(ctx)) return
-    await ctx.flushNotes()
+    if (!await flushNotesForSave(ctx)) return
     const target = name ?? (baseName(ctx.path ?? '') || 'presentation.pptx')
     const r = await window.slidesApi.saveAs(target)
     if (r.ok) {
       if (r.slides) adoptSavedSlides(ctx, r.slides)
       ctx.setPath(r.path ?? ctx.path)
       ctx.setDirty(false)
+      if (ctx.notesDraftsPending()) {
+        ctx.setStatus(t('appEditCommitPending'))
+        return
+      }
       const saved = t('appStatusSavedAs')
       ctx.setStatus(saved)
       showToast(saved)
@@ -287,16 +304,26 @@ async function collectPdfLinks(ctx: ActionCtx): Promise<ExportPdfLink[][]> {
   const modelIndexes = ctx.slides.flatMap((s, i) => (s.hidden ? [] : [i]))
   const pageOfModelIndex = new Map(modelIndexes.map((mi, page) => [mi, page] as const))
   try {
-    const [linkLists, runLinkLists] = await Promise.all([
-      Promise.all(modelIndexes.map((mi) => window.slidesApi.getSlideLinks(mi))),
-      Promise.all(modelIndexes.map((mi) => window.slidesApi.getRunLinks(mi))),
-    ])
+    const linkLists: Awaited<ReturnType<typeof window.slidesApi.getSlideLinks>>[] = []
+    const runLinkLists: Awaited<ReturnType<typeof window.slidesApi.getRunLinks>>[] = []
+    // Keep the renderer's link reads inside the browser bridge's queue limit.
+    for (let offset = 0; offset < modelIndexes.length; offset += 16) {
+      const batch = modelIndexes.slice(offset, offset + 16)
+      const [elements, runs] = await Promise.all([
+        Promise.all(batch.map(index => window.slidesApi.getSlideLinks(index))),
+        Promise.all(batch.map(index => window.slidesApi.getRunLinks(index))),
+      ])
+      linkLists.push(...elements)
+      runLinkLists.push(...runs)
+    }
     const visible = modelIndexes.map((mi) => ctx.slides[mi]!)
     return collectExportPdfLinks(visible, linkLists, runLinkLists, pageOfModelIndex)
   } catch {
     return []
   }
 }
+
+export type SlidePdfDownload = (baseName: string, pages: string[], widthPx: number, heightPx: number, links: ExportPdfLink[][]) => Promise<string>
 
 /**
  * Export as PDF: each page (skipping hidden ones) rendered to vector SVG (text
@@ -306,16 +333,26 @@ async function collectPdfLinks(ctx: ActionCtx): Promise<ExportPdfLink[][]> {
  * `outPath` skips the save dialog — the headless CLI entry already knows where
  * the file goes. Resolves true only when a PDF was written.
  */
-export async function exportPdf(ctx: ActionCtx, outPath?: string): Promise<boolean> {
+export async function exportPdf(ctx: ActionCtx, outPath?: string, download?: SlidePdfDownload): Promise<boolean> {
   const visible = ctx.slides.filter((s) => !s.hidden)
   if (visible.length === 0) {
     ctx.setStatus(t('appExportNoSlides'))
     return false
   }
-  const target = outPath ?? (await window.slidesApi.pickExportPdfPath(`${exportBaseName(ctx)}.pdf`))
-  if (!target) return false
-  ctx.setStatus(t('appExportPdfProgress'))
   try {
+    if (download) {
+      if (visible.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
+        throw new Error('Slide dimensions exceed the PDF export limit')
+      }
+      ctx.setStatus(t('appExportPdfProgress'))
+      const pages = await renderSlidesToImageBase64(visible,ctx.images,{format:'png',maxOutputChars:64 * 1024 * 1024})
+      const path = await download(exportBaseName(ctx),pages,visible[0].widthPx,visible[0].heightPx,await collectPdfLinks(ctx))
+      ctx.setStatus(t('appExportPdfDone',{path}))
+      return true
+    }
+    const target = outPath ?? (await window.slidesApi.pickExportPdfPath(`${exportBaseName(ctx)}.pdf`))
+    if (!target) return false
+    ctx.setStatus(t('appExportPdfProgress'))
     const { pages, fontCss } = await renderSlidesToPdfPages(visible, ctx.images)
     const links = await collectPdfLinks(ctx)
     const r = await window.slidesApi.exportPdf({

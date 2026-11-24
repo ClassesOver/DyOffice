@@ -71,7 +71,8 @@ test('unsupported workbook operations reject asynchronously instead of breaking 
  const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
  const bridge=createSheetsBridge({},'unused',{language:'en',theme:'light'})
  t.after(()=>bridge.dispose())
- for(const method of ['readPivotDefinition','findWorkbookCells','updateWorkbookPassword','readExternalLinkUsage','listWorkbookTabs']){
+ assert.deepEqual(await bridge.api.listWorkbookTabs(),{tabs:[]},'linked ranges remain available without native tab routing')
+ for(const method of ['readPivotDefinition','findWorkbookCells','updateWorkbookPassword','readExternalLinkUsage']){
   assert.equal(typeof bridge.api[method],'function',method)
   let operation
   assert.doesNotThrow(()=>{operation=bridge.api[method]({})},method)
@@ -124,7 +125,7 @@ test('AI XLSX create_document generates a real PDF before uploading it through t
  assert.equal(pdf.getPageCount(),1)
 })
 
-test('Web XLSX merge attachment sessions stream ranges through the authenticated bridge',async t=>{
+for(const mode of ['attachment','manual']) test(`Web XLSX ${mode} merge sessions stream ranges through the authenticated bridge`,async t=>{
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-merge-bridge-'));t.after(()=>rm(dir,{recursive:true,force:true}))
  const outfile=join(dir,'bridge.mjs')
  await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
@@ -154,9 +155,9 @@ test('Web XLSX merge attachment sessions stream ranges through the authenticated
  t.after(()=>attachments.dispose())
  const attachmentPath=attachments.getPathForFile(file)
  assert.equal((await attachments.addAttachmentPaths([attachmentPath])).accepted.length,1)
- const bridge=createSheetsBridge(host,'current-file',{language:'en',theme:'light'},{fetchImpl,getAttachmentFile:attachments.getFileForPath})
+ const bridge=createSheetsBridge(host,'current-file',{language:'en',theme:'light'},{fetchImpl,getAttachmentFile:attachments.getFileForPath,pickMergeFiles:async()=>[file]})
  t.after(()=>bridge.dispose())
- const sources=await bridge.api.openWorkbooksForMerge([attachmentPath])
+ const sources=mode==='manual'?await bridge.api.selectWorkbooksForMerge():await bridge.api.openWorkbooksForMerge([attachmentPath])
  assert.equal(sources.length,1);assert.equal(sources[0].name,'source.xlsx');assert.equal(sources[0].readOnly,true)
  const range=await bridge.api.readWorkbookRange({sessionId:sourceSession,sheetId:sources[0].sheets[0].id,range:{startRow:1,endRow:1,startColumn:0,endColumn:5}})
  assert.equal(range.cells.find(cell=>cell.column===0).value,12.5)

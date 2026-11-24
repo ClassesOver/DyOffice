@@ -23,6 +23,14 @@ export interface HeaderFooterOptions {
   dateAuto?: boolean
 }
 
+export interface HeaderFooterState {
+  footer: string | null
+  slideNum: boolean
+  date: string | null
+  /** Present when the slide contains a date placeholder. */
+  dateAuto?: boolean
+}
+
 const HF_TYPES = new Set(['ftr', 'sldNum', 'dt'])
 
 function hfSpXml(
@@ -157,23 +165,23 @@ export function applyHeaderFooter(
 }
 
 /** Read a slide's current footer state (for dialog echo-back). */
-export function readHeaderFooter(slide: Slide): {
-  footer: string | null
-  slideNum: boolean
-  date: string | null
-} {
+export function readHeaderFooter(slide: Slide): HeaderFooterState {
   let footer: string | null = null
   let date: string | null = null
+  let dateAuto: boolean | undefined
   let slideNum = false
   for (const el of slide.elements) {
     if (el.type !== 'text' && el.type !== 'shape') continue
-    const text = (el as TextElement).text?.paragraphs
-      .map((p) => p.runs.map((r) => r.text).join(''))
+    const paragraphs = (el as TextElement).text?.paragraphs
+    const text = paragraphs
+      ?.map((p) => p.runs.map((r) => r.text).join(''))
       .join('\n')
       .trim()
     if (el.placeholder === 'ftr') footer = text || null
-    else if (el.placeholder === 'dt') date = text || null
-    else if (el.placeholder === 'sldNum') slideNum = true
+    else if (el.placeholder === 'dt') {
+      date = text || null
+      dateAuto = paragraphs?.some((p) => p.runs.some((r) => /^datetime/i.test(r.field ?? ''))) ?? false
+    } else if (el.placeholder === 'sldNum') slideNum = true
   }
-  return { footer, slideNum, date }
+  return { footer, slideNum, date, ...(dateAuto === undefined ? {} : { dateAuto }) }
 }

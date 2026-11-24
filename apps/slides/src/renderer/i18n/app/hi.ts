@@ -270,6 +270,8 @@ export const hi = {
   appSectionHeaderTitle:
     'संक्षिप्त/विस्तृत करने के लिए क्लिक करें; अनुभाग प्रबंधित करने के लिए राइट-क्लिक करें',
   appNotesLabel: 'नोट्स',
+  appNotesTooLong: "स्लाइड {slide} में वक्ता नोट्स {limit} वर्णों की सीमा से अधिक हैं। सहेजने के लिए उन्हें छोटा करें।",
+  appNotesWriteFailed: "स्लाइड {slide} के वक्ता नोट्स लिखे नहीं जा सके। फिर से सहेजने का प्रयास करें।",
   appNotesClickToAdd: 'नोट्स जोड़ने के लिए क्लिक करें',
   appNotesPlaceholder: 'वक्ता नोट्स जोड़ने के लिए क्लिक करें (.pptx में सहेजे जाते हैं)',
   appNotesShow: 'नोट्स दिखाएँ',

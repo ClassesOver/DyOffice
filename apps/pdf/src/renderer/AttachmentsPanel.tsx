@@ -27,16 +27,18 @@ export function AttachmentsPanel({
   onAdd,
   onExport,
   onToggleRemove,
+  canEdit = true,
 }: {
   t: TFunc
   rows: AttachmentRow[]
+  canEdit?: boolean
   onAdd: () => void
   onExport: (row: AttachmentRow) => void
   onToggleRemove: (row: AttachmentRow) => void
 }): React.JSX.Element {
   return (
     <div className="pdf-attachments">
-      <button type="button" className="pdf-modal-btn primary pdf-attachments-add" onClick={onAdd}>
+      <button type="button" className="pdf-modal-btn primary pdf-attachments-add" disabled={!canEdit} onClick={onAdd}>
         {t('attachmentsAdd')}
       </button>
       {rows.length === 0 && <div className="pdf-modal-hint">{t('attachmentsEmpty')}</div>}
@@ -73,6 +75,7 @@ export function AttachmentsPanel({
               className="rb-icon"
               aria-label={row.removing ? t('attachmentsKeep') : t('attachmentsRemove')}
               data-tip={row.removing ? t('attachmentsKeep') : t('attachmentsRemove')}
+              disabled={!canEdit}
               onClick={() => onToggleRemove(row)}
             >
               {row.removing ? '↺' : '×'}

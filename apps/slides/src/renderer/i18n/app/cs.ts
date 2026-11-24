@@ -263,6 +263,8 @@ export const cs = {
   appOutlineNoText: '(Bez textu)',
   appSectionHeaderTitle: 'Kliknutím sbalíte/rozbalíte; pravým tlačítkem spravujete oddíl',
   appNotesLabel: 'Poznámky',
+  appNotesTooLong: "Poznámky přednášejícího na snímku {slide} překračují limit {limit} znaků. Před uložením je zkraťte.",
+  appNotesWriteFailed: "Poznámky přednášejícího na snímku {slide} se nepodařilo zapsat. Zkuste uložit znovu.",
   appNotesClickToAdd: 'Klikněte a přidejte poznámky',
   appNotesPlaceholder: 'Klikněte a přidejte poznámky lektora (ukládají se do .pptx)',
   appNotesShow: 'Zobrazit poznámky',

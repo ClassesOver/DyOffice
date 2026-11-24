@@ -15,6 +15,7 @@ function ctx(): ActionCtx {
     flushActiveEditRef: { current: () => Promise.resolve() },
     editingActiveRef: { current: false },
     flushNotes: () => Promise.resolve(),
+    notesDraftsPending: () => false,
     slides: [],
     current: 0,
     setSlides: () => {},
@@ -176,6 +177,51 @@ it('save waits for a blurred text commit even after focus moved to the save butt
     context.editingActiveRef.current = false
     await vi.runAllTimersAsync(); await saving
     vi.useRealTimers(); vi.unstubAllGlobals()
+  }
+})
+
+it('does not publish a saved revision after a speaker notes write fails', async () => {
+  const context = ctx()
+  context.flushNotes = async () => 'Speaker notes could not be applied.'
+  const write = vi.fn(async () => ({ ok: true }))
+  const writeAs = vi.fn(async () => ({ ok: true }))
+  const status = vi.fn()
+  context.setStatus = status
+  vi.stubGlobal('window', { slidesApi: { save: write, saveAs: writeAs } })
+
+  try {
+    expect(await save(() => context, true)).toBe(false)
+    await saveAs(() => context)
+    expect(write).not.toHaveBeenCalled()
+    expect(writeAs).not.toHaveBeenCalled()
+    expect(status).toHaveBeenCalledWith('appStatusSaveFailed')
+
+    context.flushNotes = async () => {}
+    expect(await save(() => context, true)).toBe(true)
+    expect(write).toHaveBeenCalledOnce()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+it('does not report the whole deck saved when new notes arrive during a save', async () => {
+  const context = ctx()
+  const status = vi.fn()
+  context.setStatus = status
+  vi.stubGlobal('window', {
+    slidesApi: {
+      async save() {
+        context.notesDraftsPending = () => true
+        return { ok: true }
+      },
+    },
+  })
+
+  try {
+    expect(await save(() => context, true)).toBe(false)
+    expect(status).toHaveBeenCalledWith('appEditCommitPending')
+  } finally {
+    vi.unstubAllGlobals()
   }
 })
 

@@ -131,11 +131,46 @@ for(const mode of modes)test(mode!=='node'
  await page.goto(origin+'/native-xlsx/?fileId='+initial.fileId)
  const localAmount=()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue())
  await expect.poll(localAmount,{timeout:30000}).toBe(12.5)
+ const notifications=page.getByRole('complementary',{name:'Document notifications'})
+ const assistantWarning=notifications.getByText(/No model is available for AI assistant/)
+ await expect(assistantWarning).toBeVisible()
+ await page.evaluate(()=>{
+  const workbook=window.__genofficeDebug.univerAPI.getActiveWorkbook()
+  workbook.setActiveRange(workbook.getActiveSheet().getRange('H3'))
+ })
+ await page.getByRole('button',{name:'Formulas',exact:true}).click()
+ await page.getByRole('button',{name:/Insert Function/}).click()
+ const functionCatalog=page.getByRole('dialog',{name:'Insert Function',exact:true})
+ await functionCatalog.getByPlaceholder('Search functions…').fill('SUM')
+ await functionCatalog.getByRole('option',{name:/^SUM\(/}).click()
+ const [argumentLinks]=await Promise.all([
+  page.waitForResponse(response=>response.url().endsWith('/sheets/external-links'),{timeout:20000}),
+  functionCatalog.getByRole('button',{name:'OK',exact:true}).click(),
+ ])
+ assert.ok(argumentLinks.ok(),`Function argument link list returned HTTP ${argumentLinks.status()}`)
+ const args=page.getByRole('dialog',{name:'Function Arguments',exact:true})
+ await expect(args.getByText('Linked workbooks',{exact:true})).toBeVisible()
+ const linkedBook=args.locator('.fn-args-external-row').filter({hasText:'linked-source.xlsx'})
+ await expect(linkedBook.getByRole('combobox')).toHaveValue('Catalog')
+ await linkedBook.getByPlaceholder('A1:B2').fill('A1:A2')
+ await linkedBook.getByRole('button',{name:'Insert',exact:true}).click()
+ await expect(args.locator('#fn-arg-0')).toHaveValue('[1]Catalog!A1:A2')
+ await args.getByRole('button',{name:'OK',exact:true}).click({timeout:5000})
+ await expect(args).toBeHidden()
+ await expect(assistantWarning).toBeVisible()
+ await notifications.getByRole('button',{name:/^Notifications \(/}).click()
+ await expect(assistantWarning).toBeHidden()
+ const readInsertedFormula=()=>page.evaluate(()=>
+  window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('H3').getFormula())
+ await expect.poll(readInsertedFormula).toBe('=SUM([1]Catalog!A1:A2)')
+ assert.equal(externalRequests,0)
  const openExternalLinks=async()=>{
-  await page.getByRole('button',{name:'Formulas',exact:true}).click()
-  const result=page.waitForResponse(response=>response.url().endsWith('/sheets/external-links'),{timeout:20000})
-  await page.getByRole('button',{name:'External Links',exact:true}).click()
-  const response=await result
+  const command=page.getByRole('button',{name:'External Links',exact:true})
+  if(!await command.isVisible())await page.getByRole('button',{name:'Formulas',exact:true}).click()
+  const [response]=await Promise.all([
+   page.waitForResponse(response=>response.url().endsWith('/sheets/external-links'),{timeout:20000}),
+   command.click(),
+  ])
   assert.ok(response.ok(),`External link list returned HTTP ${response.status()}`)
   const panel=page.getByRole('dialog',{name:'External Links',exact:true})
   await expect(panel.getByRole('cell',{name:externalTarget,exact:true})).toBeVisible({timeout:12000})
@@ -152,7 +187,9 @@ for(const mode of modes)test(mode!=='node'
  const bytes=await readFile(await download.path()),saved=await JSZip.loadAsync(bytes)
  assert.ok((await saved.file(book).async('string')).includes(reference))
  assert.ok((await saved.file(bookRelationships).async('string')).includes(relationship))
- assert.ok((await saved.file(worksheet).async('string')).includes(formula))
+ const worksheetXml=await saved.file(worksheet).async('string')
+ assert.ok(worksheetXml.includes(formula))
+ assert.ok(worksheetXml.includes('<f>SUM([1]Catalog!A1:A2)</f>'))
  for(const part of [link,linkRelationships]){
   assert.deepEqual(await saved.file(part).async('nodebuffer'),await zip.file(part).async('nodebuffer'))
  }
@@ -162,6 +199,7 @@ for(const mode of modes)test(mode!=='node'
  assert.deepEqual(original,await f.files.readFile(f.alice.token,initial.fileId,initial.revision))
  await page.reload()
  await expect.poll(localAmount,{timeout:30000}).toBe(21.25)
+ await expect.poll(readInsertedFormula).toBe('=SUM([1]Catalog!A1:A2)')
  const reopenedPanel=await openExternalLinks()
  const revisionCount=()=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async connection=>
   (await connection.query('SELECT count(*)::int AS count FROM file_revisions WHERE file_id=$1',[initial.fileId])).rows[0].count)

@@ -5927,6 +5927,7 @@ body.vib .slide-list {
 
 .notes-pane textarea {
   flex: 1;
+  min-height: 0;
   border: none;
   outline: none;
   resize: none;
@@ -5936,6 +5937,12 @@ body.vib .slide-list {
     sans-serif;
   color: var(--text);
   background: transparent;
+}
+
+.notes-error {
+  color: var(--danger);
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .notes-pane textarea::placeholder {

@@ -2566,7 +2566,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   const applyProtectDialog = async (result: ProtectDialogResult) => {
     setShowProtectDialog(false)
     let changed = false
-    if (result.openPassword !== undefined) {
+    if (result.openPassword !== undefined && host?.desktopActionsAvailable !== false) {
       const cur = fileCtxRef.current.doc
       const res = await window.desktop.setDocPassword(cur?.filePath ?? null, result.openPassword)
       if (res.ok) {
@@ -9452,6 +9452,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
       {showProtectDialog && (
         <ProtectDialog
           encrypted={doc?.encrypted ?? false}
+          openPasswordAvailable={desktopActionsAvailable !== false}
           writeProtection={writeProtection}
           protection={protection}
           removePersonalInfo={removePersonalInfo}

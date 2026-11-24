@@ -58,6 +58,7 @@ export function CertSignDialog({
   pageCount,
   currentPage,
   hasSignatures,
+  webHost = false,
   onCancel,
   onSigned,
 }: {
@@ -67,11 +68,12 @@ export function CertSignDialog({
   currentPage: number
   /** The document already carries signatures: it can still be signed, but not certified */
   hasSignatures: boolean
+  webHost?: boolean
   onCancel: () => void
   onSigned: (path: string) => void
 }): ReactElement {
   const dialogRef = useModalDialog(onCancel)
-  const [source, setSource] = useState<'system' | 'file'>(IS_MAC ? 'file' : 'system')
+  const [source, setSource] = useState<'system' | 'file'>(IS_MAC || webHost ? 'file' : 'system')
   const [cert, setCert] = useState<{ certId: string; fileName: string } | null>(null)
   const [systemCerts, setSystemCerts] = useState<SystemCertificateInfo[]>([])
   const [systemId, setSystemId] = useState('')
@@ -133,8 +135,12 @@ export function CertSignDialog({
 
   const choose = async () => {
     setError(null)
-    const picked = await window.pdfApi.pickCertificate()
-    if (picked) setCert(picked)
+    try {
+      const picked = await window.pdfApi.pickCertificate()
+      if (picked) setCert(picked)
+    } catch {
+      setError(t('certErrInvalid'))
+    }
   }
 
   const check = async () => {
@@ -219,7 +225,7 @@ export function CertSignDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="pdf-modal-title">{t('certSignTitle')}</div>
-        <div className="pdf-modal-hint">{t('certSignIntro')}</div>
+        <div className="pdf-modal-hint">{t(webHost ? 'certSignWebIntro' : 'certSignIntro')}</div>
 
         <div className="pdf-field">
           <span>{t('certSource')}</span>
@@ -229,7 +235,7 @@ export function CertSignDialog({
             disabled={busy}
             onChange={(e) => setSource(e.target.value as 'system' | 'file')}
           >
-            {!IS_MAC && <option value="system">{t('certSourceSystem')}</option>}
+            {!IS_MAC && !webHost && <option value="system">{t('certSourceSystem')}</option>}
             <option value="file">{t('certSourceFile')}</option>
           </select>
         </div>
@@ -483,7 +489,7 @@ export function CertSignDialog({
             onClick={() => void sign()}
             disabled={!signer || busy}
           >
-            {busy ? t('certSigning') : t('certSignButton')}
+            {busy ? t('certSigning') : t(webHost ? 'certSignDownload' : 'certSignButton')}
           </button>
         </div>
       </div>

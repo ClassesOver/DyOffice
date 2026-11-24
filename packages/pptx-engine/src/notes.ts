@@ -199,7 +199,7 @@ export function appendRelationship(
 }
 
 /** Ensure a notesMaster exists and return its part path. Created and registered in the presentation if missing. */
-function ensureNotesMaster(archive: PackageArchive): string | null {
+export function ensureNotesMaster(archive: PackageArchive): string | null {
   for (const path of archive.entries.keys()) {
     if (/^ppt\/notesMasters\/notesMaster\d+\.xml$/.test(path)) return path
   }

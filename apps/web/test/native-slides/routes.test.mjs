@@ -6,11 +6,12 @@ import {buildLocalApp} from '../../server/src/app.ts'
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
-import {randomUUID} from 'node:crypto'
+import {createHash, randomUUID} from 'node:crypto'
 import {mkdtemp, mkdir, writeFile, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import JSZip from 'jszip'
+import {PNG} from 'pngjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
@@ -410,4 +411,212 @@ test('master edits are lease and generation fenced and exported from the origina
  const savedLayout = await post('export',{generation:2})
  assert.equal(savedLayout.statusCode,200)
  assert.match(await (await JSZip.loadAsync(savedLayout.rawPayload)).file(layout.partPath).async('string'),/StableLayoutElement/)
+})
+
+test('Web PPTX clipboard pastes editable pages and objects across decks and preserves native undo',async t=>{
+ const app=await createApiShell(),revision=randomUUID(),editorId=randomUUID()
+ const zip=await JSZip.loadAsync(await bytes()),numberedPart='ppt/slides/slide2.xml'
+ const slideXml=await zip.file(numberedPart).async('string')
+ zip.file(numberedPart,slideXml.replace(/<a:r>[\s\S]*?<\/a:r>/,'<a:fld id="{D9047A8C-12C1-445A-8D35-2B52209B9889}" type="slidenum"><a:rPr lang="en-US"/><a:t>2</a:t></a:fld>'))
+ const deck=await zip.generateAsync({type:'nodebuffer'})
+ const slides=createSlidesService({files:{openFile:async()=>({format:'pptx',file:{revision}}),download:async()=>({format:'pptx',bytes:deck})},leases:{renewLease:async()=>{}},revisions:{},host:slidesHost})
+ t.after(async()=>{slides.dispose();await app.close()})
+ registerSlidesRoutes(app,slides,{authenticate:async()=>{}},{originCheck(){},requireSession(){}})
+ const fetchFor=token=>async(url,init)=>{
+  if(url==='/api/v1/auth/csrf')return Response.json({csrfToken:'a'.repeat(43)})
+  const res=await app.inject({method:init.method,url,payload:JSON.parse(init.body),headers:{cookie:'__Host-dyoffice-session='+token}})
+  return new Response(res.body,{status:res.statusCode,headers:{'content-type':'application/json'}})
+ }
+ const alice='a'.repeat(43),bob='b'.repeat(43)
+ const open=async(token=alice)=>{
+  const id=randomUUID()
+  const bridge=createSlidesBridge({getState:()=>({revision:{revision},name:'deck.pptx',lease:{editorId,leaseEpoch:1}})},id,{language:'en'},{fetchImpl:fetchFor(token)})
+  t.after(()=>bridge.dispose())
+  return {id,api:bridge.api,opened:await bridge.api.openPptx(960)}
+ }
+ const source=await open(),target=await open(),other=await open(bob)
+ const text='剪贴板 round trip'
+ const slideText=slide=>slide.nodes.map(node=>node.text?.lines?.flatMap(line=>line.runs.map(run=>run.text)).join('')??'').join('\n')
+ const title=await source.api.addElement({slideIndex:0,kind:'textbox',xPx:80,yPx:80,wPx:240,hPx:45,fitWidthPx:960})
+ const edited=await source.api.editText({slideIndex:0,sourceId:title.sourceId,paragraphs:[{runs:[{text}]}]})
+ assert.ok(slideText(edited).includes(text))
+ const png=PNG.sync.write({width:1,height:1,data:Buffer.from([255,0,0,255])}).toString('base64')
+ assert.equal(await source.api.copySlides({slideIndexes:[0],pngs:[png]}),true)
+ assert.equal(await other.api.pasteSlide({afterIndex:1,fitWidthPx:960}),null,'clipboard handle is bound to Alice’s session')
+ assert.equal((await other.api.getRenderSlides()).length,2)
+ await source.api.editText({slideIndex:0,sourceId:title.sourceId,paragraphs:[{runs:[{text:'Changed after copy'}]}]})
+ assert.deepEqual(await target.api.clipboardExternal(),{kind:'slide'})
+ assert.ok(slideText(target.opened.slides[1]).split('\n').includes('2'))
+ const pasted=await target.api.pasteSlide({afterIndex:0,fitWidthPx:960})
+ assert.equal(pasted.index,1)
+ const renumbered=pasted.slides.find(slide=>slide.partPath===numberedPart)
+ assert.ok(slideText(renumbered).split('\n').includes('3'))
+ assert.equal(pasted.count,1)
+ assert.equal(pasted.order.length,3)
+ assert.ok(slideText(pasted.slides.find(slide=>slide.partPath===pasted.order[pasted.index])).includes(text))
+ const repasted=await target.api.repasteSlide({mode:'source',fitWidthPx:960})
+ assert.equal(repasted.order.length,3)
+ assert.ok(slideText(repasted.slides.find(slide=>slide.partPath===repasted.order[repasted.index])).includes(text))
+ const bitmap=await target.api.repasteSlide({mode:'picture',fitWidthPx:960})
+ assert.equal(bitmap.count,0)
+ assert.equal(bitmap.order.length,2)
+ assert.ok(slideText(bitmap.slides.find(slide=>slide.partPath===numberedPart)).split('\n').includes('2'))
+ assert.equal(bitmap.slides.find(slide=>slide.partPath===bitmap.order[bitmap.index]).nodes.filter(node=>node.type==='picture').length,1)
+ assert.equal((await target.api.undo()).length,2)
+ assert.equal(await target.api.repasteSlide({mode:'source',fitWidthPx:960}),null)
+ await source.api.editText({slideIndex:0,sourceId:title.sourceId,paragraphs:[{runs:[{text}]}]})
+ const sourceWithLink=await source.api.setLink({slideIndex:0,sourceId:title.sourceId,target:{kind:'slide',slideIndex:1}})
+ const [link]=await source.api.getSlideLinks(0)
+ const linkedTitle=sourceWithLink.nodes.find(node=>node.sourceId===link.sourceId||node.durableId===link.sourceId)
+ assert.ok(linkedTitle)
+ assert.equal(await source.api.copyElements({slideIndex:0,sourceIds:[linkedTitle.sourceId]}),1)
+ assert.equal(await other.api.pasteElements({slideIndex:1,fitWidthPx:960}),null,'another account cannot use the element reference')
+ const sameFile=await source.api.pasteElements({slideIndex:1,fitWidthPx:960})
+ assert.ok(sameFile)
+ assert.deepEqual((await source.api.getSlideLinks(1)).map(link=>link.target),[{kind:'slide',slideIndex:1}])
+ const inserted=await target.api.pasteElements({slideIndex:1,fitWidthPx:960})
+ assert.equal(inserted.sourceIds.length,1)
+ assert.ok(slideText(inserted.slide).includes(text))
+ assert.deepEqual(await target.api.getSlideLinks(1),[])
+ const duplicate=await target.api.duplicateElements({slideIndex:1,sourceIds:inserted.sourceIds,dxPx:16,dyPx:16,fitWidthPx:960})
+ assert.equal(duplicate.sourceIds.length,1)
+ assert.notEqual(duplicate.sourceIds[0],inserted.sourceIds[0])
+ const originalBox=inserted.slide.nodes.find(node=>node.sourceId===inserted.sourceIds[0]).box
+ const duplicateBox=duplicate.slide.nodes.find(node=>node.sourceId===duplicate.sourceIds[0]).box
+ assert.ok(Math.abs(duplicateBox.x-originalBox.x-16)<0.01)
+ assert.ok(Math.abs(duplicateBox.y-originalBox.y-16)<0.01)
+ const changed=await target.api.editText({slideIndex:1,sourceId:duplicate.sourceIds[0],paragraphs:[{runs:[{text:'Still editable'}]}]})
+ assert.ok(slideText(changed).includes('Still editable'))
+ const raw=await slides.exportDraft(alice,target.id,{revision,editorId,leaseEpoch:1,generation:7})
+ const reopened=await openIsolatedPptxSession({fileId:'clipboard-reopen',revision,bytes:raw.bytes},{unsafeTestOnly:true})
+ t.after(()=>reopened.close())
+ assert.ok(slideText(await reopened.render(0,1)).includes('Still editable'))
+ assert.deepEqual(await reopened.links(0,1),[])
+})
+
+test('Web PPTX clipboard keeps live same-file jumps and never sends stale jumps to a replacement slide',async t=>{
+ const app=await createApiShell(),fileId=randomUUID(),editorId=randomUUID()
+ let revision=randomUUID(),deck=await bytes()
+ const token='a'.repeat(43)
+ const slides=createSlidesService({files:{openFile:async()=>({format:'pptx',file:{revision,sha256:createHash('sha256').update(deck).digest('hex')}}),download:async()=>({format:'pptx',bytes:deck})},leases:{renewLease:async()=>{}},revisions:{},host:slidesHost})
+ registerSlidesRoutes(app,slides,{authenticate:async()=>{}},{originCheck(){},requireSession(){}})
+ const bridge=createSlidesBridge({getState:()=>({revision:{revision},name:'deck.pptx',lease:{editorId,leaseEpoch:1}})},fileId,{language:'en'}, {fetchImpl:async(url,init)=>{
+  if(url==='/api/v1/auth/csrf')return Response.json({csrfToken:token})
+  const res=await app.inject({method:init.method,url,payload:JSON.parse(init.body),headers:{cookie:'__Host-dyoffice-session='+token}})
+  return new Response(res.body,{status:res.statusCode,headers:{'content-type':'application/json'}})
+ }})
+ t.after(async()=>{bridge.dispose();slides.dispose();await app.close()})
+ const {api}=bridge
+ await api.openPptx(960)
+ const link=await api.addElement({slideIndex:0,kind:'textbox',xPx:80,yPx:80,wPx:240,hPx:45,fitWidthPx:960})
+ assert.ok(await api.setLink({slideIndex:0,sourceId:link.sourceId,target:{kind:'slide',slideIndex:1}}))
+ assert.equal(await api.copySlides({slideIndexes:[0]}),true)
+ const first=await api.pasteSlide({afterIndex:0,fitWidthPx:960})
+ assert.deepEqual((await api.getSlideLinks(first.index)).map(link=>link.target),[{kind:'slide',slideIndex:2}])
+ const second=await api.pasteSlide({afterIndex:0,fitWidthPx:960})
+ assert.deepEqual((await api.getSlideLinks(second.index)).map(link=>link.target),[{kind:'slide',slideIndex:3}])
+ await api.undo()
+ await api.undo()
+ assert.ok(await api.deleteSlide(1))
+ assert.ok(await api.addBlankSlide({sourceIndex:0}))
+ const pasted=await api.pasteSlide({afterIndex:0,fitWidthPx:960})
+ assert.deepEqual(await api.getSlideLinks(pasted.index),[])
+
+ const replaced=await JSZip.loadAsync(deck)
+ replaced.file('ppt/slides/slide2.xml',await replaced.file('ppt/slides/slide1.xml').async('string'))
+ deck=await replaced.generateAsync({type:'nodebuffer'})
+ revision=randomUUID()
+ await api.openPptx(960)
+ const pastedAfterReplacement=await api.pasteSlide({afterIndex:0,fitWidthPx:960})
+ assert.deepEqual(await api.getSlideLinks(pastedAfterReplacement.index),[])
+})
+
+test('Web PPTX clipboard restores the target of incoming jumps when a cut slide returns to its deck',async t=>{
+ const app=await createApiShell(),fileId=randomUUID(),editorId=randomUUID(),revision=randomUUID(),deck=await bytes()
+ const token='a'.repeat(43)
+ const slides=createSlidesService({files:{openFile:async()=>({format:'pptx',file:{revision}}),download:async()=>({format:'pptx',bytes:deck})},leases:{renewLease:async()=>{}},revisions:{},host:slidesHost})
+ registerSlidesRoutes(app,slides,{authenticate:async()=>{}},{originCheck(){},requireSession(){}})
+ const createBridge=id=>createSlidesBridge({getState:()=>({revision:{revision},name:'cut.pptx',lease:{editorId,leaseEpoch:1}})},id,{language:'en'},{fetchImpl:async(url,init)=>{
+  if(url==='/api/v1/auth/csrf')return Response.json({csrfToken:token})
+  const res=await app.inject({method:init.method,url,payload:JSON.parse(init.body),headers:{cookie:'__Host-dyoffice-session='+token}})
+  return new Response(res.body,{status:res.statusCode,headers:{'content-type':'application/json'}})
+ }})
+ const bridge=createBridge(fileId), other=createBridge(randomUUID())
+ t.after(async()=>{other.dispose();bridge.dispose();slides.dispose();await app.close()})
+ const {api}=bridge
+ const opened=await api.openPptx(960)
+ const originalPath=opened.slides[1].partPath
+ const link=await api.addElement({slideIndex:0,kind:'textbox',xPx:80,yPx:80,wPx:240,hPx:45,fitWidthPx:960})
+ assert.ok(await api.setLink({slideIndex:0,sourceId:link.sourceId,target:{kind:'slide',slideIndex:1}}))
+ const png=PNG.sync.write({width:1,height:1,data:Buffer.from([255,0,0,255])}).toString('base64')
+ assert.equal(await api.copySlides({slideIndexes:[1],cut:true,pngs:[png]}),true)
+ assert.ok(await api.deleteSlide(1))
+ await other.api.openPptx(960)
+ assert.equal((await other.api.pasteSlide({afterIndex:0,fitWidthPx:960})).count,1)
+ const added=await api.pasteSlide({afterIndex:0,fitWidthPx:960})
+ assert.equal(added.order[1],originalPath)
+ const targets=async()=>(await api.getSlideLinks(0)).map(link=>link.target)
+ assert.deepEqual(await targets(),[{kind:'slide',slideIndex:1}])
+ const repasted=await api.repasteSlide({mode:'source',fitWidthPx:960})
+ assert.equal(repasted.order[1],originalPath)
+ const picture=await api.repasteSlide({mode:'picture',fitWidthPx:960})
+ assert.equal(picture.order.length,1)
+ assert.equal((await api.pasteSlide({afterIndex:0,fitWidthPx:960})).order[1],originalPath)
+ assert.equal((await api.undo()).length,1)
+ assert.equal((await api.pasteSlide({afterIndex:0,fitWidthPx:960})).order[1],originalPath)
+ const extra=await api.pasteSlide({afterIndex:1,fitWidthPx:960})
+ assert.notEqual(extra.order[2],originalPath)
+ assert.deepEqual(await targets(),[{kind:'slide',slideIndex:1}])
+ const saved=await slides.exportDraft(token,fileId,{revision,editorId,leaseEpoch:1,generation:10})
+ const reopened=await openIsolatedPptxSession({fileId:'cut-reopen',revision,bytes:saved.bytes},{unsafeTestOnly:true})
+ t.after(()=>reopened.close())
+ assert.deepEqual((await reopened.links(0,0)).map(link=>link.target),[{kind:'slide',slideIndex:1}])
+})
+
+test('PPTX reads existing footer, transition and advance time from the pinned deck',async t=>{
+ const pkg=await JSZip.loadAsync(await bytes())
+ const part='ppt/slides/slide1.xml'
+ const xml=await pkg.file(part).async('string')
+ const footer='<p:sp><p:nvSpPr><p:cNvPr id="77" name="Footer"/><p:cNvSpPr/><p:nvPr><p:ph type="ftr"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Keep this footer</a:t></a:r></a:p></p:txBody></p:sp>'
+ pkg.file(part,xml.replace('</p:spTree>',footer+'</p:spTree>').replace('</p:sld>','<p:transition advTm="900"><p:fade/></p:transition></p:sld>'))
+ const f=await fixture(t,()=>pkg.generateAsync({type:'nodebuffer'})),id=f.file.file.fileId
+ const request={revision:f.file.file.revision,generation:0,...f.authority}
+ const post=(method,input,headers=f.headers())=>f.app.inject({method:'POST',url:`/api/v1/files/${id}/slides/${method}`,headers,payload:input})
+ assert.equal((await post('open',request)).statusCode,200)
+ const initial=await post('slide-info',request)
+ assert.equal(initial.statusCode,200,initial.body)
+ const {shapeKeys,...first}=initial.json()[0]
+ assert.ok(shapeKeys.some(key=>key.name==='Shape 3'&&key.spid===3))
+ assert.deepEqual(first,{
+  transition:'fade',timing:{advanceMs:900,narrationIds:[]},
+  headerFooter:{footer:'Keep this footer',slideNum:false,date:null},
+ })
+ assert.equal((await post('slide-info',request,f.headers(f.bob.token))).statusCode,404)
+ const edit=await post('apply',{...request,ops:[{op:'setAdvanceTime',target:{slide:0},ms:1400}]})
+ assert.equal(edit.statusCode,200,edit.body)
+ assert.equal((await post('slide-info',request)).statusCode,409)
+ const fresh=await post('slide-info',{...request,generation:edit.json().generation})
+ assert.equal(fresh.json()[0].timing.advanceMs,1400)
+})
+
+test('PPTX ink is a saved editable stroke and an undoable page mutation',async t=>{
+ const f=await fixture(t),id=f.file.file.fileId
+ const request={revision:f.file.file.revision,generation:0,...f.authority}
+ const post=(method,input)=>f.app.inject({method:'POST',url:`/api/v1/files/${id}/slides/${method}`,headers:f.headers(),payload:input})
+ assert.equal((await post('open',request)).statusCode,200)
+ const png=new PNG({width:2,height:2})
+ png.data.fill(255)
+ const inkPayload=JSON.stringify({v:1,tool:'pen',color:'000000',width:2,points:[[0,0],[1,1]]})
+ const input={...request,mode:'ink',slide:0,ext:'png',bytesBase64:PNG.sync.write(png).toString('base64'),inkPayload,xPx:50,yPx:70,wPx:20,hPx:10,fitWidthPx:960}
+ assert.equal((await post('media',{...input,inkPayload:'invalid'})).statusCode,400)
+ const inserted=await post('media',input)
+ assert.equal(inserted.statusCode,200,inserted.body)
+ const insertedBody=inserted.json()
+ const node=insertedBody.slide.nodes.find(node=>node.type==='picture'&&node.name?.startsWith('aislides-ink'))
+ assert.ok(node)
+ assert.equal(node.descr,inkPayload)
+ assert.equal(insertedBody.history.canUndo,true)
+ const undone=await post('undo',{...request,generation:insertedBody.generation})
+ assert.equal(undone.statusCode,200,undone.body)
+ assert.equal(undone.json().slides[0].nodes.some(node=>node.descr===inkPayload),false)
 })

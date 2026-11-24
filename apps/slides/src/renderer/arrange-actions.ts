@@ -224,18 +224,23 @@ export async function reorderSelected(
 
 export async function commitInk(ctx: ActionCtx, stroke: InkStroke): Promise<void> {
   if (!ctx.slide) return
-  const raster = rasterizeStroke(stroke)
-  const r = await window.slidesApi.addInk({
-    slideIndex: ctx.current,
-    base64: raster.base64,
-    xPx: raster.xPx,
-    yPx: raster.yPx,
-    wPx: raster.wPx,
-    hPx: raster.hPx,
-    fitWidthPx: FIT_WIDTH,
-    payload: raster.payload,
-  })
-  if (r) ctx.applySlide(ctx.current, r.slide)
+  try {
+    const raster = rasterizeStroke(stroke)
+    const r = await window.slidesApi.addInk({
+      slideIndex: ctx.current,
+      base64: raster.base64,
+      xPx: raster.xPx,
+      yPx: raster.yPx,
+      wPx: raster.wPx,
+      hPx: raster.hPx,
+      fitWidthPx: ctx.slide.widthPx,
+      payload: raster.payload,
+    })
+    if (!r) throw new Error(t('ribbonTabDraw'))
+    ctx.applySlide(ctx.current, r.slide)
+  } catch (error) {
+    ctx.setStatus(t('appStatusSaveFailed', { error: error instanceof Error ? error.message : String(error) }))
+  }
 }
 
 /**

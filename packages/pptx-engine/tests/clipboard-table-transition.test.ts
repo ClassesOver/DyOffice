@@ -13,6 +13,7 @@ import {
   setTableColWidth,
   elementSpid,
   getSlideAnimations,
+  getSlideLinks,
   getSlideTransition,
   openPptx,
   pasteElements,
@@ -169,12 +170,18 @@ describe('copy/paste elements', () => {
     expect(clip.rels.some((r) => r.target === source.deck.slides[1]!.path)).toBe(true)
     expect(Object.keys(clip.parts ?? {})).toEqual([])
 
-    // Cross-deck paste imports nothing extra; the link resolves by path in the target
+    const sameDeck = pasteElements(source, 0, [clip], SHIFT)!
+    expect(getSlideLinks(source, 0).find(link => link.elementId === sameDeck.elementIds[0])?.target)
+      .toEqual({ kind: 'slide', slideIndex: 1 })
+
+    // A matching package path in a different file is unrelated to the source.
     const target = await openPptx(fx('01_standard_business.pptx'))
     const partsBefore = target.archive.entries.size
     const r = pasteElements(target, 0, [clip], SHIFT)
     expect(r).not.toBeNull()
     expect(target.archive.entries.size).toBe(partsBefore)
+    const reopened = await openPptx(await savePptx(target))
+    expect(getSlideLinks(reopened, 0)).toEqual([])
   })
 
   it('pending text edits are baked into the copied xml', async () => {

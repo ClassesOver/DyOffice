@@ -10,6 +10,7 @@ export const externalLinkListStatusSchema = z
     rawTarget: z.string(),
     source: z.string().nullable(),
     sheetNames: z.array(z.string()),
+    displayName: z.string().optional(),
   })
   .strict()
 export type ExternalLinkListStatus = z.infer<typeof externalLinkListStatusSchema>

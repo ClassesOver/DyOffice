@@ -224,10 +224,17 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
   throw Error('linked glyph is missing')
  },reloaded.runLinks[0].sourceId)
  const runLinksRead=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/slides/run-links')&&response.request().postDataJSON().index===0)
+ const animationsRead=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/slides/animations')&&response.request().postDataJSON().index===0)
+ await page.clock.install()
  await page.keyboard.press('F5')
  const show=page.locator('.slideshow')
  await expect(show.locator('.ss-counter')).toHaveText('1 / 3')
- await (await runLinksRead).finished()
+ await Promise.all([runLinksRead,animationsRead].map(async response=>(await response).finished()))
+ // The linked text is the same shape as the click-triggered entrance animation.
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+ await page.keyboard.press('ArrowRight')
+ await page.clock.runFor(800)
+ await expect(show.locator('.ss-counter')).toHaveText('1 / 3')
  const slideSurface=show.locator('.ss-frame > div').first()
  await expect.poll(async()=>{
   const box=await slideSurface.boundingBox()

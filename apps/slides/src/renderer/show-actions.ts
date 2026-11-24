@@ -36,11 +36,11 @@ export function exitSlideShow(ctx: ActionCtx, lastIndex: number): void {
 }
 
 /** Update the custom show list overwrite-style and persist */
-export function updateCustomShows(ctx: ActionCtx, shows: CustomShow[]): void {
+export function updateCustomShows(ctx: ActionCtx, shows: CustomShow[], scope: string | null = ctx.path): void {
   ctx.setCustomShows(shows)
-  if (ctx.path) {
+  if (scope) {
     try {
-      localStorage.setItem(`ai-slides-custom-shows:${ctx.path}`, JSON.stringify(shows))
+      localStorage.setItem(`ai-slides-custom-shows:${scope}`, JSON.stringify(shows))
     } catch {
       // Degrade to memory-only when localStorage is full/unavailable
     }
@@ -115,29 +115,34 @@ export function onRecordDone(ctx: ActionCtx, take: Promise<NarrationTake | null>
 }
 
 /** Keep the recording: each recorded slide gets its narration and its time as advance time */
-export async function saveRecording(ctx: ActionCtx): Promise<void> {
+export async function saveRecording(ctx: ActionCtx): Promise<boolean> {
   const take = ctx.pendingRecording
-  if (!take) return
-  ctx.setPendingRecording(null)
+  if (!take) return false
   try {
     const slides = await recordedSlides(take.audio, take.marks, take.endMs)
     const all = slides.length > 0 ? await window.slidesApi.saveRecording({ slides }) : null
     if (!all) throw new Error('the recording was not saved')
     ctx.setSlides(all)
     ctx.setDirty(true)
+    ctx.setPendingRecording(null)
     ctx.setStatus(t('appStatusRecordSaved', { count: slides.length }))
+    return true
   } catch {
-    ctx.setStatus(t('appStatusRecordFailed'))
+    return false
   }
 }
 
 export async function clearNarration(ctx: ActionCtx, all: boolean): Promise<void> {
   const indexes = all ? ctx.slides.map((_, i) => i) : [ctx.current]
-  const updated = await window.slidesApi.clearNarration(indexes)
-  if (!updated) return
-  ctx.setSlides(updated)
-  ctx.setDirty(true)
-  ctx.setStatus(t('appStatusNarrationCleared'))
+  try {
+    const updated = await window.slidesApi.clearNarration(indexes)
+    if (!updated) return
+    ctx.setSlides(updated)
+    ctx.setDirty(true)
+    ctx.setStatus(t('appStatusNarrationCleared'))
+  } catch {
+    ctx.setStatus(t('appStatusSaveFailed', { error: t('appStatusRecordFailed') }))
+  }
 }
 
 /** Presenter view (single-window version, entry aligned with the show) */

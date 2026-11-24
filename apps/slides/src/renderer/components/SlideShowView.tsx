@@ -1,3 +1,4 @@
+import { loadShowData } from '../load-show-data'
 /**
  * Slide show — the full-screen playback view.
  *
@@ -12,7 +13,7 @@
  * - Right-click opens PowerPoint's show menu (next/previous/last viewed/see all slides/screen/end)
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { RenderNode, RenderSlide, ShapeRenderNode } from '@genoffice/pptx-render'
+import type { RenderSlide } from '@genoffice/pptx-render'
 import type {
   AnimationItem,
   LinkTargetOp,
@@ -47,6 +48,7 @@ import {
   type RehearseTiming,
 } from '../slideshow-utils'
 import { liftShowCurtain } from '../show-actions'
+import { hitShowLink } from '../show-link-hit-test'
 
 const ANIMATED = [
   'fade',
@@ -144,23 +146,23 @@ export function SlideShowView({
     let cancelled = false
     void Promise.all(slides.map((_, i) => window.slidesApi.getTransition(i))).then((kinds) => {
       if (!cancelled) transRef.current = kinds
-    })
+    }, () => {})
     void Promise.all(slides.map((_, i) => window.slidesApi.getShowTiming(i))).then((list) => {
       if (!cancelled) setTimings(list)
-    })
-    void Promise.all(slides.map((_, i) => window.slidesApi.getAnimations(i))).then((lists) => {
+    }, () => {})
+    void loadShowData(slides.length, i => window.slidesApi.getAnimations(i), () => !cancelled).then((lists) => {
       if (!cancelled) setAllAnims(lists)
-    })
+    }, () => {})
     void Promise.all(slides.map((_, i) => window.slidesApi.getShapeKeys(i))).then((keys) => {
       if (!cancelled) keysRef.current = keys
-    })
-    void Promise.all(slides.map((_, i) => window.slidesApi.getSlideLinks(i))).then((lists) => {
+    }, () => {})
+    void loadShowData(slides.length, i => window.slidesApi.getSlideLinks(i), () => !cancelled).then((lists) => {
       if (!cancelled)
         linksRef.current = lists.map(
           (list) => new Map(list.map(({ sourceId, target }) => [sourceId, target])),
         )
-    })
-    void Promise.all(slides.map((_, i) => window.slidesApi.getRunLinks(i))).then((lists) => {
+    }, () => {})
+    void loadShowData(slides.length, i => window.slidesApi.getRunLinks(i), () => !cancelled).then((lists) => {
       if (!cancelled)
         runLinksRef.current = lists.map(
           (list) =>
@@ -168,7 +170,7 @@ export function SlideShowView({
               list.map((l) => [`${l.sourceId}:${l.paraIndex}:${l.runIndex}`, l.target] as const),
             ),
         )
-    })
+    }, () => {})
     return () => {
       cancelled = true
     }
@@ -214,9 +216,12 @@ export function SlideShowView({
 
   const recording = useNarrationRecording(!!recordMode, curIdx, ended)
 
-  const exitRef = useRef(() => {})
-  exitRef.current = () => {
-    if (recordMode && onRecordDone) onRecordDone(recording.finish())
+  const exitRef = useRef<(stopNotice?: string) => void>(() => {})
+  exitRef.current = (stopNotice) => {
+    if (recordMode && onRecordDone) {
+      const take = recording.finish()
+      onRecordDone(stopNotice ? take.then(value => value && { ...value, stopNotice }) : take)
+    }
     // Rehearsal mode: report each page's dwell seconds before exit (ref nulled to prevent duplicate fullscreenchange triggers)
     const t = rehearseRef.current
     if (rehearseMode && onRehearseDone && t) {
@@ -225,6 +230,10 @@ export function SlideShowView({
     }
     onExit(order[Math.min(pos, order.length - 1)] ?? startAt)
   }
+
+  useEffect(() => {
+    if (recording.limitNotice) exitRef.current(recording.limitNotice)
+  }, [recording.limitNotice])
 
   // System full screen: requested on entering the show; exiting/user leaving full screen ends the show.
   // Entry is detected from the fullscreenchange event, not the requestFullscreen promise: inside the
@@ -430,18 +439,21 @@ export function SlideShowView({
       const cur = order[pos]
       const links = (cur != null ? linksRef.current[cur] : undefined) ?? new Map()
       const runLinks = (cur != null ? runLinksRef.current[cur] : undefined) ?? new Map()
-      if ((!links.size && !runLinks.size) || !slide) return null
+      if ((!links.size && !runLinks.size) || !shownSlide) return null
       const rect = e.currentTarget.getBoundingClientRect()
-      const kx = slide.widthPx / rect.width
-      return hitLink(
-        slide.nodes,
-        (e.clientX - rect.left) * kx,
-        (e.clientY - rect.top) * kx,
+      if (!rect.width || !rect.height) return null
+      return hitShowLink(
+        shownSlide.nodes,
+        {
+          x: ((e.clientX - rect.left) * shownSlide.widthPx) / rect.width,
+          y: ((e.clientY - rect.top) * shownSlide.heightPx) / rect.height,
+        },
         links,
         runLinks,
+        player.states,
       )
     },
-    [order, pos, slide],
+    [order, pos, shownSlide, player.states],
   )
 
   // Keyboard navigation (capture beats the editor's generic shortcuts). The menu owns
@@ -659,47 +671,4 @@ export function SlideShowView({
       )}
     </div>
   )
-}
-
-/**
- * Topmost linked element at a point (slide-model px). Scans nodes back-to-front (z-order),
- * descends into groups (children boxes are group-local); unlinked overlapping nodes don't block
- * links underneath (lenient, matches the show's forgiving click behavior).
- */
-function hitLink(
-  nodes: RenderNode[],
-  x: number,
-  y: number,
-  links: Map<string, LinkTargetOp>,
-  runLinks: Map<string, LinkTargetOp>,
-): LinkTargetOp | null {
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    const n = nodes[i]!
-    const { box } = n
-    if (x < box.x || y < box.y || x > box.x + box.w || y > box.y + box.h) continue
-    if (n.type === 'group') {
-      const inner = hitLink(n.children, x - box.x, y - box.y, links, runLinks)
-      if (inner) return inner
-    }
-    // Run-level link on the glyph under the pointer beats the whole-element link (more specific)
-    const text = (n as ShapeRenderNode).text
-    if (text && runLinks.size) {
-      let para = -1
-      for (const ln of text.lines) {
-        if (ln.paraStart !== false) para++
-        const ly = box.y + text.insets.t + ln.top
-        if (y < ly || y > ly + ln.height) continue
-        for (const r of ln.runs) {
-          if (r.srcRunIdx == null) continue
-          const rx = box.x + text.insets.l + r.x
-          if (x < rx || x > rx + r.widthPx) continue
-          const target = runLinks.get(`${n.sourceId}:${para}:${r.srcRunIdx}`)
-          if (target) return target
-        }
-      }
-    }
-    const target = links.get(n.sourceId)
-    if (target) return target
-  }
-  return null
 }

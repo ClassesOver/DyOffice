@@ -295,6 +295,8 @@ const api: SlidesApi = {
   addMediaBytes: (op: AddMediaBytesOp) => ipcRenderer.invoke('slides:add-media-bytes', op),
   getMediaData: (slideIndex: number, sourceId: string) =>
     ipcRenderer.invoke('slides:media-data', slideIndex, sourceId),
+  // Desktop media uses data URLs and has no browser object URL to release.
+  releaseMediaData: undefined,
   pickModel3d: () => ipcRenderer.invoke('slides:pick-model3d'),
   addModel3d: (op: AddModel3dOp) => ipcRenderer.invoke('slides:add-model3d', op),
   getModel3dData: (slideIndex: number, sourceId: string) =>
@@ -317,6 +319,7 @@ const api: SlidesApi = {
   clearNarration: (slideIndexes: number[]) =>
     ipcRenderer.invoke('slides:clear-narration', slideIndexes),
   microphoneAccess: () => ipcRenderer.invoke('slides:microphone-access'),
+  recordingLimits: undefined,
   getAnimations: (slideIndex: number) => ipcRenderer.invoke('slides:get-animations', slideIndex),
   getShapeKeys: (slideIndex: number) => ipcRenderer.invoke('slides:get-shape-keys', slideIndex),
   setAnimations: (op: SetAnimationsOp) => ipcRenderer.invoke('slides:set-animations', op),

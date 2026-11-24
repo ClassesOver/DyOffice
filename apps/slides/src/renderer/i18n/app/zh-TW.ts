@@ -248,6 +248,8 @@ export const zhTW = {
   appOutlineNoText: '（無文字）',
   appSectionHeaderTitle: '按一下摺疊/展開；按右鍵管理章節',
   appNotesLabel: '備忘稿',
+  appNotesTooLong: "第 {slide} 張投影片的演講者備忘稿超過 {limit} 個字元。請縮短備忘稿後儲存。",
+  appNotesWriteFailed: "無法寫入第 {slide} 張投影片的演講者備忘稿。請重試儲存。",
   appNotesClickToAdd: '按一下此處新增備忘稿',
   appNotesPlaceholder: '按一下此處新增演講者備忘稿（隨文件儲存進 pptx）',
   appNotesShow: '顯示備忘稿',

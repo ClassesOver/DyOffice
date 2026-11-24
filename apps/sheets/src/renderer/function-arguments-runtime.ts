@@ -218,7 +218,7 @@ export function createFunctionArgumentsHost(
           : undefined
         return {
           index: link.index,
-          name: pathBasename(link.source ?? link.rawTarget),
+          name: link.displayName ?? pathBasename(link.source ?? link.rawTarget),
           source: link.source ?? link.rawTarget,
           open: tab !== undefined,
           wcId: tab?.wcId ?? null,

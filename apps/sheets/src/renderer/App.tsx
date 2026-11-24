@@ -5256,6 +5256,7 @@ export function App({
     if (!userMutationAllowed()) return
     if (hostRef.current?.readOnly) return
     if (command.startsWith('query-refresh:')) {
+      if (hostRef.current?.inPlaceSave) return
       void refreshQueryConnection(command.slice('query-refresh:'.length))
       return
     }
@@ -6587,6 +6588,7 @@ export function App({
         onClosePrint={() => setPrintHost(null)}
         calcManual={calcManual}
         queryConnections={queryConnections}
+        queryRefreshAvailable={!host?.inPlaceSave}
         showFormulas={activeShowFormulas}
         onGoalSeek={(setCell, toValue, byCell) => {
           const runtime = univerRef.current

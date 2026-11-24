@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ReactElement } from 'react'
 import type { TFunc } from './i18n/locale'
+import { isWebPdfLinkUrl } from '../shared/web-link-url'
 import { useModalDialog } from './modal-dialog'
 
 /** Pending link box drawn on a page (PDF user space), waiting for its target */
@@ -17,11 +18,13 @@ export interface LinkDraft {
 export function LinkDialog({
   t,
   pageCount,
+  webHost,
   onCancel,
   onApply,
 }: {
   t: TFunc
   pageCount: number
+  webHost?: boolean
   onCancel: () => void
   onApply: (target: { url: string } | { destPage: number }) => void
 }): ReactElement {
@@ -30,13 +33,15 @@ export function LinkDialog({
   const dialogRef = useModalDialog(onCancel)
 
   const pageNum = Number(page)
-  const urlValid = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url.trim()) || url.trim().startsWith('www.')
+  const trimmedUrl = url.trim()
+  const urlTarget = trimmedUrl.startsWith('www.') ? `https://${trimmedUrl}` : trimmedUrl
+  const urlValid = webHost ? isWebPdfLinkUrl(urlTarget) : /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(urlTarget)
   const pageValid =
     page.trim() !== '' && Number.isInteger(pageNum) && pageNum >= 1 && pageNum <= pageCount
   // exactly one target: the field the user cleared last loses
   const target: { url: string } | { destPage: number } | null =
     urlValid && !pageValid
-      ? { url: url.trim().startsWith('www.') ? `https://${url.trim()}` : url.trim() }
+      ? { url: urlTarget }
       : pageValid && !urlValid
         ? { destPage: pageNum }
         : null

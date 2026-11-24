@@ -5,7 +5,7 @@
 import React, { useState } from 'react'
 import { useModalDialog } from './modal-dialog'
 import { Dropdown } from '@genoffice/ui'
-import type { LinkTargetOp } from '../../shared/ipc'
+import type { HeaderFooterState, LinkTargetOp } from '../../shared/ipc'
 import { EQUATION_GALLERY } from '../insert-presets'
 import { useI18n } from '../i18n/locale'
 
@@ -117,14 +117,14 @@ interface HeaderFooterDialogProps {
   }) => void
   onClose: () => void
   /** Display: current page state */
-  initial: { footer: string | null; slideNum: boolean; date: string | null }
+  initial: HeaderFooterState
 }
 
 export function HeaderFooterDialog({ initial, onApply, onClose }: HeaderFooterDialogProps) {
   const { titleId, dialogProps } = useModalDialog(onClose)
   const { t } = useI18n()
-  const [dateOn, setDateOn] = useState(!!initial.date)
-  const [dateAuto, setDateAuto] = useState(true)
+  const [dateOn, setDateOn] = useState(!!initial.date || initial.dateAuto === true)
+  const [dateAuto, setDateAuto] = useState(initial.dateAuto ?? true)
   const [dateText, setDateText] = useState(initial.date ?? new Date().toLocaleDateString())
   const [numOn, setNumOn] = useState(initial.slideNum)
   const [footerOn, setFooterOn] = useState(!!initial.footer)

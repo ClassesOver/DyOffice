@@ -5,9 +5,8 @@
  * page image; Chromium's printToPDF converts them to /URI actions and
  * in-document destinations).
  *
- * Geometry mirrors the slideshow's hitLink (SlideShowView): unrotated node
- * boxes, group children clipped to the group box, run rects from the laid-out
- * glyph geometry. What the show would follow on click is what the PDF links.
+ * The PDF overlay uses unrotated node boxes, group children clipped to the
+ * group box, and run rectangles from the laid-out glyph geometry.
  */
 import type { RenderNode, RenderSlide, ShapeRenderNode } from '@genoffice/pptx-render'
 import type { ExportPdfLink, LinkTargetOp } from '../shared/ipc'
@@ -51,8 +50,7 @@ export function collectSlideLinkRects(
   runLinks: ReadonlyMap<string, LinkTargetOp>,
 ): TargetRect[] {
   const out: TargetRect[] = []
-  // Clip to the innermost group box like hitLink (a point outside the group
-  // never reaches its children), then to the page.
+  // Clip to the innermost group box and to the page.
   const walk = (nodes: readonly RenderNode[], dx: number, dy: number, clip: Bounds): void => {
     for (const n of nodes) {
       const { box } = n
@@ -63,8 +61,7 @@ export function collectSlideLinkRects(
       const target = links.get(n.sourceId)
       if (target) push({ x: dx + box.x, y: dy + box.y, w: box.w, h: box.h }, target)
       const text = (n as ShapeRenderNode).text
-      // hitLink rejects a point outside the node box before looking at runs, so
-      // overflowing glyphs are not followable in the show and must not link here.
+      // Clip run rectangles to the node box to exclude overflowing glyphs.
       const nodeClip =
         text && runLinks.size
           ? clipRect({ x: dx + box.x, y: dy + box.y, w: box.w, h: box.h }, clip)

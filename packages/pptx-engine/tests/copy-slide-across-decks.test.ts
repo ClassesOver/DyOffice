@@ -2,16 +2,28 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { XMLValidator } from 'fast-xml-parser'
 import {
   openPptx,
   savePptx,
   copySlide,
   pasteSlide,
+  planSlidePastes,
   listLayouts,
   chooseLayout,
   materializeSlideBundle,
+  getSlideNotes,
+  getSlideLinks,
+  setSlideNotes,
+  setElementLink,
+  notesPathForSlide,
+  getSections,
+  setSections,
+  deleteSlide,
+  insertBlankSlide,
 } from '../src/index'
 import type { SlideBundle } from '../src/index'
+import { relsPathFor, resolveTarget } from '../src/zip'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fx = (name: string) => readFileSync(join(here, 'fixtures', name))
@@ -25,6 +37,49 @@ const slideText = (slide: any): string =>
     .join('')
 
 describe('copySlide / pasteSlide across decks', () => {
+  it.each([0, 1])('keeps the section of a cut slide pasted back at index %i after reopening', async (index) => {
+    const opened = await openPptx(fx('01_standard_business.pptx'))
+    const sections = [
+      { id: '{00000000-0000-4000-8000-000000000001}', name: 'First', slideIndices: [0] },
+      { id: '{00000000-0000-4000-8000-000000000002}', name: 'Second', slideIndices: [1] },
+      { id: '{00000000-0000-4000-8000-000000000003}', name: 'Rest', slideIndices: [2, 3, 4] },
+    ]
+    setSections(opened, sections)
+    const bundle = copySlide(opened, index)!
+    expect(deleteSlide(opened, index)).toBe(true)
+    const plan = planSlidePastes(opened, [bundle], true, true)[0]!
+    expect(pasteSlide(opened, index - 1, bundle, { plan })?.path).toBe(bundle.sourcePath)
+    const reopened = await openPptx(await savePptx(opened))
+    expect(getSections(reopened)).toEqual(sections)
+  })
+
+  it('reserves the numeric ID of a cut last slide while a new slide is inserted', async () => {
+    const opened = await openPptx(fx('01_standard_business.pptx'))
+    const section = { id: '{00000000-0000-4000-8000-000000000004}', name: 'Cut target', slideIndices: [4] }
+    setSections(opened, [section])
+    const bundle = copySlide(opened, 4)!
+    expect(deleteSlide(opened, 4)).toBe(true)
+    expect(insertBlankSlide(opened, 3)).not.toBeNull()
+    expect(getSections(opened)[0]?.slideIndices).toEqual([])
+    const plan = planSlidePastes(opened, [bundle], true, true)[0]!
+    expect(pasteSlide(opened, 3, bundle, { plan })?.path).toBe(bundle.sourcePath)
+    expect(getSections(opened)[0]?.slideIndices).toEqual([4])
+  })
+
+  it('assigns a cut slide moved to another section as a thumbnail move would', async () => {
+    const opened = await openPptx(fx('01_standard_business.pptx'))
+    setSections(opened, [
+      { id: '{00000000-0000-4000-8000-000000000001}', name: 'First', slideIndices: [0, 1] },
+      { id: '{00000000-0000-4000-8000-000000000002}', name: 'Last', slideIndices: [2, 3, 4] },
+    ])
+    const bundle = copySlide(opened, 1)!
+    expect(deleteSlide(opened, 1)).toBe(true)
+    const plan = planSlidePastes(opened, [bundle], true, true)[0]!
+    expect(pasteSlide(opened, 3, bundle, { plan })?.path).toBe(bundle.sourcePath)
+    expect(opened.deck.slides[4]?.path).toBe(bundle.sourcePath)
+    expect(getSections(opened).map(section => section.slideIndices)).toEqual([[0], [1, 2, 3, 4]])
+  })
+
   it('carries a slide into another deck and survives save → reopen', async () => {
     const source = await openPptx(fx('05_unicode_cjk_emoji.pptx'))
     const target = await openPptx(fx('01_standard_business.pptx'))
@@ -249,5 +304,113 @@ describe('copySlide / pasteSlide across decks', () => {
     const reopened = await openPptx(await savePptx(target))
     expect(reopened.deck.slides.length).toBe(target.deck.slides.length)
     expect(slideText(reopened.deck.slides[1])).toBe(slideText(reopened.deck.slides[2]))
+  })
+})
+
+
+describe('notes and slide jumps in editable slide pastes', () => {
+  it('copies a standalone notes part, preserves its rich text, and sets its backlink to the pasted slide', async () => {
+    const source = await openPptx(fx('05_unicode_cjk_emoji.pptx'))
+    const target = await openPptx(fx('01_standard_business.pptx'))
+    const original = source.deck.slides[0]!
+    expect(setSlideNotes(source, 0, 'First line\nSecond & third')).toBe(true)
+    const sourceNotes = notesPathForSlide(source.archive, original.path)!
+    const richNotes = source.archive.readText(sourceNotes)!.replace('dirty="0"', 'dirty="0" b="1"')
+    source.archive.entries.set(sourceNotes, Buffer.from(richNotes))
+    expect(setSlideNotes(target, 0, 'Keep the target’s own notes')).toBe(true)
+    const targetNotes = notesPathForSlide(target.archive, target.deck.slides[0]!.path)!
+
+    const paste = pasteSlide(target, 0, copySlide(source, 0)!)!
+    const reopened = await openPptx(await savePptx(target))
+    expect(getSlideNotes(reopened.archive, paste.path)).toBe('First line\nSecond & third')
+    const pastedNotes = notesPathForSlide(reopened.archive, paste.path)!
+    expect(pastedNotes).not.toBe(targetNotes)
+    expect(reopened.archive.readText(pastedNotes)).toBe(richNotes)
+    expect(getSlideNotes(reopened.archive, reopened.deck.slides[0]!.path)).toBe('Keep the target’s own notes')
+    const rels = [...reopened.archive.readRels(pastedNotes).values()]
+    const back = rels.find(rel => rel.type.endsWith('/slide'))!
+    const master = rels.find(rel => rel.type.endsWith('/notesMaster'))!
+    expect(resolveTarget(pastedNotes, back.target)).toBe(paste.path)
+    expect(reopened.archive.has(resolveTarget(pastedNotes, master.target))).toBe(true)
+  })
+
+  it('keeps a jump to the same deck’s original destination without creating any unlisted slide parts', async () => {
+    const opened = await openPptx(fx('01_standard_business.pptx'))
+    const first = opened.deck.slides[0]!
+    const target = opened.deck.slides[1]!
+    expect(setElementLink(opened, 0, first.elements[0]!.id, { kind: 'slide', slideIndex: 1 })).not.toBeNull()
+    const paste = pasteSlide(opened, 0, copySlide(opened, 0)!)!
+    const reopened = await openPptx(await savePptx(opened))
+    expect(getSlideLinks(reopened, 1).map(link => link.target)).toEqual([{ kind: 'slide', slideIndex: 2 }])
+    expect(reopened.deck.slides[2]!.path).toBe(target.path)
+    const parts = [...reopened.archive.entries.keys()].filter(path => /^ppt\/slides\/slide\d+\.xml$/.test(path))
+    expect(parts.sort()).toEqual(reopened.deck.slides.map(slide => slide.path).sort())
+    expect(reopened.deck.slides[1]!.path).toBe(paste.path)
+  })
+
+  it('retains the notes slide content type when the source override uses a different attribute order', async () => {
+    const source = await openPptx(fx('01_standard_business.pptx'))
+    const target = await openPptx(fx('01_standard_business.pptx'))
+    setSlideNotes(source, 0, 'Notes with a reordered override')
+    const sourceNotes = notesPathForSlide(source.archive, source.deck.slides[0]!.path)!
+    const type = 'application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml'
+    const typesPath = '[Content_Types].xml'
+    const types = source.archive.readText(typesPath)!
+      .replace(`<Override PartName="/${sourceNotes}" ContentType="${type}"/>`, `<Override ContentType='${type}' PartName='/${sourceNotes}' />`)
+    expect(types).toContain(`<Override ContentType='${type}' PartName='/${sourceNotes}' />`)
+    source.archive.entries.set(typesPath, Buffer.from(types))
+    const pasted = pasteSlide(target, 0, copySlide(source, 0)!)!
+    const pastedNotes = notesPathForSlide(target.archive, pasted.path)!
+    expect(target.archive.readText(typesPath)).toContain(`<Override PartName="/${pastedNotes}" ContentType="${type}"/>`)
+  })
+
+  it('removes a paired unresolved relationship tag from a pasted notes part', async () => {
+    const source = await openPptx(fx('01_standard_business.pptx'))
+    const target = await openPptx(fx('01_standard_business.pptx'))
+    setSlideNotes(source, 0, 'Notes with a jump')
+    const sourceNotes = notesPathForSlide(source.archive, source.deck.slides[0]!.path)!
+    const sourceNotesRels = relsPathFor(sourceNotes)
+    const jump = '<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="../slides/slide2.xml">\n</Relationship>'
+    source.archive.entries.set(sourceNotesRels, Buffer.from(source.archive.readText(sourceNotesRels)!
+      .replace('</Relationships>', () => `${jump}</Relationships>`)))
+    const pasted = pasteSlide(target, 0, copySlide(source, 0)!)!
+    const pastedNotes = notesPathForSlide(target.archive, pasted.path)!
+    const relsXml = target.archive.readText(relsPathFor(pastedNotes))!
+    expect(relsXml).not.toContain('rId99')
+    expect(XMLValidator.validate(relsXml)).toBe(true)
+  })
+
+  it('retargets both directions of a jump within a pasted cross-deck selection', async () => {
+    const source = await openPptx(fx('01_standard_business.pptx'))
+    const target = await openPptx(fx('01_standard_business.pptx'))
+    for (const index of [0, 1]) {
+      const element = source.deck.slides[index]!.elements[0]!
+      expect(setElementLink(source, index, element.id, { kind: 'slide', slideIndex: 1 - index })).not.toBeNull()
+    }
+    // Match the Web worker's serialized clipboard, which carries no object identity.
+    const bundles = JSON.parse(JSON.stringify([copySlide(source, 0), copySlide(source, 1)])) as SlideBundle[]
+    const plans = planSlidePastes(target, bundles, false)
+    for (const [index, bundle] of bundles.entries()) {
+      expect(pasteSlide(target, index, bundle, {plan: plans[index]!})).not.toBeNull()
+    }
+    const reopened = await openPptx(await savePptx(target))
+    expect(getSlideLinks(reopened, 1).map(link => link.target)).toEqual([{ kind: 'slide', slideIndex: 2 }])
+    expect(getSlideLinks(reopened, 2).map(link => link.target)).toEqual([{ kind: 'slide', slideIndex: 1 }])
+    const parts = [...reopened.archive.entries.keys()].filter(path => /^ppt\/slides\/slide\d+\.xml$/.test(path))
+    expect(parts.sort()).toEqual(reopened.deck.slides.map(slide => slide.path).sort())
+  })
+
+  it('removes an unresolved cross-deck jump instead of binding it to a coincidental part path', async () => {
+    const source = await openPptx(fx('01_standard_business.pptx'))
+    const target = await openPptx(fx('01_standard_business.pptx'))
+    expect(setElementLink(source, 0, source.deck.slides[0]!.elements[0]!.id, { kind: 'slide', slideIndex: 1 })).not.toBeNull()
+    expect(setSlideNotes(source, 0, 'Notes without an existing master in the destination')).toBe(true)
+    const bundle = copySlide(source, 0)!
+    const pasted = pasteSlide(target, 0, bundle)!
+    expect(getSlideLinks(target, 1)).toEqual([])
+    expect(target.archive.readText(pasted.path)).not.toContain('hlinksldjump')
+    expect([...target.archive.readRels(pasted.path).values()].some(rel => rel.type.endsWith('/slide'))).toBe(false)
+    expect(getSlideNotes(target.archive, pasted.path)).toBe('Notes without an existing master in the destination')
+    expect([...target.archive.readRels('ppt/presentation.xml').values()].some(rel => rel.type.endsWith('/notesMaster'))).toBe(true)
   })
 })

@@ -70,6 +70,7 @@ function ctxWith(over: {
     path: over.path,
     editingActiveRef: { current: over.editing ?? false },
     flushNotes: () => Promise.resolve(),
+    notesDraftsPending: () => false,
     setSlides: () => {},
     setSelectedIds: () => {},
     setEnteredGroupId: () => {},

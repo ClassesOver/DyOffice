@@ -2,14 +2,14 @@ import {PDFArray,PDFDict,PDFName,PDFRef,PDFString,PDFHexString,PDFRadioGroup,PDF
 const n=PDFName.of
 function fail(){throw Object.assign(Error('PDF_EDIT_UNSUPPORTED_STRUCTURE'),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})}
 const widget=dict=>String(dict.lookup(n('Subtype')))==='/Widget'
-/** Run before page deletion, on the same PDFDocument whose original page refs were captured.
+/** Run before deleting pages or individual widgets, using refs from the current PDFDocument.
  * Preflight the complete tree and widget ownership before making any changes.
  * Detached indirect objects are left in context; only reachable form/page arrays are rewritten.
  */
-export function cleanupDeletedPageForms(doc,deletedPageRefs){
- try{cleanup(doc,deletedPageRefs)}catch{fail()}
+export function cleanupDeletedPageForms(doc,deletedPageRefs,removedWidgetRefs=[]){
+ try{cleanup(doc,deletedPageRefs,new Set(removedWidgetRefs))}catch{fail()}
 }
-function cleanup(doc,deletedPageRefs){
+function cleanup(doc,deletedPageRefs,removedWidgetRefs){
  if(!Array.isArray(deletedPageRefs)||deletedPageRefs.length>100||Reflect.ownKeys(deletedPageRefs).length!==deletedPageRefs.length+1)fail()
  const deleted=new Set()
  for(let i=0;i<deletedPageRefs.length;i++){
@@ -17,7 +17,7 @@ function cleanup(doc,deletedPageRefs){
   if(!d||!('value'in d)||typeof d.value!=='string'||!/^\d+ \d+ R$/.test(d.value)||deleted.has(d.value))fail()
   deleted.add(d.value)
  }
- if(!deleted.size)return
+ if(!deleted.size&&!removedWidgetRefs.size)return
  const pages=doc.getPages(),pageRefs=new Set(pages.map(p=>String(p.ref)))
  if([...deleted].some(ref=>!pageRefs.has(ref)))fail()
  const locations=new Map(),annotsByPage=[]
@@ -79,7 +79,10 @@ function cleanup(doc,deletedPageRefs){
  if(co!==undefined&&(!(co instanceof PDFArray)||co.asArray().some(raw=>!(raw instanceof PDFRef)||!nodes.has(String(raw)))))fail()
  const removedWidgets=new Set(),plans=[]
  for(const leaf of leaves){
-  const indices=leaf.widgets.flatMap((w,i)=>deleted.has(w.page)?[i]:[])
+  const indices=leaf.widgets.flatMap((w,i)=>{
+   const removing=removedWidgetRefs.delete(String(w.raw))
+   return removing||deleted.has(w.page)?[i]:[]
+  })
   if(!indices.length)continue
   const field=fields.get(String(leaf.raw)),keep=leaf.widgets.filter((_,i)=>!indices.includes(i)),plan={field,indices,remove:!keep.length,clear:false,clearDefault:false,opt:false}
   for(const i of indices)removedWidgets.add(leaf.widgets[i].dict)
@@ -106,6 +109,7 @@ function cleanup(doc,deletedPageRefs){
   }
   plans.push(plan)
  }
+ if(removedWidgetRefs.size)fail()
  // Detach only arrays that will be changed: PDF arrays can be shared via indirect refs.
  const detached=new Map()
  function detachArray(dict,key){

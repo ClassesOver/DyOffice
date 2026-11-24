@@ -103,6 +103,7 @@ import {
   createBlankPptx,
   setSlideSize,
   copySlide,
+  planSlidePastes,
   type SlideBundle,
   listSlideLayouts,
   editChartElement,
@@ -119,6 +120,7 @@ import {
   narrationSpids,
   getSlideAdvanceTime,
   getSlideAnimations,
+  getSlideShapeKeys,
   listEmbeddedFonts,
   openPptx,
   mergeSlideFromPptx,
@@ -2708,12 +2710,13 @@ export function registerSlidesIpc(): void {
     const picture = op.mode === 'picture'
     const { bundles, pngs } = slideClipboard
     if (picture && !pngs) return null
+    const plans = picture ? [] : planSlidePastes(session.opened, bundles)
     const r = journaledTxn(session, 'edit', {
       ops: bundles.map((bundle, j) => ({
         op: 'pasteSlide',
         afterIndex: picture ? op.afterIndex : op.afterIndex + j,
         mode: op.mode,
-        ...(picture ? { png: pngs![j] } : { bundle }),
+        ...(picture ? { png: pngs![j] } : { bundle, plan: plans[j] }),
       })),
     })
     if (!r.applied) return null
@@ -4400,12 +4403,7 @@ export function registerSlidesIpc(): void {
   ipcMain.handle('slides:get-shape-keys', (e, slideIndex: number): ShapeKey[] => {
     const session = sessions.get(e.sender.id)
     const slide = session?.opened.deck.slides[slideIndex]
-    if (!slide) return []
-    return slide.elements.map((el) => ({
-      sourceId: el.id,
-      spid: elementSpid(el),
-      name: el.name ?? '',
-    }))
+    return slide ? getSlideShapeKeys(slide) : []
   })
 
   ipcMain.handle('slides:set-animations', (e, op: SetAnimationsOp) => {

@@ -1,6 +1,8 @@
 import { Readable } from 'node:stream'
 import { createBrotliCompress } from 'node:zlib'
 import { acceptsBrotli, fastBrotli, minCompressionBytes } from '../../../response-encoding.mjs'
+import {MAX_PPTX_ADVANCE_MS, MAX_PPTX_MEDIA_BYTES, MAX_PPTX_RECORDING_BYTES, MAX_PPTX_RECORDING_SLIDES} from '../../../../worker/src/native/pptx-session-host.ts'
+import {MAX_INK_PAYLOAD_BYTES} from '../../../../../slides/src/shared/ink-payload'
 import type { SlidesSessions } from './service.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type { SlidesSaveService, SlidesSaveInput } from './save.ts'
@@ -20,6 +22,11 @@ const SLIDES_APPLY_ORDINARY_LIMIT = 256 * 1024
 const SLIDES_APPLY_BODY_LIMIT = SLIDES_APPLY_ORDINARY_LIMIT + 4096 + 7 * 1024 * 1024
 /** The larger body is only for one analysis picture (plus its provenance text box); ordinary op batches keep the old limit. */
 export function assertApplySize(ops: unknown[]): void {
+  // Whole-deck timing updates may include all 200 supported slides.
+  if(ops.length>100&&!ops.every(value=>{
+    const op=(value as {op?:unknown}|null)?.op
+    return op==='setTransition'||op==='setAdvanceTime'
+  }))throw Object.assign(new Error('Too many slide operations'),{statusCode:400})
   if (Buffer.byteLength(JSON.stringify(ops)) <= SLIDES_APPLY_ORDINARY_LIMIT) return
   const pictures = ops.filter(op => (op as { op?: unknown } | null)?.op === 'addPicture').length
   if (pictures === 1 && ops.length <= 2) return
@@ -59,12 +66,44 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/comments', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.comments(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number;sourceId:string}>('/api/v1/files/:id/slides/chart-data', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575},sourceId:{type:'string',minLength:1,maxLength:256}}, (token,id,body,signal)=>slides.chartData(token,id,body,signal))
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/chart-color-schemes', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.chartColorSchemes(token,id,body,signal))
+    readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/slide-info', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.slideInfo(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/animations', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.animations(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.links(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/run-links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.runLinks(token,id,body,signal))
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/layouts', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.layouts(token,id,body,signal))
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/slides', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.slides(token,id,body,signal))
-    route<{revision:string;generation:number;ops:unknown[];isolation?:'atomic'|'per_op';dryRun?:boolean}>('/api/v1/files/:id/slides/apply', {...revisionBody,generation:generationBody,ops:{type:'array',minItems:1,maxItems:100},isolation:{type:'string',enum:['atomic','per_op']},dryRun:{type:'boolean'}}, (token,id,body,signal)=>{assertApplySize(body.ops);return slides.apply(token,id,body,signal)}, SLIDES_APPLY_BODY_LIMIT, ['isolation','dryRun'])
+    const clipboardBase={...revisionBody,generation:generationBody}
+    const slideIndex={type:'integer',minimum:0,maximum:1048575}
+    readRoute<Parameters<SlidesSessions['mediaData']>[2]>('/api/v1/files/:id/slides/media-data',{
+      ...clipboardBase,index:slideIndex,sourceId:{type:'string',minLength:1,maxLength:256},
+    },(token,id,body,signal)=>slides.mediaData(token,id,body,signal))
+    const recordingMs={type:'integer',minimum:1,maximum:MAX_PPTX_ADVANCE_MS}
+    route<Parameters<SlidesSessions['applyRecording']>[2]>('/api/v1/files/:id/slides/recording',{
+      ...clipboardBase,kind:{type:'string',enum:['save','clear']},
+      indexes:{type:'array',minItems:1,maxItems:MAX_PPTX_RECORDING_SLIDES,uniqueItems:true,items:slideIndex},
+      slides:{type:'array',minItems:1,maxItems:MAX_PPTX_RECORDING_SLIDES,items:{
+        type:'object',additionalProperties:false,required:['slideIndex','wavBase64','durationMs','advanceMs'],properties:{
+          slideIndex,wavBase64:{type:'string',minLength:64,maxLength:Math.ceil(MAX_PPTX_MEDIA_BYTES/3)*4},
+          durationMs:recordingMs,advanceMs:recordingMs,
+        },
+      }},
+    },(token,id,body,signal)=>slides.applyRecording(token,id,body,signal),
+    Math.ceil(MAX_PPTX_RECORDING_BYTES/3)*4+64*1024,['slides','indexes'])
+    const sourceIds={type:'array',minItems:1,maxItems:100,uniqueItems:true,items:{type:'string',minLength:1,maxLength:256}}
+    route<Parameters<SlidesSessions['copyClipboard']>[2]>('/api/v1/files/:id/slides/clipboard-copy',{
+      ...clipboardBase,kind:{type:'string',enum:['slides','elements']},index:slideIndex,sourceIds,
+      indexes:{type:'array',minItems:1,maxItems:100,uniqueItems:true,items:slideIndex},
+      cut:{type:'boolean'},pngs:{type:'array',minItems:1,maxItems:100,items:{type:'string',minLength:1,maxLength:7*1024*1024}},
+    },(token,id,body,signal)=>slides.copyClipboard(token,id,body,signal),7*1024*1024+32*1024,['editorId','leaseEpoch','index','sourceIds','indexes','cut','pngs'])
+    route<Parameters<SlidesSessions['pasteClipboard']>[2]>('/api/v1/files/:id/slides/clipboard-paste',{
+      ...clipboardBase,kind:{type:'string',enum:['slides','elements']},index:{...slideIndex,minimum:-1},clipboardId:uuidSchema,fitWidthPx,
+      mode:{type:'string',enum:['theme','source','picture']},replace:{type:'boolean'},
+    },(token,id,body,signal)=>slides.pasteClipboard(token,id,body,signal),4096,['mode','replace'])
+    const delta={type:'number',minimum:-100000,maximum:100000}
+    route<Parameters<SlidesSessions['duplicateClipboard']>[2]>('/api/v1/files/:id/slides/clipboard-duplicate',{
+      ...clipboardBase,index:slideIndex,sourceIds,fitWidthPx,dxPx:delta,dyPx:delta,
+    },(token,id,body,signal)=>slides.duplicateClipboard(token,id,body,signal),32*1024)
+    route<{revision:string;generation:number;ops:unknown[];isolation?:'atomic'|'per_op';dryRun?:boolean}>('/api/v1/files/:id/slides/apply', {...revisionBody,generation:generationBody,ops:{type:'array',minItems:1,maxItems:200},isolation:{type:'string',enum:['atomic','per_op']},dryRun:{type:'boolean'}}, (token,id,body,signal)=>{assertApplySize(body.ops);return slides.apply(token,id,body,signal)}, SLIDES_APPLY_BODY_LIMIT, ['isolation','dryRun'])
     route<{revision:string;generation:number;slide:number;sourceId:string;patch:Record<string,unknown>;confirmed?:boolean}>('/api/v1/files/:id/slides/chart-edit', {
       ...revisionBody,generation:generationBody,slide:{type:'integer',minimum:0,maximum:1048575},sourceId:{type:'string',minLength:1,maxLength:256},confirmed:{type:'boolean'},
       patch:{type:'object',additionalProperties:false,properties:{kind:{type:'string',enum:['bar','bar3D','barStacked','barPercentStacked','barH','line','area','pie','pie3D','doughnut','scatter','radar','comboBarLine']},barDir:{type:'string',enum:['col','bar']},categories:{type:'array',maxItems:1000,items:{type:'string',maxLength:1024}},series:{type:'array',maxItems:100,items:{type:'object',additionalProperties:false,required:['name','values'],properties:{name:{type:'string',maxLength:1024},values:{type:'array',maxItems:1000,items:{type:'number'}}}}},title:{type:'string',maxLength:4096},colorScheme:{type:'string',maxLength:32},legendPos:{type:'string',enum:['b','t','r','l','none']},dataLabels:{type:'boolean'},gridlines:{type:'boolean'},catAxisTitle:{type:'string',maxLength:1024},valAxisTitle:{type:'string',maxLength:1024},gapWidthPct:{type:'number',minimum:0,maximum:500},holeSizePct:{type:'number',minimum:0,maximum:100},switchRowCol:{type:'boolean'},pointColors:{type:'object',maxProperties:100,additionalProperties:{type:'object',maxProperties:100,additionalProperties:{anyOf:[{type:'string',pattern:'^#[0-9A-Fa-f]{6}$'},{type:'null'}]}}}}},
@@ -82,9 +121,18 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
       ...revisionBody,generation:generationBody,fitWidthPx,partPath:{type:'string',minLength:1,maxLength:128},operation:{type:'object'},
     },(token,id,body,signal)=>slides.applyMaster(token,id,body,signal),260*1024)
     route<Parameters<SlidesSessions['applyImage']>[2]>('/api/v1/files/:id/slides/media', {
-      ...revisionBody,generation:generationBody,mode:{type:'string',enum:['insert','replace']},slide:{type:'integer',minimum:0,maximum:1048575},bytesBase64:{type:'string',minLength:16,maxLength:6990508},ext:{type:'string',enum:['png','jpg','jpeg','gif','bmp','tif','tiff']},placement:{type:'string',enum:['natural']},
-      xPx:{type:'number',minimum:-100000,maximum:100000},yPx:{type:'number',minimum:-100000,maximum:100000},wPx:{type:'number',exclusiveMinimum:0,maximum:100000},hPx:{type:'number',exclusiveMinimum:0,maximum:100000},fitWidthPx:fitWidthPx,sourceId:{type:'string',minLength:1,maxLength:256},keepSrcRect:{type:'boolean'},
-    }, (token,id,body,signal)=>slides.applyImage(token,id,body,signal), 7*1024*1024, ['placement','xPx','yPx','wPx','hPx','fitWidthPx','sourceId','keepSrcRect'])
+      ...revisionBody,generation:generationBody,mode:{type:'string',enum:['insert','replace','background','fill','ink']},
+      slide:{...slideIndex,minimum:-1},bytesBase64:{type:'string',minLength:16,maxLength:6990508},ext:{type:'string',enum:['png','jpg','jpeg','gif','bmp','tif','tiff']},
+      placement:{type:'string',enum:['natural']},xPx:{type:'number',minimum:-100000,maximum:100000},yPx:{type:'number',minimum:-100000,maximum:100000},
+      wPx:{type:'number',exclusiveMinimum:0,maximum:100000},hPx:{type:'number',exclusiveMinimum:0,maximum:100000},fitWidthPx,
+      sourceId:{type:'string',minLength:1,maxLength:256},keepSrcRect:{type:'boolean'},inkPayload:{type:'string',minLength:1,maxLength:MAX_INK_PAYLOAD_BYTES},
+      tile:{type:'boolean'},sourceSlide:slideIndex,targets:{type:'array',minItems:1,maxItems:100,items:{
+        type:'object',additionalProperties:false,required:['sourceId'],properties:{
+          sourceId:{type:'string',minLength:1,maxLength:256},groupId:{type:'string',minLength:1,maxLength:256},
+        },
+      }},
+    }, (token,id,body,signal)=>slides.applyImage(token,id,body,signal), 8*1024*1024,
+      ['bytesBase64','ext','placement','xPx','yPx','wPx','hPx','fitWidthPx','sourceId','keepSrcRect','tile','sourceSlide','targets','inkPayload'])
     route<{revision:string;generation:number}>('/api/v1/files/:id/slides/undo', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.undo(token,id,body,signal))
     route<{revision:string;generation:number}>('/api/v1/files/:id/slides/history-batch-begin', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.beginHistoryBatch(token,id,body,signal))
     route<{revision:string;generation:number}>('/api/v1/files/:id/slides/history-batch-end', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.endHistoryBatch(token,id,body,signal))

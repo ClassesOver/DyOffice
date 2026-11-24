@@ -247,6 +247,8 @@ export const zh = {
   appOutlineNoText: '（无文字）',
   appSectionHeaderTitle: '单击折叠/展开；右键管理节',
   appNotesLabel: '备注',
+  appNotesTooLong: "第 {slide} 张幻灯片的演讲者备注超过 {limit} 字符。请缩短备注后保存。",
+  appNotesWriteFailed: "无法写入第 {slide} 张幻灯片的演讲者备注。请重试保存。",
   appNotesClickToAdd: '单击此处添加备注',
   appNotesPlaceholder: '单击此处添加演讲者备注（随文档保存进 pptx）',
   appNotesShow: '显示备注',

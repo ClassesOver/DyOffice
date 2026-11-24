@@ -3,13 +3,19 @@ import {validatePdfStampOperation} from '../../../../../packages/web-contracts/s
 import {MAX_PDF_OCR_INSERTS,MAX_PDF_TEXT_INSERTS} from '../../../../../packages/web-contracts/src/pdf-ocr-bake.ts'
 import {decodePdfImage} from './image-content-job.mjs'
 import {validatePdfDraftInserts} from './draft-inserts-job.mjs'
+import {isWebPdfLinkUrl} from '../../../../pdf/src/shared/web-link-url.ts'
 import {EDIT_FONTS} from '../../../../pdf/src/shared/ipc.ts'
+import {MAX_PDF_DRAFT_BLANK_PAGES,MAX_PDF_EDIT_PAGES} from '../../../shared/pdf-edit-structure.mjs'
 function fail(){throw Object.assign(Error('INVALID_PDF_APPLY_SNAPSHOT'),{code:'INVALID_PDF_APPLY_SNAPSHOT'})}
+// DrawLayer records pointer samples until release. Keep room for long strokes
+// while the drawing validator still caps the entire batch's coordinate budget.
+const MAX_DRAWING_COORDINATES=100_000
+const MAX_STROKE_COORDINATES=50_000
 function clone(v,depth=0){
- if(depth>12)fail()
+ if(depth>52)fail()
  if(!v||typeof v!=='object')return v
  if(Array.isArray(v)){
-  if(v.length>1000||Reflect.ownKeys(v).length!==v.length+1)fail()
+  if(v.length>MAX_STROKE_COORDINATES||Reflect.ownKeys(v).length!==v.length+1)fail()
   return Array.from({length:v.length},(_,i)=>{const d=Object.getOwnPropertyDescriptor(v,String(i));if(!d||!('value'in d)||!d.enumerable)fail();return clone(d.value,depth+1)})
  }
  if(![Object.prototype,null].includes(Object.getPrototypeOf(v)))fail()
@@ -19,7 +25,7 @@ function clone(v,depth=0){
 function obj(v,allowed,required=allowed){if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).some(k=>!allowed.includes(k))||required.some(k=>!Object.hasOwn(v,k)))fail();return v}
 const num=(v,min=-100000,max=100000)=>typeof v==='number'&&Number.isFinite(v)&&v>=min&&v<=max
 const text=(v,max=10000)=>typeof v==='string'&&v.length<=max&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)
-const page=v=>Number.isSafeInteger(v)&&v>=0&&v<100
+const page=v=>Number.isSafeInteger(v)&&v>=0&&v<MAX_PDF_EDIT_PAGES
 function array(v,max=100){if(!Array.isArray(v)||v.length>max)fail();return v}
 function vector(v,length,min=-100000,max=100000){if(!Array.isArray(v)||v.length!==length||v.some(x=>!num(x,min,max)))fail();return v}
 function rect(v){vector(v,4);if(v[2]<=v[0]||v[3]<=v[1])fail();return v}
@@ -66,8 +72,104 @@ function imageEdit(o){
  optional(o,'layer',v=>['aboveText','belowText'].includes(v));optional(o,'rotate',v=>[0,90,180,270].includes(v));optional(o,'quarterTurns',v=>[0,1,2,3].includes(v))
  if('image'in o){if(typeof o.image!=='string'||o.image.length>7*1024*1024||!o.image.length)fail();try{decodePdfImage({mime:Buffer.from(o.image,'base64')[0]===255?'image/jpeg':'image/png',base64:o.image})}catch{fail()}}
 }
+
+const drawingProperties={
+ ink:['paths','width','color','formFieldName'],rect:['rect','width','color'],ellipse:['rect','width','color'],
+ line:['from','to','width','color'],arrow:['from','to','width','color'],measure:['from','to','label','width','color'],
+ caret:['point','color'],polygon:['vertices','width','color'],image:['rect','image','formFieldName'],link:['rect','url','destPage'],
+}
+function validateDrawings(drawings){
+ let coordinates=0
+ for(const drawing of array(drawings)){
+  if(!drawing||!Object.hasOwn(drawingProperties,drawing.kind))fail()
+  const properties=drawingProperties[drawing.kind],base=['kind','pageIndex']
+  obj(drawing,[...base,...properties],[...base,...properties.filter(key=>!['formFieldName','url','destPage'].includes(key))])
+  if(!page(drawing.pageIndex))fail()
+  if('color'in drawing)vector(drawing.color,3,0,1)
+  if('width'in drawing&&!num(drawing.width,.01,100))fail()
+  if('rect'in drawing)rect(drawing.rect)
+  optional(drawing,'formFieldName',v=>text(v,1024)&&!!v)
+  switch(drawing.kind){
+   case 'ink':
+    if(!array(drawing.paths).length)fail()
+    for(const path of drawing.paths){
+     if(array(path,MAX_STROKE_COORDINATES).length<4||path.length%2||path.some(value=>!num(value)))fail()
+     coordinates+=path.length
+    }
+    break
+   case 'polygon':
+    if(array(drawing.vertices,500).length<3)fail()
+    for(const point of drawing.vertices)vector(point,2)
+    coordinates+=drawing.vertices.length*2
+    break
+   case 'measure':
+    if(!text(drawing.label,64)||/[\r\n\t]/.test(drawing.label)||!drawing.label.trim())fail()
+    // The measurement, line and arrow use the same endpoint format.
+   case 'line': case 'arrow':
+    vector(drawing.from,2);vector(drawing.to,2)
+    break
+   case 'caret':
+    vector(drawing.point,2)
+    break
+   case 'link':
+    if(('url'in drawing)===('destPage'in drawing))fail()
+    if('url'in drawing?!isWebPdfLinkUrl(drawing.url):!Number.isSafeInteger(drawing.destPage)||!page(drawing.destPage-1))fail()
+    break
+   case 'image':
+    try{decodePdfImage({mime:'image/png',base64:drawing.image})}catch{fail()}
+    break
+  }
+ }
+ if(coordinates>MAX_DRAWING_COORDINATES)fail()
+}
+function validateOutline(outline){
+ let count=0
+ function walk(list,depth){
+  for(const item of array(list,500)){
+   if(++count>500||depth>24)fail()
+   obj(item,['title','pageIndex','top','children'],['title','pageIndex'])
+   if(!text(item.title,1000)||!item.title.trim()||!page(item.pageIndex))fail()
+   optional(item,'top',v=>v===null||num(v))
+   if('children'in item)walk(item.children,depth+1)
+  }
+ }
+ walk(outline,1)
+}
+function validateFormWidgetEdits(edits){
+ const ids=new Set()
+ for(const edit of array(edits)){
+  obj(edit,['widgetId','fieldName','rect','required','remove'],['widgetId','fieldName'])
+  if(typeof edit.widgetId!=='string'||!/^([1-9]\d{0,9})R(?:[1-9]\d{0,4})?$/.test(edit.widgetId)||ids.has(edit.widgetId)||!text(edit.fieldName,1024)||!edit.fieldName)fail()
+  optional(edit,'required',v=>typeof v==='boolean')
+  optional(edit,'remove',v=>typeof v==='boolean')
+  if('rect'in edit)rect(edit.rect)
+  if(!edit.remove&&!('rect'in edit)&&!('required'in edit))fail()
+  ids.add(edit.widgetId)
+ }
+}
 export function validatePdfApplySnapshot(input){
- const s=clone(input),required=['fileId','baseRevision','generation','markups','notes','textInserts','imageEdits','formEdits','formFields','rotations','deleted','order','metadata'];obj(s,[...required,'savedImageEdits','annotationAuthor','blankPages','textEdits','annotDeletes','noteEdits','stampOperations'],required)
+ const s=clone(input),required=['fileId','baseRevision','generation','markups','notes','textInserts','imageEdits','formEdits','formFields','rotations','deleted','order','metadata'];obj(s,[...required,'savedImageEdits','annotationAuthor','blankPages','textEdits','annotDeletes','noteEdits','stampOperations','attachments','drawings','outline','formWidgetEdits'],required)
+ if('drawings'in s)validateDrawings(s.drawings)
+ if('outline'in s)validateOutline(s.outline)
+ if('formWidgetEdits'in s)validateFormWidgetEdits(s.formWidgetEdits)
+ if('attachments'in s){
+  const edits=obj(s.attachments,['add','remove'],[]),added=new Set(),removed=new Set()
+  let bytes=0
+  for(const file of ('add'in edits?array(edits.add,8):[])){
+   obj(file,['name','bytesBase64','description'],['name','bytesBase64'])
+   if(!text(file.name,255)||!file.name.trim()||file.name==='.'||file.name==='..'||/[\\/\u0000-\u001f\u007f]/.test(file.name)||added.has(file.name))fail()
+   optional(file,'description',v=>text(v,1000))
+   if(typeof file.bytesBase64!=='string'||!file.bytesBase64.length||file.bytesBase64.length>6990508)fail()
+   const content=Buffer.from(file.bytesBase64,'base64')
+   bytes+=content.length
+   if(!content.length||content.length>5*1024*1024||bytes>10*1024*1024||content.toString('base64')!==file.bytesBase64)fail()
+   added.add(file.name)
+  }
+  for(const name of ('remove'in edits?array(edits.remove,100):[])){
+   if(!text(name,1024)||!name||removed.has(name))fail()
+   removed.add(name)
+  }
+ }
  if('stampOperations'in s){
   try{s.stampOperations=array(s.stampOperations,2).map(validatePdfStampOperation)}catch{fail()}
   if(new Set(s.stampOperations.map(operation=>operation.op)).size!==s.stampOperations.length)fail()
@@ -83,7 +185,7 @@ export function validatePdfApplySnapshot(input){
   if(editing){if(!text(item.oldContents)||!text(item.contents)||!item.contents.trim())fail()}
   else if(!['highlight','underline','squiggly','strikeout','note','polygon'].includes(item.subtype)||item.subtype==='note'&&!text(item.contents)||'contents'in item&&!text(item.contents))fail()
  }
- if('blankPages'in s)for(const item of array(s.blankPages,20)){
+ if('blankPages'in s)for(const item of array(s.blankPages,MAX_PDF_DRAFT_BLANK_PAGES)){
   obj(item,['pageIndex','width','height']);if(!page(item.pageIndex)||!num(item.width,1,14400)||!num(item.height,1,14400))fail()
  }
  optional(s,'annotationAuthor',v=>text(v,200)&&!!v.trim())
@@ -106,7 +208,7 @@ export function validatePdfApplySnapshot(input){
   if(s.savedImageEdits.length)try{s.savedImageEdits=validatePdfDraftInserts({texts:[],images:[],imageEdits:s.savedImageEdits}).imageEdits}catch{fail()}
  }
  const savedImages=s.savedImageEdits??[]
- if([...s.imageEdits.map(e=>e.input.image),...savedImages.map(e=>e.image?.base64)].reduce((sum,image)=>sum+(image?Buffer.byteLength(image,'base64'):0),0)>20*1024*1024)fail()
+ if([...s.imageEdits.map(e=>e.input.image),...savedImages.map(e=>e.image?.base64),...(s.drawings??[]).map(drawing=>drawing.image)].reduce((sum,image)=>sum+(image?Buffer.byteLength(image,'base64'):0),0)>20*1024*1024)fail()
  obj(s.formEdits,Object.keys(s.formEdits));if(Object.keys(s.formEdits).length>100)fail()
  for(const [name,v]of Object.entries(s.formEdits)){obj(v,['name','kind','value','checked'],['name','kind']);if(name!==v.name||!text(name,1024)||!name||!['text','checkbox','radio','choice'].includes(v.kind))fail();if(v.kind==='checkbox'){if(typeof v.checked!=='boolean'||'value'in v)fail()}else if(!text(v.value)||'checked'in v)fail()}
  s.formFields=entries(s.formFields,'F',o=>{
@@ -119,6 +221,6 @@ export function validatePdfApplySnapshot(input){
  if(s.order!==null){array(s.order);if(!s.order.length||s.order.some(p=>!page(p))||new Set(s.order).size!==s.order.length)fail()}
  if(s.metadata!==null){obj(s.metadata,['title','author','subject','keywords'],[]);if(Object.values(s.metadata).some(v=>!text(v,4000)))fail()}
  // Bound aggregate state independently of the per-tool limits.
- if(s.markups.length+s.notes.length+visibleText+s.imageEdits.length+savedImages.length+s.formFields.length+Object.keys(s.formEdits).length>250)fail()
+ if(s.markups.length+s.notes.length+(s.drawings?.length??0)+(s.formWidgetEdits?.length??0)+visibleText+s.imageEdits.length+savedImages.length+s.formFields.length+Object.keys(s.formEdits).length>250)fail()
  return JSON.parse(JSON.stringify(s))
 }

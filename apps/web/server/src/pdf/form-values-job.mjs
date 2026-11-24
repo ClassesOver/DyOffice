@@ -60,28 +60,32 @@ export function preparePdfFormValues(doc,operations){
  })
 }
 function current(field){return field instanceof PDFTextField?field.getText()??'':field instanceof PDFCheckBox?field.isChecked():field instanceof PDFRadioGroup?field.getSelected()??'':field.getSelected()}
-export async function updatePdfFormValueAppearances(doc,names,signal){
- const map=pdfFormValueFields(doc)
+export function createPdfAppearanceFontSelector(doc){
  doc.registerFontkit(pdfFontkit)
  let latin,cjk
+ return async text=>{
+  if(/^[\x00-\x7f]*$/.test(text))return latin??=await doc.embedFont(StandardFonts.Helvetica)
+  cjk??=await doc.embedFont(await readFile(cjkSubsetFontPath()),{subset:true})
+  const covers=font=>{
+   const chars=new Set(font.getCharacterSet())
+   return Array.from(text).every(char=>/[\r\n\t]/.test(char)||chars.has(char.codePointAt(0)))
+  }
+  if(covers(cjk))return cjk
+  const {fallbackFontFor}=await import('../../../../pdf/src/main/text-edit.ts'),bytes=fallbackFontFor(text)
+  if(!bytes)fail('PDF_FORM_FONT_UNAVAILABLE')
+  const font=await doc.embedFont(bytes,{subset:true})
+  if(!covers(font))fail('PDF_FORM_FONT_UNAVAILABLE')
+  return font
+ }
+}
+export async function updatePdfFormValueAppearances(doc,names,signal){
+ const map=pdfFormValueFields(doc),selectFont=createPdfAppearanceFontSelector(doc)
  const appearanceFields=names.map(name=>{const field=map.get(name);if(!field||field instanceof PDFSignature)fail('INVALID_PDF_FORM_VALUES');return field})
-   for(const field of appearanceFields){
-    if(field instanceof PDFCheckBox||field instanceof PDFRadioGroup){field.defaultUpdateAppearances();continue}
-    const text=field instanceof PDFTextField?field.getText()??'':field instanceof PDFButton?field.acroField.getWidgets().flatMap(widget=>Object.values(widget.getAppearanceCharacteristics()?.getCaptions()??{})).filter(Boolean).join(''):field.getOptions().join('')
-    let font
-    if(/^[\x00-\x7f]*$/.test(text))font=latin??=await doc.embedFont(StandardFonts.Helvetica)
-    else{
-     cjk??=await doc.embedFont(await readFile(cjkSubsetFontPath()),{subset:true})
-     font=cjk
-     const covers=f=>{const chars=new Set(f.getCharacterSet());return Array.from(text).every(char=>/[\r\n\t]/.test(char)||chars.has(char.codePointAt(0)))}
-     if(!covers(font)){
-      const {fallbackFontFor}=await import('../../../../pdf/src/main/text-edit.ts'),bytes=fallbackFontFor(text)
-      if(!bytes)fail('PDF_FORM_FONT_UNAVAILABLE')
-      font=await doc.embedFont(bytes,{subset:true});if(!covers(font))fail('PDF_FORM_FONT_UNAVAILABLE')
-     }
-    }
-    field.defaultUpdateAppearances(font)
-   }
+ for(const field of appearanceFields){
+  if(field instanceof PDFCheckBox||field instanceof PDFRadioGroup){field.defaultUpdateAppearances();continue}
+  const text=field instanceof PDFTextField?field.getText()??'':field instanceof PDFButton?field.acroField.getWidgets().flatMap(widget=>Object.values(widget.getAppearanceCharacteristics()?.getCaptions()??{})).filter(Boolean).join(''):field.getOptions().join('')
+  field.defaultUpdateAppearances(await selectFont(text))
+ }
  check(signal)
 }
 export function createPdfFormValuesJob(){

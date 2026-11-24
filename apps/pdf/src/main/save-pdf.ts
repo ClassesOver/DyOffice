@@ -18,7 +18,7 @@ import {
   degrees,
   rgb,
 } from 'pdf-lib'
-import type { PDFPage } from 'pdf-lib'
+import type { PDFFont, PDFPage } from 'pdf-lib'
 import { VISUAL_SIGNATURE_CONTENT_PREFIX } from '../shared/ipc'
 import {
   decryptDocument,
@@ -480,10 +480,11 @@ function addLinkAnnot(
     P: page.ref,
   })
   if (d.url) {
-    annot.set(
-      PDFName.of('A'),
-      pdfDoc.context.obj({ Type: 'Action', S: 'URI', URI: PDFString.of(d.url) }),
-    )
+    // A /URI is a byte string. Hex-encoding its UTF-8 bytes also keeps
+    // parentheses and backslashes from changing the PDF object syntax.
+    const bytes = new TextEncoder().encode(d.url)
+    const uri = PDFHexString.of(Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(''))
+    annot.set(PDFName.of('A'), pdfDoc.context.obj({ Type: 'Action', S: 'URI', URI: uri }))
   } else {
     const target = pages[(d.destPage ?? 1) - 1]
     if (!target) return
@@ -632,8 +633,8 @@ function addDrawing(
   d: DrawingInput,
   /** localId → registered ref of notes written earlier in this request (reply parenting) */
   noteRefs?: Map<string, PDFRef>,
-  /** the label font's ref for measure drawings (their appearance names /F1) */
-  measureFontRef?: PDFRef,
+  /** The label font for measure drawings (their appearance names /F1). */
+  measureFont?: PDFFont,
   author = DEFAULT_ANNOT_AUTHOR,
 ): void {
   if (d.kind === 'image') return // handled by addImageStamp (needs async embed)
@@ -777,17 +778,31 @@ function addDrawing(
       const ang = Math.atan2(ty - fy, tx - fx)
       const flip = Math.abs(ang) > Math.PI / 2
       const tilt = flip ? ang + Math.PI : ang
-      ops.push(`BT ${r} ${g} ${b} rg /F1 9 Tf`)
+      if (!measureFont) throw new Error('A measurement label needs an appearance font')
+      const coverage = new Set(measureFont.getCharacterSet())
+      const label = Array.from(d.label, (char) =>
+        coverage.has(char.codePointAt(0)!) ? char : '?',
+      ).join('')
+      const fontSize = 9
+      const width = measureFont.widthOfTextAtSize(label, fontSize)
+      const cos = Math.cos(tilt)
+      const sin = Math.sin(tilt)
+      const originX = mx - cos * width / 2
+      const originY = my + 6 - sin * width / 2
       ops.push(
-        `${num(Math.cos(tilt))} ${num(Math.sin(tilt))} ${num(-Math.sin(tilt))} ${num(Math.cos(tilt))} ${num(mx)} ${num(my + 6)} Tm`,
+        `BT ${r} ${g} ${b} rg /F1 ${fontSize} Tf`,
+        `${num(cos)} ${num(sin)} ${num(-sin)} ${num(cos)} ${num(originX)} ${num(originY)} Tm`,
+        `${measureFont.encodeText(label).toString()} Tj ET`,
       )
-      const esc = d.label.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
-      ops.push(`(${esc}) Tj ET`)
-      // Helvetica 9pt averages ~4.5pt per glyph, and the extent follows the
-      // label's tilt — an axis-aligned half-width clipped steep lines
-      const halfW = (d.label.length * 4.5) / 2
-      xs.push(mx + Math.cos(tilt) * halfW, mx - Math.cos(tilt) * halfW)
-      ys.push(my + 6 + Math.sin(tilt) * halfW, my + 6 - Math.sin(tilt) * halfW)
+      // Use the rotated glyph box to keep long or wide units inside the appearance.
+      const ascent = measureFont.heightAtSize(fontSize, { descender: false })
+      const descent = ascent - measureFont.heightAtSize(fontSize)
+      for (const x of [0, width]) {
+        for (const y of [descent, ascent]) {
+          xs.push(originX + x * cos - y * sin)
+          ys.push(originY + x * sin + y * cos)
+        }
+      }
     }
     if (d.kind === 'arrow') {
       const ang = Math.atan2(ty - fy, tx - fx)
@@ -815,8 +830,8 @@ function addDrawing(
     Type: 'XObject',
     Subtype: 'Form',
     BBox: rect,
-    ...(d.kind === 'measure' && measureFontRef
-      ? { Resources: { Font: { F1: measureFontRef } } }
+    ...(d.kind === 'measure' && measureFont
+      ? { Resources: { Font: { F1: measureFont.ref } } }
       : {}),
   })
   const annot = pdfDoc.context.obj({
@@ -1408,21 +1423,7 @@ export async function cropPagesBytes(
   return doc.save({ useObjectStreams: false })
 }
 
-/** Append all pages of the other PDFs (in the given order) to the first; returns combined bytes and appended page count */
-export async function mergePdfBytes(
-  first: Uint8Array,
-  others: Uint8Array[],
-): Promise<{ merged: Uint8Array; appended: number }> {
-  const dst = await PDFDocument.load(first, { updateMetadata: false })
-  let appended = 0
-  for (const otherBytes of others) {
-    const src = await PDFDocument.load(otherBytes, { updateMetadata: false })
-    const copied = await dst.copyPages(src, src.getPageIndices())
-    for (const p of copied) dst.addPage(p)
-    appended += copied.length
-  }
-  return { merged: await dst.save({ useObjectStreams: false }), appended }
-}
+export { mergePdfBytes } from '../shared/merge-pdf'
 
 function applyMetadata(pdfDoc: PDFDocument, meta: MetadataInput): void {
   if (meta.title !== undefined) pdfDoc.setTitle(meta.title)
@@ -1575,6 +1576,7 @@ export async function applySaveRequest(
     applyFormValues?: (doc: PDFDocument) => void | Promise<void>
     applyFormFields?: (doc: PDFDocument) => void | Promise<void>
     updateFieldAppearances?: (doc: PDFDocument) => void | Promise<void>
+    measureFont?: (doc: PDFDocument, label: string) => Promise<PDFFont | undefined>
     decodeImage?: (base64: string) => { width: number; height: number; bgra: Buffer }
   } = {},
 ): Promise<AppliedSaveRequest> {
@@ -1667,15 +1669,20 @@ export async function applySaveRequest(
   // only when a measure drawing is actually written, so saves without one
   // leave the document's font dict untouched
   const drawings = request.drawings ?? []
-  const measureFontRef = drawings.some((d) => d.kind === 'measure')
-    ? (await pdfDoc.embedFont(StandardFonts.Helvetica)).ref
+  const measureFont = drawings.some((d) => d.kind === 'measure')
+    ? await pdfDoc.embedFont(StandardFonts.Helvetica)
     : undefined
   for (const d of drawings) {
     const page = pages[d.pageIndex]
     if (!page) continue
     if (d.kind === 'image') await addImageStamp(pdfDoc, page, d, author)
     else if (d.kind === 'link') addLinkAnnot(pdfDoc, pages, page, d)
-    else addDrawing(pdfDoc, page, d, noteRefs, measureFontRef, author)
+    else {
+      const font = d.kind === 'measure' && /[^\x20-\x7e]/.test(d.label)
+        ? await forms.measureFont?.(pdfDoc, d.label) ?? measureFont
+        : measureFont
+      addDrawing(pdfDoc, page, d, noteRefs, font, author)
+    }
   }
   // Note content edits go after the drawings: replies added above locate their /IRT
   // parent by its old contents, which an earlier in-place rewrite would break. An

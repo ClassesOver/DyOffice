@@ -116,3 +116,10 @@ test('a displaced editor can download its own exact PPTX draft after another edi
  await assert.rejects(f.s.recoverDraft('a',file,{...old,generation:0}),{statusCode:409})
  await assert.rejects(f.s.exportForSave('a',file,old),{statusCode:409})
 })
+
+test('whole presentation timing batches may cover all 200 slides without raising the ordinary operation limit', async () => {
+ const {assertApplySize}=await import('../../server/src/modules/slides/routes.ts')
+ const timing=Array.from({length:200},(_,slide)=>({op:'setAdvanceTime',target:{slide},ms:900}))
+ assert.doesNotThrow(()=>assertApplySize(timing))
+ assert.throws(()=>assertApplySize([...timing.slice(0,100),{op:'setNotes',target:{slide:0},text:'Note'}]),{statusCode:400})
+})

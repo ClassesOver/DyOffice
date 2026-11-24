@@ -23,7 +23,7 @@ import {
 } from './placeholder'
 import { isPresetShapeType } from './preset-shape-types'
 import { custGeomXml, parseCustGeom, validCustGeomPath, type CustGeomPath } from './custgeom'
-import { nextSlideId } from './slide-ids'
+import { nextSlideId, nextSlidePath, rememberRemovedSlide, removedSlide, reserveSlideNumbers, retireSlidePath } from './slide-ids'
 import {
   alternateContentBranches,
   generateParagraphXml,
@@ -86,14 +86,17 @@ import {
   type NewChartKind,
   type NewChartOptions,
 } from './chart-insert'
+import { CHART_WORKBOOK_REL_TYPE } from './chart-workbook'
 import { parseLayoutPlaceholders, placeholderSpXml, prepareInsertSlideWithLayout } from './layout'
 import {
   chooseLayout,
   collectPart,
   collectSlideBundle,
+  duplicateSlideRelationships,
   importClipboardParts,
   importSourceLayout,
   materializeSlideBundle,
+  removeMissingSlideJumps,
   type SlideBundle,
 } from './slide-transfer'
 import { moveSlide } from './sections'
@@ -119,6 +122,7 @@ export {
   DEFAULT_MOTION_PATH,
   elementSpid,
   getSlideAnimations,
+  getSlideShapeKeys,
   patchSlideTimingIncrementalXml,
   patchSlideTimingXml,
   readSlideTimingXml,
@@ -133,6 +137,7 @@ export {
   type AnimEffectKind,
   type AnimTrigger,
   type SlideAnimation,
+  type SlideShapeKey,
 } from './animation'
 export { PackageArchive, PPTX_ZIP_LIMITS, assertZipWithinLimits } from './zip'
 export {
@@ -343,7 +348,12 @@ export {
   NARRATION_NAME,
   type NarrationAudio,
 } from './narration'
-export { applyHeaderFooter, readHeaderFooter, type HeaderFooterOptions } from './headerfooter'
+export {
+  applyHeaderFooter,
+  readHeaderFooter,
+  type HeaderFooterOptions,
+  type HeaderFooterState,
+} from './headerfooter'
 export {
   getSections,
   setSections,
@@ -1943,26 +1953,16 @@ export function replacePictureBytes(
 const SLIDE_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml'
 const SLIDE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide'
 
-/** New slide part path: number = existing max + 1. */
-function nextSlidePath(archive: PackageArchive): string {
-  let maxNum = 0
-  for (const path of archive.entries.keys()) {
-    const m = /^ppt\/slides\/slide(\d+)\.xml$/.exec(path)
-    if (m) maxNum = Math.max(maxNum, Number(m[1]))
-  }
-  return `ppt/slides/slide${maxNum + 1}.xml`
-}
-
 /**
  * Register a new slide part (already written into the archive) with the package
  * and insert it into the deck: add an Override to [Content_Types].xml, register a
  * new sldId/rId in presentation.xml(.rels) (inserted after the sourceIndex slide's
  * sldId), and splice the parsed new slide model into deck.slides.
  */
-function registerNewSlide(opened: OpenedPptx, sourceIndex: number, newPath: string): Slide | null {
+function registerNewSlide(opened: OpenedPptx, sourceIndex: number, newPath: string, restoreId?: number): Slide | null {
   const { deck, archive } = opened
   const src = deck.slides[sourceIndex]
-  if (!src) return null
+  if (!src && sourceIndex !== -1) return null
 
   const ctPath = '[Content_Types].xml'
   const ct = archive.readText(ctPath)
@@ -1993,17 +1993,19 @@ function registerNewSlide(opened: OpenedPptx, sourceIndex: number, newPath: stri
     ),
   )
 
-  const newSldId = `<p:sldId id="${nextSlideId(pres)}" r:id="${newRid}"/>`
+  const newSldId = `<p:sldId id="${nextSlideId(pres, archive, restoreId)}" r:id="${newRid}"/>`
   // Insert after the source slide's sldId; append to the end of the list when not found
-  const srcRid = [...archive.readRels(presPath).values()].find(
+  const srcRid = src && [...archive.readRels(presPath).values()].find(
     (r) => resolveTarget(presPath, r.target) === src.path,
   )?.id
   const srcTag = srcRid
     ? new RegExp(`<p:sldId\\s[^>]*r:id="${srcRid}"[^>]*/>`).exec(pres)?.[0]
     : undefined
-  const nextPres = srcTag
-    ? pres.replace(srcTag, () => `${srcTag}${newSldId}`)
-    : pres.replace('</p:sldIdLst>', () => `${newSldId}</p:sldIdLst>`)
+  const nextPres = sourceIndex === -1
+    ? pres.replace(/<p:sldIdLst\b[^>]*>/, tag => tag + newSldId)
+    : srcTag
+      ? pres.replace(srcTag, () => `${srcTag}${newSldId}`)
+      : pres.replace('</p:sldIdLst>', () => `${newSldId}</p:sldIdLst>`)
   archive.entries.set(presPath, Buffer.from(nextPres, 'utf8'))
 
   const slide = parseSlideFromArchive(archive, newPath)
@@ -2031,11 +2033,7 @@ export function duplicateSlide(
   const newPath = nextSlidePath(archive)
   archive.entries.set(newPath, Buffer.from(patchSlideXml(src), 'utf8'))
 
-  const srcRels = archive.readText(relsPathFor(src.path))
-  if (srcRels) {
-    const cleaned = srcRels.replace(/<Relationship\s[^>]*\/notesSlide"[^>]*\/>/g, '')
-    archive.entries.set(relsPathFor(newPath), Buffer.from(cleaned, 'utf8'))
-  }
+  duplicateSlideRelationships(archive, src.path, newPath, !opts?.clearText)
 
   const slide = registerNewSlide(opened, sourceIndex, newPath)
   if (!slide) return null
@@ -2054,10 +2052,51 @@ export function duplicateSlide(
  * Snapshot a slide for pasting into another deck (or back into this one),
  * including its unsaved edits and every part it references.
  */
+const slideBundleOrigins = new WeakMap<SlideBundle, WeakRef<PackageArchive>>()
+
 export function copySlide(opened: OpenedPptx, sourceIndex: number): SlideBundle | null {
   const slide = opened.deck.slides[sourceIndex]
   if (!slide) return null
-  return collectSlideBundle(opened.archive, slide.path, patchSlideXml(slide))
+  const bundle = collectSlideBundle(opened.archive, slide.path, patchSlideXml(slide))
+  slideBundleOrigins.set(bundle, new WeakRef(opened.archive))
+  return bundle
+}
+
+export interface SlidePastePlan {
+  path: string
+  destinations: ReadonlyArray<readonly [source: string, destination: string]>
+}
+
+function isRestorableSlidePath(path: string): boolean {
+  return /^ppt\/slides\/(?:[\w.-]+\/)*[\w.-]+\.xml$/.test(path) &&
+    resolveTarget('ppt/presentation.xml', '/' + path) === path
+}
+
+/** Reserve paths ahead of the transaction so forwards and backwards jumps both resolve. */
+export function planSlidePastes(
+  opened: OpenedPptx,
+  bundles: readonly SlideBundle[],
+  sameDeck = bundles.every(bundle => slideBundleOrigins.get(bundle)?.deref() === opened.archive),
+  restoreCutPaths = false,
+): SlidePastePlan[] {
+  const start = reserveSlideNumbers(opened.archive, bundles.length)
+  const restored = new Set<string>()
+  const paths = bundles.map(({sourcePath}, i) => {
+    // The first paste of a cut slide can restore the original part so inbound
+    // jumps in the same live deck reconnect to it.
+    if (sameDeck && restoreCutPaths && sourcePath && isRestorableSlidePath(sourcePath) &&
+        !opened.archive.has(sourcePath) && !restored.has(sourcePath)) {
+      restored.add(sourcePath)
+      return sourcePath
+    }
+    return `ppt/slides/slide${start + i}.xml`
+  })
+  const destinations = new Map(sameDeck ? opened.deck.slides.map(({path}) => [path, path] as const) : [])
+  bundles.forEach(({sourcePath}, i) => {
+    if (sourcePath) destinations.set(sourcePath, paths[i]!)
+  })
+  const mappings = [...destinations]
+  return paths.map(path => ({path, destinations:mappings}))
 }
 
 /**
@@ -2072,7 +2111,7 @@ export function pasteSlide(
   opened: OpenedPptx,
   afterIndex: number,
   bundle: SlideBundle,
-  opts?: { keepSourceFormatting?: boolean },
+  opts?: { keepSourceFormatting?: boolean; plan?: SlidePastePlan },
 ): Slide | null {
   const { deck, archive } = opened
   if (deck.slides.length === 0) return null
@@ -2083,13 +2122,32 @@ export function pasteSlide(
     chooseLayout(archive, bundle, neighbour?.path)
   if (!layoutPath) return null
 
-  const newPath = nextSlidePath(archive)
-  const relsXml = materializeSlideBundle(archive, bundle, newPath, layoutPath)
-  archive.entries.set(newPath, Buffer.from(bundle.slideXml, 'utf8'))
+  const plan = opts?.plan ?? planSlidePastes(opened, [bundle])[0]!
+  const newPath = plan.path
+  const restoresSource = newPath === bundle.sourcePath && isRestorableSlidePath(newPath)
+  if ((!/^ppt\/slides\/slide\d+\.xml$/.test(newPath) && !restoresSource) || archive.has(newPath)) return null
+  const slideTargets = new Map(plan.destinations)
+  // A self jump and the notes backlink point to this specific copy.
+  if (bundle.sourcePath) slideTargets.set(bundle.sourcePath, newPath)
+  const missing = new Set(bundle.rels
+    .filter(rel => !rel.external && rel.type.endsWith('/slide') && !slideTargets.has(rel.target))
+    .map(rel => rel.id))
+  const relsXml = materializeSlideBundle(archive, bundle, newPath, layoutPath, slideTargets)
+  archive.entries.set(newPath, Buffer.from(removeMissingSlideJumps(bundle.slideXml, missing), 'utf8'))
   archive.entries.set(relsPathFor(newPath), Buffer.from(relsXml, 'utf8'))
 
+  const original = restoresSource ? removedSlide(archive, newPath) : undefined
+  if (original) {
+    // Restore the existing ID and section first. If the user picked a new
+    // position, apply the same destination section rules as a thumbnail move.
+    const originalIndex = Math.min(original.index, deck.slides.length)
+    const slide = registerNewSlide(opened, originalIndex - 1, newPath, original.id)
+    if (slide && originalIndex !== anchorIndex + 1) moveSlide(opened, originalIndex, anchorIndex + 1)
+    return slide
+  }
+
   if (anchorIndex < 0) {
-    // registerNewSlide can only insert after a slide, so land at 1 and move up
+    // Use the normal move rules so a copy at the front joins the destination section.
     const slide = registerNewSlide(opened, 0, newPath)
     if (slide) moveSlide(opened, deck.slides.indexOf(slide), 0)
     return slide
@@ -2374,6 +2432,8 @@ export function deleteSlide(opened: OpenedPptx, index: number): boolean {
     archive.entries.set(presRelsPath, Buffer.from(presRels.replace(relTag, ''), 'utf8'))
   }
 
+  retireSlidePath(archive, slide.path)
+  rememberRemovedSlide(archive, slide.path, index, sldTag)
   removePartWithOwnedResources(archive, slide.path)
   deck.slides.splice(index, 1)
   return true
@@ -4132,6 +4192,17 @@ export function setTableCellAnchor(
   return true
 }
 
+/** Shifted slides with automatic page numbers need a new render after reordering. */
+export function hasSlideNumberField(slide: Slide): boolean {
+  const hasNumber = (element: SlideElement): boolean =>
+    element.type === 'group'
+      ? element.children.some(hasNumber)
+      : !!(element as TextElement).text?.paragraphs.some((p) =>
+          p.runs.some((run) => run.field === 'slidenum'),
+        )
+  return slide.elements.some(hasNumber) || !!slide.decorations?.some(hasNumber)
+}
+
 // ── Element clipboard ───────────────────────────────────────────────────
 
 export interface ElementClipboardItem {
@@ -4141,13 +4212,43 @@ export interface ElementClipboardItem {
   rels: Array<{ rid: string; type: string; target: string; external?: boolean }>
   /** Dependency part bytes (base64, keyed by absolute path), so the paste target can be a different deck */
   parts?: Readonly<Record<string, string>>
+  /** Namespace declarations inherited from the source slide and shape tree. */
+  namespaces?: Readonly<Record<string, string>>
+  /** Parts that receive independent edits after a paste, including chart workbooks. */
+  independentParts?: readonly string[]
   /** ContentType per dependency: keyed by lower-case extension or by part path */
   contentTypes?: Readonly<Record<string, string>>
 }
 
+const elementClipboardOrigins = new WeakMap<ElementClipboardItem, WeakRef<PackageArchive>>()
+
 // Quote-agnostic like the other relationship scanners: a slide written by a
 // producer that prefers single quotes still names its rIds.
 const RID_ATTR_RE = /\br:(?:embed|link|id)\s*=\s*(["'])(rId\d+)\1/g
+
+function namespaceAttributes(tag: string): [string, string][] {
+  return [...tag.matchAll(/\s+([^\s=/>]+)\s*=\s*("[^"]*"|'[^']*')/g)]
+    .filter(([, name]) => name === 'xmlns' || name?.startsWith('xmlns:'))
+    .map(([, name, value]) => [name!, value!])
+}
+
+function slideNamespaces(prefix: string): Record<string, string> {
+  const tags = prefix.matchAll(/<!--[\s\S]*?-->|<p:(?:sld|cSld|spTree)(?=[\s>])(?:[^<>"']|"[^"]*"|'[^']*')*>/g)
+  return Object.fromEntries([...tags].flatMap(([tag]) => tag.startsWith('<p:') ? namespaceAttributes(tag) : []))
+}
+
+/** Restore bindings without overwriting declarations that were local to the copied element. */
+function bindClipboardNamespaces(xml: string, source: Readonly<Record<string, string>>, target: Readonly<Record<string, string>>): string {
+  return xml.replace(/^(<[A-Za-z_][\w:.-]*)(?=[\s/>])((?:[^<>"']|"[^"]*"|'[^']*')*)>/, (tag, name: string, attributes: string) => {
+    const declared = new Map(namespaceAttributes(tag))
+    const bindings = { xmlns: '""', ...source }
+    const missing = Object.entries(bindings)
+      .filter(([prefix, value]) => !declared.has(prefix) && value.slice(1, -1) !== (target[prefix]?.slice(1, -1) ?? ''))
+      .map(([prefix, value]) => ` ${prefix}=${value}`)
+      .join('')
+    return name + missing + attributes + '>'
+  })
+}
 
 /** Copy: grab the element's current XML and the relationships it references (part paths that pictures/charts etc. point at). */
 export function copyElementData(
@@ -4160,6 +4261,7 @@ export function copyElementData(
   const rels: ElementClipboardItem['rels'] = []
   const parts: Record<string, string> = {}
   const contentTypes: Record<string, string> = {}
+  const independentParts = new Set<string>()
   const seen = new Set<string>()
   for (const m of xml.matchAll(RID_ATTR_RE)) {
     const rid = m[2]!
@@ -4173,6 +4275,14 @@ export function copyElementData(
     // layout/master/theme graph, so keep those as path-only references
     if (!external && !rel.type.endsWith('/slide')) {
       collectPart(opened.archive, target, parts, contentTypes)
+      if (/\/chart(?:Ex)?$/.test(rel.type)) {
+        independentParts.add(target)
+        for (const dependency of opened.archive.readRels(target).values()) {
+          if (dependency.targetMode !== 'External' && dependency.type === CHART_WORKBOOK_REL_TYPE) {
+            independentParts.add(resolveTarget(target, dependency.target))
+          }
+        }
+      }
     }
     rels.push({
       rid,
@@ -4181,7 +4291,13 @@ export function copyElementData(
       ...(external ? { external: true } : {}),
     })
   }
-  return { xml, rels, ...(Object.keys(parts).length ? { parts, contentTypes } : {}) }
+  const item: ElementClipboardItem = {
+    xml, rels, namespaces: slideNamespaces(slide.bodyPrefix),
+    ...(Object.keys(parts).length ? { parts, contentTypes } : {}),
+    ...(independentParts.size ? { independentParts: [...independentParts] } : {}),
+  }
+  elementClipboardOrigins.set(item, new WeakRef(opened.archive))
+  return item
 }
 
 /** 'ppt/media/image1.png' → the relative Target '../media/image1.png' in the slide rels */
@@ -4191,7 +4307,7 @@ function relTargetFromSlide(absTarget: string): string {
 
 /**
  * Paste: land bundled dependency parts (byte-identical ones already in the
- * target are shared, so a same-deck paste copies no media), rels surgery
+ * target are shared when immutable), rels surgery
  * (reuse the rId when the target slide already has a relationship with the
  * same type+target), renumber cNvPr ids, offset the whole thing, append, and
  * reparse.
@@ -4201,6 +4317,7 @@ export function pasteElements(
   slideIndex: number,
   items: ElementClipboardItem[],
   shiftEmu: { dx: number; dy: number },
+  sameDeck?: boolean,
 ): { slide: Slide; elementIds: string[] } | null {
   const { archive, deck } = opened
   const slide = deck.slides[slideIndex]
@@ -4219,22 +4336,32 @@ export function pasteElements(
     byKey.set(`${rel.type} ${abs}`, rel.id)
   }
 
-  // Land dependency parts the target deck is missing (all items at once, so shared media imports once)
+  // Import shared dependencies together. Each chart gets independently editable parts.
   const bundledParts: Record<string, string> = {}
   const bundledCT: Record<string, string> = {}
   for (const item of items) {
+    if (item.independentParts?.length) continue
     Object.assign(bundledParts, item.parts ?? {})
     Object.assign(bundledCT, item.contentTypes ?? {})
   }
-  const pathMap = Object.keys(bundledParts).length
-    ? importClipboardParts(archive, bundledParts, bundledCT)
-    : null
+  const sharedPaths = importClipboardParts(archive, bundledParts, bundledCT)
+  const slidePaths = new Set(deck.slides.map(({ path }) => path))
 
+  const targetNamespaces = slideNamespaces(slide.bodyPrefix)
   let nextId = nextCNvPrId(slide)
   const xmls = items.map((item) => {
-    let xml = item.xml
+    const pathMap = item.independentParts?.length && item.parts
+      ? importClipboardParts(archive, item.parts, item.contentTypes ?? {}, item.independentParts)
+      : sharedPaths
+    const remapped = new Map<string, string>()
+    const missing = new Set<string>()
+    const sameOrigin = sameDeck ?? elementClipboardOrigins.get(item)?.deref() === archive
     for (const rel of item.rels) {
-      const landed = rel.external ? rel.target : (pathMap?.get(rel.target) ?? rel.target)
+      if (!rel.external && rel.type.endsWith('/slide') && (!sameOrigin || !slidePaths.has(rel.target))) {
+        missing.add(rel.rid)
+        continue
+      }
+      const landed = rel.external ? rel.target : (pathMap.get(rel.target) ?? rel.target)
       const key = `${rel.type} ${landed}`
       let rid = byKey.get(key)
       if (!rid) {
@@ -4254,10 +4381,14 @@ export function pasteElements(
         relsDirty = true
         byKey.set(key, rid)
       }
-      if (rid !== rel.rid) {
-        xml = xml.replace(new RegExp(`\\br:(embed|link|id)="${rel.rid}"`, 'g'), `r:$1="${rid}"`)
-      }
+      if (rid !== rel.rid) remapped.set(rel.rid, rid)
     }
+    // Rewrite against the original XML once; source and destination rIds can overlap.
+    let xml = removeMissingSlideJumps(item.xml, missing).replace(RID_ATTR_RE, (attribute, quote: string, sourceRid: string) => {
+      const rid = remapped.get(sourceRid)
+      return rid ? attribute.slice(0, -(sourceRid.length + 1)) + rid + quote : attribute
+    })
+    if (item.namespaces) xml = bindClipboardNamespaces(xml, item.namespaces, targetNamespaces)
     xml = xml.replace(
       /(<p:cNvPr\s[^>]*\bid=["'])\d+(["'])/g,
       (_a, pre: string, post: string) => `${pre}${nextId++}${post}`,

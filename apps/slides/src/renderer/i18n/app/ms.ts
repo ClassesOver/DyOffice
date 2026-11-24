@@ -269,6 +269,8 @@ export const ms = {
   appOutlineNoText: '(Tiada teks)',
   appSectionHeaderTitle: 'Klik untuk meruntuh/mengembangkan; klik kanan untuk mengurus seksyen',
   appNotesLabel: 'Nota',
+  appNotesTooLong: "Nota penceramah pada slaid {slide} melebihi had {limit} aksara. Pendekkan nota untuk menyimpan.",
+  appNotesWriteFailed: "Nota penceramah pada slaid {slide} tidak dapat ditulis. Cuba simpan semula.",
   appNotesClickToAdd: 'Klik untuk menambah nota',
   appNotesPlaceholder: 'Klik untuk menambah nota penceramah (disimpan dalam fail .pptx)',
   appNotesShow: 'Tunjukkan nota',

@@ -786,6 +786,8 @@ register({
   touches: ['blankPages', 'order'],
   additive: true,
   validate(op, ctx) {
+    if (ctx.blankPageLimit && ctx.pageCount >= ctx.blankPageLimit.maxPages)
+      throw new GuidedError(ctx.blankPageLimit.message)
     if (op.after !== null) pageIndex(op.after, ctx, 'after')
     if (op.pageIndex !== ctx.pageCount)
       throw new GuidedError(

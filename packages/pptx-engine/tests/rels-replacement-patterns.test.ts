@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
+import JSZip from 'jszip'
 
 import {
   addElement,
+  addPicture,
   copyElementData,
   createBlankPptx,
   openPptx,
   pasteElements,
+  getElementLink,
+  setElementLink,
+  savePptx,
   type ElementClipboardItem,
 } from '../src/index'
 import { relsPathFor } from '../src/zip'
@@ -81,4 +86,40 @@ describe('relationship writers must not expand $ patterns in a replacement', () 
     const rels = opened.archive.readText(relsPathFor(opened.deck.slides[0]!.path))!
     expect(lastTarget(rels)).toBe(url)
   })
+})
+
+
+it('preserves both image and URL relationships when destination IDs cross', async () => {
+  const source = await openPptx(await createBlankPptx())
+  const slide = source.deck.slides[0]!
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
+  const picture = addPicture(source, slide, { bytes, ext: 'png', offset: OFF })!
+  const link = { kind: 'url', url: 'https://example.com/picture' } as const
+  const updated = setElementLink(source, 0, picture.id, link)!
+  const clip = copyElementData(source, updated, updated.elements.find(el => el.type === 'picture')!)
+  const target = await openPptx(await createBlankPptx())
+  const result = pasteElements(target, 0, [clip], SHIFT)!
+  expect(result.slide.elements.find(el => el.id === result.elementIds[0])?.type).toBe('picture')
+  expect(getElementLink(target, 0, result.elementIds[0]!)).toEqual(link)
+})
+
+
+it('keeps namespace bindings inherited from the source slide on a pasted element', async () => {
+  const source = await openPptx(await createBlankPptx())
+  addElement(source.deck.slides[0]!, { kind: 'textbox', offset: OFF })
+  const zip = await JSZip.loadAsync(await savePptx(source))
+  const part = source.deck.slides[0]!.path
+  const original = await zip.file(part)!.async('string')
+  const declaration = / xmlns:a16="[^"]+"/.exec(original)![0]
+  zip.file(part, original.replace(declaration, '').replace('<p:sld ', '<p:sld' + declaration + ' '))
+  const reopened = await openPptx(await zip.generateAsync({ type: 'uint8array' }))
+  const slide = reopened.deck.slides[0]!
+  const item = copyElementData(reopened, slide, slide.elements.find(el => el.type === 'text')!)
+  const target = await openPptx(await createBlankPptx())
+  expect(target.deck.slides[0]!.bodyPrefix).not.toContain(declaration)
+  pasteElements(target, 0, [item], SHIFT)
+  const result = await JSZip.loadAsync(await savePptx(target))
+  const xml = await result.file(target.deck.slides[0]!.path)!.async('string')
+  expect(xml).toContain(declaration)
+  expect(xml).toContain('<a16:creationId')
 })

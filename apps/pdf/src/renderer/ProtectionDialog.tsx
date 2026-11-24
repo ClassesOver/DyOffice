@@ -1,17 +1,18 @@
 import { useState } from 'react'
 import type { TFunc } from './i18n/locale'
-import type { PdfPermissions } from '../shared/ipc'
+import type { PdfEncryptionInput, PdfPermissions } from '../shared/ipc'
 
 /**
  * Review → Protection: set, change or lift the password the document is saved
- * under, and the limits a reader has once it is open. Applying only updates the
- * session — the next save writes the file with this configuration.
+ * under, and the limits a reader has once it is open. The desktop applies the
+ * configuration on its next save. A browser host can export a protected copy.
  */
 export function ProtectionDialog({
   t,
   hasPassword,
   permissions,
   onApply,
+  protectedCopy,
   onRemove,
   onClose,
 }: {
@@ -19,11 +20,13 @@ export function ProtectionDialog({
   /** whether the document on disk is currently password-protected */
   hasPassword: boolean
   permissions: PdfPermissions
-  onApply: (result: {
-    userPassword: string
-    ownerPassword: string
-    permissions: PdfPermissions
-  }) => void
+  onApply: (result: PdfEncryptionInput) => void
+  protectedCopy?: {
+    title: string
+    description: string
+    action: string
+    save: (result: PdfEncryptionInput) => Promise<string | null>
+  }
   onRemove: () => void
   onClose: () => void
 }): React.JSX.Element {
@@ -32,17 +35,31 @@ export function ProtectionDialog({
   const [owner, setOwner] = useState('')
   const [perms, setPerms] = useState<PdfPermissions>(permissions)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const title = protectedCopy?.title ?? t('protectTitle')
 
-  const apply = (): void => {
+  const apply = async (): Promise<void> => {
+    if (busy) return
     if (password.length === 0 || password !== confirm) {
       setError(t('protectMismatch'))
       return
     }
-    onApply({
+    const settings = {
       userPassword: password,
       ownerPassword: owner.length > 0 ? owner : password,
       permissions: perms,
-    })
+    }
+    if (!protectedCopy) {
+      onApply(settings)
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      setError(await protectedCopy.save(settings))
+    } finally {
+      setBusy(false)
+    }
   }
 
   const toggle = (key: keyof PdfPermissions): void => {
@@ -51,23 +68,24 @@ export function ProtectionDialog({
 
   const checkbox = (key: keyof PdfPermissions, label: string): React.JSX.Element => (
     <label className="pdf-perm-row">
-      <input type="checkbox" checked={perms[key]} onChange={() => toggle(key)} />
+      <input type="checkbox" disabled={busy} checked={perms[key]} onChange={() => toggle(key)} />
       <span>{label}</span>
     </label>
   )
 
   return (
-    <div className="pdf-modal-mask" onClick={onClose}>
+    <div className="pdf-modal-mask" onClick={busy ? undefined : onClose}>
       <div
         className="pdf-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={t('protectTitle')}
+        aria-label={title}
+        aria-busy={busy}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="pdf-modal-title">{t('protectTitle')}</div>
+        <div className="pdf-modal-title">{title}</div>
         <div className="pdf-modal-hint">
-          {hasPassword ? t('protectChangeHint') : t('protectSetHint')}
+          {protectedCopy?.description ?? (hasPassword ? t('protectChangeHint') : t('protectSetHint'))}
         </div>
 
         <div className="pdf-field">
@@ -75,6 +93,7 @@ export function ProtectionDialog({
             <span>{t('protectPasswordLabel')}</span>
             <input
               type="password"
+              disabled={busy}
               className="pdf-modal-input"
               value={password}
               onChange={(e) => {
@@ -88,6 +107,7 @@ export function ProtectionDialog({
             <span>{t('protectConfirmLabel')}</span>
             <input
               type="password"
+              disabled={busy}
               className="pdf-modal-input"
               value={confirm}
               onChange={(e) => {
@@ -100,6 +120,7 @@ export function ProtectionDialog({
             <span>{t('protectOwnerLabel')}</span>
             <input
               type="password"
+              disabled={busy}
               className="pdf-modal-input"
               value={owner}
               onChange={(e) => setOwner(e.target.value)}
@@ -124,7 +145,7 @@ export function ProtectionDialog({
         )}
 
         <div className="pdf-modal-actions">
-          {hasPassword && (
+          {hasPassword && !protectedCopy && (
             <button
               className="pdf-modal-btn"
               onClick={() => {
@@ -134,11 +155,11 @@ export function ProtectionDialog({
               {t('protectRemove')}
             </button>
           )}
-          <button className="pdf-modal-btn" onClick={onClose}>
+          <button className="pdf-modal-btn" disabled={busy} onClick={onClose}>
             {t('cancel')}
           </button>
-          <button className="pdf-modal-btn primary" onClick={apply}>
-            {t('protectApply')}
+          <button className="pdf-modal-btn primary" disabled={busy} onClick={() => void apply()}>
+            {busy ? t('saving') : protectedCopy?.action ?? t('protectApply')}
           </button>
         </div>
       </div>

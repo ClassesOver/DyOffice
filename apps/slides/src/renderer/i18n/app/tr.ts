@@ -263,6 +263,8 @@ export const tr = {
   appOutlineNoText: '(Metin yok)',
   appSectionHeaderTitle: 'Daraltmak/genişletmek için tıklayın; bölümü yönetmek için sağ tıklayın',
   appNotesLabel: 'Notlar',
+  appNotesTooLong: "{slide}. slayttaki konuşmacı notları {limit} karakter sınırını aşıyor. Kaydetmek için notları kısaltın.",
+  appNotesWriteFailed: "{slide}. slayttaki konuşmacı notları yazılamadı. Tekrar kaydetmeyi deneyin.",
   appNotesClickToAdd: 'Not eklemek için tıklayın',
   appNotesPlaceholder: 'Konuşmacı notu eklemek için tıklayın (.pptx içine kaydedilir)',
   appNotesShow: 'Notları göster',

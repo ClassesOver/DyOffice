@@ -19,6 +19,7 @@ import {App, type SlidesAppHost, type SlidesEditorHandle} from '../../../slides/
 import {LocaleProvider, setModuleLang} from '../../../slides/src/renderer/i18n/locale'
 import {installCanvasKerning} from '../../../slides/src/renderer/canvas-kerning'
 import type {SlidesApi} from '../../../slides/src/shared/ipc'
+import {WEB_NOTES_TEXT_LIMIT} from '../../../slides/src/shared/notes-draft'
 import {applyAiPanelPrefs, installScreenTips} from '@genoffice/ui'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -239,7 +240,12 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       {loaded && !failed && state.status !== 'unauthorized' && <a className="dyoffice-slides-download-saved"
         href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.download}</a>}
     </>
-    const hostProps: SlidesAppHost = {saveDownload,hasGeneratedName:bridge.hasGeneratedName,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, assistantAvailable:Boolean(sharedAssistant?.available&&(prefs.showAssistant!==false||handoffOpen)),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
+    const hostProps: SlidesAppHost = {saveDownload,hasGeneratedName:bridge.hasGeneratedName,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, presenterAudienceAvailable:false, documentStorageScope:`workspace:${fileId}`, assistantAvailable:Boolean(sharedAssistant?.available&&(prefs.showAssistant!==false||handoffOpen)),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
+    hostProps.downloadPdf = async (baseName,pages,width,height,links) => {
+      const {downloadSlidesPdf} = await import('./slides-pdf-download')
+      return downloadSlidesPdf(baseName,pages,width,height,links,copyLifetime.signal)
+    }
+    hostProps.notesTextLimit = WEB_NOTES_TEXT_LIMIT
     hostProps.downloadImages = async (baseName,format,pages) => {
       const {downloadSlidesImages} = await import('./slides-image-download')
       return downloadSlidesImages(baseName,format,pages,copyLifetime.signal)

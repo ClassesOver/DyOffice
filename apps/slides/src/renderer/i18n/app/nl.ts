@@ -277,6 +277,8 @@ export const nl = {
   appSectionHeaderTitle:
     'Klik om samen/uit te vouwen; klik met de rechtermuisknop om de sectie te beheren',
   appNotesLabel: 'Notities',
+  appNotesTooLong: "De sprekersnotities op dia {slide} zijn langer dan {limit} tekens. Kort ze in om op te slaan.",
+  appNotesWriteFailed: "De sprekersnotities op dia {slide} konden niet worden geschreven. Probeer opnieuw op te slaan.",
   appNotesClickToAdd: 'Klik om notities toe te voegen',
   appNotesPlaceholder: 'Klik om sprekersnotities toe te voegen (opgeslagen in het .pptx-bestand)',
   appNotesShow: 'Notities weergeven',

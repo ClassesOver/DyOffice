@@ -9,6 +9,9 @@ test('mixed PDF snapshot upload requires session and CSRF and exposes no caller-
  const forbidden=()=>Object.assign(Error('Forbidden'),{statusCode:403})
  registerPdfRoutes(app,{stageApplyOps:async(...args)=>{calls.push(args);return {commitInput:{fileId,baseRevision:revision}}}},{authenticate:async value=>{if(value!==token)throw forbidden()}},{originCheck(){},requireSession(request,value){if(value!==token||request.headers['x-csrf-token']!==token)throw forbidden()}})
  const snapshot={fileId,baseRevision:revision,generation:1,markups:[],notes:[],textInserts:[],imageEdits:[],formEdits:{},formFields:[],rotations:{0:90},deleted:[],order:null,metadata:{title:'Mixed'}}
+ snapshot.drawings=[{kind:'ink',pageIndex:0,color:[0.2,0.4,0.8],width:2,paths:[[10,20,30,40]]}]
+ snapshot.outline=[{title:'Chapter',pageIndex:0}]
+ snapshot.formWidgetEdits=[{widgetId:'12R',fieldName:'field',remove:true}]
  const payload={baseRevision:revision,editorId:fileId,leaseEpoch:1,idempotencyKey:'mixed-ops-save',snapshot},url=`/api/v1/files/${fileId}/pdf/apply-ops/uploads`,headers={cookie:`__Host-dyoffice-session=${token}`,'x-csrf-token':token}
  assert.equal((await app.inject({method:'POST',url,payload})).statusCode,403)
  assert.equal((await app.inject({method:'POST',url,headers:{cookie:headers.cookie},payload})).statusCode,403)

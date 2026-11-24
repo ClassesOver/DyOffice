@@ -1,9 +1,12 @@
 import {PDFArray,PDFDict,PDFName} from 'pdf-lib'
 
+export const MAX_PDF_EDIT_PAGES=100
+export const MAX_PDF_DRAFT_BLANK_PAGES=20
+
 /** Structural edit policy shared by the Web viewer and canonical PDF workers. */
 export function assertPdfEditStructure(doc,{allowAcroForm=false}={}){
  const fail=code=>{throw Object.assign(Error(code),{code})}
- if(doc.getPageCount()<1||doc.getPageCount()>100)fail('PDF_EDIT_LIMIT')
+ if(doc.getPageCount()<1||doc.getPageCount()>MAX_PDF_EDIT_PAGES)fail('PDF_EDIT_LIMIT')
  const pending=doc.context.enumerateIndirectObjects().map(([,object])=>object),visited=new Set()
  while(pending.length){
   const object=pending.pop();if(!object||visited.has(object))continue

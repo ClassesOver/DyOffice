@@ -7,7 +7,7 @@
  *  - insertBlankSlideWithLayout: insert a blank slide after a given position, with
  *    rels pointing at the chosen layout
  */
-import { nextSlideId } from './slide-ids'
+import { nextSlideId, nextSlidePath } from './slide-ids'
 import type { PackageArchive } from './zip'
 import { resolveTarget, relsPathFor } from './zip'
 import { escapeXmlAttr, hasContentTypeOverride, maxRelationshipIdNumber } from './xml-utils'
@@ -130,16 +130,6 @@ const SLIDE_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presen
 const SLIDE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide'
 export const LAYOUT_REL_TYPE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout'
-
-/** Generate the next unused slide path (current max number + 1). */
-function nextSlidePath(archive: PackageArchive): string {
-  let max = 0
-  for (const path of archive.entries.keys()) {
-    const m = /^ppt\/slides\/slide(\d+)\.xml$/.exec(path)
-    if (m) max = Math.max(max, parseInt(m[1]!, 10))
-  }
-  return `ppt/slides/slide${max + 1}.xml`
-}
 
 export interface InsertLayoutSlideOptions {
   /** Insert after this slide index (0-based) */
@@ -269,7 +259,7 @@ export function prepareInsertSlideWithLayout(
     ),
   )
 
-  const newSldTag = `<p:sldId id="${nextSlideId(pres)}" r:id="${newRid}"/>`
+  const newSldTag = `<p:sldId id="${nextSlideId(pres, archive)}" r:id="${newRid}"/>`
 
   // Insert after the source slide's sldId
   const srcRid = [...archive.readRels(presPath).values()].find(

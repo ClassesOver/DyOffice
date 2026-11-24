@@ -254,6 +254,8 @@ export const th = {
   appOutlineNoText: '(ไม่มีข้อความ)',
   appSectionHeaderTitle: 'คลิกเพื่อยุบ/ขยาย คลิกขวาเพื่อจัดการส่วน',
   appNotesLabel: 'บันทึกย่อ',
+  appNotesTooLong: "บันทึกย่อของผู้บรรยายในสไลด์ {slide} ยาวเกิน {limit} อักขระ โปรดย่อบันทึกก่อนบันทึกไฟล์",
+  appNotesWriteFailed: "ไม่สามารถเขียนบันทึกย่อของผู้บรรยายในสไลด์ {slide} ได้ โปรดลองบันทึกอีกครั้ง",
   appNotesClickToAdd: 'คลิกเพื่อเพิ่มบันทึกย่อ',
   appNotesPlaceholder: 'คลิกเพื่อเพิ่มบันทึกย่อของผู้บรรยาย (บันทึกลงใน pptx พร้อมเอกสาร)',
   appNotesShow: 'แสดงบันทึกย่อ',

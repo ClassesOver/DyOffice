@@ -1,2 +1,11 @@
 .dyoffice-native-sheets { height: 100vh; display: flex; flex-direction: column; color: var(--text); background: var(--surface); }
 .dyoffice-native-sheets > .app-shell { flex: 1; min-height: 0; }
+
+/* Sheets dialogs use layer 40. Keep notifications below the active dialog. */
+.dyoffice-native-sheets:has(.dialog-backdrop, [role='dialog'][aria-modal='true']) > .document-notifications {
+  z-index: 39;
+}
+
+.dyoffice-native-sheets:has(.dialog-backdrop, [role='dialog'][aria-modal='true']) > .document-notifications * {
+  pointer-events: none;
+}

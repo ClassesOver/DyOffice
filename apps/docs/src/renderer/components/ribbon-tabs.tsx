@@ -1358,8 +1358,8 @@ export function ReviewTab({
         <div className="ribbon-group-items">
           <button
             className={`rb-big ${protectActive ? 'active' : ''}`}
-            disabled={!hasDoc || !desktopActionsAvailable}
-            title={!desktopActionsAvailable ? '文档密码与保护仅桌面版可用。' : t('ribbonProtectDocTip')}
+            disabled={!hasDoc}
+            title={desktopActionsAvailable ? t('ribbonProtectDocTip') : t('ribbonProtectDoc')}
             onClick={onProtectDoc}
           >
             <span className="rb-big-icon">

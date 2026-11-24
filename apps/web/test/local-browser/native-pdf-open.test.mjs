@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {execFileSync} from 'node:child_process'
-import {PDFDocument,PDFName,PDFString,rgb} from 'pdf-lib'
+import {createServer} from 'node:http'
+import JSZip from 'jszip'
+import {PDFDict,PDFDocument,PDFHexString,PDFName,PDFString,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
@@ -21,6 +23,78 @@ import {renderPdfPages} from '../../server/src/pdf/raster.mjs'
 
 const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const liveImageConfig=process.env.DYOFFICE_LIVE_PDF_IMAGE_CONFIG
+test('native Web PDF opens an internal link at its explicit destination',{skip:!directory,timeout:60000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ const pdf=await PDFDocument.create()
+ const source=pdf.addPage([600,800]),target=pdf.addPage([600,2400])
+ pdf.addPage([600,800])
+ source.drawText('Go to the marked location',{x:60,y:718,size:17})
+ target.drawText('Marked location',{x:60,y:280,size:20})
+ const link=pdf.context.register(pdf.context.obj({
+  Type:'Annot',Subtype:'Link',Rect:[55,702,478,745],Border:[0,0,0],
+  Dest:[target.ref,PDFName.of('XYZ'),0,300,null],
+ }))
+ source.node.set(PDFName.of('Annots'),pdf.context.obj([link]))
+ const {file}=await importFile(f,f.alice.token,Buffer.from(await pdf.save()),'internal-link.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1280,height:720}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.locator('.pdf-page[data-page="0"] .pdf-link').click()
+ const markedLocation=page.locator('.pdf-page[data-page="1"] .textLayer').getByText('Marked location',{exact:true})
+ await expect(markedLocation).toBeInViewport()
+ await expect.poll(()=>markedLocation.evaluate(mark=>Math.abs(
+  mark.getBoundingClientRect().top-document.querySelector('.pdf-scroll').getBoundingClientRect().top,
+ ))).toBeLessThan(60)
+})
+
+test('native Web PDF prevents a 101st draft page and saves the existing edits',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ const pdf=await PDFDocument.create()
+ for(let i=0;i<99;i++)pdf.addPage([240,300]).drawText('Fixture page '+(i+1))
+ const {file}=await importFile(f,f.alice.token,Buffer.from(await pdf.save()),'page-limit.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ const insertBlank=page.getByRole('button',{name:'Insert blank page',exact:true})
+ await expect(insertBlank).toBeEnabled()
+ await insertBlank.click()
+ await expect(insertBlank).toBeDisabled({timeout:1500})
+ await expect(insertBlank).toHaveAttribute('data-tip',/100 pages/)
+ await page.locator('.pdf-thumb-box').first().click({button:'right'})
+ await expect(page.locator('.thumb-menu').getByRole('button',{name:'Insert blank page',exact:true})).toBeDisabled()
+ await page.keyboard.press('Escape')
+ await page.keyboard.press('Control+s')
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ await expect.poll(head,{timeout:40000}).not.toBe(file.revision)
+ const stored=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,await head()))
+ assert.equal(stored.getPageCount(),100)
+ assert.equal(stored.getPage(0).getRotation().angle,90)
+})
+
 test('native PDF assistant starts a new chat without losing the draft or pending page rotation',{skip:!directory,timeout:60000},async t=>{
  const origin='http://localhost:4274',f=await fileFixture(t,{origin,buildApp:false})
  const fixture=await PDFDocument.create()
@@ -911,5 +985,202 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  await page.reload()
  await mixedReload
  await expect.poll(()=>pixel(138,65),{timeout:15000}).toEqual([0,0,255])
+ assert.deepEqual(errors,[])
+})
+
+
+test('native Web PDF compares local files and downloads page images and an embedded attachment',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en'})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300]).drawText('PDF comparison fixture')
+ const attachment=Buffer.from('Embedded test content')
+ await pdf.attach(attachment,'evidence.txt',{mimeType:'text/plain'})
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'comparison.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({acceptDownloads:true})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'View',exact:true}).click()
+ await page.getByRole('button',{name:'Compare',exact:true}).click()
+ const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.locator('.pdf-compare-pick').click()])
+ await chooser.setFiles({name:'identical.pdf',mimeType:'application/pdf',buffer:original})
+ await expect(page.getByText('Both documents carry the same text')).toBeVisible()
+ await page.getByRole('button',{name:'Attachments',exact:true}).click()
+ await expect(page.getByRole('button',{name:'Add attachment',exact:true})).toBeEnabled()
+ const [embedded]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export',exact:true}).click()])
+ assert.equal(embedded.suggestedFilename(),'evidence.txt')
+ assert.deepEqual(await readFile(await embedded.path()),attachment)
+
+ await page.getByRole('button',{name:'Home',exact:true}).click()
+ await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
+ await expect(page.getByRole('button',{name:'PDF to Word',exact:true})).toBeDisabled()
+ const [images]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export as PNG',exact:true}).click()])
+ const archive=await JSZip.loadAsync(await readFile(await images.path()))
+ assert.deepEqual(Object.keys(archive.files),['comparison-01.png'])
+ const raster=PNG.sync.read(await archive.file('comparison-01.png').async('nodebuffer'))
+ assert.deepEqual([raster.width,raster.height],[500,625])
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ await page.getByRole('button',{name:'View',exact:true}).click()
+ if(!await page.getByRole('button',{name:'Add attachment',exact:true}).isVisible()){
+  await page.getByRole('button',{name:'Attachments',exact:true}).click()
+ }
+ const addedBytes=Buffer.from('New browser attachment')
+ const [pickAttachment]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('button',{name:'Add attachment',exact:true}).click()])
+ await pickAttachment.setFiles({name:'added.txt',mimeType:'text/plain',buffer:addedBytes})
+ await expect(page.locator('.pdf-attachment-name[title="added.txt"]')).toBeVisible()
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ await page.getByRole('button',{name:'Home',exact:true}).click()
+ await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
+ const [afterSave]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export as JPG',exact:true}).click()])
+ const afterZip=await JSZip.loadAsync(await readFile(await afterSave.path()))
+ assert.deepEqual(Object.keys(afterZip.files),['comparison-01.jpg'])
+ await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
+ await page.reload()
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'View',exact:true}).click()
+ await page.getByRole('button',{name:'Attachments',exact:true}).click()
+ const added=page.locator('.pdf-attachment').filter({hasText:'added.txt'})
+ const [stored]=await Promise.all([page.waitForEvent('download'),added.getByRole('button',{name:'Export',exact:true}).click()])
+ assert.deepEqual(await readFile(await stored.path()),addedBytes)
+})
+
+test('native Web PDF merges local files in order into a separate download',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ const makePdf=async widths=>{
+  const doc=await PDFDocument.create()
+  for(const width of widths)doc.addPage([width,300]).drawText('Page '+width)
+  return Buffer.from(await doc.save())
+ }
+ const original=await makePdf([240])
+ const {file}=await importFile(f,f.alice.token,original,'merge-source.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({acceptDownloads:true})
+ const errors=[]
+ page.on('pageerror',error=>errors.push(error.message))
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ const pick=async()=> (await Promise.all([
+  page.waitForEvent('filechooser',{timeout:5000}),
+  page.getByRole('button',{name:'Merge PDF',exact:true}).click(),
+ ]))[0]
+ const canceled=await pick()
+ await canceled.setFiles([])
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ assert.equal(await head(),file.revision)
+ const selected=await pick()
+ assert.equal(selected.isMultiple(),true)
+ const [download]=await Promise.all([
+  page.waitForEvent('download'),
+  selected.setFiles([
+   {name:'z-first.pdf',mimeType:'application/pdf',buffer:await makePdf([250,260])},
+   {name:'a-second.pdf',mimeType:'application/pdf',buffer:await makePdf([270])},
+  ]),
+ ])
+ assert.equal(download.suggestedFilename(),'merge-source-merged.pdf')
+ const merged=await PDFDocument.load(await readFile(await download.path()))
+ assert.deepEqual(merged.getPages().map(p=>p.getWidth()),[240,250,260,270])
+ assert.equal(merged.getPage(0).getRotation().angle,90)
+ const savedRevision=await head()
+ assert.notEqual(savedRevision,file.revision)
+ const saved=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,savedRevision))
+ assert.equal(saved.getPageCount(),1)
+ assert.equal(saved.getPage(0).getRotation().angle,90)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ assert.deepEqual(errors,[])
+})
+
+test('native Web PDF saves rotation, drawings, bookmarks and widget deletion together',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ const pdf=await PDFDocument.create()
+ const p=pdf.addPage([240,300])
+ p.drawText('PDF parity fixture')
+ pdf.addPage([240,300]).drawText('Second page')
+ const field=pdf.getForm().createTextField('old field')
+ field.addToPage(p,{x:50,y:95,width:100,height:22})
+ const outline=pdf.context.obj({Type:'Outlines',Count:1})
+ const root=pdf.context.register(outline)
+ const bookmark=pdf.context.register(pdf.context.obj({Title:PDFHexString.fromText('Original bookmark'),Parent:root,Dest:[p.ref,'XYZ',0,240,null]}))
+ outline.set(PDFName.of('First'),bookmark)
+ outline.set(PDFName.of('Last'),bookmark)
+ pdf.catalog.set(PDFName.of('Outlines'),root)
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'mixed-save.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({acceptDownloads:true})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:40000})
+
+ const errors=[]
+ page.on('pageerror', error=>errors.push(error.message))
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await page.getByRole('button',{name:'Annotate',exact:true}).click()
+ const pen=page.getByRole('button',{name:'Draw',exact:true})
+ await pen.click()
+ const target=page.locator('.pdf-page').first()
+ const box=await target.boundingBox()
+ assert.ok(box)
+ await page.mouse.move(box.x+40,box.y+65)
+ await page.mouse.down()
+ await page.mouse.move(box.x+85,box.y+100,{steps:6})
+ await page.mouse.up()
+ await pen.click()
+ await page.getByRole('button',{name:'View',exact:true}).click()
+ await page.getByRole('button',{name:'Outline',exact:true}).click()
+ await page.getByRole('button',{name:'Edit bookmarks',exact:true}).click()
+ await page.getByRole('button',{name:'Original bookmark',exact:true}).hover()
+ await page.getByRole('button',{name:'Rename bookmark',exact:true}).click()
+ const title=page.locator('.pdf-bookmark-row input')
+ await title.fill('Updated bookmark')
+ await title.press('Enter')
+ await page.getByRole('button',{name:'Edit bookmarks',exact:true}).click()
+ await page.getByRole('button',{name:'Form Design',exact:true}).click()
+ await page.locator('[data-field-id]').first().click()
+ await page.locator('.pdf-formdesign-remove').click()
+ await page.keyboard.press('Control+s')
+ const getRevision=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ await expect.poll(getRevision,{timeout:25000}).not.toBe(file.revision)
+ const stored=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,await getRevision()))
+ assert.equal(stored.getPage(0).getRotation().angle,90)
+ const annots=stored.getPage(0).node.Annots().asArray().map(ref=>stored.context.lookup(ref,PDFDict))
+ assert.deepEqual(annots.map(annot=>String(annot.get(PDFName.of('Subtype')))),['/Ink'])
+ const savedBookmark=stored.catalog.lookup(PDFName.of('Outlines'),PDFDict).lookup(PDFName.of('First'),PDFDict)
+ assert.equal(savedBookmark.lookup(PDFName.of('Title')).decodeText(),'Updated bookmark')
+ assert.equal(stored.getForm().getFieldMaybe('old field'),undefined)
  assert.deepEqual(errors,[])
 })

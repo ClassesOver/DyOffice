@@ -277,6 +277,8 @@ export const de = {
   appSectionHeaderTitle:
     'Klicken zum Reduzieren/Erweitern; Rechtsklick zum Verwalten des Abschnitts',
   appNotesLabel: 'Notizen',
+  appNotesTooLong: "Die Vortragsnotizen auf Folie {slide} überschreiten das Limit von {limit} Zeichen. Kürzen Sie sie vor dem Speichern.",
+  appNotesWriteFailed: "Die Vortragsnotizen auf Folie {slide} konnten nicht geschrieben werden. Versuchen Sie erneut zu speichern.",
   appNotesClickToAdd: 'Klicken, um Notizen hinzuzufügen',
   appNotesPlaceholder:
     'Klicken, um Sprechernotizen hinzuzufügen (werden in der .pptx-Datei gespeichert)',

@@ -1486,7 +1486,8 @@ describe('outline replacement', () => {
 })
 
 describe('link annotations', () => {
-  it('writes a web link the read path (pdf.js) surfaces as url', async () => {
+  it('writes a web link with parentheses that pdf.js surfaces as a URL', async () => {
+    const url = 'https://example.com/folder)/doc?q=(test%29'
     const bytes = await makePdf([
       [612, 792],
       [612, 792],
@@ -1495,7 +1496,7 @@ describe('link annotations', () => {
       bytes,
       request({
         drawings: [
-          { kind: 'link', pageIndex: 0, rect: [50, 700, 250, 720], url: 'https://example.com' },
+          { kind: 'link', pageIndex: 0, rect: [50, 700, 250, 720], url },
         ],
       }),
     )
@@ -1505,15 +1506,14 @@ describe('link annotations', () => {
     expect(subtypeOf(annots[0]!)).toBe('Link')
     const action = annots[0]!.lookup(PDFName.of('A'), PDFDict)
     expect(action.lookup(PDFName.of('S'), PDFName).decodeText()).toBe('URI')
-    expect(action.lookup(PDFName.of('URI'), PDFString).decodeText()).toBe('https://example.com')
+    expect(action.lookup(PDFName.of('URI'), PDFHexString).decodeText()).toBe(url)
     const loadingTask = getDocument({ data: saved.slice() })
     try {
       const pdfJsDoc = await loadingTask.promise
       const annos = await (await pdfJsDoc.getPage(1)).getAnnotations()
       const links = annos.filter((a) => a.subtype === 'Link')
       expect(links).toHaveLength(1)
-      // pdf.js normalizes the URL (bare host gains its trailing slash)
-      expect(links[0]!.url).toBe('https://example.com/')
+      expect(links[0]!.url).toBe(url)
     } finally {
       await loadingTask.destroy()
     }

@@ -46,15 +46,22 @@ export function ShowMediaLayer({
   const els = useRef(new Map<string, HTMLMediaElement>())
   useEffect(() => {
     let cancelled = false
+    const loadedUrls = new Set<string>()
     setUrls({})
     setPlaying({})
     for (const n of nodes) {
       void window.slidesApi.getMediaData(slideIndex, n.sourceId).then((d) => {
-        if (!cancelled && d) setUrls((u) => ({ ...u, [n.sourceId]: d }))
+        if (!d) return
+        if (cancelled) window.slidesApi.releaseMediaData?.(d.dataUrl)
+        else {
+          loadedUrls.add(d.dataUrl)
+          setUrls((u) => ({ ...u, [n.sourceId]: d }))
+        }
       })
     }
     return () => {
       cancelled = true
+      for (const url of loadedUrls) window.slidesApi.releaseMediaData?.(url)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slideIndex])
@@ -89,7 +96,7 @@ export function ShowMediaLayer({
   if (!nodes.length) return null
   const toggle = (el: HTMLMediaElement | null) => {
     if (!el) return
-    if (el.paused) void el.play()
+    if (el.paused) void el.play().catch(() => {})
     else el.pause()
   }
   const ref = (id: string) => (el: HTMLMediaElement | null) => {

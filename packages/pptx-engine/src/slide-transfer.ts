@@ -2,17 +2,19 @@
 /// package part it depends on (media, charts and their embedded workbooks, …) so
 /// the target deck can be a different file — or a different process.
 ///
-/// Two things keep this simple. Relationship ids only have to be unique inside one
-/// part's .rels, so the copied slide keeps the source's rIds verbatim and its XML
-/// never needs rewriting. And the layout is not copied: the slide is re-pointed at
-/// a layout in the destination, which is what PowerPoint's "use destination theme"
-/// paste does.
+/// Relationship ids are scoped to each part. Preserve them for dependencies
+/// that land in the destination, and resolve slide jumps against actual deck
+/// members rather than treating other slides as generic dependencies.
 
 import { PackageArchive, relsPathFor, resolveTarget, type Relationship } from './zip'
 import { hasContentTypeOverride, maxRelationshipIdNumber } from './xml-utils'
+import { ensureNotesMaster } from './notes'
 
 const LAYOUT_REL = '/slideLayout'
 const NOTES_REL = '/notesSlide'
+const NOTES_MASTER_REL = '/notesMaster'
+const SLIDE_REL = '/slide'
+const relationshipTags = /<!--[^]*?-->|<((?:[\w.-]+:)?Relationship)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*?(?:\/>|>[^]*?<\/\1\s*>)/g
 
 export interface SlideBundleRel {
   readonly id: string
@@ -35,6 +37,7 @@ export interface SlideBundleChain {
 }
 
 export interface SlideBundle {
+  readonly sourcePath?: string
   readonly slideXml: string
   readonly rels: readonly SlideBundleRel[]
   /** every dependency part, base64 so the bundle survives IPC and JSON */
@@ -55,10 +58,13 @@ function extOf(path: string): string {
 
 function overrideContentType(ct: string | null, partPath: string): string | undefined {
   if (!ct) return undefined
-  const re = new RegExp(
-    `<Override[^>]*PartName=["']/${partPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*ContentType=["']([^"']+)["']`,
-  )
-  return re.exec(ct)?.[1]
+  const name = '/' + partPath
+  for (const match of ct.matchAll(/<!--[^]*?-->|<((?:[\w.-]+:)?Override)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/g)) {
+    if (match[1] && attribute(match[0], 'PartName') === name) {
+      return attribute(match[0], 'ContentType')
+    }
+  }
+  return undefined
 }
 
 function defaultContentType(ct: string | null, ext: string): string | undefined {
@@ -72,6 +78,7 @@ export function collectPart(
   partPath: string,
   parts: Record<string, string>,
   contentTypes: Record<string, string>,
+  skipRelationship?: (rel: Relationship) => boolean,
 ): void {
   if (parts[partPath]) return
   const bytes = archive.readBytes(partPath)
@@ -92,8 +99,8 @@ export function collectPart(
   if (!relsXml) return
   parts[relsPath] = Buffer.from(relsXml, 'utf8').toString('base64')
   for (const rel of archive.readRels(partPath).values()) {
-    if (rel.targetMode === 'External') continue
-    collectPart(archive, resolveTarget(partPath, rel.target), parts, contentTypes)
+    if (rel.targetMode === 'External' || skipRelationship?.(rel)) continue
+    collectPart(archive, resolveTarget(partPath, rel.target), parts, contentTypes, skipRelationship)
   }
 }
 
@@ -117,7 +124,6 @@ export function collectSlideBundle(
   let layoutName: string | undefined
 
   for (const rel of archive.readRels(slidePath).values()) {
-    if (rel.type.endsWith(NOTES_REL)) continue
     if (rel.targetMode === 'External') {
       rels.push({ id: rel.id, type: rel.type, target: rel.target, external: true })
       continue
@@ -128,7 +134,13 @@ export function collectSlideBundle(
       rels.push({ id: rel.id, type: rel.type, target: absolute, layout: true })
       continue
     }
-    collectPart(archive, absolute, parts, contentTypes)
+    // Notes link back to the slide and reuse a destination notes master.
+    // Neither relation should pull other decks' slides or masters into the bundle.
+    if (!rel.type.endsWith(SLIDE_REL)) {
+      collectPart(archive, absolute, parts, contentTypes, dependency =>
+        dependency.type.endsWith(SLIDE_REL) || dependency.type.endsWith(NOTES_MASTER_REL),
+      )
+    }
     rels.push({ id: rel.id, type: rel.type, target: absolute })
   }
 
@@ -145,7 +157,7 @@ export function collectSlideBundle(
     const chainParts: Record<string, string> = {}
     const chainCT: Record<string, string> = {}
     // collectPart walks the rel graph: layout → master → theme + the master's other layouts + media
-    collectPart(archive, c.layoutPath, chainParts, chainCT)
+    collectPart(archive, c.layoutPath, chainParts, chainCT, rel => rel.type.endsWith(SLIDE_REL))
     chain = {
       layoutPath: c.layoutPath,
       masterPath: c.masterPath,
@@ -156,6 +168,7 @@ export function collectSlideBundle(
   }
 
   return {
+    sourcePath: slidePath,
     slideXml,
     rels,
     parts,
@@ -195,6 +208,26 @@ function escapeAttr(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;')
 }
 
+function attribute(tag: string, name: string): string | undefined {
+  const match = new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`).exec(tag)
+  return match?.[2]
+}
+
+function retargetRelationship(tag: string, from: string, to: string): string {
+  return tag.replace(/\sTarget\s*=\s*(["'])([\s\S]*?)\1/, () => ` Target="${escapeAttr(relative(from, to))}"`)
+}
+
+/** Remove hyperlinks whose slide targets do not exist in the pasted deck. */
+export function removeMissingSlideJumps(xml: string, removed: ReadonlySet<string>): string {
+  if (!removed.size) return xml
+  const links = /<!--[^]*?-->|<!\[CDATA\[[^]*?\]\]>|<((?:[\w.-]+:)?hlink(?:Click|MouseOver))\b(?:[^<>"']|"[^"]*"|'[^']*')*?(?:\/>|>[^]*?<\/\1\s*>)/g
+  return xml.replace(links, (tag, name: string | undefined) => {
+    if (!name) return tag
+    const id = attribute(tag, '(?:[\\w.-]+:)?id')
+    return id && removed.has(id) ? '' : tag
+  })
+}
+
 /** All layout paths in the target, with their display names. */
 export function listLayouts(archive: PackageArchive): { path: string; name?: string }[] {
   const layouts: { path: string; name?: string }[] = []
@@ -221,6 +254,7 @@ function writeParts(
   parts: Readonly<Record<string, string>>,
   contentTypes: Readonly<Record<string, string>>,
   reusable?: ReadonlySet<string>,
+  remapRelation?: (owner: string, relType: string, target: string) => string | null | undefined,
 ): Map<string, string> {
   // rels parts follow their owner, so map the owners first
   const pathMap = new Map<string, string>()
@@ -248,18 +282,60 @@ function writeParts(
     const sourceRels = parts[relsPathFor(sourcePath)]
     if (!sourceRels) continue
     let relsXml = Buffer.from(sourceRels, 'base64').toString('utf8')
-    // rewrite this part's own targets to wherever their parts landed
-    relsXml = relsXml.replaceAll(/Target="([^"]+)"/g, (whole, target: string) => {
-      if (/^[a-z]+:/i.test(target)) return whole
+    const omitted = new Set<string>()
+    // Retarget bundled internal relationships, leaving external URLs intact.
+    relsXml = relsXml.replace(relationshipTags, (tag, name: string | undefined) => {
+      if (!name) return tag
+      if (/\sTargetMode\s*=\s*(["'])External\1/.test(tag)) return tag
+      const target = attribute(tag, 'Target')
+      if (!target || /^[a-z]+:/i.test(target)) return tag
       const absolute = resolveTarget(sourcePath, target)
-      const mapped = pathMap.get(absolute)
-      return mapped ? `Target="${escapeAttr(relative(targetPath, mapped))}"` : whole
+      const mapped = remapRelation?.(sourcePath, attribute(tag, 'Type') ?? '', absolute)
+      if (mapped === null) {
+        const id = attribute(tag, 'Id')
+        if (id) omitted.add(id)
+        return ''
+      }
+      const resolved = mapped ?? pathMap.get(absolute)
+      return resolved ? retargetRelationship(tag, targetPath, resolved) : tag
     })
+    if (omitted.size) {
+      const xml = archive.readText(targetPath)
+      if (xml) archive.entries.set(targetPath, Buffer.from(removeMissingSlideJumps(xml, omitted), 'utf8'))
+    }
     archive.entries.set(relsPathFor(targetPath), new Uint8Array(Buffer.from(relsXml, 'utf8')))
   }
 
   ensureContentTypes(archive, contentTypes, pathMap)
   return pathMap
+}
+
+/** Duplicate the editable notes part while retaining dependencies already in the same package. */
+export function duplicateSlideRelationships(
+  archive: PackageArchive,
+  sourceSlide: string,
+  copySlide: string,
+  includeNotes: boolean,
+): void {
+  const relsXml = archive.readText(relsPathFor(sourceSlide))
+  if (!relsXml) return
+  const copyRels = relsXml.replace(relationshipTags, (tag, name: string | undefined) => {
+    if (!name || !attribute(tag, 'Type')?.endsWith(NOTES_REL)) return tag
+    const target = attribute(tag, 'Target')
+    if (!includeNotes || !target || attribute(tag, 'TargetMode') === 'External') return ''
+    const notesPath = resolveTarget(sourceSlide, target)
+    const parts: Record<string, string> = {}
+    const contentTypes: Record<string, string> = {}
+    // The notes XML and rels get their own names. Their media and notes master
+    // already exist and can be reused from the same package.
+    collectPart(archive, notesPath, parts, contentTypes, () => true)
+    const paths = writeParts(archive, parts, contentTypes, undefined, (_owner, type, dependency) =>
+      type.endsWith(SLIDE_REL) && dependency === sourceSlide ? copySlide : undefined,
+    )
+    const copiedNotes = paths.get(notesPath)
+    return copiedNotes ? retargetRelationship(tag, copySlide, copiedNotes) : ''
+  })
+  archive.entries.set(relsPathFor(copySlide), Buffer.from(copyRels, 'utf8'))
 }
 
 /**
@@ -308,17 +384,19 @@ function reusableParts(
 }
 
 /**
- * Lands an element-clipboard's dependency parts in `archive` (paste target).
- * Byte-identical parts already present are shared — a same-deck paste writes
- * nothing; a cross-deck paste imports media/charts under non-conflicting names.
- * Returns the source→destination path map.
+ * Lands an element clipboard's dependencies in the target archive. Immutable
+ * parts such as media can be shared. Independently editable parts get fresh
+ * paths when the destination already has them.
  */
 export function importClipboardParts(
   archive: PackageArchive,
   parts: Readonly<Record<string, string>>,
   contentTypes: Readonly<Record<string, string>>,
+  independentParts: readonly string[] = [],
 ): Map<string, string> {
-  return writeParts(archive, parts, contentTypes, reusableParts(archive, parts))
+  const reusable = reusableParts(archive, parts)
+  for (const path of independentParts) reusable.delete(path)
+  return writeParts(archive, parts, contentTypes, reusable)
 }
 
 export function materializeSlideBundle(
@@ -326,8 +404,16 @@ export function materializeSlideBundle(
   bundle: SlideBundle,
   slidePath: string,
   layoutPath: string,
+  slideTargets: ReadonlyMap<string, string> = new Map(),
 ): string {
-  const pathMap = writeParts(archive, bundle.parts, bundle.contentTypes)
+  const notesParts = new Set(bundle.rels.filter(rel => !rel.external && rel.type.endsWith(NOTES_REL))
+    .map(rel => rel.target).filter(path => bundle.parts[path] !== undefined))
+  const notesMaster = notesParts.size > 0 ? ensureNotesMaster(archive) : undefined
+  const pathMap = writeParts(archive, bundle.parts, bundle.contentTypes, undefined, (owner, type, target) => {
+    if (notesParts.has(owner) && type.endsWith(NOTES_MASTER_REL)) return notesMaster ?? null
+    if (type.endsWith(SLIDE_REL)) return slideTargets.get(target) ?? null
+    return undefined
+  })
 
   const relLines = bundle.rels.map((rel) => {
     if (rel.layout) {
@@ -336,7 +422,10 @@ export function materializeSlideBundle(
     if (rel.external) {
       return `<Relationship Id="${rel.id}" Type="${rel.type}" Target="${escapeAttr(rel.target)}" TargetMode="External"/>`
     }
-    const mapped = pathMap.get(rel.target) ?? rel.target
+    const mapped = rel.type.endsWith(SLIDE_REL)
+      ? slideTargets.get(rel.target)
+      : pathMap.get(rel.target) ?? rel.target
+    if (!mapped) return ''
     return `<Relationship Id="${rel.id}" Type="${rel.type}" Target="${escapeAttr(relative(slidePath, mapped))}"/>`
   })
   return (

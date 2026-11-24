@@ -130,6 +130,21 @@ export function elementSpid(el: SlideElement): number | null {
   return m ? Number(m[1]) : null
 }
 
+/** Match the rendered source ID to the shape's OOXML ID and name for Morph. */
+export interface SlideShapeKey {
+  sourceId: string
+  spid: number | null
+  name: string
+}
+
+export function getSlideShapeKeys(slide: Slide): SlideShapeKey[] {
+  return slide.elements.map((element) => ({
+    sourceId: element.id,
+    spid: elementSpid(element),
+    name: element.name ?? '',
+  }))
+}
+
 // ── Write: SlideAnimation[] → <p:timing> ───────────────────────────────
 
 /** presetID/presetClass/presetSubtype (used by PowerPoint's animation pane to show effect names). */

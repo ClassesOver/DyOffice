@@ -187,7 +187,7 @@ export function createSlidesMockServer({name = 'deck.pptx', slideCount = 3, init
           if (!changed.includes(index)) changed.push(index)
         }
         records.push({op:{op:op.op},slideId:'s_'+session.deck[0].partPath.match(/slide(\d+)\.xml$/)?.[1]})
-      } else if (op.op === 'setBackground' || op.op === 'setPictureSrcRect' || op.op === 'setPictureOpacity') {
+      } else if (op.op === 'setBackground' || op.op === 'setPictureSrcRect' || op.op === 'setPictureOpacity' || op.op === 'setConnectorEndpoints' || op.op === 'setShapeCustomGeometry') {
         const slide = session.deck[slideIndex]
         if (!slide) throw httpError(409, 'CONFLICT', 'slide target')
         if (op.op === 'setBackground') slide.background = {...op}
@@ -353,6 +353,15 @@ export function createSlidesMockServer({name = 'deck.pptx', slideCount = 3, init
       if (route === 'layouts') {
         requireGeneration(current, body.generation)
         return json({layouts: [{path: 'ppt/slideLayouts/slideLayout1.xml', name: 'Title Slide', layoutType: 'title', placeholders: []}], size: {cx: 12192000, cy: 6858000}})
+      }
+      if (route === 'slide-info') {
+        requireGeneration(current, body.generation)
+        return json(current.deck.map(slide => ({
+          transition: slide.transition ?? 'none',
+          timing: {advanceMs: slide.advanceMs ?? null, narrationIds: []},
+          headerFooter: {footer: null, date: null, slideNum: false},
+          shapeKeys: [],
+        })))
       }
       if (route === 'slide') {
         const slide = current.deck[body.index]

@@ -435,6 +435,7 @@ interface ExcelShellProps {
   readonly calcManual: boolean
   /// The workbook's refreshable web queries.
   readonly queryConnections: readonly QueryConnection[]
+  readonly queryRefreshAvailable?: boolean
   /// Formula view (sheetView/@showFormulas) of the active sheet: the sheet
   /// renders formulas instead of their values.
   readonly showFormulas: boolean
@@ -599,6 +600,7 @@ export function ExcelShell({
   pageLayout,
   calcManual,
   queryConnections,
+  queryRefreshAvailable = true,
   showFormulas,
   onGoalSeek,
   onDataTable,
@@ -1041,6 +1043,7 @@ export function ExcelShell({
           }}
           calcManual={calcManual}
           queryConnections={queryConnections}
+          queryRefreshAvailable={queryRefreshAvailable}
           showFormulas={showFormulas}
           onRefreshPivot={onRefreshPivot}
           onIsSelectionInPivot={onIsSelectionInPivot}
@@ -2031,6 +2034,7 @@ function Ribbon({
   onListNames,
   calcManual,
   queryConnections,
+  queryRefreshAvailable = true,
   showFormulas,
   onRefreshPivot,
   onIsSelectionInPivot,
@@ -2062,6 +2066,7 @@ function Ribbon({
   readonly calcManual: boolean
   /** The workbook's refreshable web queries, listed under Data ▸ Get data. */
   readonly queryConnections: readonly QueryConnection[]
+  readonly queryRefreshAvailable?: boolean
   /** Open the AI panel and immediately send the given prompt */
   readonly onAiRun: (prompt: string) => void
   /** AI side panel visibility (docs/slides parity: the entry button toggles it) */
@@ -3163,7 +3168,7 @@ function Ribbon({
               <ToolSymbol symbol="⟳" />
               {t('appRefreshAll')}
             </button>
-            {queryConnections.length > 0 ? (
+            {queryConnections.length > 0 && queryRefreshAvailable ? (
               <span className="styles-row" data-tip={t('appQueryConnectionsTitle')}>
                 <ToolSymbol symbol="⟳" />
                 {t('appRefreshQuery')}

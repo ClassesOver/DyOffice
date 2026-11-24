@@ -24,6 +24,7 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
  const client=createLocalShellClient(fetchImpl),session=await client.bindSession()
  const host=createSessionFileHost({fetchImpl,expectedRevision})
  let disposed=false,pending=true,chunks:Promise<Uint8Array>|undefined
+ let galleryAccount:[deploymentId:string,userId:string]|undefined
  const assertActive=()=>{if(disposed)throw Error('PDF file grant is closed')}
  const assertSession=async()=>{
   assertActive()
@@ -132,7 +133,22 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
     }
    },
   }
-  return {path,revision,api,current:()=>current,inspectSignatureMarker(bytes:Uint8Array,encrypted:boolean){
+  return {path,revision,api,current:()=>current,async signatureGalleryAccount(signal:AbortSignal){
+   assertActive()
+   if(!galleryAccount){
+    const {deploymentId,user}=await session.request<{deploymentId:string;user:{id:string}}>('/api/v1/auth/me','GET',undefined,signal)
+    const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
+    assertActive()
+    if(typeof deploymentId!=='string'||typeof user?.id!=='string'||!uuid.test(deploymentId)||!uuid.test(user.id)){
+     throw Error('The account identity is unavailable')
+    }
+    galleryAccount=[deploymentId,user.id]
+   }else{
+    await client.bindSession(session.proof,signal)
+    assertActive()
+   }
+   return galleryAccount
+  },inspectSignatureMarker(bytes:Uint8Array,encrypted:boolean){
    signatureRevision=!encrypted&&hasSignatureMarker(bytes)?current:undefined
   },async recognizeOcr(png:string,signal?:AbortSignal){
    const base=current

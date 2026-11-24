@@ -2,12 +2,14 @@ import {PDFDocument,PDFName,PDFDict,PDFNumber,PDFRef,PDFHexString,PDFString} fro
 import {openPdfForPendingEdits as open} from './pending-document.mjs'
 import {pdfInsertFormState,assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {updatePdfFormFieldAppearances,pdfFormFieldsSafetyCodes} from './form-fields-job.mjs'
-import {preparePdfFormValues,pdfFormValueFields,updatePdfFormValueAppearances,pdfFormValuesSafetyCodes} from './form-values-job.mjs'
+import {createPdfAppearanceFontSelector,preparePdfFormValues,pdfFormValueFields,updatePdfFormValueAppearances,pdfFormValuesSafetyCodes} from './form-values-job.mjs'
 import {cleanupDeletedPageForms} from './deleted-page-forms.mjs'
 import {validatePdfApplySnapshot} from './apply-snapshot.mjs'
+import {MAX_PDF_EDIT_PAGES} from '../../../shared/pdf-edit-structure.mjs'
 import {decodePdfImage} from './image-content-job.mjs'
 import {applyExistingImages,pdfDraftInsertsSafetyCodes} from './draft-inserts-job.mjs'
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,preservePdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
+import {planPdfOutline,verifyPdfOutline,verifyPdfDrawing,planPdfWidgetEdits,resolvePdfWidgetEdits,verifyPdfWidgetEdits} from './apply-document-details.mjs'
 import {isolatePdfImageResources} from './isolate-image-resources.mjs'
 import {fail,hash,requireEnvelope} from './job-common.mjs'
 export {validatePdfApplySnapshot}
@@ -87,10 +89,12 @@ function plan(doc,s){
  const values=Object.values(s.formEdits),operations=values.map(v=>{const {kind,...value}=v;return {op:'setFormValue',value}}),prepared=operations.length?preparePdfFormValues(doc,operations):[]
  if(prepared.some((value,i)=>value.kind!==values[i].kind))fail('INVALID_PDF_APPLY_SNAPSHOT')
  const clearedValues=new Set(),pageIndices=new Map(doc.getPages().map((page,index)=>[String(page.ref),index])),widgetPages=new Map(doc.getPages().flatMap((page,index)=>(page.node.Annots()?.asArray()??[]).map(ref=>[doc.context.lookup(ref),index])))
+ const widgetEdits=planPdfWidgetEdits(s.formWidgetEdits??[],existing,widgetPages,deleted)
+ const removedWidgets=new Set(widgetEdits.filter(target=>target.edit.remove).map(target=>target.widget))
  for(const value of prepared){
   if(value.kind!=='radio'&&value.kind!=='checkbox')continue
   const field=existing.get(value.name),widgets=field.acroField.getWidgets(),selected=value.kind==='radio'?widgets[field.getOptions().lastIndexOf(value.value)]?.getOnValue():value.checked?widgets[0]?.getOnValue():undefined
-  if(selected&&!widgets.some(widget=>widget.getOnValue()===selected&&!deleted.has(pageIndices.get(String(widget.dict.get(n('P'))))??widgetPages.get(widget.dict))))clearedValues.add(value.name)
+  if(selected&&!widgets.some(widget=>widget.getOnValue()===selected&&!removedWidgets.has(widget.dict)&&!deleted.has(pageIndices.get(String(widget.dict.get(n('P'))))??widgetPages.get(widget.dict))))clearedValues.add(value.name)
  }
 
  for(const m of s.markups){if(deleted.has(m.pageIndex))fail('INVALID_PDF_APPLY_SNAPSHOT');m.quads.forEach(q=>visible(doc,m.pageIndex,q,true))}
@@ -104,7 +108,17 @@ function plan(doc,s){
  }
  for(const {input:o}of s.textInserts)visible(doc,o.pageIndex,o.origin,true)
  for(const {input:o}of s.imageEdits){if(o.rect)visible(doc,o.pageIndex,o.rect,true);if(o.oldRect)visible(doc,o.pageIndex,o.oldRect,true)}
- return {fields,values:prepared,clearedValues,order,notes:s.notes.map(({id,input:o})=>({...o,localId:o.localId??id}))}
+ const drawings=s.drawings??[]
+ for(const drawing of drawings){
+  if(drawing.pageIndex>=count||deleted.has(drawing.pageIndex))fail('INVALID_PDF_APPLY_SNAPSHOT')
+  if(drawing.kind==='link'&&drawing.destPage!==undefined&&(drawing.destPage>count||deleted.has(drawing.destPage-1)))fail('INVALID_PDF_APPLY_SNAPSHOT')
+  if(drawing.formFieldName){
+   const field=existing.get(drawing.formFieldName),fieldAdded=fields.some(f=>f.name===drawing.formFieldName&&f.kind==='signature'&&f.pageIndex===drawing.pageIndex)
+   if(!fieldAdded&&(field?.constructor.name!=='PDFSignature'||!field.acroField.getWidgets().some(widget=>widgetPages.get(widget.dict)===drawing.pageIndex)))fail('INVALID_PDF_APPLY_SNAPSHOT')
+  }
+ }
+ const outline=planPdfOutline(s.outline,count,deleted)
+ return {fields,values:prepared,clearedValues,order,drawings,outline,widgetEdits,notes:s.notes.map(({id,input:o})=>({...o,localId:o.localId??id}))}
 }
 const near=(a,b)=>a.length===b.length&&a.every((x,i)=>Math.abs(x-b[i])<.1)
 const sameLeaf=(a,b)=>JSON.stringify([a.type,a.text,a.font,a.image,a.fill,a.stroke,a.size,a.mode])===JSON.stringify([b.type,b.text,b.font,b.image,b.fill,b.stroke,b.size,b.mode])&&near(a.bounds,b.bounds)&&near(a.matrix,b.matrix)
@@ -135,7 +149,10 @@ function verifyAnnotations(doc,s,planned,original){
    const found=entries.find(e=>!used.has(e.ref)&&String(e.dict.get(n('Subtype')))==='/Text'&&e.dict.lookup(n('Contents'))?.decodeText?.()===note.contents&&e.dict.lookup(n('T'))?.decodeText?.()===(note.author||'AI Assistant')&&(!note.replyToLocalId||String(e.dict.get(n('IRT')))===parent))
    if(!found)fail('PDF_APPLY_OPS_VERIFY_FAILED');used.add(found.ref);locals.set(note.localId,found.ref)
   }
-  if(entries.filter(e=>String(e.dict.get(n('Subtype')))!=='/Widget').some(e=>!used.has(e.ref)))fail('PDF_APPLY_OPS_VERIFY_FAILED')
+  const remaining=entries.filter(e=>String(e.dict.get(n('Subtype')))!=='/Widget'&&!used.has(e.ref))
+  const drawings=planned.drawings.filter(drawing=>drawing.pageIndex===source)
+  if(remaining.length!==drawings.length)fail('PDF_APPLY_OPS_VERIFY_FAILED')
+  for(const [index,drawing]of drawings.entries())verifyPdfDrawing(doc,remaining[index].dict,drawing,planned.order.indexOf(drawing.destPage-1))
  }
 }
 function verifyFormTargets(doc,planned,s,surviving){
@@ -204,7 +221,7 @@ export function createPdfApplyOpsJob(){
   const s=parsePdfApplyOpsRequest(raw),original=Buffer.from(input);busy=true
   try{
    const before=await open(original),originalCount=before.getPageCount(),blanks=s.blankPages??[]
-   if(originalCount+blanks.length>100||blanks.some((page,index)=>page.pageIndex!==originalCount+index))fail('INVALID_PDF_APPLY_SNAPSHOT')
+   if(originalCount+blanks.length>MAX_PDF_EDIT_PAGES||blanks.some((page,index)=>page.pageIndex!==originalCount+index))fail('INVALID_PDF_APPLY_SNAPSHOT')
    const {applySaveRequest,applyFormFields}=await import('../../../../pdf/src/main/save-pdf.ts'),{readPdfLeafObjects,readUneditedPdfLeaves,applyTextEdits,verifyTextBlockMoves,verifyTextEdits,validateTextEdits}=await import('../../../../pdf/src/main/text-edit.ts')
    const savedImages=s.savedImageEdits??[]
    if(savedImages.some(op=>op.page>before.getPageCount()))fail('INVALID_PDF_APPLY_SNAPSHOT')
@@ -247,12 +264,21 @@ export function createPdfApplyOpsJob(){
    if(replacingImage){working=await isolatePdfImageResources(working);check(signal)}
    for(const blank of blanks)before.addPage([blank.width,blank.height])
    const planned=plan(before,s)
-   let expectedForm,currentPageRefs,originalAnnots,survivingFields
-   const request={blankPages:blanks,markups:s.markups.map(({id,...m})=>m),drawings:planned.notes,formValues:[],formFields:[],textInserts:s.textInserts.map(e=>e.input),imageEdits:s.imageEdits.map(e=>e.input),rotations:Object.entries(s.rotations).map(([p,delta])=>({pageIndex:Number(p),delta})),deletedPages:s.deleted,pageOrder:planned.order,metadata:s.metadata,annotationAuthor:s.annotationAuthor??'AI Assistant'}
+   let expectedForm,currentPageRefs,originalAnnots,survivingFields,resolvedWidgetEdits;const widgetEdits=[]
+   const request={blankPages:blanks,markups:s.markups.map(({id,...m})=>m),drawings:[...planned.notes,...planned.drawings],outline:planned.outline,formWidgetEdits:widgetEdits,formValues:[],formFields:[],textInserts:s.textInserts.map(e=>e.input),imageEdits:s.imageEdits.map(e=>e.input),rotations:Object.entries(s.rotations).map(([p,delta])=>({pageIndex:Number(p),delta})),deletedPages:s.deleted,pageOrder:planned.order,metadata:s.metadata,annotationAuthor:s.annotationAuthor??'AI Assistant',...(s.attachments?{attachments:s.attachments}:{})}
+   let selectMeasureFont
    const result=await applySaveRequest(working,request,{
+    measureFont:async(doc,label)=>{
+     selectMeasureFont??=createPdfAppearanceFontSelector(doc)
+     try{return await selectMeasureFont(label)}catch(error){
+      if(error?.code!=='PDF_FORM_FONT_UNAVAILABLE')throw error
+     }
+    },
     decodeImage:base64=>decodePdfImage({mime:Buffer.from(base64,'base64')[0]===255?'image/jpeg':'image/png',base64}),
     applyFormValues:doc=>{
      assertPdfInsertFormPreserved(before,doc)
+     resolvedWidgetEdits=resolvePdfWidgetEdits(doc,planned.widgetEdits)
+     widgetEdits.push(...resolvedWidgetEdits.filter(edit=>!edit.remove).map(({ref,...edit})=>edit))
      currentPageRefs=doc.getPages().map(p=>String(p.ref))
      originalAnnots=doc.getPages().map(page=>(page.node.Annots()?.asArray()??[]).map(ref=>({ref:String(ref),dict:doc.context.lookup(ref)})).filter(e=>String(e.dict?.get?.(n('Subtype')))!=='/Widget').map(e=>({ref:e.ref,value:String(e.dict)})))
      for(const value of planned.values){const field=doc.getForm().getField(value.name);if(value.kind==='text')field.setText(value.value);else if(value.kind==='checkbox')value.checked?field.check():field.uncheck();else value.value?field.select(value.value):field.clear()}
@@ -261,12 +287,14 @@ export function createPdfApplyOpsJob(){
      const defaults=new Map((doc.catalog.has(n('AcroForm'))?doc.getForm().getFields():[]).filter(f=>f.constructor.name==='PDFRadioGroup'&&planned.fields.some(op=>op.name===f.getName())).map(f=>[f.getName(),f.acroField.dict.get(n('DA'))]))
      if(planned.fields.length)applyFormFields(doc,planned.fields.map(f=>f.kind==='choice'?{...f,options:[],value:undefined}:f))
      for(const [name,da]of defaults){const d=doc.getForm().getRadioGroup(name).acroField.dict;if(da===undefined)d.delete(n('DA'));else d.set(n('DA'),da)}
-     cleanupDeletedPageForms(doc,s.deleted.map(index=>String(doc.getPage(index).ref)))
+     cleanupDeletedPageForms(doc,s.deleted.map(index=>String(doc.getPage(index).ref)),resolvedWidgetEdits.filter(edit=>edit.remove).map(edit=>String(edit.ref)))
      survivingFields=new Set(doc.catalog.has(n('AcroForm'))?pdfFormValueFields(doc).keys():[])
     },
     updateFieldAppearances:async doc=>{
      const existing=doc.catalog.has(n('AcroForm'))?pdfFormValueFields(doc):new Map(),surviving=planned.values.filter(v=>existing.has(v.name))
-     if(surviving.length)await updatePdfFormValueAppearances(doc,surviving.map(v=>v.name),signal)
+     const refreshNames=new Set(surviving.map(v=>v.name))
+     for(const {edit,refresh,deleted} of planned.widgetEdits)if(refresh&&!deleted&&existing.has(edit.fieldName))refreshNames.add(edit.fieldName)
+     if(refreshNames.size)await updatePdfFormValueAppearances(doc,[...refreshNames],signal)
      if(planned.fields.length)await updatePdfFormFieldAppearances(doc,planned.fields.filter(f=>existing.has(f.name)),signal)
      await doc.flush();expectedForm=normalizedForm(doc);check(signal)
     },
@@ -278,6 +306,8 @@ export function createPdfApplyOpsJob(){
    for(let i=0;i<planned.order.length;i++){const page=planned.order[i],old=before.getPage(page),actual=after.getPage(i);if(currentPageRefs[page]!==String(actual.ref)||((actual.getRotation().angle%360)+360)%360!==((old.getRotation().angle+(s.rotations[page]??0))%360+360)%360||page>=originalCount&&(actual.getWidth()!==old.getWidth()||actual.getHeight()!==old.getHeight()))fail('PDF_APPLY_OPS_VERIFY_FAILED')}
    for(const [key,value]of Object.entries(s.metadata??{})){const actual=after[{title:'getTitle',author:'getAuthor',subject:'getSubject',keywords:'getKeywords'}[key]]()??'',expected=key==='keywords'?value.split(/[,，;；]/).map(v=>v.trim()).filter(Boolean).join(' '):value;if(actual!==expected)fail('PDF_APPLY_OPS_VERIFY_FAILED')}
    verifyFormTargets(after,planned,s,survivingFields)
+   verifyPdfWidgetEdits(after,planned.widgetEdits,resolvedWidgetEdits)
+   verifyPdfOutline(after,planned.outline,planned.order)
    const actualLeaves=await readPdfLeafObjects(bytes,true,{normalizeSyntheticTextSuffix:true})
    const textTargets=s.textInserts.map(e=>e.input).filter(e=>planned.order.includes(e.pageIndex)).map(e=>({pageIndex:planned.order.indexOf(e.pageIndex),newText:e.text}))
    if(textTargets.length&&(await verifyTextEdits(bytes,textTargets)).length)fail('PDF_APPLY_OPS_VERIFY_FAILED')

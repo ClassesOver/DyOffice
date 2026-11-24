@@ -107,7 +107,7 @@ describe('Edit Points keys', () => {
 })
 
 describe('preview tracker', () => {
-  const commit = { slideIndex: 2, sourceId: 's', path: { w: 1, h: 1, cmds: [] } }
+  const commit = { slideIndex: 2, fitWidthPx: 960, sourceId: 's', path: { w: 1, h: 1, cmds: [] } }
 
   it('holds the last previewed path until a final commit closes the gesture', () => {
     const tr = createPreviewTracker()
@@ -124,6 +124,7 @@ describe('preview tracker', () => {
     tr.note(commit, true)
     const flushed = tr.flush()!
     expect(flushed.slideIndex).toBe(2)
+    expect(flushed.fitWidthPx).toBe(960)
     expect(flushed).toBe(commit)
   })
 

@@ -342,7 +342,11 @@ export async function insertZoom(ctx: ActionCtx, target: number): Promise<void> 
 
 export async function openHeaderFooter(ctx: ActionCtx): Promise<void> {
   if (!ctx.slide) return
-  ctx.setHfDialog(await window.slidesApi.getHeaderFooter(ctx.current))
+  try {
+    ctx.setHfDialog(await window.slidesApi.getHeaderFooter(ctx.current))
+  } catch (error) {
+    ctx.setStatus(error instanceof Error ? error.message : String(error))
+  }
 }
 
 export async function applyHf(

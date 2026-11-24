@@ -3351,7 +3351,8 @@ button {
   cursor: pointer;
 }
 
-.pdf-sign-saved-item:hover .pdf-sign-saved-del {
+.pdf-sign-saved-item:hover .pdf-sign-saved-del,
+.pdf-sign-saved-item:focus-within .pdf-sign-saved-del {
   display: flex;
 }
 

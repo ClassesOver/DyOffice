@@ -1,10 +1,11 @@
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
-import type {PdfHostImageBake,PdfPageGeometryOperation,SavePdfRequest,SavePdfResult} from '../../../pdf/src/shared/ipc'
+import type {DrawingInput,FormWidgetEditInput,OutlineEntryInput,PdfAttachmentOps,PdfHostImageBake,PdfPageGeometryOperation,SavePdfRequest,SavePdfResult} from '../../../pdf/src/shared/ipc'
 import type {PdfPendingSnapshot} from './pdf-pending-ops'
 import {createPdfMutations} from './pdf-mutations'
 import type {RevisionRef} from '../../../../packages/web-contracts/src/api'
 import {validatePdfStampOperation,type PdfStampOperation} from '../../../../packages/web-contracts/src/pdf-stamp-ops'
 import type {StampConfig} from '../../../pdf/src/renderer/edit-state'
+import {MAX_PDF_DRAFT_BLANK_PAGES,MAX_PDF_EDIT_PAGES} from '../../shared/pdf-edit-structure.mjs'
 
 export function createNativePdfSave({fileId,path,request,getRevision,getPageCount,onSaved}:{
  fileId:string;path:string;request:SettingsRequest;getRevision:()=>string;getPageCount:()=>number
@@ -30,13 +31,11 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
   async save(draft:SavePdfRequest,check?:()=>boolean,stamps?:StampConfig|null,imageBakes:readonly PdfHostImageBake[]=[]):Promise<SavePdfResult>{
    if(mutations.hasPending())return unknown
    if(draft.path!==path||draft.targetPath!==undefined||draft.protectionDirty||draft.encryption||draft.decryption||
-    draft.outline!==undefined||draft.attachments!==undefined||
-    [draft.stamps,draft.redactions,draft.formWidgetEdits].some(items=>items?.length)||
+    [draft.stamps,draft.redactions].some(items=>items?.length)||
     // Check and cross artwork is already in imageEdits. Web does not store the desktop form-fill metadata.
-    draft.staticFormFills?.some(fill=>fill.kind!=='check'&&fill.kind!=='cross')||
-    draft.drawings.some(item=>item.kind!=='note'))return refused
+    draft.staticFormFills?.some(fill=>fill.kind!=='check'&&fill.kind!=='cross'))return refused
    const originalCount=getPageCount(),baseRevision=getRevision(),blankPages=draft.blankPages??[],count=originalCount+blankPages.length
-   if(!baseRevision||!Number.isSafeInteger(originalCount)||originalCount<1||count>100)return refused
+   if(!baseRevision||!Number.isSafeInteger(originalCount)||originalCount<1||count>MAX_PDF_EDIT_PAGES||blankPages.length>MAX_PDF_DRAFT_BLANK_PAGES)return refused
    const pages=Array.from({length:count},(_,page)=>page),valid=(page:number)=>Number.isInteger(page)&&page>=0&&page<count
    const deleted=draft.deletedPages??[],removed=new Set(deleted)
    if(deleted.some(page=>!valid(page))||removed.size!==deleted.length||removed.size===count)return refused
@@ -59,13 +58,22 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
      footer_left:hf.footerLeft,footer_center:hf.footerCenter,footer_right:hf.footerRight,page_number:hf.pageNumber,start_at:hf.startAt,font_size:hf.fontSize,color:hf.color}))
     else if(stamps?.clearHeaderFooter)stampOperations.push({op:'set_header_footer'})
    }catch{return refused}
-   const snapshot:PdfPendingSnapshot&{stampOperations?:readonly PdfStampOperation[]}={
+   const drawings=draft.drawings.filter((input):input is Exclude<DrawingInput,{kind:'note'}>=>
+    input.kind!=='note'&&!removed.has(input.pageIndex)&&!(input.kind==='link'&&input.destPage!==undefined&&removed.has(input.destPage-1)))
+   const snapshot:PdfPendingSnapshot&{
+    stampOperations?:readonly PdfStampOperation[];attachments?:PdfAttachmentOps
+    drawings?:readonly Exclude<DrawingInput,{kind:'note'}>[];outline?:readonly OutlineEntryInput[];formWidgetEdits?:readonly FormWidgetEditInput[]
+   }={
     fileId,baseRevision,generation:0,
     ...(blankPages.length?{blankPages}:{}),
     ...(draft.textEdits?.length?{textEdits:draft.textEdits}:{}),
     ...(draft.annotDeletes?.length?{annotDeletes:draft.annotDeletes}:{}),
     ...(draft.noteEdits?.length?{noteEdits:draft.noteEdits}:{}),
+    ...(drawings.length?{drawings}:{}),
+    ...(draft.outline!==undefined?{outline:draft.outline}:{}),
+    ...(draft.formWidgetEdits?.length?{formWidgetEdits:draft.formWidgetEdits}:{}),
     ...(draft.annotationAuthor?{annotationAuthor:draft.annotationAuthor}:{}),
+    ...(draft.attachments?{attachments:draft.attachments}:{}),
     ...(stampOperations.length?{stampOperations}:{}),
     ...(imageBakes.length?{savedImageEdits:imageBakes}:{}),
     markups:draft.markups.map((markup,index)=>({...markup,id:'Pm'+index})),

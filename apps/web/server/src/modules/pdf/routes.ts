@@ -35,10 +35,18 @@ const mutationProperties = {
 
 const applyOpsSnapshotSchema={type:'object',additionalProperties:false,required:['fileId','baseRevision','generation','markups','notes','textInserts','imageEdits','formEdits','formFields','rotations','deleted','order','metadata'],properties:{
             fileId:uuidSchema,baseRevision:uuidSchema,generation:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER-1},
-            ...Object.fromEntries(['markups','notes','imageEdits','formFields','annotDeletes','noteEdits'].map(key=>[key,{type:'array',maxItems:100,items:{type:'object'}}])),
+            ...Object.fromEntries(['markups','notes','drawings','imageEdits','formFields','formWidgetEdits','annotDeletes','noteEdits'].map(key=>[key,{type:'array',maxItems:100,items:{type:'object'}}])),
+            outline:{type:'array',maxItems:500,items:{type:'object'}},
             textInserts:{type:'array',maxItems:MAX_PDF_OCR_INSERTS+MAX_PDF_TEXT_INSERTS,items:{type:'object'}},
             stampOperations:{type:'array',maxItems:2,items:{type:'object'}},
             savedImageEdits:{type:'array',maxItems:20,items:{type:'object'}},
+            attachments:{type:'object',additionalProperties:false,properties:{
+              add:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['name','bytesBase64'],properties:{
+                name:{type:'string',minLength:1,maxLength:255},bytesBase64:{type:'string',minLength:4,maxLength:6990508},
+                description:{type:'string',maxLength:1000},
+              }}},
+              remove:{type:'array',maxItems:100,uniqueItems:true,items:{type:'string',minLength:1,maxLength:1024}},
+            }},
             textEdits:{type:'array',maxItems:50,items:{type:'object'}},
             annotationAuthor:{type:'string',minLength:1,maxLength:200},
             blankPages:{type:'array',maxItems:20,items:{type:'object',additionalProperties:false,required:['pageIndex','width','height'],properties:{pageIndex:{type:'integer',minimum:0,maximum:99},width:{type:'number',minimum:1,maximum:14400},height:{type:'number',minimum:1,maximum:14400}}}},
