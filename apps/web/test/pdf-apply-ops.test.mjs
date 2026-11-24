@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {PDFDocument,PDFName,PDFDict,PDFArray,PDFString,StandardFonts} from 'pdf-lib'
+import {PNG} from 'pngjs'
 import {createHash} from 'node:crypto'
 import {execFile as run} from 'node:child_process'
 import {mkdtemp,rm,writeFile} from 'node:fs/promises'
@@ -199,4 +200,90 @@ test('verification text reading leaves ordinary content and extracted whitespace
  const d=await PDFDocument.create(),p=d.addPage([500,600]);for(const [i,text]of ['Authored  ','Inner  spaces','Different content',' Leading and trailing '].entries())p.drawText(text,{x:40,y:500-i*60,size:12})
  const bytes=Buffer.from(await d.save()),{readPdfLeafObjects}=await import('../../pdf/src/main/text-edit.ts'),ordinary=await readPdfLeafObjects(bytes),verified=await readPdfLeafObjects(bytes,false,{normalizeSyntheticTextSuffix:true})
  assert.deepEqual(verified,ordinary);assert.notEqual(verified[0].text,verified[2].text)
+})
+
+test('mixed PDF save preserves drawing annotations through rotation and reordered pages',async()=>{
+ const doc=await PDFDocument.create()
+ doc.addPage([400,500]).drawText('Original content')
+ doc.addPage([400,500])
+ const before=Buffer.from(await doc.save())
+ const paint={pageIndex:0,color:[.2,.4,.6],width:2}
+ const signatureImage=PNG.sync.write({width:2,height:2,data:Buffer.from([0,0,0,255,0,0,0,0,0,0,0,0,0,0,0,255])}).toString('base64')
+ const drawings=[
+  {...paint,kind:'ink',paths:[Array.from({length:900},(_,index)=>[40+index/10,390-index/10]).flat()]},
+  {...paint,kind:'rect',rect:[40,160,100,200]},
+  {...paint,kind:'ellipse',rect:[120,160,180,200]},
+  {...paint,kind:'arrow',from:[200,220],to:[240,250]},
+  {...paint,kind:'polygon',vertices:[[100,60],[150,70],[125,90]]},
+  {kind:'link',pageIndex:0,rect:[10,10,50,30],destPage:2},
+  {...paint,kind:'measure',from:[70,120],to:[150,120],label:'2.00 厘米'},
+  {kind:'link',pageIndex:0,rect:[200,10,260,30],url:'https://example.test/a)b?q=张'},
+  {kind:'image',pageIndex:0,rect:[295,62,345,94],image:signatureImage,formFieldName:'approval'},
+ ]
+ const formFields=[{id:'F1',input:{kind:'signature',name:'approval',pageIndex:0,rect:[290,60,350,96]}}]
+ const snapshot={...empty(),drawings,formFields,order:[1,0],rotations:{0:90}}
+ const {bytes}=await createPdfApplyOpsJob().execute(before,raw(snapshot)),saved=await PDFDocument.load(bytes)
+ const annots=saved.getPage(1).node.Annots().asArray().map(ref=>saved.context.lookup(ref,PDFDict))
+  .filter(annot=>String(annot.get(n('Subtype')))!=='/Widget')
+ assert.equal(saved.getPage(1).getRotation().angle,90)
+ assert.deepEqual(annots.map(annot=>String(annot.get(n('Subtype')))),['/Ink','/Square','/Circle','/Line','/Polygon','/Link','/Line','/Link','/Stamp'])
+ assert.deepEqual(annots[0].lookup(n('InkList')).lookup(0).asArray().map(value=>value.asNumber()),drawings[0].paths[0])
+ assert.ok(annots.slice(0,5).every(annot=>annot.lookup(n('AP'),PDFDict).has(n('N'))))
+ assert.equal(annots[5].lookup(n('Dest')).get(0),saved.getPage(0).ref)
+ assert.equal(annots[6].lookup(n('Contents')).decodeText(),'2.00 厘米')
+ const measureFont=annots[6].lookup(n('AP')).lookup(n('N')).dict.lookup(n('Resources')).lookup(n('Font')).lookup(n('F1'))
+ assert.equal(String(measureFont.get(n('Subtype'))),'/Type0')
+ assert.equal(new TextDecoder().decode(annots[7].lookup(n('A')).lookup(n('URI')).asBytes()),drawings[7].url)
+ assert.equal(annots[8].lookup(n('GenOfficeFormField')).decodeText(),'approval')
+ assert.ok(annots[8].lookup(n('AP'),PDFDict).has(n('N')))
+ assert.equal(saved.getForm().getSignature('approval').acroField.dict.has(n('V')),false)
+ await assert.rejects(createPdfApplyOpsJob().execute(before,raw({...snapshot,drawings:[{kind:'link',pageIndex:0,rect:[10,10,50,30],url:'javascript:alert(1)'}]})),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
+})
+
+test('mixed PDF save persists hierarchical bookmarks and edits the exact existing widgets',async()=>{
+ const doc=await PDFDocument.create()
+ const page=doc.addPage([400,500]),second=doc.addPage([400,500])
+ const form=doc.getForm()
+ const keep=form.createTextField('keep'),move=form.createTextField('move'),remove=form.createTextField('remove')
+ keep.addToPage(page,{x:20,y:70,width:100,height:20})
+ move.addToPage(page,{x:20,y:120,width:100,height:20})
+ remove.addToPage(page,{x:20,y:150,width:100,height:20})
+ move.setText('Keep value')
+ const widgetId=field=>field.acroField.Kids().get(0).objectNumber+'R'
+ const target=[35,170,185,200]
+ const formWidgetEdits=[{widgetId:widgetId(move),fieldName:'move',rect:target,required:true},{widgetId:widgetId(remove),fieldName:'remove',remove:true}]
+ const outline=[{title:'章节',pageIndex:0,top:320,children:[{title:'Details',pageIndex:1}]}]
+ const before=Buffer.from(await doc.save())
+ const snapshot={...empty(),outline,formWidgetEdits,order:[1,0]}
+ await assert.rejects(createPdfApplyOpsJob().execute(before,raw({...snapshot,formWidgetEdits:[{...formWidgetEdits[0],widgetId:widgetId(keep)}]})),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
+ const {bytes}=await createPdfApplyOpsJob().execute(before,raw(snapshot)),saved=await PDFDocument.load(bytes)
+ const chapter=saved.catalog.lookup(n('Outlines'),PDFDict).lookup(n('First'),PDFDict)
+ const child=chapter.lookup(n('First'),PDFDict)
+ assert.equal(chapter.lookup(n('Title')).decodeText(),'章节')
+ assert.equal(chapter.lookup(n('Dest')).get(0),saved.getPage(1).ref)
+ assert.equal(chapter.lookup(n('Dest')).lookup(3).asNumber(),320)
+ assert.equal(child.lookup(n('Title')).decodeText(),'Details')
+ assert.equal(child.lookup(n('Dest')).get(0),saved.getPage(0).ref)
+ const updated=saved.getForm().getTextField('move'),bounds=updated.acroField.getWidgets()[0].getRectangle()
+ assert.equal(updated.isRequired(),true)
+ assert.equal(updated.getText(),'Keep value')
+ assert.deepEqual([bounds.x,bounds.y,bounds.x+bounds.width,bounds.y+bounds.height],target)
+ assert.equal(saved.getForm().getFieldMaybe('remove'),undefined)
+ assert.equal(ap(saved,'keep'),ap(await PDFDocument.load(before),'keep'))
+})
+
+test('PDF widget removal keeps the surviving radio option and clears the removed selection',async()=>{
+ const doc=await PDFDocument.create()
+ const page=doc.addPage([400,500]),radio=doc.getForm().createRadioGroup('choice')
+ radio.addOptionToPage('remove option',page,{x:20,y:150,width:20,height:20})
+ radio.addOptionToPage('keep option',page,{x:20,y:120,width:20,height:20})
+ radio.select('remove option')
+ const widget=radio.acroField.Kids().get(0)
+ const input=Buffer.from(await doc.save())
+ const formWidgetEdits=[{widgetId:widget.objectNumber+'R',fieldName:'choice',remove:true}]
+ const {bytes}=await createPdfApplyOpsJob().execute(input,raw({...empty(),formWidgetEdits}))
+ const saved=await PDFDocument.load(bytes),actual=saved.getForm().getRadioGroup('choice')
+ assert.deepEqual(actual.getOptions(),['keep option'])
+ assert.equal(actual.getSelected(),undefined)
+ assert.equal(saved.getPage(0).node.Annots().asArray().length,1)
 })

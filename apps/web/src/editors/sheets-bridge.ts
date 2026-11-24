@@ -1,6 +1,7 @@
 import type {SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {messages} from './messages.ts'
+import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
@@ -24,8 +25,9 @@ type Recovery = {saved?: Awaited<ReturnType<SessionFileHost['saveSheets']>>; res
 type OpeningViewport = {sheetId:string;endRow:number;endColumn:number;result:WorkbookRangeResult}
 type Session = {openingViewport?:OpeningViewport; revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
+const mergeExtensions = ['xlsx','xlsm','xls','csv','tsv'] as const
 const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,docxCreationAvailable=false}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean} = {}) {
+export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,docxCreationAvailable=false,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
@@ -100,6 +102,30 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         return await response.json()
       }
     }finally{controllers.delete(controller)}
+  }
+  async function openMergeFiles(files:File[],revision:string,check=()=>true){
+    const supported:readonly string[]=mergeExtensions
+    if(files.length>8||files.some(file=>!file.size||file.size>50*1024*1024||!supported.includes(file.name.split('.').at(-1)?.toLowerCase()??''))){
+      throw new Error(prefs.language==='zh'?'请选择最多 8 个工作簿，每个最多 50 MiB。':'Choose up to 8 supported workbooks, each at most 50 MiB.')
+    }
+    const opened:WorkbookFile[]=[]
+    try{
+      for(const file of files){
+        if(!check()||host.getState(fileId).revision.revision!==revision)throw hostError('CONFLICT','merge source revision')
+        const raw=await requestAttachment(revision,file.name,file)
+        const source=workbookFileSchema.parse({...raw,readOnly:true,needsSaveAs:false,automaticRecoveryDisabled:true})
+        sessions.set(source.sessionId,{revision,file:source,attachment:true})
+        opened.push(source)
+      }
+      if(disposed||!check()||host.getState(fileId).revision.revision!==revision)throw hostError('CONFLICT','merge source revision')
+      return opened
+    }catch(error){
+      await Promise.allSettled(opened.map(async file=>{
+        sessions.delete(file.sessionId)
+        await call(revision,'merge-sources/close',{sessionId:file.sessionId})
+      }))
+      throw error
+    }
   }
   async function call(revision: string, method: string, input: object = {}) {
     if (waiting.length >= 64) throw hostError('UNAVAILABLE','read capacity')
@@ -335,20 +361,31 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         return {ok:false,error:text.unavailable}
       }catch(error){return {ok:false,error:error&&typeof error==='object'&&'message'in error&&typeof error.message==='string'?error.message:text.unavailable}}
     },
-    selectWorkbooksForMerge:unavailable,
+    async selectWorkbooksForMerge(){
+      const base=host.getState(fileId)
+      const controller=new AbortController()
+      controllers.add(controller)
+      try{
+        const files=await pickMergeFiles(controller.signal)
+        if(!files.length)return []
+        const stillCurrent=()=>{
+          const current=host.getState(fileId)
+          return !disposed&&!!base.lease&&!!current.lease&&base.revision.revision===current.revision.revision&&
+            base.lease.editorId===current.lease.editorId&&base.lease.leaseEpoch===current.lease.leaseEpoch
+        }
+        return await openMergeFiles(files,base.revision.revision,stillCurrent)
+      }finally{controllers.delete(controller)}
+    },
     async openWorkbooksForMerge(paths:string[]){
       if(!getAttachmentFile||!Array.isArray(paths)||paths.length<1||paths.length>8)throw new Error(text.unavailable)
-      const opened:WorkbookFile[]=[]
-      try{
-        for(const path of paths){
-          if(typeof path!=='string'||!path.startsWith('web-attachment:'))throw new Error(text.unavailable)
-          const file=await getAttachmentFile(path);if(!file)throw new Error(text.unavailable)
-          const current=host.getState(fileId),revision=current.revision.revision,raw=await requestAttachment(revision,file.name,file)
-          const source=workbookFileSchema.parse({...raw,readOnly:true,needsSaveAs:false,automaticRecoveryDisabled:true})
-          sessions.set(source.sessionId,{revision,file:source,attachment:true});opened.push(source)
-        }
-        return opened
-      }catch(error){await Promise.allSettled(opened.map(async file=>{const current=sessions.get(file.sessionId);sessions.delete(file.sessionId);if(current)await call(current.revision,'merge-sources/close',{sessionId:file.sessionId})}));throw error}
+      const files:File[]=[]
+      for(const path of paths){
+        if(typeof path!=='string'||!path.startsWith('web-attachment:'))throw new Error(text.unavailable)
+        const file=await getAttachmentFile(path)
+        if(!file)throw new Error(text.unavailable)
+        files.push(file)
+      }
+      return openMergeFiles(files,host.getState(fileId).revision.revision)
     },
     openEncryptedWorkbook:unavailable,reopenWorkbook:unavailable,
     async listExternalLinks(input){
@@ -380,7 +417,9 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }))
     },
     updateWorkbookPassword:unavailable,
-    readExternalLinkUsage:unavailable,listWorkbookTabs:unavailable,
+    readExternalLinkUsage:unavailable,
+    // Browser editors use the typed-range picker for external workbook links.
+    async listWorkbookTabs(){return {tabs:[]}},
     writeWorkbookRecovery:unavailable,exportPdf:unavailable,printWorkbook:unavailable,exportCsv:unavailable,
     openAiModelSettings:async()=>{
       const parent=typeof window!=='undefined'?(window.parent as unknown as {dyofficeOpenEditorSettings?:(tab:'models'|'skills',source:Window)=>Promise<void>}):undefined
@@ -453,6 +492,6 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         return ['csv'] as const // Cross-origin parents cannot supply workspace creators.
       }
     },
-    supportedMergeExtensions: ['xlsx','xlsm','xls','csv','tsv'] as const,
+    supportedMergeExtensions: mergeExtensions,
     api,workspaceLinks,guardedSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

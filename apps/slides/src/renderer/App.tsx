@@ -166,7 +166,6 @@ import * as styleActions from './style-actions'
 import { handleGlobalKeydown, slideRailHasFocus } from './keyboard-actions'
 import { clickSelection, currentAfterHistory, normalizeSelection } from '../shared/slide-selection'
 import {
-  notesBaselineAfterFlush,
   notesDraftIndex,
   retargetNotesDraft,
   startNotesDraft,
@@ -368,7 +367,7 @@ export interface SlidesEditorHandle {
   analysis?:import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   /** Run the renderer's full save flow (flush the edit overlay + notes, then save in place). */
   saveAndWait(): Promise<boolean>
-  /** Session-authoritative dirty flag, updated from every slidesApi round trip. */
+  /** True when the session or the local speaker notes have unsaved changes. */
   isDirty(): boolean
   /** A background continuation may use this saved deck without flushing any local drafts. */
   canContinueAssistant(): boolean
@@ -380,6 +379,7 @@ export interface SlidesEditorHandle {
 export interface SlidesAppHost {
   saveDownload?: React.ReactNode
   downloadImages?: fileActions.SlideImageDownload
+  downloadPdf?: fileActions.SlidePdfDownload
   namedCopy?: fileActions.SlidesNamedCopy
   hasGeneratedName?:()=>boolean
   analysisGeneration?:()=>number|null
@@ -388,6 +388,11 @@ export interface SlidesAppHost {
   readOnly?: boolean
   /** Saves commit in place without dialogs (the Web workspace). */
   inPlaceSave?: boolean
+  /** Maximum speaker notes length accepted by this host. */
+  notesTextLimit?: number
+  presenterAudienceAvailable?: boolean
+  /** Stable browser storage identity for this workspace document. */
+  documentStorageScope?: string
   /** false hides the AI dock and rail entirely. */
   assistantAvailable?: boolean
   assistant?: {
@@ -409,6 +414,11 @@ export interface SlidesAppHost {
   onEditorReady?: (handle: SlidesEditorHandle) => void
 }
 
+type NotesKey = string | number
+type PendingNotes = NotesDraft & { writeFailed?: boolean }
+type SlideGuide = { axis: 'v' | 'h'; pos: number }
+const DEFAULT_GUIDES: SlideGuide[] = [{ axis: 'v', pos: 0.5 }, { axis: 'h', pos: 0.5 }]
+
 export function App({ host }: { host?: SlidesAppHost } = {}) {
   const hostRef = useRef(host)
   hostRef.current = host
@@ -421,6 +431,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     if (slides.length) void syncPrivateFonts()
   }, [slides])
   const [path, setPath] = useState<string | null>(null)
+  const documentStorageScope = path ? (host?.documentStorageScope ?? path) : null
   // Deck references catalog fonts that are missing locally → one-click download banner
   const [missingFonts, setMissingFonts] = useState<string[]>([])
   const [fontBannerBusy, setFontBannerBusy] = useState(false)
@@ -633,24 +644,43 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   /** Per-page dwell seconds awaiting confirmation after rehearsal (non-null shows the "save?" confirmation dialog) */
   const [pendingRehearse, setPendingRehearse] = useState<number[] | null>(null)
   const [pendingRecording, setPendingRecording] = useState<NarrationTake | null>(null)
+  const [recordingSaving, setRecordingSaving] = useState(false)
+  const [recordingSaveFailed, setRecordingSaveFailed] = useState(false)
   const [showRuler, setShowRuler] = useState(false)
   const [showGrid, setShowGrid] = useState(false)
   const [showGuides, setShowGuides] = useState(false)
   const [formatSizeNonce, setFormatSizeNonce] = useState(0)
-  // Draggable guides (pos = 0..1 relative to page width/height); persisted to localStorage by document path
-  const [guides, setGuides] = useState<Array<{ axis: 'v' | 'h'; pos: number }>>([
-    { axis: 'v', pos: 0.5 },
-    { axis: 'h', pos: 0.5 },
-  ])
+  // Positions are relative to the slide. Keep the scope with the loaded values so a document switch cannot save the previous deck's guides.
+  const [guideState, setGuideState] = useState<{ scope: string | null; values: SlideGuide[] }>({
+    scope: null,
+    values: DEFAULT_GUIDES,
+  })
+  const guides = guideState.scope === documentStorageScope ? guideState.values : DEFAULT_GUIDES
+  const setGuides = useCallback((update: (guides: SlideGuide[]) => SlideGuide[]) => {
+    setGuideState(state => state.scope === documentStorageScope
+      ? { scope: state.scope, values: update(state.values) }
+      : state)
+  }, [documentStorageScope])
   // PowerPoint model: the notes pane is SHOWN by default (type in place); the
   // Notes buttons hide/show it entirely; drag its top edge to any height, all
   // the way down to hide.
   const [showNotes, setShowNotes] = useState(true)
-  const [notesText, setNotesText] = useState('')
-  /** Unsaved notes draft (flushed before page switch/save) */
-  const notesDraftRef = useRef<NotesDraft | null>(null)
-  /** Notes as last read from the document, so a draft knows what it started from */
-  const notesLoadedRef = useRef<LoadedNotes | null>(null)
+  const [notesDrafts, setNotesDrafts] = useState(() => new Map<NotesKey, PendingNotes>())
+  const notesDraftsRef = useRef(notesDrafts)
+  const [loadedNotes, setLoadedNotes] = useState<(LoadedNotes & { key: NotesKey }) | null>(null)
+  const notesLoadedRef = useRef(loadedNotes)
+  const notesWriteRef = useRef<Promise<string | void> | null>(null)
+  const notesReconcileRef = useRef<Promise<void> | null>(null)
+  const updateNotesDrafts = useCallback((edit: (drafts: Map<NotesKey, PendingNotes>) => void) => {
+    const drafts = new Map(notesDraftsRef.current)
+    edit(drafts)
+    notesDraftsRef.current = drafts
+    setNotesDrafts(drafts)
+  }, [])
+  const loadNotes = useCallback((entry: typeof loadedNotes) => {
+    notesLoadedRef.current = entry
+    setLoadedNotes(entry)
+  }, [])
   /** Notes pane height (px): default shows ~4 lines (PowerPoint-like), drag-resizable */
   const [notesHeight, setNotesHeight] = useState(100)
   const notesDragRef = useRef<{ startY: number; startH: number } | null>(null)
@@ -717,6 +747,17 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const [brushMode, setBrushMode] = useState<'once' | 'continuous' | null>(null)
 
   const slide = slides[current]
+  const notesKey = slide?.partPath ?? current
+  const currentNotesDraft = notesDrafts.get(notesKey)
+  const notesText = currentNotesDraft?.text ?? (loadedNotes?.key === notesKey ? loadedNotes.text : '')
+  const notesError = useCallback((draft: PendingNotes, index: number) => {
+    const limit = hostRef.current?.notesTextLimit
+    if (limit != null && draft.text.length > limit) {
+      return t('appNotesTooLong', { slide: index + 1, limit })
+    }
+    return draft.writeFailed ? t('appNotesWriteFailed', { slide: index + 1 }) : undefined
+  }, [])
+  const currentNotesError = currentNotesDraft && notesError(currentNotesDraft, current)
   // Rail multi-selection: stale entries (page deleted, anchor moved elsewhere) collapse to the anchor
   const selectedSlides = useMemo(
     () => normalizeSelection(slideSelRaw, current, slides.length),
@@ -751,19 +792,85 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     return slides.every((s) => !nodesHaveContent(s.nodes))
   }, [slides])
 
-  /** Write the notes draft back to the main process (called on page switch / blur / before save). */
-  const flushNotes = useCallback(async () => {
-    const pending = notesDraftRef.current
-    if (!pending) return
-    notesDraftRef.current = null
-    const ok = await window.slidesApi.setNotes({ slideIndex: pending.index, text: pending.text })
-    if (!ok) return
-    setDirty(true)
-    // read back: the document normalizes what it stores (trailing empty paragraphs), and the
-    // baseline must match what a later getNotes returns
-    const stored = await window.slidesApi.getNotes(pending.index)
-    notesLoadedRef.current = notesBaselineAfterFlush(notesLoadedRef.current, pending.index, stored)
-  }, [])
+  /** Blur and Save share a write pass. The draft stays dirty until its write succeeds. */
+  const flushNotes = useCallback((): Promise<string | void> => {
+    if (notesWriteRef.current) return notesWriteRef.current
+    const write = (async () => {
+      await notesReconcileRef.current
+      const attempted = new Set<PendingNotes>()
+      const limit = hostRef.current?.notesTextLimit
+      // Include notes typed during the first pass without waiting indefinitely
+      // if the user keeps editing. An unchanged failed write is retried by Save.
+      for (let pass = 0; pass < 2; pass++) {
+        for (const [key, pending] of notesDraftsRef.current) {
+          if (attempted.has(pending)) continue
+          const index = notesDraftIndex(pending, ctxRef.current.slides)
+          if (index >= 0 && limit != null && pending.text.length > limit) continue
+          let stored: string | undefined
+          try {
+            if (index >= 0 && await window.slidesApi.setNotes({ slideIndex: index, text: pending.text })) {
+              setDirty(true)
+              // The stored text normalizes trailing empty paragraphs.
+              stored = await window.slidesApi.getNotes(index).catch(() => pending.text)
+              const active = ctxRef.current
+              if ((active.slide?.partPath ?? active.current) === key) {
+                loadNotes({ key, index: active.current, text: stored })
+              }
+            }
+          } catch {
+            // Keep the draft for an explicit retry.
+          }
+          if (stored === undefined && index >= 0) {
+            if (notesDraftsRef.current.get(key) === pending) {
+              const failed = { ...pending, writeFailed: true }
+              attempted.add(failed)
+              updateNotesDrafts(drafts => drafts.set(key, failed))
+            }
+          } else {
+            updateNotesDrafts(drafts => {
+              const live = drafts.get(key)
+              if (live === pending) drafts.delete(key)
+              else if (live && stored !== undefined) drafts.set(key, { ...live, base: stored })
+            })
+          }
+        }
+      }
+      for (const draft of notesDraftsRef.current.values()) {
+        const index = notesDraftIndex(draft, ctxRef.current.slides)
+        const error = notesError(draft, index >= 0 ? index : draft.index)
+        if (error) return error
+      }
+      if (notesDraftsRef.current.size) return t('appEditCommitPending')
+    })().finally(() => { notesWriteRef.current = null })
+    notesWriteRef.current = write
+    return write
+  }, [loadNotes, notesError, setDirty, updateNotesDrafts])
+
+  // Deck replacements can move or rewrite notes. Check the stored baseline
+  // before flushing an older draft over a newer deck edit.
+  const reconcileNotes = useCallback((all: RenderSlide[]) => {
+    const pending = notesDraftsRef.current
+    const write = notesWriteRef.current
+    const reconcile = async () => {
+      await write
+      for (const [key, draft] of pending) {
+        const index = notesDraftIndex(draft, all)
+        try {
+          const stored = index < 0 ? '' : await window.slidesApi.getNotes(index)
+          if (notesDraftsRef.current.get(key) !== draft) continue
+          const retargeted = retargetNotesDraft(draft, all, stored)
+          updateNotesDrafts(drafts => {
+            if (retargeted) drafts.set(key, retargeted)
+            else drafts.delete(key)
+          })
+        } catch {
+          // Allow the next flush to retry if the stored notes could not be read.
+        }
+      }
+    }
+    notesReconcileRef.current = reconcile()
+    setAnnotationsNonce(n => n + 1)
+  }, [updateNotesDrafts])
 
   // Uncapped proportional fit ratio from the stage container's measured size
   // (fall back to a window estimate before mount)
@@ -948,6 +1055,8 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       setSelectedSlides([0])
       setSelectedIds([])
       setEditing(null)
+      loadNotes(null)
+      updateNotesDrafts(drafts => drafts.clear())
       setDirty(false)
       setInkTool('select')
       setUngroupedSets([])
@@ -967,7 +1076,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       // Fetch the layout list asynchronously (doesn't block opening)
       void window.slidesApi.getLayouts().then((r) => setLayoutsResult(r))
     },
-    [fitZoom],
+    [fitZoom, loadNotes, updateNotesDrafts],
   )
 
   const setSelectedId = useCallback((id: string | null, additive = false) => {
@@ -1037,11 +1146,11 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       saveAndWait: () => saveRef.current(true),
       analysis:{captureAnalysis:()=>captureSlideAnalysis({current:(forSave=false)=>{
         const ctx=ctxRef.current,generation=hostRef.current?.analysisGeneration?.()
-        if(!ctx.slide||generation==null||(!forSave&&(hostRef.current?.readOnly||analysisSaving.current>0))||ctx.editingActiveRef.current||notesDraftRef.current||ctx.masterItems||effectsInFlight.current||mouseDownRef.current)return null
+        if(!ctx.slide||generation==null||(!forSave&&(hostRef.current?.readOnly||analysisSaving.current>0))||ctx.editingActiveRef.current||notesDraftsRef.current.size||ctx.masterItems||effectsInFlight.current||mouseDownRef.current)return null
         return {identity:ctx.slides,slideId:ctx.slide.partPath??'',index:ctx.current,selection:JSON.stringify(ctx.selectedIds),generation,width:ctx.slide.widthPx,height:ctx.slide.heightPx,scale:ctx.slide.scale}
       },hold:()=>analysisConsent.current.hold(),run:async(ops,check)=>{analysisApplying.current=true;try{return await (hostRef.current?.runAnalysis?.(ops,check,all=>flushSync(()=>ctxRef.current.applyDeck(all,ctxRef.current.current)))??false)}finally{analysisApplying.current=false}}})},
-      isDirty: () => dirtyRef.current,
-      canContinueAssistant: () => !dirtyRef.current && !editingActiveRef.current && !notesDraftRef.current &&
+      isDirty: () => dirtyRef.current || notesDraftsRef.current.size > 0,
+      canContinueAssistant: () => !dirtyRef.current && !editingActiveRef.current && !notesDraftsRef.current.size &&
         !ctxRef.current.masterItems && !effectsInFlight.current && !mouseDownRef.current &&
         !analysisSaving.current && !analysisApplying.current,
       reload: async () => {
@@ -1126,7 +1235,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     const tick = () => {
       if (saving || editing || editingCell || mouseDownRef.current) return
       void window.slidesApi.isDirty().then((d) => {
-        if (!d || saving) return
+        if ((!d && !notesDraftsRef.current.size) || saving) return
         saving = true
         void save(true,true).finally(() => {
           saving = false
@@ -1150,7 +1259,13 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     try { await fileActions.exportImages(ctxRef.current, format, hostRef.current?.downloadImages) }
     finally { exportingImages.current = false }
   }, [])
-  const exportPdf = useCallback(() => void fileActions.exportPdf(ctxRef.current), [])
+  const exportingPdf = useRef(false)
+  const exportPdf = useCallback(async () => {
+    if (exportingPdf.current) return
+    exportingPdf.current = true
+    try { await fileActions.exportPdf(ctxRef.current,undefined,hostRef.current?.downloadPdf) }
+    finally { exportingPdf.current = false }
+  }, [])
   const [videoDlgOpen, setVideoDlgOpen] = useState(false)
 
   // Headless export mode (--headless-export): this renderer lives in a hidden
@@ -1207,11 +1322,10 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       setSelectedIds([])
       setEditing(null)
       setPasteFloater(null) // The paste the floater refers to may have just been undone
-      notesDraftRef.current = null // Undo overrides the unsaved draft, avoiding writing an old draft back
-      setAnnotationsNonce((n) => n + 1) // Notes/comments aren't in RenderSlide; re-fetch
+      reconcileNotes(r)
       void window.slidesApi.isDirty().then(setDirty)
     },
-    [],
+    [reconcileNotes],
   )
 
   const undo = useCallback(async () => {
@@ -1696,26 +1810,8 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     setSelectedIds([])
     setEditing(null)
     setDirty(true)
-    // Notes/comments aren't part of RenderSlide, so the re-fetch below reads them back. A
-    // notes draft the user is typing survives unless the batch rewrote that slide's notes
-    // (or removed the slide): park it while the stored text is compared, so the re-fetch's
-    // flush can't write a stale draft over what the batch wrote via setNotes.
-    const draft = notesDraftRef.current
-    notesDraftRef.current = null
-    if (!draft) {
-      setAnnotationsNonce((n) => n + 1)
-      return
-    }
-    const index = notesDraftIndex(draft, all)
-    void (index < 0 ? Promise.resolve('') : window.slidesApi.getNotes(index)).then((stored) => {
-      const kept = retargetNotesDraft(draft, all, stored)
-      const typedSince = notesDraftRef.current
-      if (kept && (!typedSince || typedSince.index === draft.index)) {
-        notesDraftRef.current = typedSince ? { ...typedSince, index: kept.index } : kept
-      }
-      setAnnotationsNonce((n) => n + 1)
-    })
-  }, [])
+    reconcileNotes(all)
+  }, [reconcileNotes])
 
   const addSlide = useCallback(() => slideActions.addSlide(ctxRef.current), [])
   const addSlideWithLayout = useCallback(
@@ -1863,7 +1959,13 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   // Reflect the current page's transition effect on page/document changes
   useEffect(() => {
     if (!hasDoc) return
-    void window.slidesApi.getTransition(current).then(setTransition)
+    let active = true
+    void window.slidesApi.getTransition(current).then(kind => {
+      if (active) setTransition(kind)
+    }, () => {
+      if (active) setTransition('none')
+    })
+    return () => { active = false }
   }, [hasDoc, current, path])
 
   const applyTransition = useCallback(
@@ -1902,34 +2004,31 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     }
   }, [hasDoc, current, path, slide, annotationsNonce])
 
-  // Guides persisted per document (loaded on document switch, saved on change)
   useEffect(() => {
-    if (!path) return
-    try {
-      const raw = localStorage.getItem(`ai-slides-guides:${path}`)
-      setGuides(
-        raw
-          ? JSON.parse(raw)
-          : [
-              { axis: 'v', pos: 0.5 },
-              { axis: 'h', pos: 0.5 },
-            ],
-      )
-    } catch {
-      setGuides([
-        { axis: 'v', pos: 0.5 },
-        { axis: 'h', pos: 0.5 },
-      ])
+    let values = DEFAULT_GUIDES
+    if (documentStorageScope) {
+      try {
+        const raw = localStorage.getItem(`ai-slides-guides:${documentStorageScope}`)
+        const saved: unknown = raw === null ? null : JSON.parse(raw)
+        if (Array.isArray(saved) && saved.every(item => item &&
+          (item.axis === 'v' || item.axis === 'h') &&
+          typeof item.pos === 'number' && Number.isFinite(item.pos) && item.pos >= 0 && item.pos <= 1)) {
+          values = saved
+        }
+      } catch {
+        // Use centered guides if storage is unavailable or unreadable.
+      }
     }
-  }, [path])
+    setGuideState({ scope: documentStorageScope, values })
+  }, [documentStorageScope])
   useEffect(() => {
-    if (!path) return
+    if (!documentStorageScope || guideState.scope !== documentStorageScope) return
     try {
-      localStorage.setItem(`ai-slides-guides:${path}`, JSON.stringify(guides))
+      localStorage.setItem(`ai-slides-guides:${documentStorageScope}`, JSON.stringify(guideState.values))
     } catch {
-      /* Quota full: guides aren't critical data, ignore */
+      // The current session still retains the guides when storage is unavailable.
     }
-  }, [path, guides])
+  }, [documentStorageScope, guideState])
 
   // Clear pane selection and preview on page switch
   useEffect(() => {
@@ -2031,25 +2130,25 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     [],
   )
 
-  // ── Custom shows: load the document's list on document switch (no path = unsaved new document, memory-only) ──
+  // The Web host supplies a stable workspace identity. Unsaved desktop decks stay in memory.
   useEffect(() => {
     setCustomShowDlgOpen(false)
-    if (!path) {
+    if (!documentStorageScope) {
       setCustomShows([])
       return
     }
     try {
-      const raw = localStorage.getItem(`ai-slides-custom-shows:${path}`)
+      const raw = localStorage.getItem(`ai-slides-custom-shows:${documentStorageScope}`)
       const parsed: unknown = raw ? JSON.parse(raw) : []
       setCustomShows(Array.isArray(parsed) ? (parsed as CustomShow[]) : [])
     } catch {
       setCustomShows([])
     }
-  }, [path])
+  }, [documentStorageScope])
 
   const updateCustomShows = useCallback(
-    (shows: CustomShow[]) => showActions.updateCustomShows(ctxRef.current, shows),
-    [],
+    (shows: CustomShow[]) => showActions.updateCustomShows(ctxRef.current, shows, documentStorageScope),
+    [documentStorageScope],
   )
   const playCustomShow = useCallback(
     (show: CustomShow) => showActions.playCustomShow(ctxRef.current, show),
@@ -2062,16 +2161,29 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   )
   const saveRehearseTimings = useCallback(() => showActions.saveRehearseTimings(ctxRef.current), [])
   const startRecordShow = useCallback(
-    (fromStart: boolean) => showActions.startRecordShow(ctxRef.current, fromStart),
+    (fromStart: boolean) => {
+      if (!hostRef.current?.readOnly) showActions.startRecordShow(ctxRef.current, fromStart)
+    },
     [],
   )
   const onRecordDone = useCallback(
     (take: Promise<NarrationTake | null>) => showActions.onRecordDone(ctxRef.current, take),
     [],
   )
-  const saveRecording = useCallback(() => showActions.saveRecording(ctxRef.current), [])
+  const saveRecording = async () => {
+    if (recordingSaving) return
+    setRecordingSaving(true)
+    setRecordingSaveFailed(false)
+    try {
+      setRecordingSaveFailed(!await showActions.saveRecording(ctxRef.current))
+    } finally {
+      setRecordingSaving(false)
+    }
+  }
   const clearNarration = useCallback(
-    (all: boolean) => void showActions.clearNarration(ctxRef.current, all),
+    (all: boolean) => {
+      if (!hostRef.current?.readOnly) void showActions.clearNarration(ctxRef.current, all)
+    },
     [],
   )
   const startPresenterView = useCallback(
@@ -2131,30 +2243,33 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   useEffect(() => {
     if (!hasDoc) return
     let cancelled = false
-    void flushNotes()
+    const flushed = analysisSaving.current ? undefined : flushNotes()
+    void Promise.resolve(flushed)
       .then(() => window.slidesApi.getNotes(current))
       .then((t) => {
-        if (cancelled) return
-        notesLoadedRef.current = { index: current, text: t }
-        setNotesText(t)
+        if (!cancelled) loadNotes({ key: notesKey, index: current, text: t })
       })
+      .catch(() => { /* Keep any local draft if the notes read fails. */ })
     return () => {
       cancelled = true
     }
-  }, [hasDoc, current, path, annotationsNonce, flushNotes])
+  }, [hasDoc, current, notesKey, path, annotationsNonce, flushNotes, loadNotes])
 
   const onNotesChange = useCallback(
     (text: string) => {
-      setNotesText(text)
-      notesDraftRef.current = startNotesDraft(
-        notesDraftRef.current,
-        notesLoadedRef.current,
-        current,
-        text,
-        ctxRef.current.slides[current]?.partPath,
-      )
+      updateNotesDrafts(drafts => {
+        const previous = drafts.get(notesKey)
+        const loaded = notesLoadedRef.current
+        drafts.set(notesKey, startNotesDraft(
+          previous ?? null,
+          loaded?.key === notesKey ? loaded : null,
+          current,
+          text,
+          ctxRef.current.slides[current]?.partPath,
+        ))
+      })
     },
-    [current],
+    [current, notesKey, updateNotesDrafts],
   )
 
   // ── Comments: fetch the current page's list on page switch/document change/undo (the ribbon badge uses it too) ──────────
@@ -2607,6 +2722,10 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     dataUrl: string
   } | null>(null)
   useEffect(() => setMediaPlay(null), [current])
+  useEffect(() => {
+    const url = mediaPlay?.dataUrl
+    return () => { if (url) window.slidesApi.releaseMediaData?.(url) }
+  }, [mediaPlay])
   const startMediaPlayback = useCallback(
     async (sourceId: string) => {
       const r = await window.slidesApi.getMediaData(current, sourceId)
@@ -2831,6 +2950,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   )
 
   // Edit Points drag: same throttled preview / final commit contract as the adjust handles
+  const renderedSlideWidth = slide?.widthPx
   const editPointsLastSent = useRef(0)
   const editPointsPreview = useRef(createPreviewTracker())
   const sendEditPoints = useCallback((commit: EditPointsCommit, preview: boolean) => {
@@ -2841,7 +2961,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         slideIndex,
         sourceId: commit.sourceId,
         pathPx: commit.path,
-        fitWidthPx: FIT_WIDTH,
+        fitWidthPx: commit.fitWidthPx,
         ...(preview ? { preview: true } : {}),
       })
       .then((r) => {
@@ -2853,12 +2973,13 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   }, [])
   const commitEditPoints = useCallback(
     (sourceId: string, path: { w: number; h: number; cmds: PathCmd[] }, preview: boolean) => {
+      if (!renderedSlideWidth) return
       const now = performance.now()
       if (preview && now - editPointsLastSent.current < 80) return
       editPointsLastSent.current = now
-      sendEditPoints({ slideIndex: current, sourceId, path }, preview)
+      sendEditPoints({ slideIndex: current, sourceId, path, fitWidthPx: renderedSlideWidth }, preview)
     },
-    [current, sendEditPoints],
+    [current, renderedSlideWidth, sendEditPoints],
   )
 
   // Edit Points mode ends with the selection: click-away, another element, a page switch or text editing
@@ -2893,6 +3014,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         end?: { targetId: string; idx: number } | null
       },
     ) => {
+      if (!renderedSlideWidth) return
       const updated = await window.slidesApi.editConnectorEndpoints({
         slideIndex: current,
         sourceId,
@@ -2900,7 +3022,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         y1Px: ep.y1,
         x2Px: ep.x2,
         y2Px: ep.y2,
-        fitWidthPx: FIT_WIDTH,
+        fitWidthPx: renderedSlideWidth,
         ...(ep.start !== undefined ? { start: ep.start } : {}),
         ...(ep.end !== undefined ? { end: ep.end } : {}),
       })
@@ -2909,7 +3031,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         setDirty(true)
       }
     },
-    [current],
+    [current, renderedSlideWidth],
   )
 
   // Text / element styling (style-actions.ts)
@@ -3340,6 +3462,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     applySlide,
     applyDeck,
     flushNotes,
+    notesDraftsPending: () => notesDraftsRef.current.size > 0,
     findNodeCtx,
     groupIdOf,
     startEdit,
@@ -3428,7 +3551,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         deckEmpty={deckEmpty}
         canUndo={histState.canUndo}
         canRedo={histState.canRedo}
-        dirty={dirty}
+        dirty={dirty || notesDrafts.size > 0}
         editing={!!editing || !!editingCell}
         autoSave={autoSave}
         onAutoSaveChange={setAutoSave}
@@ -3439,6 +3562,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         onSaveAs={() => void saveAs()}
         saveDownload={host?.saveDownload}
         onNameWithAi={() => void nameWithAi()}
+        desktopMediaAvailable={!host?.inPlaceSave}
         onExportPdf={() => void exportPdf()}
         onPrint={() => setPrintDlgOpen(true)}
         onExportImages={() => void exportImages('png')}
@@ -3794,7 +3918,13 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                   setPath(p)
                   setDirty(false)
                 }}
-                onBeforeRun={flushNotes}
+                onBeforeRun={async () => {
+                  const error = await flushNotes()
+                  if (error) {
+                    setStatus(error)
+                    throw new Error(error)
+                  }
+                }}
                 currentFilePath={path}
                 editQueue={editQueue}
                 onQueueEditInstruction={(key, instruction) =>
@@ -4242,7 +4372,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                               }
                               for (const { f, kind } of files) {
                                 if (kind !== 'image') {
-                                  void insertDroppedMedia(f, kind, at)
+                                  if (!hostRef.current?.inPlaceSave) void insertDroppedMedia(f, kind, at)
                                   continue
                                 }
                                 void f.arrayBuffer().then((buf) => {
@@ -4560,12 +4690,22 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                       />
                       <textarea
                         value={notesText}
+                        readOnly={hostReadOnly}
+                        aria-invalid={currentNotesError ? true : undefined}
+                        aria-describedby={currentNotesError ? 'speaker-notes-error' : undefined}
                         placeholder={
                           notesHeight < 60 ? t('appNotesClickToAdd') : t('appNotesPlaceholder')
                         }
                         onChange={(e) => onNotesChange(e.target.value)}
-                        onBlur={() => void flushNotes()}
+                        onBlur={() => {
+                          if (!analysisSaving.current) void flushNotes()
+                        }}
                       />
+                      {currentNotesError && (
+                        <div id="speaker-notes-error" className="notes-error" role="alert">
+                          {currentNotesError}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -4707,6 +4847,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
           startAt={presenter.startAt}
           onExit={exitPresenterView}
           onUseSlideShow={switchPresenterToShow}
+          audienceAvailable={host?.presenterAudienceAvailable}
         />
       )}
 
@@ -4853,9 +4994,14 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
             <p className="rehearse-summary">
               {t('appRecordSummary', { duration: formatClock(pendingRecording.endMs) })}
             </p>
+            {pendingRecording.stopNotice && <p role="status">{pendingRecording.stopNotice}</p>}
+            {recordingSaveFailed && <p role="alert">{t('appStatusRecordFailed')}</p>}
             <div className="modal-actions">
-              <button onClick={() => setPendingRecording(null)}>{t('appRecordDiscard')}</button>
-              <button className="primary" onClick={() => void saveRecording()}>
+              <button disabled={recordingSaving} onClick={() => {
+                setRecordingSaveFailed(false)
+                setPendingRecording(null)
+              }}>{t('appRecordDiscard')}</button>
+              <button disabled={recordingSaving} className="primary" onClick={() => void saveRecording()}>
                 {t('appRecordSave')}
               </button>
             </div>

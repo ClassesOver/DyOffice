@@ -9,6 +9,8 @@ import {
   CHART_WORKBOOK_REL_TYPE,
   addChart,
   createBlankPptx,
+  copyElementData,
+  pasteElements,
   deleteElement,
   editChartElement,
   openPptx,
@@ -92,6 +94,32 @@ describe('chart workbook', () => {
     expect(chartXml).toContain('<c:f>Sheet1!$C$1</c:f>')
     expect(chartXml).toContain('<c:f>Sheet1!$B$2:$B$4</c:f>')
     if (schemaGate) expect(await validatePptx(saved)).toEqual([])
+  })
+
+  it.each(['double', 'single'])('pastes a chart with independent data with %s-quoted workbook relationships', async (quote) => {
+    const opened = await openPptx(await createBlankPptx())
+    const original = addChart(opened, 0, { kind: 'bar', ...SALES, offset: OFF })!
+    if (quote === 'single') {
+      const rels = relsPathFor(chartPaths(opened)[0]!)
+      const xml = opened.archive.readText(rels)!
+      opened.archive.entries.set(rels, Buffer.from(xml.replace(/Target="([^"]+)"/g, "Target='$1'")))
+    }
+    const slide = opened.deck.slides[0]!
+    const chart = slide.elements.find((element) => element.id === original.elementId)!
+    const clip = copyElementData(opened, slide, chart)
+    const pasted = pasteElements(opened, 0, [clip], { dx: 1000, dy: 1000 })!
+    expect(editChartElement(opened, 0, pasted.elementIds[0]!, {
+      series: [{ name: 'Changed', values: [91, 92, 93] }],
+    })).toBe(true)
+
+    const reopened = await openPptx(await savePptx(opened))
+    const [sourceChart, pastedChart] = chartPaths(reopened)
+    expect(pastedChart).toBeDefined()
+    const source = workbookOf(reopened, sourceChart!).path!
+    const copy = workbookOf(reopened, pastedChart!).path!
+    expect(copy).not.toBe(source)
+    expect((await sheetCells(reopened.archive.entries.get(source)!)).B2).toBe(10)
+    expect((await sheetCells(reopened.archive.entries.get(copy)!)).B2).toBe(91)
   })
 
   it('a data edit rewrites the same workbook, and a style edit keeps it in step', async () => {

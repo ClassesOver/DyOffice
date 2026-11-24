@@ -253,6 +253,8 @@ export const he = {
   appOutlineNoText: '(אין טקסט)',
   appSectionHeaderTitle: 'לחץ לכיווץ/הרחבה; לחץ לחיצה ימנית לניהול המקטע',
   appNotesLabel: 'הערות',
+  appNotesTooLong: "הערות הדובר בשקופית {slide} חורגות מהמגבלה של {limit} תווים. יש לקצר אותן כדי לשמור.",
+  appNotesWriteFailed: "לא ניתן היה לכתוב את הערות הדובר בשקופית {slide}. נסו לשמור שוב.",
   appNotesClickToAdd: 'לחץ כדי להוסיף הערות',
   appNotesPlaceholder: 'לחץ כדי להוסיף הערות מציג (נשמרות בקובץ ה-.pptx)',
   appNotesShow: 'הצג הערות',

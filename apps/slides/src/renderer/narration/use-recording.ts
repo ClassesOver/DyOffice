@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NarrationRecorder } from './recorder'
-import type { NarrationMark } from './segments'
+import { slideNarrations, type NarrationMark } from './segments'
 
 /** A whole recorded show: the audio and where each slide starts in it. */
 export interface NarrationTake {
   audio: Blob
   marks: NarrationMark[]
   endMs: number
+  stopNotice?: string
 }
 
 export type RecordingPhase = 'starting' | 'recording' | 'paused' | 'failed'
@@ -77,5 +78,9 @@ export function useNarrationRecording(
 
   const elapsedMs = recorderRef.current?.elapsedMs() ?? 0
   const slideStartMs = marksRef.current.at(-1)?.atMs ?? 0
-  return { phase, elapsedMs, slideElapsedMs: elapsedMs - slideStartMs, togglePause, finish }
+  const limits = window.slidesApi.recordingLimits
+  const limitNotice = active && limits && (elapsedMs >= limits.totalMs ||
+    (elapsedMs >= limits.slideMs && slideNarrations(marksRef.current, elapsedMs).some(slide => slide.durationMs >= limits.slideMs)))
+    ? limits.notice : undefined
+  return { phase, elapsedMs, slideElapsedMs: elapsedMs - slideStartMs, togglePause, finish, limitNotice }
 }

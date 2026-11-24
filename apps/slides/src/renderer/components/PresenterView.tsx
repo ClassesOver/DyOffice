@@ -1,3 +1,4 @@
+import { loadShowData } from '../load-show-data'
 /**
  * Presenter view for slide shows.
  *
@@ -61,6 +62,7 @@ export function PresenterView({
   startAt,
   onExit,
   onUseSlideShow,
+  audienceAvailable = true,
 }: {
   slides: RenderSlide[]
   images: Map<string, HTMLImageElement>
@@ -70,6 +72,7 @@ export function PresenterView({
   onExit: (lastIndex: number) => void
   /** "Switch to normal show": exit this view and start a normal show from lastIndex */
   onUseSlideShow?: (lastIndex: number) => void
+  audienceAvailable?: boolean
 }) {
   const { t } = useI18n()
   // Playback sequence (original indexes): hidden pages skipped; the start page kept even if hidden (consistent with SlideShowView)
@@ -122,10 +125,10 @@ export function PresenterView({
 
   useEffect(() => {
     let cancelled = false
-    void Promise.all(slides.map((_, i) => window.slidesApi.getAnimations(i))).then((lists) => {
+    void loadShowData(slides.length, i => window.slidesApi.getAnimations(i), () => !cancelled).then((lists) => {
       if (!cancelled) setAllAnims(lists)
     })
-    void Promise.all(slides.map((_, i) => window.slidesApi.getNotes(i))).then((notes) => {
+    void loadShowData(slides.length, i => window.slidesApi.getNotes(i), () => !cancelled).then((notes) => {
       if (!cancelled) setAllNotes(notes)
     })
     return () => {
@@ -133,6 +136,17 @@ export function PresenterView({
     }
   }, [slides])
 
+  const currentSlideIndex = order[pos]!
+  const [narration, setNarration] = useState<{index:number;ids:Set<string>}>()
+  useEffect(() => {
+    if (audienceAvailable) return
+    let cancelled = false
+    void window.slidesApi.getShowTiming(currentSlideIndex).then(
+      (timing) => { if (!cancelled) setNarration({ index: currentSlideIndex, ids: new Set(timing.narrationIds) }) },
+      () => {},
+    )
+    return () => { cancelled = true }
+  }, [audienceAvailable, currentSlideIndex])
   const slide = slides[order[pos]!]
   const player = useAnimPlayer(slide?.heightPx ?? 540, slide?.widthPx ?? 960)
 
@@ -146,6 +160,7 @@ export function PresenterView({
 
   // ── Multi-screen: open the audience window on entry, close on exit ─────────────
   useEffect(() => {
+    if (!audienceAvailable) return
     let disposed = false
     void window.slidesApi.presenterStart().then((r) => {
       if (!disposed) setHasAudience(r.audience)
@@ -154,7 +169,7 @@ export function PresenterView({
       disposed = true
       void window.slidesApi.presenterEnd()
     }
-  }, [])
+  }, [audienceAvailable])
 
   // Broadcast show state: epoch change = the new page's animations are loaded and loadedRef matches the player cursor
   useEffect(() => {
@@ -413,21 +428,23 @@ export function PresenterView({
         >
           ⊗ {t('panePresenterEndShow')}
         </button>
-        <button
-          className="pv-top-btn"
-          disabled={!hasAudience}
-          onClick={() => void window.slidesApi.presenterSwap()}
-          data-tip={hasAudience ? t('panePresenterSwapTip') : t('panePresenterNoSecond')}
-        >
-          ⇄ {t('panePresenterSwap')}
-        </button>
+        {audienceAvailable && (
+          <button
+            className="pv-top-btn"
+            disabled={!hasAudience}
+            onClick={() => void window.slidesApi.presenterSwap()}
+            data-tip={hasAudience ? t('panePresenterSwapTip') : t('panePresenterNoSecond')}
+          >
+            ⇄ {t('panePresenterSwap')}
+          </button>
+        )}
         {onUseSlideShow && (
           <button className="pv-top-btn" onClick={useShow} data-tip={t('panePresenterUseShowTip')}>
             ▤ {t('panePresenterUseShow')}
           </button>
         )}
         <div className="pv-top-spacer" />
-        {!hasAudience && <span className="pv-top-hint">{t('panePresenterSingleHint')}</span>}
+        {audienceAvailable && !hasAudience && <span className="pv-top-hint">{t('panePresenterSingleHint')}</span>}
       </div>
       <div className="pv-body">
         <div className="pv-left">
@@ -480,7 +497,9 @@ export function PresenterView({
                 onPointerLeave={onStagePointerLeave}
               >
                 <AnimatedSlideStage
-                  slide={slide}
+                  slide={narration?.index === currentSlideIndex
+                    ? { ...slide, nodes: slide.nodes.filter(node => !narration.ids.has(node.sourceId)) }
+                    : slide}
                   images={images}
                   width={fitW}
                   states={player.states}
@@ -493,8 +512,9 @@ export function PresenterView({
                   commands={player.mediaCmds}
                   epoch={player.epoch}
                   mediaBase={player.mediaBase}
-                  muted
-                  interactive={false}
+                  muted={audienceAvailable}
+                  interactive={!audienceAvailable && tool === 'none'}
+                  {...(narration?.index === currentSlideIndex ? { hiddenIds: narration.ids } : {})}
                 />
                 <InkLayer strokes={strokes} laser={laser} width={fitW} height={fitH} />
                 {blank !== 'none' && (

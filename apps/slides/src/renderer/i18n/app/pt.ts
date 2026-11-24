@@ -272,6 +272,8 @@ export const pt = {
   appSectionHeaderTitle:
     'Clique para recolher/expandir; clique com o botão direito para gerenciar a seção',
   appNotesLabel: 'Anotações',
+  appNotesTooLong: "As notas do orador no diapositivo {slide} excedem o limite de {limit} caracteres. Encurte-as para guardar.",
+  appNotesWriteFailed: "Não foi possível escrever as notas do orador no diapositivo {slide}. Tente guardar novamente.",
   appNotesClickToAdd: 'Clique para adicionar anotações',
   appNotesPlaceholder: 'Clique para adicionar anotações do orador (salvas no .pptx)',
   appNotesShow: 'Mostrar anotações',

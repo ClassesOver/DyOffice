@@ -22,6 +22,7 @@ import {normalizePdfGeneratedImage} from './pdf-generated-image'
 import {LocaleProvider} from '../../../pdf/src/renderer/i18n/locale'
 import {EDIT_FONTS,type PdfApi,type PdfPageGeometryOperation} from '../../../pdf/src/shared/ipc'
 import {openNativePdfBrowserFile} from './native-pdf-browser-file'
+import {MAX_PDF_DRAFT_BLANK_PAGES,MAX_PDF_EDIT_PAGES} from '../../shared/pdf-edit-structure.mjs'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import {resolveTurnImageAttachment,SharedEditorAssistant} from './shared-editor-assistant'
 import {createEditorBridge} from '../../../../packages/browser-host/src/editor-bridge'
@@ -31,6 +32,10 @@ import {reportDocumentLoading,reportDocumentOpenError,registerDisplayedRevision,
 import {createPdfCreateDocumentSkill,createPdfDocumentCreator,type PreparedAiDocumentCreator} from '../shell/pdf-create-document-skill'
 import {createNativePdfPageCopies} from './native-pdf-page-copies'
 import type {PdfRedactionReview} from './pdf-redactions'
+import {browserFileName,decodeBrowserBase64,downloadBrowserFile} from './browser-download'
+import {pickLocalFiles} from './pick-local-files'
+import {createBrowserPdfCertificate} from './pdf-certificate'
+import {createBrowserPdfSavedSignatures} from './pdf-saved-signatures'
 import {selectPdfToInsert,selectReplacementPdf} from './native-pdf-replacement'
 import {PDF_PAPER_SIZES,parsePdfPageRanges} from '../shell/pdf-page-inputs'
 import {validatePdfPageOperations} from '../../../../packages/web-contracts/src/pdf-page-ops'
@@ -62,12 +67,100 @@ async function mount(){
  const unsubscribe=()=>()=>{}
  const empty=async()=>[]
  let disposed=false,view:PdfAssistantView|undefined
+ const browserActions=new AbortController()
+ const certificate=createBrowserPdfCertificate({
+  path:grant.path,signal:browserActions.signal,current:grant.current,readPdf:grant.api.readFile,
+  canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length,
+ })
  const api={
-  ...grant.api,
+  ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.signatureGalleryAccount,browserActions.signal),
   getUsername:grant.username,getDefaultZoom:async()=>'width' as const,
   listEditFonts:empty,listStaticFormFills:empty,listPrinters:empty,
   onLanguageChanged:unsubscribe,onUsernameChanged:unsubscribe,onFileRenamed:unsubscribe,onSaveAsFlow:unsubscribe,
   onCloseSaveRequest:unsubscribe,onSaveAsRequest:unsubscribe,onPrintRequest:unsubscribe,onChromePressed:unsubscribe,
+  async compareReadPdf(){
+   try{
+    const [file]=await pickLocalFiles('application/pdf,.pdf',browserActions.signal)
+    if(!file)return {ok:false as const,canceled:true as const}
+    if(!file.size||file.size>64*1024*1024)throw Error('PDF exceeds the comparison size limit.')
+    const {readPdfComparisonPages}=await import('./pdf-browser-actions')
+    const pages=await readPdfComparisonPages(new Uint8Array(await file.arrayBuffer()),undefined,browserActions.signal)
+    return {ok:true as const,name:file.name,pageCount:pages.length,pages}
+   }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+  },
+  async compareReadOpen(path:string,password?:string){
+   try{
+    const base=grant.current()
+    const {readPdfComparisonPages}=await import('./pdf-browser-actions')
+    const pages=await readPdfComparisonPages(new Uint8Array(await grant.api.readFile(path)),password,browserActions.signal)
+    if(base!==grant.current())throw Error('The PDF changed during comparison.')
+    return {ok:true as const,name:grant.path.split('/').at(-1)!,pageCount:pages.length,pages}
+   }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+  },
+  async exportImages(request:Parameters<PdfApi['exportImages']>[0]){
+   try{
+    const {downloadPdfImages}=await import('./pdf-browser-actions')
+    const archive=await downloadPdfImages(request,browserActions.signal)
+    return {ok:true as const,savedDir:archive,count:request.images.length}
+   }catch(error){return {ok:false as const,error:error instanceof Error?error.message:String(error)}}
+  },
+  async pickAttachmentFile(){
+   try{
+    const [file]=await pickLocalFiles('',browserActions.signal)
+    if(!file)return {ok:false as const,cancelled:true as const}
+    if(!file.size||file.size>5*1024*1024||file.name.length>255||/[\\/\u0000-\u001f\u007f]/.test(file.name)){
+     throw Error(prefs?.language==='zh'?'请选择名称有效且大小不超过 5 MiB 的附件。':'Choose an attachment with a valid name, up to 5 MiB.')
+    }
+    const bytes=new Uint8Array(await file.arrayBuffer())
+    browserActions.signal.throwIfAborted()
+    const parts:string[]=[]
+    for(let offset=0;offset<bytes.length;offset+=32768)parts.push(String.fromCharCode(...bytes.subarray(offset,offset+32768)))
+    return {ok:true as const,name:file.name,bytesBase64:btoa(parts.join(''))}
+   }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+  },
+  async exportAttachment(path:string,name:string,data:string){
+   try{
+    browserActions.signal.throwIfAborted()
+    if(path!==grant.path||data.length>64*1024*1024)throw Error('PDF attachment is unavailable or too large.')
+    const targetPath=browserFileName(name,'attachment')
+    downloadBrowserFile(new Blob([decodeBrowserBase64(data)],{type:'application/octet-stream'}),targetPath)
+    return {ok:true as const,targetPath}
+   }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+  },
+  async mergePdf(
+   {path,suggestedName}:Parameters<PdfApi['mergePdf']>[0],
+   flushDraft:()=>Promise<boolean>=async()=>true,
+  ):ReturnType<PdfApi['mergePdf']>{
+   const fail=(error:string)=>({ok:false as const,error})
+   const canceled={ok:true as const,canceled:true as const}
+   const signal=browserActions.signal
+   if(path!==grant.path||disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length){
+    return fail('A PDF merge is unavailable while another page operation is pending.')
+   }
+   const initial=grant.current()
+   ribbonBusy=true
+   try{
+    const files=await pickLocalFiles('application/pdf,.pdf',signal,true)
+    if(!files.length)return canceled
+    const {preparePdfMerge,validatePdfMergeFiles}=await import('./pdf-merge-download')
+    signal.throwIfAborted()
+    validatePdfMergeFiles(files)
+    if(grant.current()!==initial)return fail('The PDF changed while selecting files. Retry the merge.')
+    if(!await flushDraft())return canceled
+    const revision=grant.current()
+    const unchanged=()=>grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
+    const {merged,appended}=await preparePdfMerge(await grant.api.readFile(path),files,signal)
+    signal.throwIfAborted()
+    if(!unchanged())return fail('The PDF changed during the merge. Retry the merge.')
+    const filename=browserFileName(suggestedName.replace(/\.pdf$/i,''),'merged')+'.pdf'
+    downloadBrowserFile(new Blob([merged],{type:'application/pdf'}),filename)
+    return {ok:true,savedPath:filename,appendedCount:appended}
+   }catch(error){
+    return signal.aborted?canceled:fail(error instanceof Error?error.message:String(error))
+   }finally{
+    ribbonBusy=false
+   }
+  },
   async insertPdf({path,afterPageIndex}:Parameters<PdfApi['insertPdf']>[0]){
    if(path!==grant.path||!Number.isSafeInteger(afterPageIndex)||afterPageIndex< -1)return {ok:false as const,error:'PDF insertion is unavailable.'}
    const current=view?.doc,revision=grant.current()
@@ -126,6 +219,45 @@ async function mount(){
  const isClean=()=>{
   const state=editor?.state()
   return !disposed&&editor?.status==='ready'&&!!state&&!state.dirty&&!state.blocked
+ }
+ async function exportProtectedCopy(
+  path:string,
+  protection:import('../../../pdf/src/shared/ipc').PdfEncryptionInput,
+  flushDraft:()=>Promise<boolean>,
+ ):Promise<string|null>{
+  const zh=prefs?.language==='zh'
+  const unavailable=zh?'当前无法生成受保护副本。':'The protected copy is unavailable.'
+  if(path!==grant.path||disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length) return unavailable
+  const signal=browserActions.signal
+  const initial=grant.current()
+  ribbonBusy=true
+  try{
+   const {createProtectedPdfCopy,isCopyPasswordValid,needsDistinctOwnerPassword}=await import('./pdf-protected-copy')
+   signal.throwIfAborted()
+   if(!isCopyPasswordValid(protection.userPassword)||!isCopyPasswordValid(protection.ownerPassword)){
+    return zh?'密码须为 1 至 127 个 UTF-8 字节，且不得包含空字符。':'Use 1 to 127 UTF-8 bytes for each password and omit NUL characters.'
+   }
+   if(needsDistinctOwnerPassword(protection)){
+    return zh?'限制操作权限时，请使用不同的所有者密码。':'Use a distinct owner password to restrict permissions.'
+   }
+   if(grant.current()!==initial)return unavailable
+   if(!await flushDraft())return zh?'待保存的编辑无法保存。':'Pending edits could not be saved.'
+   const revision=grant.current()
+   // The save returns before React necessarily publishes the cleared draft.
+   // Check the revision and ready state after retrieving the committed bytes.
+   const bytes=new Uint8Array(await grant.api.readFile(path))
+   const unchanged=()=>grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
+   if(!unchanged())return unavailable
+   const encrypted=await createProtectedPdfCopy(bytes,protection,signal)
+   if(!unchanged())return unavailable
+   const suggested=path.slice(path.lastIndexOf('/')+1).replace(/\.pdf$/i,'')+'-protected'
+   downloadBrowserFile(new Blob([encrypted],{type:'application/pdf'}),browserFileName(suggested,'protected')+'.pdf')
+   return null
+  }catch{
+   return unavailable
+  }finally{
+   ribbonBusy=false
+  }
  }
  registerDisplayedRevision(()=>isClean()?grant.current().revision:undefined)
  const savedPageCount=()=>isClean()&&view?.canAppendReport()?view.doc?.numPages:undefined
@@ -199,6 +331,7 @@ async function mount(){
  function cleanup(){
   if(disposed)return
   disposed=true
+  browserActions.abort()
   window.removeEventListener('beforeunload',beforeUnload)
   closeHandoff();assistant?.dispose();root.unmount();realtime?.dispose();grant.dispose()
  }
@@ -237,7 +370,7 @@ async function mount(){
     return [...wrapped,part]
    })
    const sections=Array.from({length:Math.ceil(lines.length/47)},(_,i)=>lines.slice(i*47,(i+1)*47).join('\n').trimEnd()).filter(section=>section.trim())
-   if(sections.length>20)throw Error('PDF report exceeds the page limit')
+   if(sections.length>MAX_PDF_DRAFT_BLANK_PAGES)throw Error('PDF report exceeds the page limit')
    const matches=view?.appendReport(sections)
    if(!matches)throw Error('PDF draft changed or report cannot be appended')
    const applicationId=crypto.randomUUID()
@@ -531,7 +664,6 @@ async function mount(){
    }
    if(call.name==='insert_blank_page'){
     signal?.throwIfAborted()
-    if(current.batchApi.pageCount()>=100)return invalid('The PDF already has 100 pages, the Web editing limit.')
     return insertBlankPageTool({...current.batchApi,readOnly:()=>!current.canEdit()},call.input,signal)
    }
    if(call.name==='apply_ops'||call.name==='list_form_fields'){
@@ -691,7 +823,7 @@ async function mount(){
   },
  })
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
-  <App hostEditRestriction={editRestriction} hostSave={grant.writer} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
+  <App hostEditRestriction={editRestriction} hostSave={grant.writer} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">

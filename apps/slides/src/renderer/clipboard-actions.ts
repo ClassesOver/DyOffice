@@ -203,7 +203,12 @@ export async function pasteClipboard(ctx: ActionCtx): Promise<void> {
     }
     return
   }
-  const r = await window.slidesApi.pasteElements({ slideIndex: ctx.current, fitWidthPx: FIT_WIDTH })
+  if (external.kind !== 'internal') return
+  const r = await window.slidesApi.pasteElements({
+    slideIndex: ctx.current,
+    fitWidthPx: ctx.slide?.widthPx ?? FIT_WIDTH,
+    ...(external.elementReference ? { elementReference: external.elementReference } : {}),
+  })
   if (r) {
     ctx.applySlide(ctx.current, r.slide)
     ctx.setSelectedIds(r.sourceIds)
@@ -224,7 +229,7 @@ export async function duplicateSelected(
     sourceIds: ids,
     dxPx,
     dyPx,
-    fitWidthPx: FIT_WIDTH,
+    fitWidthPx: ctx.slide?.widthPx ?? FIT_WIDTH,
   })
   if (r) {
     ctx.applySlide(ctx.current, r.slide)

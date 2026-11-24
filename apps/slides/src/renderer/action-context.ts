@@ -12,6 +12,7 @@ import type { GroupRenderNode, RenderNode, RenderSlide } from '@genoffice/pptx-r
 import type {
   AnimationItem,
   GetLayoutsResult,
+  HeaderFooterState,
   LinkTargetOp,
   MasterPartItem,
   PasteSlideMode,
@@ -128,11 +129,7 @@ export interface UngroupedSet {
   sourceIds: string[]
 }
 
-export interface HfDialogState {
-  footer: string | null
-  slideNum: boolean
-  date: string | null
-}
+export type HfDialogState = HeaderFooterState
 
 export interface ChartDataDialogInit {
   kind: string
@@ -272,7 +269,9 @@ export interface ActionCtx {
   applySlide: (slideIndex: number, updated: RenderSlide) => void
   /** Replace the whole deck from a rebuilt result (an op transaction may touch any slide) */
   applyDeck: (all: RenderSlide[], goTo?: number) => void
-  flushNotes: () => Promise<void>
+  /** Flushes speaker notes, returning a reader-facing error when a draft remains uncommitted. */
+  flushNotes: () => Promise<string | void>
+  notesDraftsPending: () => boolean
   findNodeCtx: (id: string) => { node: RenderNode; groupId?: string } | null
   groupIdOf: (id: string) => string | undefined
   startEdit: (sourceId: string, caret?: { x: number; y: number }) => void

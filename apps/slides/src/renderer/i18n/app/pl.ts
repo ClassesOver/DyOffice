@@ -271,6 +271,8 @@ export const pl = {
   appSectionHeaderTitle:
     'Kliknij, aby zwinąć/rozwinąć; kliknij prawym przyciskiem, aby zarządzać sekcją',
   appNotesLabel: 'Notatki',
+  appNotesTooLong: "Notatki prelegenta na slajdzie {slide} przekraczają limit {limit} znaków. Skróć je, aby zapisać.",
+  appNotesWriteFailed: "Nie udało się zapisać notatek prelegenta na slajdzie {slide}. Spróbuj zapisać ponownie.",
   appNotesClickToAdd: 'Kliknij, aby dodać notatki',
   appNotesPlaceholder: 'Kliknij, aby dodać notatki prelegenta (zapisywane w pliku .pptx)',
   appNotesShow: 'Pokaż notatki',

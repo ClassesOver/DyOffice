@@ -141,11 +141,13 @@ function StrokesThumb({
 export function SignatureDialog({
   color,
   t,
+  webHost = false,
   onCancel,
   onConfirm,
 }: {
   color: [number, number, number]
   t: TFunc
+  webHost?: boolean
   onCancel: () => void
   onConfirm: (sig: SignatureData) => void
 }): ReactElement {
@@ -157,29 +159,108 @@ export function SignatureDialog({
   /** Signatures persisted in userData; picking one skips creation and goes straight to placement */
   const [saved, setSaved] = useState<SavedSignature[]>([])
   const [saveForReuse, setSaveForReuse] = useState(true)
+  const [galleryState, setGalleryState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
+  const [galleryError, setGalleryError] = useState<'signGalleryUnavailable' | 'signGallerySaveFailed' | 'signGalleryDeleteFailed' | null>(null)
+  const [galleryBusy, setGalleryBusy] = useState(false)
+  const busyRef = useRef(false)
+  const mounted = useRef(false)
+  const galleryEpoch = useRef(0)
   const fileRef = useRef<HTMLInputElement>(null)
   const dialogRef = useModalDialog(onCancel)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const pathsRef = useRef<number[][]>([])
   const curRef = useRef<number[] | null>(null)
 
-  useEffect(() => {
-    let alive = true
-    window.pdfApi
-      .listSavedSignatures()
-      .then((list) => {
-        if (alive) setSaved(list)
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  const removeSaved = (id: string) => {
-    setSaved((prev) => prev.filter((s) => s.id !== id))
-    window.pdfApi.removeSavedSignature(id).catch(() => {})
+  const hideSaved = () => {
+    galleryEpoch.current++
+    setSaved([])
+    setGalleryState('loading')
+    setGalleryError(null)
   }
+
+  const makeUnavailable = () => {
+    setSaved([])
+    setGalleryState('unavailable')
+    setGalleryError('signGalleryUnavailable')
+    setSaveForReuse(false)
+  }
+
+  useEffect(() => {
+    mounted.current = true
+    let focused = true
+    const refresh = () => {
+      hideSaved()
+      const epoch = galleryEpoch.current
+      if (webHost && (document.hidden || !focused)) return
+      window.pdfApi.listSavedSignatures().then((list) => {
+        if (mounted.current && epoch === galleryEpoch.current) {
+          setSaved(list)
+          setGalleryState('ready')
+        }
+      }).catch(() => {
+        if (mounted.current && epoch === galleryEpoch.current) makeUnavailable()
+      })
+    }
+    const blur = () => {
+      focused = false
+      hideSaved()
+    }
+    const focus = () => {
+      focused = true
+      refresh()
+    }
+    if (webHost) {
+      window.addEventListener('blur', blur)
+      window.addEventListener('focus', focus)
+      document.addEventListener('visibilitychange', refresh)
+    }
+    refresh()
+    return () => {
+      mounted.current = false
+      galleryEpoch.current++
+      window.removeEventListener('blur', blur)
+      window.removeEventListener('focus', focus)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [webHost])
+
+  const runGalleryTask = async (
+    operation: () => Promise<SavedSignature[]>,
+    error: NonNullable<typeof galleryError>,
+    onSuccess?: (list: SavedSignature[]) => void,
+  ) => {
+    if (busyRef.current) return
+    busyRef.current = true
+    const epoch = galleryEpoch.current
+    setGalleryBusy(true)
+    setGalleryError(null)
+    try {
+      const list = await operation()
+      if (mounted.current && epoch === galleryEpoch.current) {
+        setSaved(list)
+        onSuccess?.(list)
+      }
+    } catch (failure) {
+      if (mounted.current && epoch === galleryEpoch.current) {
+        const auth = failure as {code?: string; status?: number} | undefined
+        if (error === 'signGalleryUnavailable' || auth?.code === 'stale_session' ||
+          auth?.status === 401 || auth?.status === 403) makeUnavailable()
+        else setGalleryError(error)
+      }
+    } finally {
+      busyRef.current = false
+      if (mounted.current) setGalleryBusy(false)
+    }
+  }
+
+  const chooseSaved = (id: string) =>
+    runGalleryTask(() => window.pdfApi.listSavedSignatures(), 'signGalleryUnavailable', (list) => {
+      const signature = list.find((entry) => entry.id === id)
+      if (signature) onConfirm(signature.data)
+    })
+
+  const removeSaved = (id: string) =>
+    runGalleryTask(() => window.pdfApi.removeSavedSignature(id), 'signGalleryDeleteFailed')
 
   /** Processed image + preview data URL, recomputed when the source or the B&W toggle changes */
   const processedImg = useMemo(() => {
@@ -240,10 +321,13 @@ export function SignatureDialog({
     redraw()
   }
 
-  /** New signature confirmed: persist it for reuse (unless opted out), then hand off to placement */
+  /** Wait for the reusable entry before entering placement mode. */
   const finish = (sig: SignatureData) => {
-    if (saveForReuse) window.pdfApi.addSavedSignature(sig).catch(() => {})
-    onConfirm(sig)
+    if (busyRef.current) return
+    if (!saveForReuse) onConfirm(sig)
+    else if (galleryState === 'ready') {
+      void runGalleryTask(() => window.pdfApi.addSavedSignature(sig), 'signGallerySaveFailed', () => onConfirm(sig))
+    }
   }
 
   const confirm = () => {
@@ -272,7 +356,8 @@ export function SignatureDialog({
   }
 
   const canConfirm =
-    mode === 'draw' || (mode === 'image' ? processedImg !== null : typed.trim().length > 0)
+    !galleryBusy && (!saveForReuse || galleryState === 'ready') &&
+    (mode === 'draw' || (mode === 'image' ? processedImg !== null : typed.trim().length > 0))
 
   return (
     <div className="pdf-modal-mask" onClick={onCancel}>
@@ -294,7 +379,8 @@ export function SignatureDialog({
                   <button
                     className="pdf-sign-saved-pick"
                     title={t('signPlace')}
-                    onClick={() => onConfirm(s.data)}
+                    disabled={galleryBusy}
+                    onClick={() => void chooseSaved(s.id)}
                   >
                     {s.data.kind === 'image' ? (
                       <img src={`data:image/png;base64,${s.data.image}`} alt="" />
@@ -305,7 +391,8 @@ export function SignatureDialog({
                   <button
                     className="pdf-sign-saved-del"
                     title={t('signSavedDelete')}
-                    onClick={() => removeSaved(s.id)}
+                    disabled={galleryBusy}
+                    onClick={() => void removeSaved(s.id)}
                   >
                     ×
                   </button>
@@ -415,10 +502,15 @@ export function SignatureDialog({
           <input
             type="checkbox"
             checked={saveForReuse}
-            onChange={(e) => setSaveForReuse(e.target.checked)}
+            disabled={galleryBusy || galleryState === 'unavailable'}
+            onChange={(e) => {
+              setSaveForReuse(e.target.checked)
+              if (galleryError === 'signGallerySaveFailed') setGalleryError(null)
+            }}
           />
           {t('signSave')}
         </label>
+        {galleryError && <div className="pdf-modal-hint" role="alert">{t(galleryError)}</div>}
         <div className="pdf-modal-actions">
           {mode === 'draw' && (
             <button className="pdf-modal-btn" onClick={clear}>

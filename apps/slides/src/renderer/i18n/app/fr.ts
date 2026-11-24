@@ -272,6 +272,8 @@ export const fr = {
   appOutlineNoText: '(Aucun texte)',
   appSectionHeaderTitle: 'Cliquez pour réduire/développer ; clic droit pour gérer la section',
   appNotesLabel: 'Notes',
+  appNotesTooLong: "Les notes du présentateur de la diapositive {slide} dépassent la limite de {limit} caractères. Raccourcissez-les pour enregistrer.",
+  appNotesWriteFailed: "Impossible d’écrire les notes du présentateur de la diapositive {slide}. Essayez d’enregistrer à nouveau.",
   appNotesClickToAdd: 'Cliquez pour ajouter des notes',
   appNotesPlaceholder:
     'Cliquez pour ajouter des notes du présentateur (enregistrées dans le .pptx)',

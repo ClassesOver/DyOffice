@@ -378,6 +378,29 @@ describe('blank pages', () => {
     expect(state.blankPages.map((b) => b.input.pageIndex)).toEqual([3, 4])
   })
 
+  it('rejects a batch that exceeds the host page limit and preserves earlier edits', () => {
+    const limits = { maxPages: 100, message: 'Save a page deletion before inserting more pages.' }
+    const before = run(empty(), [{ op: 'rotatePages', pages: [0], dir: 90 }], ctx({ pageCount: 99 })).state
+    const bounded = ctx({ pageCount: 99, blankPageLimit: limits })
+    const exact = run(before, [blank(0, 99)], bounded)
+    expect(exact.plan.failures).toEqual([])
+    expect(exact.state.blankPages).toHaveLength(1)
+    const overflow = run(before, [blank(0, 99), blank(99, 100)], bounded)
+    expect(overflow.plan.failures).toEqual([
+      expect.objectContaining({ index: 1, error: expect.stringContaining(limits.message) }),
+    ])
+    expect(overflow.state).toEqual(before)
+  })
+
+  it('counts deleted pages in the host limit until the draft is saved', () => {
+    const limits = { maxPages: 100, message: 'Save a page deletion before inserting more pages.' }
+    const bounded = ctx({ pageCount: 100, blankPageLimit: limits })
+    const { plan, state } = run(empty(), [blank(0, 100)], { ...bounded, deleted: new Set([1]) })
+    expect(plan.failures[0]?.error).toContain(limits.message)
+    expect(state.blankPages).toEqual([])
+    expect(run(empty(), [{ op: 'rotatePages', pages: [0], dir: 90 }], bounded).plan.failures).toEqual([])
+  })
+
   it('rejects a stale pageIndex and a bad size', () => {
     expect(run(empty(), [blank(0, 5)]).plan.failures[0]!.error).toMatch(/next page index/)
     expect(run(empty(), [{ ...blank(0, 3), width: 0 }]).plan.failures[0]!.error).toMatch(/width/)

@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { openPptx, savePptx, duplicateSlide, insertBlankSlide } from '../src/index'
+import { openPptx, savePptx, duplicateSlide, insertBlankSlide, getSlideNotes, setSlideNotes } from '../src/index'
+import { notesPathForSlide } from '../src/notes'
+import { resolveTarget } from '../src/zip'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fx = (name: string) => readFileSync(join(here, 'fixtures', name))
@@ -43,15 +45,35 @@ describe('duplicateSlide', () => {
     expect(slideText(reopened.deck.slides[1])).toContain('edited before copying')
   })
 
+  it('duplicates the notes part with its own slide relationship and editable contents', async () => {
+    const opened = await openPptx(fx('01_standard_business.pptx'))
+    const sourcePath = opened.deck.slides[0]!.path
+    setSlideNotes(opened, 0, 'Original speaker note')
+    const sourceNotes = notesPathForSlide(opened.archive, sourcePath)!
+    const { path: copyPath } = duplicateSlide(opened, 0)!
+    const reopened = await openPptx(await savePptx(opened))
+    const copyNotes = notesPathForSlide(reopened.archive, copyPath)
+    expect(getSlideNotes(reopened.archive, copyPath)).toBe('Original speaker note')
+    expect(copyNotes).not.toBe(sourceNotes)
+    expect(reopened.archive.readText(copyNotes!)).toBe(reopened.archive.readText(sourceNotes))
+    const owner = [...reopened.archive.readRels(copyNotes!).values()].find(rel => rel.type.endsWith('/slide'))
+    expect(resolveTarget(copyNotes!, owner!.target)).toBe(copyPath)
+    setSlideNotes(reopened, 1, 'Updated copy')
+    expect(getSlideNotes(reopened.archive, sourcePath)).toBe('Original speaker note')
+    expect(getSlideNotes(reopened.archive, copyPath)).toBe('Updated copy')
+  })
+
   it('clearText makes a layout-preserving blank page', async () => {
     const opened = await openPptx(fx('01_standard_business.pptx'))
     const srcCount = opened.deck.slides[0]!.elements.length
+    setSlideNotes(opened, 0, 'Only on the original')
     duplicateSlide(opened, 0, { clearText: true })
 
     const reopened = await openPptx(await savePptx(opened))
     const copy = reopened.deck.slides[1]!
     expect(copy.elements.length).toBe(srcCount)
     expect(slideText(copy)).toBe('')
+    expect(getSlideNotes(reopened.archive, copy.path)).toBe('')
   })
 
   it('two duplicates get distinct part paths and sldIds', async () => {

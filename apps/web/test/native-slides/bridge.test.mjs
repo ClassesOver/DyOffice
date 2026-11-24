@@ -28,6 +28,183 @@ async function openBridge(createSlidesBridge, server, t, {acquire = true, mediaA
   return {host, bridge}
 }
 
+function mockBrowserClipboard(t) {
+  let items = []
+  let denied = false
+  let permission = 'granted'
+  t.mock.getter(globalThis, 'navigator', () => ({permissions:{async query(){return {state:permission}}},clipboard: {
+    async read() {
+      if (denied) throw new DOMException('Clipboard access denied', 'NotAllowedError')
+      return items
+    },
+    async write(value) { items = value },
+  }}))
+  const previousClipboardItem = Object.getOwnPropertyDescriptor(globalThis, 'ClipboardItem')
+  Object.defineProperty(globalThis, 'ClipboardItem', {configurable: true, value: class {
+    constructor(formats) { this.formats = formats; this.types = Object.keys(formats) }
+    async getType(type) { return this.formats[type] }
+  }})
+  t.after(() => {
+    if (previousClipboardItem) Object.defineProperty(globalThis, 'ClipboardItem', previousClipboardItem)
+    else delete globalThis.ClipboardItem
+  })
+  return {
+    get items() { return items },
+    set items(value) { items = value },
+    denyRead() { denied = true },
+    allowRead() { denied = false },
+    promptForRead() { permission = 'prompt' },
+  }
+}
+
+test('slides bridge reads a whole-slide reference from the browser clipboard in a fresh tab', async t => {
+  const format = 'web application/x-dyoffice-slide-reference'
+  const id = '05cd6db2-b941-46a9-b145-34b12142ff55'
+  const clipboard = mockBrowserClipboard(t)
+  // Each bundle has the isolated module state of a separate browser tab.
+  const server = createSlidesMockServer({slideCount: 1})
+  const sourceBridge = await bundleBridge(t)
+  const host = createSessionFileHost({fetchImpl: server.fetchImpl})
+  t.after(() => host.dispose())
+  await host.open(server.file().fileId)
+  await host.acquireLease(server.file().fileId)
+  const source = sourceBridge(host, server.file().fileId, {language: 'en', theme: 'light'}, {
+    fetchImpl: (url, init) => String(url).endsWith('/clipboard-copy')
+      ? Promise.resolve(Response.json({id, count: 1})) : server.fetchImpl(url, init),
+  })
+  t.after(() => source.dispose())
+  await source.api.openPptx(1280)
+  assert.equal(await source.api.copySlides({slideIndexes: [0]}), true)
+  assert.deepEqual(clipboard.items[0].types, [format])
+  const destinationBridge = await bundleBridge(t)
+  const destination = destinationBridge(host, server.file().fileId, {language: 'en', theme: 'light'})
+  t.after(() => destination.dispose())
+  assert.equal(await destination.api.hasSlideClipboard(), true)
+  assert.deepEqual(await destination.api.clipboardExternal(), {kind: 'slide'})
+
+  clipboard.denyRead()
+  assert.equal(await source.api.hasSlideClipboard(), true)
+  assert.deepEqual(await destination.api.clipboardExternal(), {kind: 'none'})
+  clipboard.allowRead()
+  for (const invalid of ['slides:invalid-id', 'slides:' + id + ' '.repeat(1000)]) {
+    clipboard.items = [new ClipboardItem({[format]: new Blob([invalid])})]
+    assert.equal(await destination.api.hasSlideClipboard(), false)
+  }
+  clipboard.items = [new ClipboardItem({'text/plain': new Blob(['external text'])})]
+  assert.equal(await source.api.hasSlideClipboard(), false)
+  assert.deepEqual(await source.api.clipboardExternal(), {kind: 'text', text: 'external text'})
+
+  clipboard.promptForRead()
+  assert.equal(await source.api.hasSlideClipboard(), true, 'the context menu can offer the local copy without requesting read access')
+})
+
+test('slides bridge pastes editable elements from the browser clipboard in a fresh tab', async t => {
+  const format = 'web application/x-dyoffice-slide-reference'
+  const id = '05cd6db2-b941-46a9-b145-34b12142ff55'
+  const clipboard = mockBrowserClipboard(t)
+  const server = createSlidesMockServer({slideCount: 1})
+  const host = createSessionFileHost({fetchImpl: server.fetchImpl})
+  t.after(() => host.dispose())
+  await host.open(server.file().fileId)
+  await host.acquireLease(server.file().fileId)
+  const pasted = {
+    slide: {widthPx: 1280, heightPx: 720, scale: 1, nodes: [{type: 'text', sourceId: 'pasted-title', text: 'Editable title'}]},
+    sourceIds: ['pasted-title'],
+  }
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/clipboard-copy')) return Response.json({id, count: 1})
+    if (String(url).endsWith('/clipboard-paste')) {
+      const {kind, clipboardId} = JSON.parse(init.body)
+      if (kind !== 'elements' || clipboardId !== id) return Response.json(null)
+      return Response.json({slides: [pasted.slide], sourceIds: pasted.sourceIds, generation: 1, dirty: true, history: {canUndo: true, canRedo: false}})
+    }
+    return server.fetchImpl(url, init)
+  }
+  async function openTab() {
+    const createSlidesBridge = await bundleBridge(t)
+    const bridge = createSlidesBridge(host, server.file().fileId, {language: 'en', theme: 'light'}, {fetchImpl})
+    t.after(() => bridge.dispose())
+    await bridge.api.openPptx(1280)
+    return bridge.api
+  }
+  const source = await openTab(), destination = await openTab()
+  const clipboardToken = 'image-copy'
+  const png = PNG.sync.write({width: 1, height: 1, data: Buffer.from([255, 0, 0, 255])}).toString('base64')
+  assert.equal(await source.copyElements({slideIndex: 0, sourceIds: ['e1-title'], clipboardToken}), 1)
+  assert.equal(await source.copyElementsImage(clipboardToken, png), true)
+  assert.deepEqual(clipboard.items[0].types, [format, 'image/png'])
+  assert.deepEqual(await destination.clipboardExternal(), {kind: 'internal', elementReference: id})
+  assert.deepEqual(await destination.pasteElements({slideIndex: 0, fitWidthPx: 1280, elementReference: id}), pasted)
+
+  clipboard.items = [new ClipboardItem({'text/plain': new Blob(['external text'])})]
+  assert.equal(await source.pasteElements({slideIndex: 0, fitWidthPx: 1280}), null)
+  assert.deepEqual(await source.clipboardExternal(), {kind: 'text', text: 'external text'})
+
+  clipboard.items = [new ClipboardItem({[format]: new Blob([id])})]
+  assert.deepEqual(await source.pasteElements({slideIndex: 0, fitWidthPx: 1280}), pasted)
+  assert.equal(await destination.pasteElements({slideIndex: 0, fitWidthPx: 1280}), null)
+  clipboard.denyRead()
+  assert.deepEqual(await source.pasteElements({slideIndex: 0, fitWidthPx: 1280}), pasted)
+  assert.equal(await destination.pasteElements({slideIndex: 0, fitWidthPx: 1280}), null)
+
+  clipboard.allowRead()
+  assert.equal(await source.copyElements({slideIndex: 0, sourceIds: ['e1-title'], clipboardToken}), 1)
+  const newerCopy = new ClipboardItem({[format]: new Blob(['elements:122d966a-9c52-4c8b-8145-d6debcca0b11'])})
+  clipboard.items = [newerCopy]
+  assert.equal(await source.copyElementsImage(clipboardToken, png), false)
+  assert.equal(clipboard.items[0], newerCopy)
+})
+
+test('slides bridge uses the companion PNG when an editable copy expires', async t => {
+  const format = 'web application/x-dyoffice-slide-reference'
+  const id = '05cd6db2-b941-46a9-b145-34b12142ff55'
+  const png = PNG.sync.write({width: 1, height: 1, data: Buffer.from([255, 0, 0, 255])})
+  const clipboard = mockBrowserClipboard(t)
+  const previousFileReader = Object.getOwnPropertyDescriptor(globalThis, 'FileReader')
+  Object.defineProperty(globalThis, 'FileReader', {configurable: true, value: class {
+    async readAsDataURL(blob) {
+      this.result = 'data:image/png;base64,' + Buffer.from(await blob.arrayBuffer()).toString('base64')
+      this.onload()
+    }
+  }})
+  t.after(() => {
+    if (previousFileReader) Object.defineProperty(globalThis, 'FileReader', previousFileReader)
+    else delete globalThis.FileReader
+  })
+  const item = new ClipboardItem({[format]: new Blob(['elements:' + id]), 'image/png': new Blob([png])})
+  clipboard.items = [item]
+
+  const server = createSlidesMockServer({slideCount: 1})
+  const host = createSessionFileHost({fetchImpl: server.fetchImpl})
+  t.after(() => host.dispose())
+  await host.open(server.file().fileId)
+  await host.acquireLease(server.file().fileId)
+  const createSlidesBridge = await bundleBridge(t)
+  const picture = {type: 'picture', sourceId: 'pasted-picture'}
+  let replacement, imageRequests = 0
+  const {api, dispose} = createSlidesBridge(host, server.file().fileId, {language: 'en', theme: 'light'}, {fetchImpl: async (url, init) => {
+    if (String(url).endsWith('/clipboard-paste')) {
+      if (replacement) clipboard.items = [replacement]
+      return Response.json(null)
+    }
+    if (String(url).endsWith('/media')) {
+      const {bytesBase64, ext} = JSON.parse(init.body)
+      if (ext !== 'png' || bytesBase64 !== png.toString('base64')) return Response.json(null, {status: 400})
+      imageRequests++
+      return Response.json({slide: {nodes: [picture]}, created: [{id: picture.sourceId}], generation: 1, dirty: true})
+    }
+    return server.fetchImpl(url, init)
+  }})
+  t.after(() => dispose())
+  await api.openPptx(1280)
+  const paste = () => api.pasteElements({slideIndex: 0, fitWidthPx: 1280, elementReference: id})
+
+  assert.deepEqual(await paste(), {slide: {nodes: [picture]}, sourceIds: [picture.sourceId]})
+  replacement = new ClipboardItem({[format]: new Blob(['elements:122d966a-9c52-4c8b-8145-d6debcca0b11']), 'image/png': new Blob([png])})
+  assert.equal(await paste(), null)
+  assert.equal(imageRequests, 1)
+})
+
 test('slides bridge forwards actual AI history checkpoints and adopts confirmed restoration',async t=>{
  const createSlidesBridge=await bundleBridge(t),server=createSlidesMockServer({slideCount:1}),host=createSessionFileHost({fetchImpl:server.fetchImpl})
  t.after(()=>host.dispose());await host.open(server.file().fileId);await host.acquireLease(server.file().fileId)
@@ -605,7 +782,7 @@ test('desktop-only slides operations reject asynchronously with an explicit unav
   const createSlidesBridge = await bundleBridge(t)
   const server = createSlidesMockServer({slideCount: 1})
   const {bridge} = await openBridge(createSlidesBridge, server, t)
-  const desktopOnly = ['printSlides', 'exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'pickExportVideoPath', 'videoFileOpen', 'savePicture', 'listPrinters', 'printerOptions', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'insertMedia', 'addMediaBytes', 'pickModel3d', 'addModel3d', 'openPptxPath', 'newBlank', 'saveAs', 'presenterStart', 'aiStream', 'webSearch']
+  const desktopOnly = ['printSlides', 'exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'pickExportVideoPath', 'videoFileOpen', 'listPrinters', 'printerOptions', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'insertMedia', 'addMediaBytes', 'pickModel3d', 'addModel3d', 'openPptxPath', 'newBlank', 'saveAs', 'aiStream', 'webSearch']
   for (const method of desktopOnly) {
     assert.equal(typeof bridge.api[method], 'function', method)
     let operation
@@ -859,9 +1036,10 @@ test('links and animations bridge forwards full replacements and reads native sa
  const calls=[],link={kind:'url',url:'https://example.com'},items=[{sourceId:'e1-title',effect:'fade',trigger:'onClick',durationMs:500,delayMs:0}]
  const bridge=createSlidesBridge(host,server.file().fileId,{language:'en',theme:'light'},{fetchImpl:async(url,init)=>{
   const method=String(url).split('/').at(-1),body=init?.body?JSON.parse(init.body):null
+  if(method==='slide')return Response.json({nodes:[{type:'shape',sourceId:'sp_4',durableId:'e_904989a1'}]})
   if(['apply','animations','links'].includes(method)){
    calls.push({method,body})
-   const value=method==='apply'?{generation:calls.filter(call=>call.method==='apply').length,dirty:true,changed:[0]}:method==='links'?[{sourceId:'e1-title',target:link}]:items.map(item=>({...item,targetName:'Title'}))
+   const value=method==='apply'?{generation:calls.filter(call=>call.method==='apply').length,dirty:true,changed:[0]}:method==='links'?[{sourceId:'sp_4',target:link}]:items.map(item=>({...item,targetName:'Title'}))
    return new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}})
   }
   return server.fetchImpl(url,init)
@@ -869,7 +1047,8 @@ test('links and animations bridge forwards full replacements and reads native sa
  t.after(()=>bridge.dispose());await bridge.api.openPptx(960)
  assert.ok(await bridge.api.setLink({slideIndex:0,sourceId:'e1-title',target:link}))
  assert.equal(await bridge.api.setAnimations({slideIndex:0,items}),true)
- assert.deepEqual(await bridge.api.getLink(0,'e1-title'),link)
+ assert.deepEqual(await bridge.api.getLink(0,'sp_4'),link)
+ assert.deepEqual(await bridge.api.getLink(0,'e_904989a1'),link)
  assert.equal((await bridge.api.getAnimations(0))[0].durationMs,500)
  assert.deepEqual(calls.filter(call=>call.method==='apply').map(call=>call.body.ops),[[{op:'setLink',target:{slide:0,el:'e1-title'},link}],[{op:'setAnimations',target:{slide:0},items}]])
  assert.ok(calls.every(call=>call.body.editorId&&call.body.leaseEpoch===1))
@@ -998,4 +1177,23 @@ test('local PPTX pictures use native image mutations and reject a stale file sel
   pick = async () => { throw new Error('A read-only editor must not open a picker') }
   assert.equal(await bridge.api.insertImage(0, 960), null)
   assert.equal(requests.length, 2)
+})
+
+test('Web slides commits Edit Points and connector endpoints in slide EMUs',async t=>{
+ const createSlidesBridge=await bundleBridge(t)
+ const server=createSlidesMockServer({slideCount:1})
+ const {bridge}=await openBridge(createSlidesBridge,server,t)
+ await bridge.api.openPptx(1280)
+ const shape={slideIndex:0,sourceId:'e1-title',fitWidthPx:1280,pathPx:{w:20,h:10,cmds:[{op:'M',pts:[0,0]},{op:'L',pts:[20,10]},{op:'Z',pts:[]}]}}
+ await bridge.api.setShapeGeometry({...shape,preview:true})
+ assert.deepEqual(server.appliedOps(),[])
+ await bridge.api.setShapeGeometry(shape)
+ await bridge.api.editConnectorEndpoints({slideIndex:0,sourceId:'e1-line',fitWidthPx:1280,x1Px:20,y1Px:10,x2Px:30,y2Px:40,start:null,end:{targetId:'e1-title',idx:1}})
+ assert.deepEqual(server.appliedOps(),[
+  {op:'setShapeCustomGeometry',target:{slide:0,el:'e1-title'},path:{w:190500,h:95250,cmds:[{op:'M',pts:[0,0]},{op:'L',pts:[190500,95250]},{op:'Z',pts:[]}]}},
+  {op:'setConnectorEndpoints',target:{slide:0,el:'e1-line'},p1:{x:190500,y:95250},p2:{x:285750,y:381000},start:null,end:{targetId:'e1-title',idx:1}},
+ ])
+ assert.deepEqual(await bridge.api.presenterStart(),{audience:false})
+ assert.equal(await bridge.api.presenterSwap(),false)
+ await bridge.api.presenterEnd()
 })

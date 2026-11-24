@@ -516,19 +516,32 @@ test('a killed child fails pending and later calls with SESSION_CLOSED',async()=
  await assert.rejects(()=>session.exportBytes(0),{message:'SESSION_CLOSED'})
 })
 
-test('native links and full animation lists read back unchanged after export and a fresh session',async t=>{
+test('native links and animations address the rendered target after editing and reopening',async t=>{
  const session=await openIsolatedPptxSession({fileId:'links-animation',revision:'r1',bytes:await bytes()},{timeoutMs:60000,unsafeTestOnly:true});t.after(()=>session.close())
- const items=[{sourceId:'e_904989a1',effect:'fade',trigger:'onClick',durationMs:750,delayMs:150}]
- await session.apply(0,[{op:'setLink',target:{slide:0,el:'e_904989a1'},link:{kind:'url',url:'https://example.com/report'}},{op:'setAnimations',target:{slide:0},items}])
- assert.deepEqual((await session.animations(1,0)).map(({targetName,...item})=>item),items)
- assert.ok((await session.links(1,0)).some(link=>link.sourceId==='e_904989a1'&&link.target.url==='https://example.com/report'))
+ const durableId='e_904989a1'
+ const link={kind:'url',url:'https://example.com/report'}
+ const timing={effect:'fade',trigger:'onClick',durationMs:750,delayMs:150}
+ const items=[{sourceId:durableId,...timing}]
+ const apply=await session.apply(0,[{op:'setLink',target:{slide:0,el:durableId},link},{op:'setAnimations',target:{slide:0},items}])
+ assert.equal(apply.transaction.applied,true,JSON.stringify(apply.transaction))
+ async function checkTargets(current,generation,expectedTiming){
+  const slide=await current.render(generation,0)
+  const title=slide.nodes.find(node=>node.type==='text'&&node.text?.lines.flatMap(line=>line.runs.map(run=>run.text)).join('')==='Acceptance title')
+  assert.ok(title?.sourceId)
+  assert.ok((await current.links(generation,0)).some(item=>item.sourceId===title.sourceId&&item.target.url===link.url))
+  const animations=(await current.animations(generation,0)).map(({targetName,...item})=>item)
+  assert.deepEqual(animations,[{sourceId:title.sourceId,...expectedTiming}])
+  return animations[0]
+ }
+ await checkTargets(session,1,timing)
  await assert.rejects(()=>session.animations(0,0),{message:'GENERATION_CONFLICT'})
  await assert.rejects(()=>session.apply(1,[{op:'setAnimations',target:{slide:0},items:[{...items[0],unexpected:true}]}]))
- await assert.rejects(()=>session.apply(1,[{op:'setLink',target:{slide:0,el:'e_904989a1'},link:{kind:'url',url:'javascript:alert(1)'}}]))
- assert.deepEqual((await session.animations(1,0)).map(({targetName,...item})=>item),items)
+ await assert.rejects(()=>session.apply(1,[{op:'setLink',target:{slide:0,el:durableId},link:{kind:'url',url:'javascript:alert(1)'}}]))
  const output=await session.exportBytes(1),fresh=await openIsolatedPptxSession({fileId:'links-animation',revision:'r2',bytes:output.bytes},{timeoutMs:60000,unsafeTestOnly:true});t.after(()=>fresh.close())
- assert.deepEqual((await fresh.animations(0,0)).map(({sourceId,targetName,...item})=>item),items.map(({sourceId,...item})=>item))
- assert.ok((await fresh.links(0,0)).some(link=>link.target.url==='https://example.com/report'))
+ const animation=await checkTargets(fresh,0,timing)
+ const updated=await fresh.apply(0,[{op:'setAnimations',target:{slide:0},items:[{...animation,durationMs:500}]}])
+ assert.equal(updated.transaction.applied,true,JSON.stringify(updated.transaction))
+ await checkTargets(fresh,1,{...timing,durationMs:500})
 })
 
 
@@ -561,4 +574,121 @@ test('chart palette offers only accents present in a partial theme like PC',asyn
  assert.equal(schemes.find(item=>item.key==='colorful').colors.length,3)
  assert.deepEqual(schemes.filter(item=>item.key.startsWith('mono')).map(item=>item.key),['mono-accent1','mono-accent2','mono-accent3'])
  for(const scheme of schemes)for(const color of scheme.colors)assert.match(color,/^#[0-9a-f]{6}$/i)
+})
+
+test('picture backgrounds and fills reuse media, save their OOXML and undo as a single edit',async t=>{
+ const session=await openIsolatedPptxSession({fileId:'picture-fills',revision:'r-1',bytes:await bytes()},{timeoutMs:60000,unsafeTestOnly:true})
+ t.after(()=>session.close())
+ const image=PNG.sync.write({width:1,height:1,data:Buffer.from([6,105,216,255])})
+ const picture={bytes:image,ext:'png'}
+ assert.equal((await session.applyImage(0,{mode:'background',slide:0,tile:false,...picture})).generation,1)
+ const allBackgrounds=await session.applyImage(1,{mode:'background',slide:-1,sourceSlide:0,tile:true})
+ assert.equal(allBackgrounds.generation,2)
+ const targets=(await session.render(2,0)).nodes.filter(node=>(node.type==='text'||node.type==='shape')&&node.sourceId).map(node=>({sourceId:node.sourceId}))
+ assert.ok(targets.length>=2)
+ await assert.rejects(()=>session.applyImage(2,{mode:'fill',slide:0,tile:false,targets:[targets[0],{sourceId:'missing-shape'}],...picture}),{message:'INVALID_TARGET'})
+ assert.equal((await session.applyImage(2,{mode:'fill',slide:0,tile:false,targets,...picture})).generation,3)
+ const saved=await JSZip.loadAsync((await session.exportBytes(3)).bytes)
+ const slide1=await saved.file('ppt/slides/slide1.xml').async('string')
+ const slide2=await saved.file('ppt/slides/slide2.xml').async('string')
+ for(const slide of [slide1,slide2])assert.match(slide,/<p:bg>.*?<a:blipFill.*?<a:tile/s)
+ assert.ok((slide1.match(/<a:blipFill rotWithShape="1">/g)??[]).length>=targets.length)
+ const rela=await saved.file('ppt/slides/_rels/slide1.xml.rels').async('string')
+ const relb=await saved.file('ppt/slides/_rels/slide2.xml.rels').async('string')
+ const fills=[...rela.matchAll(/Target="\.\.\/media\/([^"]+)"/g)].map(match=>match[1])
+ const backgrounds=[...relb.matchAll(/Target="\.\.\/media\/([^"]+)"/g)].map(match=>match[1])
+ assert.equal(new Set(fills).size,1)
+ assert.ok(backgrounds.length===1&&fills.includes(backgrounds[0]))
+ assert.deepEqual(await saved.file('ppt/media/'+backgrounds[0]).async('nodebuffer'),image)
+ const undo=await session.undo(3)
+ const undone=await JSZip.loadAsync((await session.exportBytes(undo.generation)).bytes)
+ assert.doesNotMatch(await undone.file('ppt/slides/slide1.xml').async('string'),/<a:blipFill rotWithShape="1">/)
+})
+
+test('native Edit Points and connector reattachment are preserved in the saved slide',async t=>{
+ const session=await openIsolatedPptxSession({fileId:'shape-geometry',revision:'r-1',bytes:await bytes()},{timeoutMs:60000,unsafeTestOnly:true})
+ t.after(()=>session.close())
+ const elements=(await session.render(0,0)).nodes.filter(node=>(node.type==='text'||node.type==='shape')&&!node.decoration)
+ const [from,destination]=elements.map(element=>element.sourceId)
+ assert.ok(from&&destination)
+ const created=await session.apply(0,[{op:'addConnector',target:{slide:0},from,to:destination}])
+ assert.equal(created.transaction.applied,true,JSON.stringify(created.transaction))
+ const connector=created.created[0]?.id
+ assert.ok(connector)
+ const changed=await session.apply(1,[
+  {op:'setShapeCustomGeometry',target:{slide:0,el:from},path:{w:500,h:500,cmds:[{op:'M',pts:[0,0]},{op:'L',pts:[500,100]},{op:'L',pts:[500,500]},{op:'Z',pts:[]}]}},
+  {op:'setConnectorEndpoints',target:{slide:0,el:connector},p1:{x:500000,y:600000},p2:{x:900000,y:800000},start:null,end:{targetId:from,idx:0}},
+ ])
+ assert.equal(changed.transaction.applied,true,JSON.stringify(changed.transaction))
+ const archive=await JSZip.loadAsync((await session.exportBytes(changed.generation)).bytes)
+ const xml=await archive.file('ppt/slides/slide1.xml').async('string')
+ assert.match(xml,/<a:custGeom>.*?<a:pt x="500" y="100"\s*\/>.*?<\/a:custGeom>/s)
+ const connection=xml.match(/<p:cxnSp>.*?<\/p:cxnSp>/s)?.[0]
+ assert.ok(connection)
+ assert.doesNotMatch(connection,/<a:stCxn/)
+ assert.match(connection,/<a:endCxn id="\d+" idx="0"\s*\/>/)
+})
+
+test('PPTX slide info returns date modes and Morph keys for the rendered shapes',async t=>{
+ const {openPptx,applyHeaderFooter,setSlideTransition,savePptx}=await import('@genoffice/pptx-engine')
+ const deck=await openPptx(await bytes())
+ assert.equal(applyHeaderFooter(deck,{date:'Fixed April date',dateAuto:false},[0]),true)
+ assert.equal(applyHeaderFooter(deck,{date:'April 2026',dateAuto:true},[1]),true)
+ setSlideTransition(deck.deck.slides[1],'morph')
+ const open=(archive,revision)=>openIsolatedPptxSession({fileId:'slide-info-morph',revision,bytes:archive},
+  {timeoutMs:60000,unsafeTestOnly:true})
+ const session=await open(await savePptx(deck),'r1')
+ t.after(()=>session.close())
+ const [first,second]=await session.slideInfo(0)
+ assert.deepEqual(first.headerFooter,{footer:null,slideNum:false,date:'Fixed April date',dateAuto:false})
+ assert.deepEqual(second.headerFooter,{footer:null,slideNum:false,date:'April 2026',dateAuto:true})
+ assert.equal(second.transition,'morph')
+ const [firstShape,secondShape]=[first,second].map(info=>info.shapeKeys.find(key=>key.name==='Shape 3'))
+ assert.equal(firstShape.spid,3)
+ assert.equal(secondShape.spid,3)
+ for(const [index,shape] of [firstShape,secondShape].entries()){
+  const render=await session.render(0,index)
+  assert.ok(render.nodes.some(node=>!node.decoration&&node.sourceId===shape.sourceId))
+ }
+ const updated=await session.apply(0,[{op:'applyHeaderFooter',settings:{...first.headerFooter}}])
+ assert.equal(updated.transaction.applied,true)
+ await assert.rejects(()=>session.slideInfo(0),/GENERATION_CONFLICT/)
+ const reopened=await open((await session.exportBytes(updated.generation)).bytes,'r2')
+ t.after(()=>reopened.close())
+ assert.deepEqual((await reopened.slideInfo(0)).map(info=>info.headerFooter),[first.headerFooter,first.headerFooter])
+})
+
+test('isolated slide sections follow the active generation, including reorder and history', async t => {
+ const session=await openIsolatedPptxSession({fileId:'f-sections',revision:'r1',bytes:await bytes()},
+   {timeoutMs:60000,unsafeTestOnly:true})
+ t.after(()=>session.close())
+ const before=await session.outline(0)
+ assert.deepEqual(before.sections,[])
+ const added=await session.apply(0,[{op:'addSection',atSlideIndex:1,name:'Second topic'}])
+ assert.equal(added.transaction.applied,true)
+ assert.deepEqual(added.sections.map(({name,slideIndices})=>({name,slideIndices})),[
+  {name:'Default Section',slideIndices:[0]},
+  {name:'Second topic',slideIndices:[1]},
+ ])
+ const moved=await session.apply(added.generation,[{op:'moveSection',id:added.sections[1].id,dir:'up'}])
+ assert.deepEqual(moved.paths,[before.paths[1],before.paths[0]])
+ assert.deepEqual(moved.sections[0].slideIndices,[0])
+ assert.equal(moved.sections[0].name,'Second topic')
+ const undone=await session.undo(moved.generation)
+ assert.deepEqual(undone.sections,added.sections)
+ const redone=await session.redo(undone.generation)
+ assert.deepEqual(redone.sections,moved.sections)
+ await assert.rejects(()=>session.outline(undone.generation),{message:'GENERATION_CONFLICT'})
+ const reopened=await openIsolatedPptxSession({fileId:'f-sections',revision:'r2',bytes:(await session.exportBytes(redone.generation)).bytes},
+   {timeoutMs:60000,unsafeTestOnly:true})
+ t.after(()=>reopened.close())
+ assert.deepEqual((await reopened.outline(0)).sections,moved.sections)
+ const deleted=await session.apply(redone.generation,[{op:'removeSectionSlides',id:moved.sections[0].id}])
+ assert.equal(deleted.transaction.applied,true)
+ assert.deepEqual(deleted.paths,[before.paths[0]])
+ assert.deepEqual(deleted.sections,[{...moved.sections[1],slideIndices:[0]}])
+ const refused=await session.apply(deleted.generation,[{op:'removeSectionSlides',id:deleted.sections[0].id}])
+ assert.equal(refused.transaction.applied,false)
+ assert.equal(refused.generation,deleted.generation)
+ assert.deepEqual((await session.undo(deleted.generation)).sections,moved.sections)
 })

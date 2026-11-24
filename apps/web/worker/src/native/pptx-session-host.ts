@@ -1,6 +1,12 @@
-import type {SlideAnimation,LinkTarget} from '@genoffice/pptx-engine'
+import type {HeaderFooterState,LinkTarget,SectionInfo,SlideAnimation,SlideShapeKey,SlideTransitionKind} from '@genoffice/pptx-engine'
 export type AnimationItem={sourceId:string;targetName:string}&Omit<SlideAnimation,'spid'>
 type LinkTargetOp=LinkTarget
+export interface SlidePresentationInfo {
+  transition: SlideTransitionKind
+  timing: { advanceMs: number | null; narrationIds: string[] }
+  headerFooter: HeaderFooterState
+  shapeKeys: SlideShapeKey[]
+}
 export type RunLink = {sourceId:string;paraIndex:number;runIndex:number;target:LinkTarget}
 import { fork } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -18,7 +24,7 @@ export interface SlidesMasterEditResult {
   slide:SlidesRenderSlideLike; sourceId?:string
 }
 export interface PptxChildBinding { fileId: string; revision: string }
-export interface SlidesStepView { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; size: {cx:number;cy:number}; slides: SlidesRenderSlideLike[] }
+export interface SlidesStepView { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; size: {cx:number;cy:number}; slides: SlidesRenderSlideLike[]; sections: SectionInfo[] }
 /** The child's apply result: the applied transaction records plus the post-transaction deck
  * outline (durable slide ids and part paths) that drives changed/order reporting. Records
  * carry the original op object (`op.op` is the op name) per the executor journal. */
@@ -27,21 +33,47 @@ export interface SlidesApplyView {
   generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean
   records: Array<{ op: { op: string }; slideId?: string; created?: string[]; after?: unknown }>
   transaction: { applied: boolean; dryRun?: boolean; plan?: string[]; failures?: Array<{ index: number; error: string }>; records?: Array<{ op: { op: string }; slideId?: string; created?: string[]; after?: unknown }> }
-  count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]
+  count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]; sections: SectionInfo[]
   created: SlidesCreatedEntryView[]
 }
+export type SlidesImageTarget = {sourceId:string;groupId?:string}
+export type SlidesImagePayload = {bytes:Uint8Array;ext:string}
 export type SlidesImageCommand =
   | {mode:'insert';slide:number;bytes:Uint8Array;ext:string} & (
       {offset:{x:number;y:number;cx:number;cy:number};placement?:never} | {placement:'natural';offset?:never}
     )
+  | {mode:'ink';slide:number;bytes:Uint8Array;ext:string;inkPayload:string;offset:{x:number;y:number;cx:number;cy:number}}
   | {mode:'replace';slide:number;sourceId:string;bytes:Uint8Array;ext:string;keepSrcRect?:boolean}
-export interface SlidesOutlineView { count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]; defaultFont?: string; writeProtected?: true }
+  | {mode:'background';slide:number;tile:boolean} & (SlidesImagePayload | {sourceSlide:number;bytes?:never;ext?:never})
+  | {mode:'fill';slide:number;tile:boolean;targets:SlidesImageTarget[]} & SlidesImagePayload
+export type SlidesRecordingCommand =
+  | {kind:'save';slides:Array<{slideIndex:number;bytes:Uint8Array;durationMs:number;advanceMs:number}>}
+  | {kind:'clear';indexes:number[]}
+export type SlidesEmbeddedMedia = {kind:'audio'|'video';dataUrl:string}
+export const MAX_PPTX_MEDIA_BYTES = 8 * 1024 * 1024
+export const MAX_PPTX_RECORDING_BYTES = 12 * 1024 * 1024
+export const MAX_PPTX_RECORDING_SLIDES = 200
+export const MAX_PPTX_ADVANCE_MS = 24 * 60 * 60 * 1000
+export const MAX_SLIDES_CLIPBOARD_BYTES = 16 * 1024 * 1024
+export type SlidesCopyCommand =
+  | {kind:'slides';indexes:number[]}
+  | {kind:'elements';index:number;sourceIds:string[]}
+export type SlidesPasteCommand =
+  | {kind:'slides';index:number;clip:Uint8Array;clipboardId:string;mode:'theme'|'source'|'picture';pngs?:string[];replace?:boolean;sameDeck?:boolean;restoreCutPaths?:boolean}
+  | {kind:'elements';index:number;clip:Uint8Array;dx:number;dy:number;sameDeck?:boolean}
+  | {kind:'duplicate';index:number;sourceIds:string[];dx:number;dy:number}
+export type SlidesPasteView<Slide=SlidesRenderSlideLike> = Omit<SlidesStepView,'slides'> & {slides:Slide[];order:string[];index:number;count:number;sourceIds:string[]}
+export interface SlidesOutlineView { count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]; sections: SectionInfo[]; defaultFont?: string; writeProtected?: true }
 export interface PptxChildSession {
   apply(expectedGeneration: number, ops: unknown, signal?: AbortSignal, options?: { isolation?: 'atomic' | 'per_op'; dryRun?: boolean }): Promise<SlidesApplyView>
   editChart(expectedGeneration:number,slide:number,sourceId:string,patch:Record<string,unknown>,signal?:AbortSignal):Promise<{generation:number;stateGeneration:number;canUndo:boolean;canRedo:boolean;slide:SlidesRenderSlideLike;sourceId:string}>
   generatePage(expectedGeneration:number,specJson:string,images:Array<{url:string;bytes:Uint8Array;ext:string}>,signal?:AbortSignal):Promise<{marker:string;imageFailures:string[];imageWarnings:string[]}>
   landGeneratedPages(expectedGeneration:number,markers:string[],mode:'replace'|'append'|'replace_at'|'insert_at',atIndex?:number,signal?:AbortSignal):Promise<SlidesApplyView>
+  copyClipboard(expectedGeneration:number,input:SlidesCopyCommand,signal?:AbortSignal):Promise<{data:Uint8Array;count:number;page?:string}|null>
+  pasteClipboard(expectedGeneration:number,input:SlidesPasteCommand,signal?:AbortSignal):Promise<SlidesPasteView|null>
   applyImage(expectedGeneration:number,input:SlidesImageCommand,signal?:AbortSignal):Promise<SlidesApplyView>
+  mediaData(expectedGeneration:number,slide:number,sourceId:string,signal?:AbortSignal):Promise<SlidesEmbeddedMedia|null>
+  applyRecording(expectedGeneration:number,input:SlidesRecordingCommand,signal?:AbortSignal):Promise<SlidesApplyView|null>
   undo(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesStepView>
   redo(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesStepView>
   beginHistoryBatch(expectedGeneration:number,signal?:AbortSignal):Promise<boolean>
@@ -50,6 +82,7 @@ export interface PptxChildSession {
   render(expectedGeneration: number, slide: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesRenderSlideLike>
   chartData(expectedGeneration:number,slide:number,sourceId:string,signal?:AbortSignal):Promise<ReturnType<typeof import('@genoffice/pptx-engine').getChartElementData>>
   chartColorSchemes(expectedGeneration:number,signal?:AbortSignal):Promise<Array<{key:string;colors:string[]}>>
+  slideInfo(expectedGeneration:number,signal?:AbortSignal):Promise<SlidePresentationInfo[]>
   animations(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<AnimationItem[]>
   links(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<Array<{sourceId:string;target:LinkTargetOp}>>
   runLinks(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<RunLink[]>
@@ -63,7 +96,7 @@ export interface PptxChildSession {
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{ generation: number; bytes: Uint8Array }>
   close(): void
 }
-interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
+interface ChildMessage { recording?:SlidesRecordingCommand; copy?:SlidesCopyCommand; paste?:SlidesPasteCommand; snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
 export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; experimental?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL; signal?: AbortSignal }
 /** Mirrors the in-process session gate: no oversized package is ever handed to a child. */
 const MAX_INPUT_BYTES = 32 * 1024 * 1024
@@ -142,6 +175,22 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
       // desynchronize the caller's generation, so the promise always settles.
       return call({m:'apply',expected,ops,isolation:options.isolation,dryRun:options.dryRun})
     },
+    copyClipboard(expected,copy,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'copyClipboard',expected,copy})
+    },
+    pasteClipboard(expected,paste,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'pasteClipboard',expected,paste})
+    },
+    mediaData(expected,slide,sourceId,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'mediaData',expected,slide,sourceId})
+    },
+    applyRecording(expected,recording,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'applyRecording',expected,recording})
+    },
     applyImage(expected,input,signal){
       if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
       return call({m:'applyImage',expected,image:input})
@@ -157,6 +206,7 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
     render(expected,slide,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'render',expected,slide,width}) },
     chartData(expected,slide,sourceId,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'chartData',expected,slide,sourceId})},
     chartColorSchemes(expected,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'chartColorSchemes',expected})},
+    slideInfo(expected,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'slideInfo',expected})},
     animations(expected,slide,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'animations',expected,slide})},
     links(expected,slide,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'links',expected,slide})},
     runLinks(expected,slide,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'runLinks',expected,slide})},

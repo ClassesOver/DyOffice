@@ -265,6 +265,8 @@ export const id = {
   appOutlineNoText: '(Tidak ada teks)',
   appSectionHeaderTitle: 'Klik untuk menciutkan/memperluas; klik kanan untuk mengelola bagian',
   appNotesLabel: 'Catatan',
+  appNotesTooLong: "Catatan pembicara di slide {slide} melebihi batas {limit} karakter. Persingkat catatan untuk menyimpan.",
+  appNotesWriteFailed: "Catatan pembicara di slide {slide} tidak dapat ditulis. Coba simpan lagi.",
   appNotesClickToAdd: 'Klik untuk menambahkan catatan',
   appNotesPlaceholder: 'Klik untuk menambahkan catatan pembicara (disimpan ke dalam .pptx)',
   appNotesShow: 'Tampilkan catatan',

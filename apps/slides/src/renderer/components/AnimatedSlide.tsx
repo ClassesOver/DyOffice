@@ -12,13 +12,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Stage, Layer, Rect, Group } from 'react-konva'
 import type Konva from 'konva'
 import type { Context } from 'konva/lib/Context'
-import type { RenderNode, RenderSlide, ShapeRenderNode } from '@genoffice/pptx-render'
+import type { RenderNode, RenderSlide } from '@genoffice/pptx-render'
 import type { AnimationItem } from '../../shared/ipc'
 import {
   buildSteps,
   computeMediaCommands,
   computeNodeStates,
-  parseParaStateKey,
   type AnimStep,
   type MediaCommand,
   type NodeAnimState,
@@ -26,6 +25,7 @@ import {
 import { useI18n } from '../i18n/locale'
 import { fillToKonva } from '../konva-adapter'
 import { StaticNode } from '../NodeBody'
+import { animatedNodeLayout, groupParagraphStates } from '../animated-node-layout'
 
 export interface AnimPlayer {
   /** animStateKey (sourceId or sourceId+paragraph index) → current visual state (targets without animation aren't in the Map) */
@@ -204,15 +204,7 @@ export function AnimatedSlideStage({
   const scale = width / slide.widthPx
   const h = slide.heightPx * scale
   const bg = fillToKonva(slide.background, slide.widthPx, slide.heightPx, images)
-  // Paragraph animation states grouped by sourceId (key format: see animStateKey)
-  const paraStates = new Map<string, Array<{ para: number; st: NodeAnimState }>>()
-  for (const [key, st] of states) {
-    const pk = parseParaStateKey(key)
-    if (!pk) continue
-    const arr = paraStates.get(pk.sourceId) ?? []
-    arr.push({ para: pk.para, st })
-    paraStates.set(pk.sourceId, arr)
-  }
+  const paraStates = groupParagraphStates(states)
   return (
     <Stage
       width={width}
@@ -293,54 +285,6 @@ export function AnimPreviewOverlay({
   )
 }
 
-/** Transform Group props driven by st (scale/rotation around (cx,cy) + offset/opacity). */
-function stateGroupProps(st: NodeAnimState, cx: number, cy: number) {
-  return {
-    x: cx + st.dx,
-    y: cy + st.dy,
-    offsetX: cx,
-    offsetY: cy,
-    scaleX: st.scale * st.scaleX,
-    scaleY: st.scale,
-    rotation: st.rotationDeg,
-    opacity: st.opacity,
-    listening: false as const,
-  }
-}
-
-/** Wipe/split clip: narrows the visible area within rect according to t/mode. */
-function wipedRect(
-  clip: NonNullable<NodeAnimState['clip']>,
-  rect: { y: number; h: number },
-): { y: number; h: number } {
-  const visH = rect.h * clip.t
-  if (clip.mode === 'top') return { y: rect.y, h: visH }
-  if (clip.mode === 'mid') return { y: rect.y + (rect.h - visH) / 2, h: visH }
-  return { y: rect.y + (rect.h - visH), h: visH }
-}
-
-/**
- * Vertical line ranges per text paragraph (slide coordinates): lines grouped by paraStart,
- * missing means a new paragraph (same paragraph-split rule as the editor). Vertical/rotated/flipped
- * text is approximated as untransformed horizontal — a trade-off on par with the whole-box wipe clip.
- */
-function paragraphSpans(node: RenderNode): Array<{ y0: number; y1: number }> {
-  const text = (node as ShapeRenderNode).text
-  if (!text) return []
-  const base = node.box.y + text.insets.t
-  const spans: Array<{ y0: number; y1: number }> = []
-  for (const ln of text.lines) {
-    const y0 = base + ln.top
-    const y1 = y0 + ln.height
-    if (ln.paraStart === false && spans.length) {
-      spans[spans.length - 1]!.y1 = Math.max(spans[spans.length - 1]!.y1, y1)
-    } else {
-      spans.push({ y0, y1 })
-    }
-  }
-  return spans
-}
-
 function AnimNode({
   node,
   images,
@@ -350,81 +294,32 @@ function AnimNode({
   node: RenderNode
   images: Map<string, HTMLImageElement>
   st?: NodeAnimState
-  /** Per-paragraph animation states for this node (only paragraphs covered by paragraph animations are listed) */
+  /** Per-paragraph animation states for this node. */
   paraSts?: Array<{ para: number; st: NodeAnimState }>
 }) {
-  const b = node.box
-  const spans = paraSts?.length ? paragraphSpans(node) : []
-  // Paragraph indexes may go out of range after text edits: paragraph animations without a matching line range are ignored whole-box
-  const active = (paraSts ?? []).filter((p) => spans[p.para]).sort((x, y) => x.para - y.para)
-  const cx = b.x + b.w / 2
-  const cy = b.y + b.h / 2
-  const m = Math.max(20, b.h * 0.1) // Margin on all sides to accommodate strokes/shadows
-
-  if (!active.length) {
-    if (!st) return <StaticNode node={node} images={images} />
-    if (st.hidden) return null
-    const clip = st.clip
-    const clipFunc =
-      clip != null
-        ? (ctx: Context) => {
-            // Wipe/split: clip the visible area to the node's bounding box
-            const r = wipedRect(clip, { y: b.y, h: b.h })
-            // The fixed top/bottom edge is widened outward by m so edge strokes aren't clipped
-            const top = clip.mode === 'top' ? m : 0
-            const btm = clip.mode === 'btm' ? m : 0
-            ctx.rect(b.x - m, r.y - top, b.w + 2 * m, r.h + top + btm)
-          }
-        : undefined
-    return (
-      <Group {...stateGroupProps(st, cx, cy)} clipFunc={clipFunc}>
-        <StaticNode node={node} images={images} />
-      </Group>
-    )
-  }
-
-  // Paragraph layering: the base layer cuts out animated paragraphs' line ranges; each animated
-  // paragraph renders a clone layer showing only its range with its own state. Cloning the whole node then
-  // clipping — shape fill/stroke moves along with the paragraph strip; placeholder text boxes usually have no fill, acceptable approximation.
-  if (st?.hidden) return null
+  if (!st && !paraSts?.length) return <StaticNode node={node} images={images} />
+  const { transform, layers } = animatedNodeLayout(node, st, paraSts)
+  if (!layers.length) return null
   return (
-    <Group {...(st ? stateGroupProps(st, cx, cy) : { listening: false as const })}>
-      <Group
-        listening={false}
-        clipFunc={(ctx: Context) => {
-          let y = b.y - m
-          for (const p of active) {
-            const s = spans[p.para]!
-            if (s.y0 > y) ctx.rect(b.x - m, y, b.w + 2 * m, s.y0 - y)
-            y = Math.max(y, s.y1)
-          }
-          const end = b.y + b.h + m
-          if (end > y) ctx.rect(b.x - m, y, b.w + 2 * m, end - y)
-        }}
-      >
-        <StaticNode node={node} images={images} />
-      </Group>
-      {active
-        .filter((p) => !p.st.hidden) // Entrance paragraphs are invisible before playing (the base layer already cut them out)
-        .map((p) => {
-          const s = spans[p.para]!
-          const cyP = (s.y0 + s.y1) / 2
-          return (
-            <Group
-              key={p.para}
-              {...stateGroupProps(p.st, cx, cyP)}
-              clipFunc={(ctx: Context) => {
-                // Paragraph line range; narrowed within the range during wipe. No top/bottom margin, avoiding bleeding into adjacent paragraphs
-                const r = p.st.clip
-                  ? wipedRect(p.st.clip, { y: s.y0, h: s.y1 - s.y0 })
-                  : { y: s.y0, h: s.y1 - s.y0 }
-                ctx.rect(b.x - m, r.y, b.w + 2 * m, r.h)
-              }}
-            >
-              <StaticNode node={node} images={images} />
-            </Group>
-          )
-        })}
+    <Group {...transform} listening={false}>
+      {layers.map(({ key, transform: placement, clips }) => {
+        if (!placement && !clips) return <StaticNode key={key} node={node} images={images} />
+        return (
+          <Group
+            key={key}
+            {...placement}
+            listening={false}
+            clipFunc={
+              clips &&
+              ((ctx: Context) => {
+                for (const { x, y, w, h } of clips) ctx.rect(x, y, w, h)
+              })
+            }
+          >
+            <StaticNode node={node} images={images} />
+          </Group>
+        )
+      })}
     </Group>
   )
 }

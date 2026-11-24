@@ -260,6 +260,8 @@ export const en = {
   appOutlineNoText: '(No text)',
   appSectionHeaderTitle: 'Click to collapse/expand; right-click to manage the section',
   appNotesLabel: 'Notes',
+  appNotesTooLong: "Speaker notes on slide {slide} exceed the {limit}-character limit. Shorten them to save.",
+  appNotesWriteFailed: "Could not write speaker notes on slide {slide}. Try saving again.",
   appNotesClickToAdd: 'Click to add notes',
   appNotesPlaceholder: 'Click to add speaker notes (saved into the .pptx)',
   appNotesShow: 'Show notes',

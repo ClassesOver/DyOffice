@@ -50,6 +50,7 @@ type ErrorKey = '' | 'appEncMismatch' | 'appWrongPassword'
 
 export function ProtectDialog({
   encrypted,
+  openPasswordAvailable = true,
   writeProtection,
   protection,
   removePersonalInfo,
@@ -58,6 +59,7 @@ export function ProtectDialog({
 }: {
   /** an open password is desired for the next save */
   encrypted: boolean
+  openPasswordAvailable?: boolean
   writeProtection: WriteProtection | null
   protection: DocProtection | null
   removePersonalInfo: boolean
@@ -92,7 +94,7 @@ export function ProtectDialog({
 
   const submit = async () => {
     if (busy) return
-    if (openPwd !== openPwd2 || modifyPwd !== modifyPwd2) {
+    if ((openPasswordAvailable && openPwd !== openPwd2) || modifyPwd !== modifyPwd2) {
       setErrorKey('appEncMismatch')
       return
     }
@@ -100,7 +102,7 @@ export function ProtectDialog({
     try {
       const result: ProtectDialogResult = {}
 
-      if (openPwd !== (encrypted ? KEEP : '')) {
+      if (openPasswordAvailable && openPwd !== (encrypted ? KEEP : '')) {
         result.openPassword = openPwd === '' ? null : openPwd
       }
 
@@ -161,7 +163,7 @@ export function ProtectDialog({
         <p className="modal-desc">{t('appProtectDesc')}</p>
 
         <h3 className="protect-section-title">{t('appProtectSecurity')}</h3>
-        <div className="fld-row">
+        {openPasswordAvailable && <div className="fld-row">
           <label className="fld">
             {t('appProtectOpenPwd')} <span className="fld-opt">{t('appOptional')}</span>
             <PasswordInput
@@ -190,12 +192,13 @@ export function ProtectDialog({
               onKeyDown={onEnter}
             />
           </label>
-        </div>
+        </div>}
         <div className="fld-row">
           <label className="fld">
             {t('appProtectModifyPwd')} <span className="fld-opt">{t('appOptional')}</span>
             <PasswordInput
               maxLength={255}
+              autoFocus={!openPasswordAvailable}
               value={modifyPwd}
               hideReveal={modifyPwd === KEEP}
               onChange={(v) => {
@@ -220,7 +223,7 @@ export function ProtectDialog({
             />
           </label>
         </div>
-        {(encrypted || hadModifyPwd) && <p className="fld-hint">{t('appProtectPwdKeepHint')}</p>}
+        {((openPasswordAvailable && encrypted) || hadModifyPwd) && <p className="fld-hint">{t('appProtectPwdKeepHint')}</p>}
 
         <h3 className="protect-section-title">{t('appProtectSectionTitle')}</h3>
         <label className="protect-check">

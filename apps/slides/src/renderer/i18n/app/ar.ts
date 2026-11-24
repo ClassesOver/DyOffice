@@ -258,6 +258,8 @@ export const ar = {
   appOutlineNoText: '(بلا نص)',
   appSectionHeaderTitle: 'انقر للطي/التوسيع؛ انقر بزر الماوس الأيمن لإدارة المقطع',
   appNotesLabel: 'الملاحظات',
+  appNotesTooLong: "تتجاوز ملاحظات المتحدث في الشريحة {slide} الحد الأقصى البالغ {limit} حرفًا. اختصرها لحفظها.",
+  appNotesWriteFailed: "تعذرت كتابة ملاحظات المتحدث في الشريحة {slide}. حاول الحفظ مرة أخرى.",
   appNotesClickToAdd: 'انقر لإضافة ملاحظات',
   appNotesPlaceholder: 'انقر لإضافة ملاحظات المحاضر (يتم حفظها في ملف pptx)',
   appNotesShow: 'إظهار الملاحظات',

@@ -454,7 +454,7 @@ register({
     const r = pasteElements(ctx.opened, index, op.items as Parameters<typeof pasteElements>[2], {
       dx: op.dx as number,
       dy: op.dy as number,
-    })
+    }, typeof op.sameDeck === 'boolean' ? op.sameDeck : undefined)
     if (!r) throw new GuidedError('op "pasteElements": the clipboard items could not be pasted.')
     return { op, created: r.elementIds }
   },

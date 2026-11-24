@@ -9,7 +9,7 @@ import type { AiPanelPrefs } from '@genoffice/ui'
  * them to the model and rebuilds the RenderSlide.
  */
 import type { RenderSlide } from '@genoffice/pptx-render'
-import type { CustGeomPathCmd, SlideComment, SectionInfo } from '@genoffice/pptx-engine'
+import type { CustGeomPathCmd, HeaderFooterState, SectionInfo, SlideComment, SlideShapeKey } from '@genoffice/pptx-engine'
 import type { FontSizeStep } from '@genoffice/pptx-ops/font-size'
 // the font catalog's shape is the store's to declare, not a copy kept in step by hand
 import type { CatalogEntry as FontCatalogEntry } from '@genoffice/electron-utils/font-store'
@@ -47,7 +47,7 @@ export type {
   LinkTargetOp,
 }
 
-export type { SlideComment, SectionInfo } from '@genoffice/pptx-engine'
+export type { HeaderFooterState, SectionInfo, SlideComment } from '@genoffice/pptx-engine'
 
 // Canonical definitions of AI-related types live in @genoffice/ai-provider / @genoffice/agent-core (shared with docs)
 export type {
@@ -504,6 +504,8 @@ export interface CopyElementsOp {
 export interface PasteElementsOp {
   slideIndex: number
   fitWidthPx: number
+  /** Web clipboard reference read by the current paste action. */
+  elementReference?: string
 }
 
 /** Duplicate elements in place (⌘D / Option+drag copy): bypasses the app clipboard; the caller supplies the offset. */
@@ -627,11 +629,7 @@ export interface AnimationItem {
 }
 
 /** Element pairing key for Morph transitions: cNvPr id / name are stable across pages; sourceId is per-page temporary. */
-export interface ShapeKey {
-  sourceId: string
-  spid: number | null
-  name: string
-}
+export type ShapeKey = SlideShapeKey
 
 /** Overwrite-set the whole page's animation list (add/remove/reorder/param changes all use this). */
 export interface SetAnimationsOp {
@@ -730,6 +728,7 @@ export interface MoveSlidesOp {
 export interface CopySlidesOp {
   slideIndexes: number[]
   pngs?: string[]
+  cut?: boolean
 }
 
 /** Duplicate a page: copy slide sourceIndex and insert after it; clearText empties text yielding a layout-preserving blank page. */
@@ -1521,7 +1520,7 @@ export interface SlidesApi {
   }) => Promise<RenderSlide | null>
   /** External clipboard content probe (internal/slide = last copy came from this app) */
   clipboardExternal: () => Promise<
-    | { kind: 'internal' }
+    | { kind: 'internal'; elementReference?: string }
     | { kind: 'slide' }
     | { kind: 'image'; base64: string; ext: string }
     | { kind: 'text'; text: string }
@@ -1624,6 +1623,8 @@ export interface SlidesApi {
     slideIndex: number,
     sourceId: string,
   ) => Promise<{ kind: 'video' | 'audio'; dataUrl: string } | null>
+  /** Release a temporary browser media URL when its player closes. */
+  releaseMediaData?: (url: string) => void
   /** Show a dialog to pick a 3D model (.glb) and read it */
   pickModel3d: () => Promise<{ name: string; bytes: Uint8Array } | null>
   addModel3d: (op: AddModel3dOp) => Promise<{ slide: RenderSlide; sourceId: string } | null>
@@ -1645,9 +1646,7 @@ export interface SlidesApi {
   /** Apply header/footer to all pages; returns the full RenderSlide set */
   applyHeaderFooter: (op: HeaderFooterOp) => Promise<RenderSlide[] | null>
   /** Current page footer state (dialog echo) */
-  getHeaderFooter: (
-    slideIndex: number,
-  ) => Promise<{ footer: string | null; slideNum: boolean; date: string | null }>
+  getHeaderFooter: (slideIndex: number) => Promise<HeaderFooterState>
   /** Apply a theme (color/font scheme + per-page background); returns the reparsed full RenderSlide set, null = no-op, { error } = failed (state rolled back) */
   applyTheme: (op: ApplyThemeOp) => Promise<RenderSlide[] | { error: string } | null>
   /** Set the transition effect (takes effect in PowerPoint shows of the saved pptx); returns success */
@@ -1662,6 +1661,8 @@ export interface SlidesApi {
   clearNarration: (slideIndexes: number[]) => Promise<RenderSlide[] | null>
   /** Asks the OS for the microphone where it gates it (macOS); false when refused. */
   microphoneAccess: () => Promise<boolean>
+  /** Browser service bounds, leaving headroom for a final encoded audio chunk. */
+  recordingLimits?: {slideMs:number;totalMs:number;notice:string}
   /** The current page's animation list (read by the Animations tab / during shows) */
   getAnimations: (slideIndex: number) => Promise<AnimationItem[]>
   /** Morph pairing keys of the current page's elements (matched against same-name/same-id elements on the previous page during morph tweening) */

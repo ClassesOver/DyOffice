@@ -1,11 +1,13 @@
+import {decodeInkPayload,encodeInkPayload,INK_NAME_PREFIX,MAX_INK_PAYLOAD_BYTES} from '../../../../slides/src/shared/ink-payload'
+import {WEB_NOTES_TEXT_LIMIT} from '../../../../slides/src/shared/notes-draft'
 import {safeExternalUrl} from '../../../../../packages/electron-utils/src/safe-external-url'
 import {sniffImageMime} from '../../../../slides/src/main/media-mime.ts'
 import {pictureFrame} from '../../../../slides/src/main/picture-frame.ts'
 import {tiffToPng} from '../../../../slides/src/main/tiff-decode.ts'
-import type {AnimationItem,RunLink} from './pptx-session-host'
-import {getRunLinks,MAX_INSERT_TABLE_DIM,NAMED_ACTIONS} from '@genoffice/pptx-engine'
+import type {AnimationItem,RunLink,SlidePresentationInfo} from './pptx-session-host'
+import {getRunLinks,getSlideTransition,getSlideAdvanceTime,getSlideShapeKeys,getSections,narrationSpids,readHeaderFooter,MAX_INSERT_TABLE_DIM,NAMED_ACTIONS} from '@genoffice/pptx-engine'
 import type {LinkTarget as LinkTargetOp} from '@genoffice/pptx-engine'
-import { openPptx, savePptx, getChartElementData, getSlideLinks, getSlideAnimations, elementSpid, parseTheme, getSlideNotes, getSlideComments, materializeSlide, listSlideLayouts, builtinLayoutInfos, shouldOfferBuiltinLayouts, type OpenedPptx, type Slide, type SlideSize, type SlideComment } from '@genoffice/pptx-engine'
+import { openPptx, savePptx, getChartElementData, getSlideLinks, getSlideAnimations, elementSpid, parseTheme, getSlideNotes, getSlideComments, materializeSlide, listSlideLayouts, builtinLayoutInfos, shouldOfferBuiltinLayouts, type OpenedPptx, type SectionInfo, type Slide, type SlideSize, type SlideComment } from '@genoffice/pptx-engine'
 import { matchesElementRef } from '@genoffice/pptx-engine/identity'
 import { runTxn, elementDurableId, slideDurableId, type Op, type OpRecord } from '@genoffice/pptx-ops'
 import { markChartEditable } from '@genoffice/pptx-engine'
@@ -18,7 +20,10 @@ import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
 import { PNG } from 'pngjs'
 import { JpegImage } from 'pdfjs-dist/image_decoders/pdf.image_decoders.mjs'
 import { randomUUID } from 'node:crypto'
-import type { SlidesImageCommand, SlidesApplyView } from './pptx-session-host.ts'
+import { inflateSync } from 'node:zlib'
+import { MAX_SLIDES_CLIPBOARD_BYTES, type PptxChildSession, type SlidesPasteView, type SlidesCopyCommand, type SlidesPasteCommand, type SlidesImageCommand, type SlidesImagePayload, type SlidesApplyView } from './pptx-session-host.ts'
+import { copySlide, copyElementData, hasSlideNumberField, planSlidePastes, type SlideBundle } from '@genoffice/pptx-engine'
+import {embeddedMediaData, recordingOps} from './pptx-media'
 
 /** In-process reuse seam, NOT an authenticated service, durable revision ledger or sandbox.
  * No network, filesystem paths, global session registry or persistent save acknowledgements.
@@ -33,11 +38,11 @@ export type { RenderSlide } from '@genoffice/pptx-render'
 export interface SlidesCreatedEntry { slide: number; index: number; id: string }
 export interface SlidesApplyResult {
   generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean
-  records: OpRecord[]; slideIds: string[]; paths: string[]; created: SlidesCreatedEntry[]
+  records: OpRecord[]; slideIds: string[]; paths: string[]; sections: SectionInfo[]; created: SlidesCreatedEntry[]
   transaction: { applied: boolean; dryRun?: boolean; plan?: string[]; failures?: Array<{ index: number; error: string }>; records?: Array<{op:{op:string};slideId?:string;created?:string[]}> }
 }
-export interface SlidesStepResult { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; slides: RenderSlide[] }
-export interface SlidesOutline { count: number; size: SlideSize; slideIds: string[]; paths: string[]; defaultFont?: string; writeProtected?: true }
+export interface SlidesStepResult { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; slides: RenderSlide[]; sections: SectionInfo[] }
+export interface SlidesOutline { count: number; size: SlideSize; slideIds: string[]; paths: string[]; sections: SectionInfo[]; defaultFont?: string; writeProtected?: true }
 export interface SlidesMasterView extends MasterPartInfo { slide: RenderSlide }
 export interface SlidesMasterEditResult {
   generation: number
@@ -52,7 +57,8 @@ export interface PptxSelection {
   slide: {index: number; id: string | undefined}
   element?: {id: string; type: string}
 }
-export interface PptxSession {
+export interface PptxSession extends Pick<PptxChildSession, 'copyClipboard'|'mediaData'|'applyRecording'> {
+  pasteClipboard(expectedGeneration:number,input:SlidesPasteCommand,signal?:AbortSignal):Promise<SlidesPasteView<RenderSlide>|null>
   selection(expectedGeneration: number, slide: number, elementId?: string, signal?: AbortSignal): Promise<PptxSelection>
   apply(expectedGeneration: number, ops: unknown, signal?: AbortSignal, options?: { isolation?: 'atomic' | 'per_op'; dryRun?: boolean }): Promise<SlidesApplyResult>
   editChart(expectedGeneration:number,slide:number,sourceId:string,patch:Record<string,unknown>,signal?:AbortSignal):Promise<{generation:number;stateGeneration:number;canUndo:boolean;canRedo:boolean;slide:RenderSlide;sourceId:string}>
@@ -66,6 +72,7 @@ export interface PptxSession {
   render(expectedGeneration: number, slide: number, fitWidthPx?: number, signal?: AbortSignal): Promise<RenderSlide>
   chartData(expectedGeneration:number,slide:number,sourceId:string,signal?:AbortSignal):Promise<ReturnType<typeof import('@genoffice/pptx-engine').getChartElementData>>
   chartColorSchemes(expectedGeneration:number,signal?:AbortSignal):Promise<Array<{key:string;colors:string[]}>>
+  slideInfo(expectedGeneration:number,signal?:AbortSignal):Promise<SlidePresentationInfo[]>
   animations(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<AnimationItem[]>
   links(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<Array<{sourceId:string;target:LinkTargetOp}>>
   runLinks(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<RunLink[]>
@@ -108,8 +115,8 @@ function editableMasterParts(state: OpenedPptx): MasterPartInfo[] {
   }
   return [...parts.values()]
 }
-function imageContent(input:SlidesImageCommand){
-  if(!input||typeof input!=='object'||(input.mode!=='insert'&&input.mode!=='replace')||!(input.bytes instanceof Uint8Array)||input.bytes.byteLength<1||input.bytes.byteLength>MAX_IMAGE_BYTES)throw new Error('INVALID_MEDIA')
+function imageContent(input:SlidesImagePayload){
+  if(!(input.bytes instanceof Uint8Array)||input.bytes.byteLength<1||input.bytes.byteLength>MAX_IMAGE_BYTES)throw new Error('INVALID_MEDIA')
   const bytes=Uint8Array.from(input.bytes)
   const mime=sniffImageMime(bytes)
   const ext=String(input.ext).toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
@@ -122,19 +129,65 @@ function imageContent(input:SlidesImageCommand){
   return {bytes,ext,size}
 }
 
+
+/** A fresh picture lands once. All remaining targets reference that same part.
+ * The caller owns the outer snapshot so a bad target rolls the entire edit back. */
+function applyImageFill(state:OpenedPptx,input:Extract<SlidesImageCommand,{mode:'background'|'fill'}>,media?:SlidesImagePayload):OpRecord[]{
+  const {slide,tile}=input
+  const slides=state.deck.slides
+  if(typeof tile!=='boolean'||!Number.isSafeInteger(slide)||slide>=slides.length||
+    slide<(input.mode==='background'?-1:0))throw new Error('INVALID_TARGET')
+  let ops:Op[]
+  let existing:{mediaPath:string}|undefined
+  if(input.mode==='background'){
+    if(!media){
+      if(!('sourceSlide' in input)||!Number.isSafeInteger(input.sourceSlide))throw new Error('INVALID_TARGET')
+      const source=slides[input.sourceSlide]?.background
+      if(source?.type!=='image')throw new Error('INVALID_TARGET')
+      existing={mediaPath:source.mediaRef}
+    }
+    const targets=slide===-1?slides.map((_,index)=>index):[slide]
+    ops=targets.map(index=>({op:'setBackground',target:{slide:index},kind:'image',tile}))
+  }else{
+    if(!media||!Array.isArray(input.targets)||!input.targets.length||input.targets.length>100)throw new Error('INVALID_TARGET')
+    const validId=(id:unknown):id is string=>typeof id==='string'&&id.length>0&&id.length<=256
+    const seen=new Set<string>()
+    ops=input.targets.map(target=>{
+      if(!record(target)||!validId(target.sourceId)||target.groupId!==undefined&&!validId(target.groupId))throw new Error('INVALID_TARGET')
+      keys(target,['sourceId','groupId'])
+      const key=JSON.stringify([target.sourceId,target.groupId])
+      if(seen.has(key))throw new Error('INVALID_TARGET')
+      seen.add(key)
+      return {op:'setImageFill',target:{slide,el:target.sourceId},tile,...(target.groupId?{group:target.groupId}:{})}
+    })
+  }
+  const apply=(operations:Op[],source:SlidesImagePayload|{mediaPath:string})=>{
+    const result=runTxn(state,{isolation:'atomic',ops:operations.map(op=>({...op,source}))})
+    if(!result.applied||!result.records?.length)throw new Error('INVALID_TARGET')
+    return result.records
+  }
+  if(existing)return apply(ops,existing)
+  if(!media||!ops.length)throw new Error('INVALID_TARGET')
+  const records=apply(ops.slice(0,1),media)
+  if(ops.length===1)return records
+  const landed=records[0]?.after as {mediaPath?:string}|undefined
+  if(!landed?.mediaPath)throw new Error('INVALID_MEDIA')
+  return [...records,...apply(ops.slice(1),{mediaPath:landed.mediaPath})]
+}
+
 // Reject incomplete inline images without allocating a decoded pixel plane.
-function completePng(bytes:Buffer):boolean {
-  let hasData=false
+function pngImageData(bytes:Buffer):Buffer[]|null {
+  const chunks:Buffer[]=[]
   for(let offset=8;offset+12<=bytes.length;){
     const size=bytes.readUInt32BE(offset),end=offset+8+size
-    if(end+4>bytes.length)return false
+    if(end+4>bytes.length)return null
     const type=bytes.toString('ascii',offset+4,offset+8)
-    if(offset===8?(type!=='IHDR'||size!==13):type==='IHDR')return false
-    if(type==='IDAT'&&size>0)hasData=true
-    if(type==='IEND')return hasData&&size===0&&end+4===bytes.length
+    if(offset===8?(type!=='IHDR'||size!==13):type==='IHDR')return null
+    if(type==='IDAT'&&size>0)chunks.push(bytes.subarray(offset+8,end))
+    if(type==='IEND')return chunks.length&&size===0&&end+4===bytes.length?chunks:null
     offset=end+4
   }
-  return false
+  return null
 }
 
 function completeJpeg(bytes:Buffer):boolean {
@@ -164,12 +217,20 @@ function completeJpeg(bytes:Buffer):boolean {
 }
 
 function decodedAnalysisPicture(bytes:Buffer,ext:'png'|'jpg'):Uint8Array {
-  if (!(ext==='png'?completePng(bytes):completeJpeg(bytes))) throw new Error('INVALID_MEDIA')
-  const media=imageContent({mode:'insert',slide:0,placement:'natural',bytes,ext})
+  const pngData=ext==='png'?pngImageData(bytes):null
+  if (!(ext==='png'?pngData:completeJpeg(bytes))) throw new Error('INVALID_MEDIA')
+  const media=imageContent({bytes,ext})
   const {w:width,h:height}=media.size
   if (width*height>MAX_ANALYSIS_PICTURE_PIXELS) throw new Error('INVALID_MEDIA')
   try {
-    if (ext==='png') {
+    if (pngData) {
+      const channels=[1,0,3,1,2,0,4][bytes[25]!]??0
+      const depth=bytes[24]!
+      if(!channels||![1,2,4,8,16].includes(depth))throw new Error('INVALID_MEDIA')
+      // The library's private zlib path can suppress decode errors. Validate
+      // the full stream with a cap that covers row padding and filter bytes.
+      const maxOutputLength=width*height*(Math.ceil(channels*depth/8)+1)
+      inflateSync(Buffer.concat(pngData),{maxOutputLength})
       const decoded=PNG.sync.read(bytes,{checkCRC:true})
       if (decoded.width!==width||decoded.height!==height) throw new Error('INVALID_MEDIA')
     } else {
@@ -211,6 +272,7 @@ const OP_FIELDS: Record<string, readonly string[]> = {
   addSection: ['op','atSlideIndex','name'],
   renameSection: ['op','id','name'],
   removeSection: ['op','id'],
+  removeSectionSlides: ['op','id'],
   moveSection: ['op','id','dir'],
   setShapeGeometry: ['op','target','prst','group'],
   flipElements: ['op','target','els','axis','group'],
@@ -395,7 +457,10 @@ function checkLayoutRef(value: unknown) {
 /** Copy the batch and validate its fields before scheduling a mutation. One inline
  * PNG or JPEG can share the transaction with its provenance text box. */
 function captureOps(input: unknown, allowAnalysisPicture=false): Op[] {
-  if (!Array.isArray(input) || input.length === 0 || input.length > 100) throw new Error('OPS_LIMIT')
+  if (!Array.isArray(input) || input.length === 0 || input.length > 200 ||
+    (input.length>100&&!input.every(value=>record(value)&&(value.op==='setTransition'||value.op==='setAdvanceTime')))) {
+    throw new Error('OPS_LIMIT')
+  }
   let json: string
   try { json=JSON.stringify(input) } catch { throw new Error('INVALID_OPS') }
   const payloadBytes = Buffer.byteLength(json)
@@ -485,7 +550,7 @@ function captureOps(input: unknown, allowAnalysisPicture=false): Op[] {
         if (!Number.isSafeInteger(value.to) || (value.to as number) < 0) throw new Error('INVALID_TARGET')
         break
       case 'setNotes':
-        if (typeof value.text !== 'string' || value.text.length > 65536) throw new Error('INVALID_TEXT')
+        if (typeof value.text !== 'string' || value.text.length > WEB_NOTES_TEXT_LIMIT) throw new Error('INVALID_TEXT')
         break
       case 'reorderElement':
         if (!['front','back','forward','backward'].includes(String(value.dir))) throw new Error('INVALID_DIRECTION')
@@ -602,6 +667,42 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   const redoStack: HistorySnapshot[]=[]; let redoBytes=0
   let batchDepth=0,batchBefore:HistorySnapshot|undefined,nextSnapshotId=0,aiSnapshotBytes=0
   const aiSnapshots=new Map<number,HistorySnapshot>()
+  let lastSlidePaste: {generation:number;id:string;index:number;restoreCutPaths:boolean}|undefined
+  let cutPasteBefore: {id:string;stateGeneration?:number}|undefined
+
+  function* copiedItems(state:OpenedPptx,input:SlidesCopyCommand):Generator<unknown> {
+    if(input.kind==='slides'){
+      for(const index of input.indexes){
+        const bundle=copySlide(state,index)
+        if(!bundle)throw new Error('INVALID_SLIDE')
+        yield bundle
+      }
+      return
+    }
+    const page=state.deck.slides[input.index]
+    if(!page)throw new Error('INVALID_SLIDE')
+    for(const id of new Set(input.sourceIds)){
+      const matches=page.elements.filter(element=>matchesElementRef(element,id))
+      if(matches.length>1)throw new Error('AMBIGUOUS_ELEMENT')
+      if(matches[0])yield copyElementData(state,page,matches[0])
+    }
+  }
+  function captureClipboard(state:OpenedPptx,input:SlidesCopyCommand) {
+    // Serialize each item as it is captured so copying many rich slides stays bounded.
+    const chunks:Buffer[]=[]
+    let bytes=2
+    for(const item of copiedItems(state,input)){
+      const chunk=Buffer.from(JSON.stringify(item))
+      bytes+=chunk.length+(chunks.length?1:0)
+      if(bytes>MAX_SLIDES_CLIPBOARD_BYTES)throw new Error('INPUT_LIMIT')
+      chunks.push(chunk)
+    }
+    if(!chunks.length)return null
+    const comma=Buffer.from(',')
+    const data=Buffer.concat([Buffer.from('['),...chunks.flatMap((chunk,i)=>i?[comma,chunk]:[chunk]),Buffer.from(']')],bytes)
+    const page=input.kind==='elements'?state.deck.slides[input.index]?.path:undefined
+    return {data,count:chunks.length,...(page?{page}:{})}
+  }
   function snapshot(state: OpenedPptx): HistorySnapshot {
     const bytes=historyCost(state)
     const slides=structuredClone(state.deck.slides)
@@ -655,7 +756,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   function history(): {canUndo:boolean;canRedo:boolean} { return {canUndo: undoStack.length>0, canRedo: redoStack.length>0} }
   function outlineOf(state: OpenedPptx) {
     return { count: state.deck.slides.length, size: {cx: state.deck.size.cx, cy: state.deck.size.cy},
-      slideIds: state.deck.slides.map(slideDurableId), paths: state.deck.slides.map(slide => slide.path) }
+      slideIds: state.deck.slides.map(slideDurableId), paths: state.deck.slides.map(slide => slide.path), sections:getSections(state) }
   }
   /** Bridge contract: add ops echo where the created element/slide landed, so the renderer can
    * select it without a re-fetch. Elements locate by slide index + z-order position; slide-add
@@ -790,6 +891,85 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         return {generation, stateGeneration, ...history(), slide, ...(sourceId ? {sourceId} : {})}
       })
     },
+    copyClipboard(expected,input,signal) {
+      return enqueue(expected,signal,state=>captureClipboard(state,input))
+    },
+    pasteClipboard(expected,input,signal) {
+      return enqueueWrite(expected,signal,state=>{
+        const original=lastSlidePaste
+        const repaste=input.kind==='slides'&&input.replace===true
+        const undoPoint=undoStack.at(-1)
+        if(repaste&&(original?.generation!==generation||!undoPoint||
+          original.id!==input.clipboardId||original.index!==input.index||batchDepth>0))return null
+        const current=snapshot(state)
+        const before=repaste?undoPoint!:current
+        if(repaste)restore(state,before)
+        try{
+          const pages=state.deck.slides.length
+          const {index}=input
+          const slidePaste=input.kind==='slides'
+          if(!Number.isSafeInteger(index)||index<(slidePaste?-1:0)||index>=pages)throw new Error('INVALID_SLIDE')
+          const data=input.kind==='duplicate'?captureClipboard(state,{kind:'elements',index,sourceIds:input.sourceIds})?.data:input.clip
+          if(!data){if(repaste)restore(state,current);return null}
+          if(!(data instanceof Uint8Array)||data.byteLength>MAX_SLIDES_CLIPBOARD_BYTES)throw new Error('INPUT_LIMIT')
+          const items=JSON.parse(Buffer.from(data).toString('utf8')) as unknown[]
+          // Undo restores the exact pre-paste state. A later, independent
+          // deletion has a different state generation and cannot reuse a cut.
+          const undoCutPaste=slidePaste&&cutPasteBefore?.id===input.clipboardId&&
+            (cutPasteBefore.stateGeneration===undefined||cutPasteBefore.stateGeneration===before.atGeneration)
+          const restoreCutPaths=slidePaste&&input.sameDeck===true&&(
+            repaste?original?.restoreCutPaths===true:input.restoreCutPaths===true||undoCutPaste
+          )
+          let ops:Op[], count=0, target=index
+          if(slidePaste){
+            const {mode,pngs}=input
+            if(mode==='picture'){
+              if(!pngs||pngs.length!==items.length){if(repaste)restore(state,current);return null}
+              pngs.forEach(png=>decodedAnalysisPicture(Buffer.from(png,'base64'),'png'))
+              target=Math.max(index,0)
+              ops=pngs.map(png=>({op:'pasteSlide',afterIndex:index,mode,png}))
+            }else{
+              if(pages+items.length>MAX_RENDER_SLIDES)throw new Error('RENDER_LIMIT')
+              target=index+1
+              count=items.length
+              const plans=planSlidePastes(state,items as SlideBundle[],input.sameDeck===true,restoreCutPaths)
+              ops=items.map((bundle,i)=>({op:'pasteSlide',afterIndex:index+i,mode,bundle,plan:plans[i]}))
+            }
+          }else{
+            if(!Number.isSafeInteger(input.dx)||!Number.isSafeInteger(input.dy)||Math.max(Math.abs(input.dx),Math.abs(input.dy))>EMU_MAX)throw new Error('INVALID_OPS')
+            const sameDeck=input.kind==='duplicate'||input.sameDeck===true
+            ops=[{op:'pasteElements',target:{slide:index},items,dx:input.dx,dy:input.dy,sameDeck}]
+          }
+          const result=runTxn(state,{isolation:'atomic',ops})
+          if(!result.applied){restore(state,current);return null}
+          historyCost(state)
+          const changed=new Set(Array.from({length:Math.max(1,count)},(_,i)=>target+i))
+          // A previous picture paste left the anchor changed in the renderer.
+          if(repaste)changed.add(Math.max(index,0))
+          if(slidePaste){
+            const previous=new Map(current.slides.map((slide,i)=>[slide.path,i]))
+            state.deck.slides.forEach((slide,i)=>{
+              if(previous.has(slide.path)&&previous.get(slide.path)!==i&&hasSlideNumberField(slide))changed.add(i)
+            })
+          }
+          const media=mediaResolver(state)
+          const slides=[...changed].map(i=>structuredClone(buildRenderSlide(state.deck.slides[i]!,state.deck.size,{
+            fitWidthPx:DEFAULT_FIT_WIDTH_PX,slideNo:i+1,media,
+          })))
+          redoStack.length=0;redoBytes=0
+          if(!repaste)push(undoStack,before)
+          stateGeneration=++generation
+          if(slidePaste&&restoreCutPaths&&count>0)cutPasteBefore={id:input.clipboardId,stateGeneration:before.atGeneration}
+          // Switching to a picture removes the first editable paste. The cut
+          // can be restored again when the user next pastes an editable slide.
+          if(slidePaste&&restoreCutPaths&&repaste&&count===0)cutPasteBefore={id:input.clipboardId}
+          lastSlidePaste=slidePaste&&undoStack.at(-1)===before?{generation,id:input.clipboardId,index,restoreCutPaths}:undefined
+          const sourceIds=(result.records??[]).flatMap(record=>record.created??[])
+          return {generation,stateGeneration,...history(),size:{...state.deck.size},slides,sections:getSections(state),
+            order:slidePaste?state.deck.slides.map(slide=>slide.path):[],index:target,count,sourceIds}
+        }catch(error){restore(state,current);throw error}
+      })
+    },
     async apply(expected, ops, signal, options = {}) {
       const captured=captureOps(ops,options.isolation!=='per_op')
       return enqueueWrite(expected,signal,state=>{
@@ -852,7 +1032,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         let imageBytes=0
         for(const image of images){
           if(!image||typeof image.url!=='string'||image.url.length>4096||imageMap.has(image.url)||!(image.bytes instanceof Uint8Array)||image.bytes.byteLength<1||image.bytes.byteLength>MAX_IMAGE_BYTES)throw new Error('INVALID_MEDIA')
-          const media=imageContent({mode:'insert',slide:0,offset:{x:0,y:0,cx:1,cy:1},bytes:image.bytes,ext:image.ext})
+          const media=imageContent(image)
           imageBytes+=media.bytes.byteLength
           if(imageBytes>15*1024*1024)throw new Error('INVALID_MEDIA')
           imageMap.set(image.url,{bytes:media.bytes,ext:media.ext})
@@ -898,15 +1078,62 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         return {generation,stateGeneration,...history(),records:result.records??[],...outlineOf(state),created:createdOf(state,result.records??[]),transaction:{applied:true,records:journal}}
       })
     },
+    async mediaData(expected,index,sourceId,signal){
+      if(!Number.isSafeInteger(index)||index<0||typeof sourceId!=='string'||!sourceId||sourceId.length>256)throw new Error('INVALID_MEDIA')
+      return enqueue(expected,signal,state=>embeddedMediaData(state,index,sourceId))
+    },
+    async applyRecording(expected,input,signal){
+      return enqueueWrite(expected,signal,state=>{
+        const ops=recordingOps(state,input)
+        if(!ops.length)return null
+        const before=snapshot(state)
+        let result:ReturnType<typeof runTxn>
+        try{
+          result=runTxn(state,{isolation:'atomic',ops})
+          if(!result.applied)throw new Error('OP_REJECTED')
+          historyCost(state)
+        }catch(error){restore(state,before);throw error}
+        redoStack.length=0;redoBytes=0
+        push(undoStack,before)
+        generation++;stateGeneration=generation
+        // The raw transaction contains recorded WAVs. Only forward its operation summary.
+        const records=(result.records??[]).map(({op,slideId,created})=>({op:{op:op.op},...(slideId?{slideId}:{}),...(created?{created}:{})}))
+        return {generation,stateGeneration,...history(),records,...outlineOf(state),created:createdOf(state,result.records??[]),transaction:{applied:true,records}}
+      })
+    },
     async applyImage(expected,input,signal){
+      if(input.mode==='background'||input.mode==='fill'){
+        const media=input.bytes===undefined?undefined:imageContent(input)
+        return enqueueWrite(expected,signal,state=>{
+          const before=snapshot(state)
+          let records:OpRecord[]
+          try {
+            records=applyImageFill(state,input,media)
+            historyCost(state)
+          }catch(error){restore(state,before);throw error}
+          redoStack.length=0;redoBytes=0
+          push(undoStack,before)
+          generation++;stateGeneration=generation
+          const safeRecords=records.map(({op,slideId})=>({op:{op:op.op},slideId}))
+          return {generation,stateGeneration,...history(),records:safeRecords,...outlineOf(state),created:[],transaction:{applied:true,records:safeRecords}}
+        })
+      }
+      if(input.mode!=='insert'&&input.mode!=='replace'&&input.mode!=='ink')throw new Error('INVALID_MEDIA')
       const media=imageContent(input)
+      let ink: string | undefined
+      if(input.mode==='ink'){
+        if(media.ext!=='png'||typeof input.inkPayload!=='string'||input.inkPayload.length>MAX_INK_PAYLOAD_BYTES)throw new Error('INVALID_MEDIA')
+        const stroke=decodeInkPayload(input.inkPayload)
+        if(!stroke||stroke.points.some(({x,y})=>Math.abs(x)>100000||Math.abs(y)>100000))throw new Error('INVALID_MEDIA')
+        ink=encodeInkPayload(stroke)
+      }
       return enqueueWrite(expected,signal,state=>{
         if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=state.deck.slides.length)throw new Error('INVALID_SLIDE')
         const slide=state.deck.slides[input.slide]!
         let offset:{x:number;y:number;cx:number;cy:number}|undefined
         let targetId:string|undefined
-        if(input.mode==='insert'){
-          const value=input.placement==='natural'
+        if(input.mode==='insert'||input.mode==='ink'){
+          const value=input.mode==='insert'&&input.placement==='natural'
             ? pictureFrame({width:state.deck.size.cx,height:state.deck.size.cy},{width:media.size.w,height:media.size.h},imageDpiFromBytes(media.bytes),96)
             : input.offset
           if(!value||![value.x,value.y,value.cx,value.cy].every(Number.isFinite)||value.cx<=0||value.cy<=0||[value.x,value.y,value.cx,value.cy].some(n=>Math.abs(n)>EMU_MAX))throw new Error('INVALID_GEOMETRY')
@@ -920,8 +1147,9 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         }
         const before=snapshot(state),records:OpRecord[]=[]
         try{
-          const primary=input.mode==='insert'
-            ? {op:'addPicture',target:{slide:input.slide},offset,bytes:media.bytes,ext:media.ext}
+          const primary=input.mode!=='replace'
+            ? {op:'addPicture',target:{slide:input.slide},offset,bytes:media.bytes,ext:media.ext,
+                ...(ink!==undefined?{name:INK_NAME_PREFIX,descr:ink}:{})}
             : {op:'replacePicture',target:{slide:input.slide,el:targetId!},bytes:media.bytes,ext:media.ext,keepSrcRect:input.keepSrcRect===true}
           const first=runTxn(state,{isolation:'atomic',ops:[primary as Op]})
           if(!first.applied||!first.records?.length)throw new Error('INVALID_MEDIA')
@@ -935,7 +1163,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
               if(!second.applied)throw new Error('INVALID_MEDIA')
               records.push(...(second.records??[]))
             }
-          }else if(!input.keepSrcRect){
+          }else if(input.mode==='replace'&&!input.keepSrcRect){
             const crop=coverCropFractions(media.size.w,media.size.h,offset!.cx,offset!.cy)
             const second=runTxn(state,{isolation:'atomic',ops:[{op:'setPictureSrcRect',target:{slide:input.slide,el:targetId!},srcRect:crop}]})
             if(!second.applied)throw new Error('INVALID_MEDIA')
@@ -986,7 +1214,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         redoStack.length=0;redoBytes=0;push(undoStack,current)
         for(const [id,snapshot]of aiSnapshots)if(id>=snapshotId){aiSnapshotBytes-=snapshot.bytes;aiSnapshots.delete(id)}
         generation++
-        return {generation,stateGeneration,...history(),size:{...state.deck.size},slides}
+        return {generation,stateGeneration,...history(),size:{...state.deck.size},slides,sections:getSections(state)}
       })
     },
     undo(expected,signal) {
@@ -1001,7 +1229,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         undoStack.pop(); undoBytes-=snap.bytes
         push(redoStack,current)
         generation++
-        return {generation,stateGeneration,...history(),size:{...state.deck.size},slides}
+        return {generation,stateGeneration,...history(),size:{...state.deck.size},slides,sections:getSections(state)}
       })
     },
     redo(expected,signal) {
@@ -1016,7 +1244,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         redoStack.pop(); redoBytes-=snap.bytes
         push(undoStack,current)
         generation++
-        return {generation,stateGeneration,...history(),size:{...state.deck.size},slides}
+        return {generation,stateGeneration,...history(),size:{...state.deck.size},slides,sections:getSections(state)}
       })
     },
     render(expected,slide,width,signal) {
@@ -1036,17 +1264,46 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     chartColorSchemes(expected,signal) {
       return enqueue(expected,signal,state=>{const accents=themeAccents(state);return ['default','colorful','colorful2',...accents.map((_,i)=>`mono-accent${i+1}`)].map(key=>({key,colors:chartColors(state,key,accents)!}))})
     },
+    slideInfo(expected,signal) {
+      return enqueue(expected,signal,state=>state.deck.slides.map(slide=>{
+        const narration=new Set(narrationSpids(slide))
+        return {
+          transition:getSlideTransition(slide),
+          timing:{
+            advanceMs:getSlideAdvanceTime(slide),
+            narrationIds:slide.elements.filter(element=>narration.has(elementSpid(element)??-1))
+              .map(element=>element.id),
+          },
+          headerFooter:readHeaderFooter(slide),
+          shapeKeys:getSlideShapeKeys(slide),
+        }
+      }))
+    },
     animations(expected,slide,signal) {
       return enqueue(expected,signal,state=>{
         if(!Number.isSafeInteger(slide)||slide<0||slide>=state.deck.slides.length)throw new Error('INVALID_SLIDE')
         const page=state.deck.slides[slide]!,elements=new Map(page.elements.map(element=>[elementSpid(element),element]))
-        return getSlideAnimations(page).flatMap(item=>{const element=elements.get(item.spid);return element?[{sourceId:elementDurableId(element)??element.id,targetName:element.name||element.type,effect:item.effect,trigger:item.trigger,durationMs:item.durationMs,delayMs:item.delayMs,...(item.direction!==undefined?{direction:item.direction}:{}),...(item.motionPath!==undefined?{motionPath:item.motionPath}:{}),...(item.paragraph!==undefined?{paragraph:item.paragraph}:{})}]:[]}) as AnimationItem[]
+        return getSlideAnimations(page).flatMap(item=>{
+          const element=elements.get(item.spid)
+          if(!element)return []
+          return [{
+            sourceId:element.id,
+            targetName:element.name||element.type,
+            effect:item.effect,
+            trigger:item.trigger,
+            durationMs:item.durationMs,
+            delayMs:item.delayMs,
+            ...(item.direction!==undefined?{direction:item.direction}:{}),
+            ...(item.motionPath!==undefined?{motionPath:item.motionPath}:{}),
+            ...(item.paragraph!==undefined?{paragraph:item.paragraph}:{}),
+          }]
+        })
       })
     },
     links(expected,slide,signal) {
       return enqueue(expected,signal,state=>{
         if(!Number.isSafeInteger(slide)||slide<0||slide>=state.deck.slides.length)throw new Error('INVALID_SLIDE')
-        return getSlideLinks(state,slide).map(({elementId,target})=>{const element=state.deck.slides[slide]!.elements.find(element=>element.id===elementId);return {sourceId:element?elementDurableId(element)??element.id:elementId,target}})
+        return getSlideLinks(state,slide).map(({elementId,target})=>({sourceId:elementId,target}))
       })
     },
     runLinks(expected,slide,signal) {
@@ -1097,7 +1354,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
 // ── child-process IPC loop: one untrusted deck per isolated Node child ──
 
 export interface PptxChildBinding { fileId: string; revision: string }
-interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
+interface ChildMessage { copy?:SlidesCopyCommand; recording?: import('./pptx-session-host').SlidesRecordingCommand; paste?:SlidesPasteCommand; snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
 /** Child entry body: serves exactly one bound session over IPC, then exits. Exported for the
  * dedicated child entry module; never starts from an imported module by accident. */
 export function runPptxSessionChild(): void {
@@ -1124,6 +1381,10 @@ export function runPptxSessionChild(): void {
           case 'editChart': reply(id,{id,ok:true,result:await session.editChart(raw.expected!,raw.slide!,raw.sourceId!,raw.patch!)}); return
           case 'generatePage': reply(id,{id,ok:true,result:await session.generatePage(raw.expected!,raw.specJson!,raw.images!)}); return
           case 'landGeneratedPages': reply(id,{id,ok:true,result:await session.landGeneratedPages(raw.expected!,raw.markers!,raw.mode!,raw.atIndex)}); return
+          case 'copyClipboard': reply(id,{id,ok:true,result:await session.copyClipboard(raw.expected!,raw.copy!)}); return
+          case 'pasteClipboard': reply(id,{id,ok:true,result:await session.pasteClipboard(raw.expected!,raw.paste!)}); return
+          case 'mediaData': reply(id,{id,ok:true,result:await session.mediaData(raw.expected!,raw.slide!,raw.sourceId!)}); return
+          case 'applyRecording': if(!raw.recording)throw new Error('INVALID_MEDIA');reply(id,{id,ok:true,result:await session.applyRecording(raw.expected!,raw.recording)}); return
           case 'applyImage': if(!raw.image)throw new Error('INVALID_MEDIA');reply(id,{id,ok:true,result:await session.applyImage(raw.expected!,raw.image)}); return
           case 'historyBatchBegin': reply(id,{id,ok:true,result:await session.beginHistoryBatch(raw.expected!)}); return
           case 'historyBatchEnd': reply(id,{id,ok:true,result:await session.endHistoryBatch(raw.expected!)}); return
@@ -1133,6 +1394,7 @@ export function runPptxSessionChild(): void {
           case 'render': reply(id,{id,ok:true,result:await session.render(raw.expected!,raw.slide!,raw.width)}); return
           case 'chartData': reply(id,{id,ok:true,result:await session.chartData(raw.expected!,raw.slide!,raw.sourceId!)}); return
           case 'chartColorSchemes': reply(id,{id,ok:true,result:await session.chartColorSchemes(raw.expected!)}); return
+          case 'slideInfo': reply(id,{id,ok:true,result:await session.slideInfo(raw.expected!)}); return
           case 'animations': reply(id,{id,ok:true,result:await session.animations(raw.expected!,raw.slide!)}); return
           case 'links': reply(id,{id,ok:true,result:await session.links(raw.expected!,raw.slide!)}); return
           case 'runLinks': reply(id,{id,ok:true,result:await session.runLinks(raw.expected!,raw.slide!)}); return

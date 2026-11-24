@@ -25,7 +25,7 @@ import {
   type AutoOcrStop,
   type OcrPageData,
 } from './ocr-layer'
-import type { PdfOcrLine } from '../shared/ipc'
+import type { MergePdfRequest, MergePdfResult, PdfOcrLine } from '../shared/ipc'
 import { MAX_PDF_OCR_INSERTS } from '../../../../packages/web-contracts/src/pdf-ocr-bake'
 import { addFormMarkTool, type CropRect, type FileOpCanceled, type FileOpResult, type PdfAppDeps, type RotateDelta } from './ai/tools'
 import {
@@ -135,6 +135,7 @@ import {
 } from './view-state'
 import type { PdfViewState, ZoomAnchor } from './view-state'
 import { LinkLayer } from './LinkLayer'
+import { pageDestination } from './page-destination'
 import { OutlinePanel } from './OutlinePanel'
 import { CommentsPanel, type CommentEntry } from './CommentsPanel'
 import { ComparePanel } from './ComparePanel'
@@ -471,7 +472,7 @@ export type PdfHostLifecycle = {
   gotoPage(page: number): void
 }
 
-export default function App({ hostReadOnly = false, hostEditRestriction, hostSave, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr }: {
+export default function App({ hostReadOnly = false, hostEditRestriction, hostSave, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits }: {
   hostReadOnly?: boolean
   hostEditRestriction?: (bytes: Uint8Array, encrypted: boolean) => Promise<string | null>
   hostLifecycle?: (editor: PdfHostLifecycle | null) => void
@@ -484,6 +485,9 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
   hostRedactionPending?: string
   hostImageBakePreview?: (operations: readonly PdfHostImageBake[], signal: AbortSignal) => Promise<Uint8Array>
   hostOcr?: (png: string, signal?: AbortSignal) => Promise<PdfOcrLine[] | null>
+  hostProtectCopy?: (path: string, protection: PdfEncryptionInput, flushDraft: () => Promise<boolean>) => Promise<string | null>
+  hostMergePdf?: (request: MergePdfRequest, flushDraft: () => Promise<boolean>) => Promise<MergePdfResult>
+  hostPageLimits?: { maxPages: number; maxBlankPagesPerSave: number }
   hostSave?: {
     save(draft: SavePdfRequest, pageCount: number, check?: () => boolean, stamps?: StampConfig | null, imageBakes?: PdfHostImageBake[]): Promise<SavePdfResult>
     confirm(): Promise<SavePdfResult>
@@ -532,6 +536,16 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     return b ? { width: b.input.width, height: b.input.height } : undefined
   }
   const pageCountNow = () => sizes.length + blankPagesRef.current.length
+  // Pending deletions leave their original indices addressable until saved.
+  const draftPageLimit = hostPageLimits ? sizes.length + hostPageLimits.maxBlankPagesPerSave : 0
+  const blankPageLimit = hostPageLimits
+    ? draftPageLimit < hostPageLimits.maxPages
+      ? { maxPages: draftPageLimit, message: t('insertBlankPageDraftLimit', { limit: hostPageLimits.maxBlankPagesPerSave }) }
+      : { maxPages: hostPageLimits.maxPages, message: t('insertBlankPageWebLimit', { limit: hostPageLimits.maxPages }) }
+    : undefined
+  const blankPageLimitNotice = blankPageLimit && allSizes.length >= blankPageLimit.maxPages
+    ? blankPageLimit.message
+    : undefined
   const [pageOrigins, setPageOrigins] = useState<[number, number][]>([])
   const [pageUserUnits, setPageUserUnits] = useState<number[]>([])
   const [baseRots, setBaseRots] = useState<number[]>([])
@@ -1876,7 +1890,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
   /** Only the owner password may change or lift protection: a user-password
       session, even one allowed to modify the content, must not be able to strip
       the owner's password. A plain document has no protection to lose. */
-  const protectionEditable = mayChangeProtection(readOnly, diskLock)
+  const protectionEditable = (!hostSave || !!hostProtectCopy) && mayChangeProtection(readOnly, diskLock)
 
   useEffect(() => {
     if (
@@ -2392,6 +2406,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
   const editOpContext = (): OpContext => ({
     readOnly,
     pageCount: pageCountNow(),
+    blankPageLimit,
     deleted: deletedRef.current,
     claimedImages: new Set(
       imageEditsRef.current.flatMap((e) =>
@@ -5240,7 +5255,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     !textDraft && !noteDraft && !saveInFlightRef.current && !confirmSaveRef.current
 
   const appendReport = (sections: readonly string[]) => {
-    if (!canAppendReport() || !sections.length || !doc || doc.numPages + sections.length > 100) return null
+    if (!canAppendReport() || !sections.length || !doc || doc.numPages + sections.length > (blankPageLimit?.maxPages ?? 100)) return null
     const ops: Op[] = []
     let after = visList.at(-1) ?? null
     sections.forEach((text, index) => {
@@ -6498,7 +6513,12 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
       if (!doc || exporting) return
       setExporting(format)
       try {
-        const targets = allPages ? visList : [curOrigIdx].filter((i) => i >= 0)
+        // Saving pending edits reloads the PDF.js document and bakes its page order.
+        const exportDoc = dirty ? outlineDocRef.current : doc
+        if (!exportDoc || (dirty && exportDoc === doc)) throw new Error('The saved PDF could not be reopened for export.')
+        const targets = allPages
+          ? Array.from({length:exportDoc.numPages},(_,index)=>index+1)
+          : [Math.min(currentPage,exportDoc.numPages)]
         const images: string[] = []
         const pageNumbers: number[] = []
         const canvas = document.createElement('canvas')
@@ -6506,30 +6526,24 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
           format === 'jpg'
             ? (cvs.toDataURL('image/jpeg', 0.92).split(',')[1] ?? '')
             : (cvs.toDataURL('image/png').split(',')[1] ?? '')
-        for (const origIdx of targets) {
-          if (isBlankPage(origIdx)) {
-            const d = dispSize(origIdx)
-            canvas.width = Math.floor((d.width * 150) / 72)
-            canvas.height = Math.floor((d.height * 150) / 72)
-            const ctx2d = canvas.getContext('2d')
-            if (ctx2d) {
-              ctx2d.fillStyle = '#fff'
-              ctx2d.fillRect(0, 0, canvas.width, canvas.height)
-            }
-            images.push(encodePage(canvas))
-            pageNumbers.push(visList.indexOf(origIdx) + 1)
-            continue
+        let outputChars = 0
+        const put = () => {
+          const image = encodePage(canvas)
+          outputChars += image.length
+          if (hostSave && outputChars > 64 * 1024 * 1024) throw new Error('PDF image export exceeds its size limit.')
+          images.push(image)
+        }
+        for (const number of targets) {
+          const page = await exportDoc.getPage(number)
+          const viewport = page.getViewport({scale:150 / 72})
+          if (hostSave && (!Number.isFinite(viewport.width * viewport.height) || viewport.width * viewport.height > 16 * 1024 * 1024)) {
+            throw new Error('PDF page exceeds its image export limit.')
           }
-          const page = await doc.getPage(origIdx + 1)
-          const viewport = page.getViewport({
-            scale: 150 / 72,
-            rotation: (page.rotate + rotDelta(origIdx)) % 360,
-          })
-          canvas.width = Math.floor(viewport.width)
-          canvas.height = Math.floor(viewport.height)
-          await page.render({ canvas, viewport }).promise
-          images.push(encodePage(canvas))
-          pageNumbers.push(visList.indexOf(origIdx) + 1)
+          canvas.width = Math.max(1,Math.floor(viewport.width))
+          canvas.height = Math.max(1,Math.floor(viewport.height))
+          await page.render({canvas,viewport}).promise
+          put()
+          pageNumbers.push(number)
         }
         canvas.width = 0
         canvas.height = 0
@@ -6929,7 +6943,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     ])
     if (plan.failures.length > 0) {
       const error = plan.failures[0]!.error
-      opFailed(error)
+      showNotice(error)
       return { ok: false, error }
     }
     scrollAfterReorderRef.current = pageIndex
@@ -6953,15 +6967,14 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     void splitPdfToFolder(n)
   }
 
-  const mergePdf = () =>
-    flushThen(async () => {
-      const base = fileName.replace(/\.pdf$/i, '')
-      const result = await window.pdfApi.mergePdf({
-        path: filePath,
-        suggestedName: `${base}-merged.pdf`,
-      })
-      if (!result.ok) opFailed(result.error)
-    })
+  const mergePdf = async () => {
+    const base = fileName.replace(/\.pdf$/i, '')
+    const request = { path: filePath, suggestedName: `${base}-merged.pdf` }
+    const result = hostMergePdf
+      ? await hostMergePdf(request, async () => (await flushThen(async () => true)) === true)
+      : await flushThen(() => window.pdfApi.mergePdf(request))
+    if (result && !result.ok) opFailed(result.error)
+  }
 
   const openMergePagesDlg = () => {
     setMergeCount('2')
@@ -7428,7 +7441,6 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     void save(true)
   }
 
-  /** Internal destination of a Link annotation → jump to that page */
   // ── Bookmark editing (embedded outlines only; fail-closed on named dests) ──
 
   /** The original tree as the write model: every node gains pageIndex (0-based)
@@ -7601,6 +7613,60 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     })
   }
 
+  const pendingDestination = useRef<{
+    doc: PDFDocumentProxy
+    origIdx: number
+    x: number | null
+    y: number
+  } | null>(null)
+  const scrollToDestination = (origIdx: number, x: number | null, y: number) => {
+    const el = scrollRef.current
+    const page = el?.querySelector<HTMLElement>(`.pdf-page[data-page="${origIdx}"]`)
+    if (!el || !page) return
+    const viewport = el.getBoundingClientRect()
+    const target = page.getBoundingClientRect()
+    el.scrollTop += target.top - viewport.top + y * scale - PAGE_GAP / 2
+    if (x !== null) el.scrollLeft += target.left - viewport.left + x * scale - SCROLL_PAD
+  }
+  useLayoutEffect(() => {
+    const target = pendingDestination.current
+    if (!target) return
+    pendingDestination.current = null
+    if (doc === target.doc) scrollToDestination(target.origIdx, target.x, target.y)
+  })
+
+  // Resolve page references asynchronously, then use the latest visible order, rotation, and zoom.
+  const openDestinationRef = useRef(
+    (_doc: PDFDocumentProxy, _origIdx: number, _dest: readonly unknown[]): void => {},
+  )
+  openDestinationRef.current = (sourceDoc, origIdx, dest) => {
+    const el = scrollRef.current
+    const visIdx = visList.indexOf(origIdx)
+    if (!el || doc !== sourceDoc || visIdx < 0) return
+    pendingDestination.current = null
+    const destination = pageDestination(dest, pageGeom(origIdx), {
+      width: Math.max(1, el.clientWidth - SCROLL_PAD * 2 - (noteMarginOn ? NOTE_MARGIN_W + PAGE_GAP : 0)),
+      height: Math.max(1, el.clientHeight - PAGE_GAP * 2),
+    })
+    if (!destination) {
+      scrollToPage(visIdx + 1)
+      return
+    }
+
+    const { x, y, scale: requestedScale } = destination
+    if (requestedScale !== null) {
+      const nextScale = clampScale(requestedScale)
+      fitModeRef.current = null
+      if (nextScale !== scale) {
+        zoomAnchorRef.current = null
+        pendingDestination.current = { doc: sourceDoc, origIdx, x, y }
+        setScale(nextScale)
+        return
+      }
+    }
+    scrollToDestination(origIdx, x, y)
+  }
+
   const goToDest = async (dest: unknown) => {
     if (!doc) return
     try {
@@ -7611,8 +7677,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
         typeof ref === 'number'
           ? ref
           : await doc.getPageIndex(ref as Parameters<PDFDocumentProxy['getPageIndex']>[0])
-      const visIdx = visList.indexOf(origIdx)
-      if (visIdx >= 0) scrollToPage(visIdx + 1)
+      openDestinationRef.current(doc, origIdx, arr)
     } catch {
       /* Ignore corrupted destinations */
     }
@@ -7996,8 +8061,11 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     setAiPreset({ text, nonce: Date.now() })
   }
 
+  const conversionUnavailable = hostSave ? (lang === 'zh' ? 'Web 暂不支持转换文档格式。' : 'Document conversion is unavailable on Web.') : undefined
+
   /** Converter dropdown → the shell's local conversion flows (save dialog, password prompt) */
   const convertTo = async (format: PdfConvertFormat): Promise<void> => {
+    if (hostSave) return
     setConvertOpen(false)
     if (convertBusy) return
     setConvertBusy(true)
@@ -8605,15 +8673,15 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
                     </button>
                     {convertOpen && (
                       <div className="rb-drop rb-menu">
-                        <button onClick={() => void convertTo('docx')}>{t('convertToWord')}</button>
-                        <button onClick={() => void convertTo('xlsx')}>
+                        <button disabled={!!hostSave} title={conversionUnavailable} onClick={() => void convertTo('docx')}>{t('convertToWord')}</button>
+                        <button disabled={!!hostSave} title={conversionUnavailable} onClick={() => void convertTo('xlsx')}>
                           {t('convertToExcel')}
                         </button>
-                        <button onClick={() => void convertTo('pptx')}>{t('convertToPpt')}</button>
-                        <button onClick={() => void convertTo('md')}>
+                        <button disabled={!!hostSave} title={conversionUnavailable} onClick={() => void convertTo('pptx')}>{t('convertToPpt')}</button>
+                        <button disabled={!!hostSave} title={conversionUnavailable} onClick={() => void convertTo('md')}>
                           {t('convertToMarkdown')}
                         </button>
-                        <button onClick={() => void convertTo('html')}>{t('convertToHtml')}</button>
+                        <button disabled={!!hostSave} title={conversionUnavailable} onClick={() => void convertTo('html')}>{t('convertToHtml')}</button>
                         <div className="rb-menu-sep" />
                         <button
                           title={t('exportImagesAll')}
@@ -9302,7 +9370,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
                   </button>
                   <button
                     className="rb-big"
-                    disabled={status !== 'ready' || readOnly}
+                    disabled={status !== 'ready' || readOnly || !!hostSave}
                     data-tip={t('reduceHint')}
                     onClick={() => void reduceFileSize()}
                   >
@@ -9326,7 +9394,9 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
                   </button>
                   <button
                     className="rb-big"
-                    disabled={readOnly}
+                    disabled={readOnly || !!blankPageLimitNotice}
+                    data-tip={blankPageLimitNotice}
+                    title={blankPageLimitNotice}
                     onClick={() => insertBlankPage(curOrigIdx)}
                   >
                     <span className="rb-big-icon">
@@ -9687,6 +9757,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
                 <AttachmentsPanel
                   t={t}
                   rows={attachmentRows()}
+                  canEdit={!readOnly}
                   onAdd={() => void addAttachment()}
                   onExport={(row) => void exportAttachment(row)}
                   onToggleRemove={toggleAttachmentRemove}
@@ -11554,6 +11625,8 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
                   {t('insertPdf')}
                 </button>
                 <button
+                  disabled={!!blankPageLimitNotice}
+                  title={blankPageLimitNotice}
                   onClick={() => {
                     setThumbMenu(null)
                     insertBlankPage(menuInsertAfter)
@@ -11642,6 +11715,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
               <LinkDialog
                 t={t}
                 pageCount={pageCount}
+                webHost={Boolean(hostSave)}
                 onCancel={() => setLinkDraft(null)}
                 onApply={(target) => {
                   const draft = linkDraft
@@ -11714,6 +11788,18 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
                   }
                 }
                 onApply={applyProtection}
+                {...(hostProtectCopy ? { protectedCopy: {
+                  title: lang === 'zh' ? '下载受保护副本' : 'Download a protected copy',
+                  description: lang === 'zh'
+                    ? '继续后会先保存工作区原件中的待保存编辑，再下载加密 PDF。密码仅用于下载的副本。'
+                    : 'Continue to save pending edits to the workspace document and download an encrypted PDF. The password applies to the download.',
+                  action: lang === 'zh' ? '下载受保护副本' : 'Download protected copy',
+                  save: async (protection) => {
+                    const error = await hostProtectCopy(filePath, protection, async () => (await flushThen(async () => true)) === true)
+                    if (error === null) setProtectionDlg(false)
+                    return error
+                  },
+                } } : {})}
                 onRemove={removeProtection}
                 onClose={() => setProtectionDlg(false)}
               />
@@ -11764,8 +11850,16 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
                 pageCount={pageCount}
                 currentPage={currentPage}
                 hasSignatures={digitalSignatures.length > 0}
+                webHost={Boolean(hostSave)}
                 onCancel={() => setCertSignDlg(false)}
-                onSigned={(path) => void adoptSignedFile(path)}
+                onSigned={(path) => {
+                  if (hostSave) {
+                    setCertSignDlg(false)
+                    showNotice(t('certDownloaded', { name: path }))
+                  } else {
+                    void adoptSignedFile(path)
+                  }
+                }}
               />
             )}
             {signaturesDlg && (
@@ -11781,6 +11875,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
               <SignatureDialog
                 color={drawColor}
                 t={t}
+                webHost={Boolean(hostSave)}
                 onCancel={() => {
                   setSignDlg(false)
                   setSignatureTarget(null)

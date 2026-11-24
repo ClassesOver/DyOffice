@@ -1081,6 +1081,7 @@ export function Ribbon({
   onSaveAs,
   saveDownload,
   onNameWithAi,
+  desktopMediaAvailable = true,
   onExportPdf,
   onPrint,
   onExportImages,
@@ -1640,6 +1641,7 @@ export function Ribbon({
     onInsertField,
     onInsertIcon,
     onInsertImage,
+    desktopMediaAvailable,
     onInsertMedia,
     onInsertModel3d,
     onInsertSmartArt,
@@ -1788,7 +1790,7 @@ export function Ribbon({
                   {t('ribbonFileExportPdf')}
                 </button>
                 <button
-                  disabled={!hasDoc}
+                  disabled={!hasDoc || !desktopMediaAvailable}
                   onClick={() => {
                     setFileOpen(false)
                     onPrint()
@@ -1815,7 +1817,7 @@ export function Ribbon({
                   {t('ribbonFileExportImagesJpg')}
                 </button>
                 <button
-                  disabled={!hasDoc}
+                  disabled={!hasDoc || !desktopMediaAvailable}
                   onClick={() => {
                     setFileOpen(false)
                     onExportVideo()

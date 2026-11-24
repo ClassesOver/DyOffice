@@ -261,6 +261,8 @@ export const ja = {
   appOutlineNoText: '（テキストなし）',
   appSectionHeaderTitle: 'クリックで折りたたみ/展開。右クリックでセクションを管理',
   appNotesLabel: 'ノート',
+  appNotesTooLong: "スライド {slide} の発表者ノートが上限の {limit} 文字を超えています。短くしてから保存してください。",
+  appNotesWriteFailed: "スライド {slide} の発表者ノートを書き込めませんでした。もう一度保存してください。",
   appNotesClickToAdd: 'クリックしてノートを追加',
   appNotesPlaceholder: 'クリックして発表者のノートを追加（ドキュメントと一緒に pptx に保存）',
   appNotesShow: 'ノートを表示',

@@ -297,6 +297,7 @@ export interface Props {
   /** Ask the model for a name, then open Save As with it prefilled */
   onNameWithAi: () => void
   /** Export as PDF (hidden slides skipped) */
+  desktopMediaAvailable?: boolean
   onExportPdf: () => void
   onPrint: () => void
   /** Export as images (one PNG per page, hidden slides skipped) */
@@ -636,6 +637,7 @@ export interface RibbonTabCtx extends Pick<
   | 'onInsertField'
   | 'onInsertIcon'
   | 'onInsertImage'
+  | 'desktopMediaAvailable'
   | 'onInsertMedia'
   | 'onInsertModel3d'
   | 'onInsertSmartArt'

@@ -879,3 +879,26 @@ for (const theme of ['light', 'dark']) test(`Word saves and downloads the author
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg', '#FF0000', { timeout: 45_000 })
   await expectCleanPersistence(f.page)
 })
+
+test('Web Word protection keeps the supported modify password option usable',{timeout:90000},async t=>{
+  const f=await fixture(t),{page}=f
+  const {fileId,revision}=f.opened.file
+  await page.goto(f.origin+'/native-docx/?fileId='+fileId)
+  await expect(page.locator('.tiptap.doc-page[contenteditable="true"]').first()).toBeVisible({timeout:45000})
+  await page.getByRole('button',{name:'Review',exact:true}).click()
+  await page.getByRole('button',{name:'Protect Document',exact:true}).click()
+  const dialog=page.locator('.protect-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('Password to open this document')).toHaveCount(0)
+  await expect(dialog.getByText('Password to modify this document')).toBeVisible()
+  const fields=dialog.locator('input[type=password]')
+  await fields.nth(0).fill('Synthetic Web protection')
+  await fields.nth(1).fill('Synthetic Web protection')
+  await dialog.getByRole('button',{name:'OK',exact:true}).click()
+  await expect(dialog).toHaveCount(0)
+  await page.keyboard.press('Control+s')
+  const head=async()=>(await f.files.openFile(f.alice.token,fileId)).file.revision
+  await expect.poll(head,{timeout:30000}).not.toBe(revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,fileId,await head()))
+  assert.match(await saved.file('word/settings.xml').async('string'),/<w:writeProtection\b/)
+})

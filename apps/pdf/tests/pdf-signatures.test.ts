@@ -6,6 +6,7 @@ import { PNG } from 'pngjs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { inspectCertificate, signPdf, SignError } from '../src/main/pdf-sign'
 import { readPdfSignatures } from '../src/main/pdf-signatures'
+import { openCertificate as openBrowserCertificate, signPdf as signBrowserPdf } from '../src/shared/pdf-sign'
 
 const PASSWORD = 'pw-\u6d4b\u8bd5'
 
@@ -60,6 +61,24 @@ beforeAll(() => {
 }, 60_000)
 
 describe('signing and reading back', () => {
+  it('shares the incremental signer with the browser and displays a Unicode certificate name', async () => {
+    expect(openBrowserCertificate(p12, 'wrong')).toEqual({ ok: false, error: 'cert-password' })
+    const opened = openBrowserCertificate(p12, PASSWORD)
+    if (!opened.ok) throw Error(opened.error)
+    expect(opened.info[0]?.commonName).toBe('测试用户 Alice')
+    expect(opened.info[0]?.selfSigned).toBe(true)
+    const source = await samplePdf()
+    const signed = await signBrowserPdf(source, {
+      loaded: opened.loaded,
+      visible: { pageIndex: 0, position: 'bottom-right', width: 80, height: 32, png: pngBox(80, 32) },
+    })
+    expect(signed.slice(0, source.length)).toEqual(source)
+    const [sig] = await readPdfSignatures(signed)
+    expect(sig?.problems).toEqual(['self-signed'])
+    expect(sig?.coversWholeDocument).toBe(true)
+  })
+
+
   for (const objectStreams of [true, false]) {
     it(`signs a document written ${objectStreams ? 'with an xref stream' : 'with a classic xref table'}`, async () => {
       const signed = await signPdf(await samplePdf({ objectStreams }), {

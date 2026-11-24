@@ -10,6 +10,7 @@ import {imageDpiFromBytes, imageSizeFromBytes} from '../../../../packages/pptx-r
 import {normalizeLang} from '@genoffice/i18n'
 import {tMain} from '../../../slides/src/main/i18n-main.ts'
 import {messages} from './messages.ts'
+import {browserFileName, decodeBrowserBase64, downloadBrowserFile} from './browser-download'
 import {createDocumentImageApi} from './web-ai-media-api.ts'
 import type {AiPanelPrefs} from '@genoffice/ui'
 import type {
@@ -20,9 +21,9 @@ import type {
   DeleteElementsOp, EditTransformOp, EditTransformMultiOp, BatchEditTransformOp, ReorderElementOp,
   GroupElementsOp, UngroupElementOp, SetElementFontOp, SetElementParagraphFormatOp,
   FindReplaceOp, SetNotesOp, SetTransitionOp, SetSlideHiddenOp, SetSlideLayoutOp,
-  AddSectionOp, RenameSectionOp, RemoveSectionOp, MoveSectionOp,
+  AddSectionOp, RenameSectionOp, RemoveSectionOp, RemoveSectionSlidesOp, MoveSectionOp,
   HeaderFooterOp, AddSlideWithLayoutOp, LinkTargetOp,
-  MasterPartItem,
+  MasterPartItem, PasteSlideMode, PasteSlideResult, SaveRecordingOp,
 } from '../../../slides/src/shared/ipc'
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
@@ -34,6 +35,100 @@ type Session = {nameCandidate?:string;authority?:{editorId:string;leaseEpoch:num
 type ApplyResponse = {generation: number; dirty: boolean; changed?: number[]; created?: Array<{id:string;slide:number;index:number}>; size?: {cx:number;cy:number}; order?: string[]; index?: number; sections?: SectionInfo[] | null; history?: {canUndo: boolean; canRedo: boolean}; slide?: OpenResult['slides'][number]; transaction?: {applied:boolean;dryRun?:boolean;plan?:string[];failures?:Array<{index:number;error:string}>;records?:Array<{op:{op:string};slidePath?:string;created?:string[];after?:unknown}>}}
 type HistoryState = {canUndo: boolean; canRedo: boolean}
 const SLIDE_IMAGE_LIMIT = 6990508
+const CLIPBOARD_KEY = 'dyoffice.pptx.clipboard'
+const CLIPBOARD_MIME = 'application/x-dyoffice-slide-reference'
+const CLIPBOARD_FORMAT = 'web '+CLIPBOARD_MIME
+const CLIPBOARD_ID_BYTES = 36
+const CLIPBOARD_ID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i
+type ClipboardMarker = {id:string;kind:'slides'|'elements';published?:true}
+let localClipboard:ClipboardMarker|null=null
+function clipboardMarker():ClipboardMarker|null {
+  try {
+    if(typeof window==='undefined')return localClipboard
+    const value=JSON.parse(window.sessionStorage.getItem(CLIPBOARD_KEY)??'null')
+    return typeof value?.id==='string'&&(value.kind==='slides'||value.kind==='elements')?value:null
+  }catch{return localClipboard}
+}
+function setClipboardMarker(marker:ClipboardMarker) {
+  localClipboard=marker
+  try { if(typeof window!=='undefined')window.sessionStorage.setItem(CLIPBOARD_KEY,JSON.stringify(marker)) }catch { /* In-memory fallback for restricted embeds. */ }
+}
+async function writeSystemClipboard(marker:ClipboardMarker,png?:string):Promise<boolean> {
+  try {
+    if(!globalThis.navigator?.clipboard?.write || typeof ClipboardItem==='undefined')return false
+    const reference=`${marker.kind}:${marker.id}`
+    const formats:Record<string,Blob>={[CLIPBOARD_FORMAT]:new Blob([reference],{type:CLIPBOARD_MIME})}
+    if(png){
+      if(png.length>SLIDE_IMAGE_LIMIT||!png.startsWith('iVBORw0KGgo'))return false
+      formats['image/png']=new Blob([decodeBrowserBase64(png)],{type:'image/png'})
+    }
+    await navigator.clipboard.write([new ClipboardItem(formats)])
+    if(clipboardMarker()?.id===marker.id)setClipboardMarker({...marker,published:true})
+    return true
+  }catch{return false}
+}
+
+async function readClipboard(allowPermissionPrompt=true):Promise<{marker:ClipboardMarker|null;items:ClipboardItem[];markerItem?:ClipboardItem}> {
+  const local=clipboardMarker()
+  const clipboard=globalThis.navigator?.clipboard
+  let items:ClipboardItem[]
+  try {
+    if(!clipboard?.read)return {marker:local,items:[]}
+    if(!allowPermissionPrompt){
+      // Chromium keeps read() pending while the site permission prompt is open.
+      const permission=await navigator.permissions?.query({name:'clipboard-read' as PermissionName}).catch(()=>null)
+      if(permission&&permission.state!=='granted')return {marker:local,items:[]}
+    }
+    items=await clipboard.read()
+  }catch{return {marker:local,items:[]}}
+  for(const item of items){
+    if(!item.types.includes(CLIPBOARD_FORMAT))continue
+    try {
+      const blob=await item.getType(CLIPBOARD_FORMAT)
+      if(local&&blob.size===CLIPBOARD_ID_BYTES&&await blob.text()===local.id){
+        // A bare reference needs the originating tab to supply its kind.
+        return {marker:local,items,markerItem:item}
+      }
+      if(blob.size!=='slides:'.length+CLIPBOARD_ID_BYTES&&blob.size!=='elements:'.length+CLIPBOARD_ID_BYTES)continue
+      const reference=await blob.text()
+      const separator=reference.indexOf(':')
+      const kind=reference.slice(0,separator)
+      const id=reference.slice(separator+1)
+      if((kind==='slides'||kind==='elements')&&id.length===CLIPBOARD_ID_BYTES&&CLIPBOARD_ID.test(id))return {marker:{kind,id},items,markerItem:item}
+    }catch{ /* Other clipboard formats may still be available. */ }
+  }
+  return {marker:items.length===0&&!local?.published?local:null,items}
+}
+
+async function readClipboardPng(item:ClipboardItem):Promise<string> {
+  if(!item.types.includes('image/png'))return ''
+  const blob=await item.getType('image/png')
+  if(blob.size>5*1024*1024)return ''
+  return new Promise<string>((resolve,reject)=>{
+    const reader=new FileReader()
+    reader.onerror=()=>reject(reader.error)
+    reader.onload=()=>resolve(String(reader.result).split(',')[1]??'')
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function readSystemClipboard():ReturnType<SlidesApi['clipboardExternal']> {
+  const {marker,items}=await readClipboard()
+  if(marker?.kind==='slides')return {kind:'slide'}
+  if(marker?.kind==='elements')return {kind:'internal',elementReference:marker.id}
+  try {
+    for(const item of items){
+      const data=await readClipboardPng(item)
+      if(data)return {kind:'image',base64:data,ext:'png'}
+      if(item.types.includes('text/plain')){
+        const blob=await item.getType('text/plain')
+        const text=await blob.slice(0,4*1024*1024).text()
+        if(text.trim())return {kind:'text',text}
+      }
+    }
+  }catch{ /* The clipboard data is unavailable. */ }
+  return {kind:'none'}
+}
 const isGeneratedImage = (url: string) => url.startsWith('https://generated-image.invalid/')
 const WEBP_DATA_PREFIX = 'data:image/webp;base64,'
 async function normalizeWebp(base64: string) {
@@ -79,6 +174,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     applyFence=check;try{return await action()}finally{applyFence=null}
   }
   let session: Session | null = null
+  let elementImageCopy:{token:string;marker:ClipboardMarker}|null=null
+  let lastClipboardPaste:{session:Session;id:string;index:number;generation:number}|null=null
   let master: {session:Session; partPath:string; width:number; slide:MasterPartItem['slide']} | null = null
   let openEpoch=0,opening=0,changing=0
   const controllers = new Set<AbortController>()
@@ -88,11 +185,19 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   const waiting: (() => void)[] = []
   const historyHandlers = new Set<(state: HistoryState) => void>()
   const openedHandlers = new Set<(result: OpenResult) => void>()
-  const transitions = new Map<number, TransitionKind>()
+  type SlideInfo = {
+    transition: TransitionKind
+    timing: ShowTiming
+    headerFooter: Awaited<ReturnType<SlidesApi['getHeaderFooter']>>
+    shapeKeys: ShapeKey[]
+  }
+  let inkQueue: { session: Session; revision: string; generation: number; done: Promise<void> } | undefined
+  let slideInfo: { session: Session; generation: number; revision: string; result: Promise<SlideInfo[]> } | undefined
   let sections: SectionInfo[] = []
   let csrf: string | undefined, disposed = false
   let pendingOpen: Promise<OpenResult> | null = null
   const noEvent = () => () => {}
+  const mediaUrls = new Set<string>()
   const unavailable = async (): Promise<never> => { throw new Error(text.unavailable) }
   const slideImages = mediaApi && createDocumentImageApi({
     async generateImage(input) {
@@ -123,7 +228,6 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     return result.every(url => url !== null) ? result : null
   }
   const graceful = async (): Promise<null> => null
-  const gracefulFalse = async (): Promise<false> => false
 
   function requireSession(): Session {
     if (disposed || !session) throw hostError('INVALID_REVISION', 'slides session')
@@ -145,7 +249,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
           if (typeof body?.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken)) throw hostError('INVALID_RESPONSE', 'csrf')
           csrf = body.csrfToken
         }
-        if(saveFence&&/\/(apply|media|generated-pages|snapshot-restore|undo|redo|chart-edit|master-edit)$/.test(path))throw hostError('UNAVAILABLE','analysis save in progress')
+        if(saveFence&&/\/(apply|media|generated-pages|snapshot-restore|undo|redo|chart-edit|master-edit|clipboard-paste|clipboard-duplicate|recording)$/.test(path))throw hostError('UNAVAILABLE','analysis save in progress')
         if(path.endsWith('/apply')&&applyFence&&!applyFence())throw hostError('UNAVAILABLE','analysis target changed')
         const proof = csrf
         const response = await fetchImpl(path, {method:httpMethod,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(payload?{'content-type':'application/json'}:{}),'x-csrf-token':proof!},...(payload?{body:JSON.stringify(payload)}:{})})
@@ -168,7 +272,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if(method!=='open'&&opening)throw hostError('CONFLICT','slides session reopening')
     if (waiting.length >= 64) throw hostError('UNAVAILABLE', 'read capacity')
     const captured=session,epoch=openEpoch
-    const readOnly=['slide','slides','notes','comments','animations','links','run-links','layouts','chart-data','chart-color-schemes','master-parts'].includes(method)
+    const readOnly=['slide','slides','notes','comments','animations','slide-info','media-data','links','run-links','layouts','chart-data','chart-color-schemes','master-parts','clipboard-copy'].includes(method)
     if(method!=='open'&&!readOnly&&captured?.writeProtected)throw hostError('UNAVAILABLE','write-protected presentation')
     if(!readOnly)changing++
     await acquireSlot()
@@ -176,11 +280,14 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if(method!=='open'&&(opening||disposed||session!==captured||epoch!==openEpoch||!captured||captured.revision!==revision))throw hostError('CONFLICT','stale slides session')
       if(readOnly){
         if(disposed||session!==captured||!captured||captured.revision!==revision)throw hostError('CONFLICT','stale slides read')
-        generation=captured.generation
+        if(method!=='clipboard-copy')generation=captured.generation
       }
       const result=await request(revision,generation,method,input)
       // 先采用代数再唤醒排队读取；写操作仍使用调用时捕获的代数，绝不自动重试。
-      if(!readOnly&&session===captured&&captured?.revision===revision&&typeof result?.generation==='number')captured.generation=result.generation
+      if (!readOnly && method !== 'open' && !disposed && epoch === openEpoch && session === captured && captured?.revision === revision && typeof result?.generation === 'number') {
+        captured.generation = result.generation
+        if (Array.isArray(result.sections)) sections = result.sections
+      }
       return result
     }
     finally { if(!readOnly)changing--;releaseSlot() }
@@ -192,9 +299,10 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     try{
     const state = host.getState(fileId)
     const generation = session && session.revision === state.revision.revision ? session.generation : 0
-    const raw = await call(state.revision.revision, generation, 'open') as {generation: number; dirty: boolean; size?: {cx: number; cy: number}; defaultFont?: string; slides: OpenResult['slides']; writeProtected?: true}
+    const raw = await call(state.revision.revision, generation, 'open') as {generation: number; dirty: boolean; size?: {cx: number; cy: number}; defaultFont?: string; slides: OpenResult['slides']; sections?: SectionInfo[]; writeProtected?: true}
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
     session = {...(state.lease?{authority:{editorId:state.lease.editorId,leaseEpoch:state.lease.leaseEpoch}}:{}),revision: state.revision.revision, generation: raw.generation, dirty: !!raw.dirty, size: raw.size ?? {cx: 12192000, cy: 6858000}, defaultFont: raw.defaultFont ?? 'Calibri',writeProtected: raw.writeProtected===true}
+    sections = raw.sections ?? []
     const result: OpenResult = {path: state.name, slides: raw.slides, size: session.size, defaultFont: session.defaultFont}
     if (fire) for (const handler of openedHandlers) { try { handler(result) } catch { /* renderer listeners cannot change durable results */ } }
     return result
@@ -212,9 +320,31 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     current.generation = raw.generation
     current.dirty = !!raw.dirty
     if (raw.size) current.size = raw.size
-    if (Array.isArray(raw.sections)) sections = raw.sections
     emitHistory(raw.history)
     return raw
+  }
+  async function fetchSlideInfo(index: number): Promise<SlideInfo> {
+    const current = requireSession()
+    const {generation, revision} = current
+    if (!slideInfo || slideInfo.session !== current || slideInfo.generation !== generation || slideInfo.revision !== revision) {
+      const info = {session:current, generation, revision, result:call(revision,generation,'slide-info') as Promise<SlideInfo[]>}
+      slideInfo = info
+      void info.result.catch(() => { if (slideInfo === info) slideInfo = undefined })
+    }
+    const active = slideInfo
+    const info = (await active.result)[index]
+    if (disposed || current !== session || !info) throw hostError('INVALID_RESPONSE','slide presentation settings')
+    return info
+  }
+  async function editRecording(input:({kind:'save'}&SaveRecordingOp)|{kind:'clear';indexes:number[]}) {
+    const current=session
+    if(disposed||!current||opening||recovery||!host.getState(fileId).lease)return null
+    const result=await call(current.revision,current.generation,'recording',input) as ApplyResponse & {slides:OpenResult['slides']|null}
+    if(disposed||session!==current||!result.slides)return null
+    current.dirty=result.dirty
+    emitHistory(result.history)
+    onChange()
+    return result.slides
   }
   async function fetchSlide(index: number): Promise<OpenResult['slides'][number]> {
     const current = requireSession()
@@ -287,11 +417,19 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       ? {sourceId:input.sourceId,keepSrcRect:input.keepSrcRect}
       : 'placement' in input ? {placement:input.placement}
       : {xPx:input.xPx,yPx:input.yPx,wPx:input.wPx,hPx:input.hPx,fitWidthPx:input.fitWidthPx}
-    const raw=await call(current.revision,current.generation,'media',{mode:input.mode,slide:input.slideIndex,...image,...target}) as ApplyResponse
-    current.generation=raw.generation;current.dirty=raw.dirty
-    emitHistory(raw.history);onChange()
-    if(!raw.slide)return null
+    const raw=await editPictureMedia(current,{mode:input.mode,slide:input.slideIndex,...image,...target})
+    if(!raw?.slide)return null
     return input.mode==='insert'?{slide:raw.slide,sourceId:createdId(raw)}:raw.slide
+  }
+
+  async function editPictureMedia(current:Session,input:object):Promise<ApplyResponse|null> {
+    const result=await call(current.revision,current.generation,'media',input) as ApplyResponse
+    if(disposed||session!==current)return null
+    current.generation=result.generation
+    current.dirty=result.dirty
+    emitHistory(result.history)
+    onChange()
+    return result
   }
 
   function captureImageTarget(current: Session) {
@@ -353,6 +491,40 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       input.centerPx ? {center:{x:input.centerPx.x/scale,y:input.centerPx.y/scale}} : undefined)
     return applyImage({mode:'insert', slideIndex:input.slideIndex, fitWidthPx:input.fitWidthPx, base64, ext, xPx:frame.x*scale,yPx:frame.y*scale,wPx:frame.cx*scale,hPx:frame.cy*scale})
   }
+  async function copyClipboard(kind:ClipboardMarker['kind'], input:object) {
+    const current=requireSession()
+    const result=await call(current.revision,current.generation,'clipboard-copy',{kind,...input})
+      .catch(()=>null) as {id:string;count:number}|null
+    if(disposed||session!==current||!result?.id)return null
+    const marker={kind,id:result.id}
+    setClipboardMarker(marker)
+    await writeSystemClipboard(marker)
+    return {marker,count:result.count}
+  }
+  type ClipboardResult = PasteSlideResult & {generation:number;dirty:boolean;history:HistoryState;sourceIds:string[]}
+  async function clipboardEdit(method:'clipboard-paste'|'clipboard-duplicate',input:object):Promise<ClipboardResult|null|undefined> {
+    const current=requireSession()
+    if(!captureImageTarget(current)()||current.writeProtected)return undefined
+    const result=await call(current.revision,current.generation,method,input).catch(()=>undefined) as ClipboardResult|null|undefined
+    if(disposed||session!==current)return undefined
+    if(!result)return result
+    current.dirty=result.dirty
+    emitHistory(result.history)
+    onChange()
+    return result
+  }
+  async function pasteSlideClipboard(index:number,fitWidthPx:number,mode:PasteSlideMode,replace=false):Promise<PasteSlideResult|null> {
+    const current=requireSession()
+    const stillCurrent=captureImageTarget(current)
+    if(!stillCurrent()||current.writeProtected)return null
+    const {marker}=await readClipboard(false)
+    if(marker?.kind!=='slides'||!stillCurrent())return null
+    if(replace&&(!lastClipboardPaste||lastClipboardPaste.session!==current||lastClipboardPaste.id!==marker.id||lastClipboardPaste.generation!==current.generation))return null
+    const result=await clipboardEdit('clipboard-paste',{kind:'slides',clipboardId:marker.id,index,fitWidthPx,mode,...(replace?{replace:true}:{})})
+    if(!result)return null
+    lastClipboardPaste={session:current,id:marker.id,index,generation:result.generation}
+    return {order:result.order,slides:result.slides,index:result.index,count:result.count,sourceIds:result.sourceIds}
+  }
   const slideUpdateFrom = (order: string[], deck: {slides: OpenResult['slides']}) => ({order, slides: deck.slides})
   const op = (name: string, fields: Record<string, unknown>) => ({op: name, ...fields})
 
@@ -404,7 +576,6 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       current.generation = result.generation
       current.dirty = result.dirty
       if (result.size) current.size = result.size
-      if (Array.isArray(result.sections)) sections = result.sections
       emitHistory(result.history)
       onChange()
       // A path would tell the renderer that generation has already saved a new file.
@@ -421,19 +592,100 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (picture?.base64 && picture.ext==='tif') return applyImage({mode:'insert',placement:'natural',...picture,slideIndex})
       return picture ? addImageBytes({...picture, slideIndex, fitWidthPx, naturalPx:{width:0,height:0}}) : null
     },
-    insertMedia: unavailable, addMediaBytes: unavailable, getMediaData: graceful,
+    insertMedia: unavailable, addMediaBytes: unavailable,
+    async getMediaData(index,sourceId){
+      const current=session
+      if(!current)return null
+      try{
+        const {media}=await call(current.revision,current.generation,'media-data',{index,sourceId})
+        if(disposed||session!==current||!media||(media.kind!=='audio'&&media.kind!=='video')||
+          typeof media.dataUrl!=='string')return null
+        const prefix=/^data:((?:audio|video)\/[a-z0-9-]+);base64,/i.exec(media.dataUrl)
+        if(!prefix)return null
+        const bytes=decodeBrowserBase64(media.dataUrl.slice(prefix[0].length))
+        if(!bytes.byteLength||typeof URL.createObjectURL!=='function')return null
+        const dataUrl=URL.createObjectURL(new Blob([bytes],{type:prefix[1]!}))
+        mediaUrls.add(dataUrl)
+        return {kind:media.kind as 'audio'|'video',dataUrl}
+      }catch{return null}
+    },
+    releaseMediaData(url:string) {
+      if(mediaUrls.delete(url))URL.revokeObjectURL(url)
+    },
     pickModel3d: unavailable, addModel3d: unavailable, setModel3dView: graceful, getModel3dData: graceful,
     videoFileOpen: unavailable, videoFileWrite: unavailable, videoFileClose: unavailable,
-    savePicture: unavailable, exportImages: unavailable, exportPdf: unavailable,
+    async savePicture({pngBase64,defaultName}) {
+      if(!pngBase64.startsWith('iVBORw0KGgo'))return {ok:false,error:text.unavailable}
+      const bytes=decodeBrowserBase64(pngBase64)
+      const name=browserFileName(defaultName.replace(/\.png$/i,''),'Picture')+'.png'
+      downloadBrowserFile(new Blob([bytes],{type:'image/png'}),name)
+      return {ok:true,path:name}
+    },
+    exportImages: unavailable, exportPdf: unavailable,
     printSlides: unavailable, listPrinters: unavailable, printerOptions: unavailable,
     fontCatalog: unavailable, fontDownload: unavailable, fontInstallLocal: unavailable,
     privateFontFaces: async () => [], privateFontData: async () => null, fontMissing: async () => <string[]>[],
-    microphoneAccess: async () => false, getRecentFiles: async () => <string[]>[],
+    // Browser permission is requested by the recorder's getUserMedia call.
+    microphoneAccess: async () => typeof window!=='undefined'&&window.isSecureContext&&
+      typeof navigator.mediaDevices?.getUserMedia==='function'&&typeof MediaRecorder==='function',
+    // 24 kHz 16-bit mono WAV at 48 KB/s, below the per-part and per-take service caps.
+    recordingLimits: {
+      slideMs:170_000,
+      totalMs:250_000,
+      notice:prefs.language==='zh'?'录音已达到网页保存上限，已停止录制。可以保存本次录音。':
+        'Recording stopped at the Web recording limit. You can save this take.',
+    },
+    getRecentFiles: async () => <string[]>[],
     setShowFullScreen: async () => {}, nativeClipboard: async () => {},
-    clipboardExternal: async () => ({kind: 'none'} as const), clipboardProbe: async () => false,
-    hasSlideClipboard: async () => false, copySlides: gracefulFalse, copyElements: async () => 0,
-    copyElementsImage: gracefulFalse, pasteElements: graceful, duplicateElements: graceful,
-    pasteSlide: graceful, repasteSlide: graceful,
+    clipboardExternal:readSystemClipboard,
+    clipboardProbe:async()=>clipboardMarker()!==null||Boolean(globalThis.navigator?.clipboard?.read),
+    hasSlideClipboard:async()=>(await readClipboard(false)).marker?.kind==='slides',
+    async copySlides({slideIndexes,pngs,cut}) {
+      const indexes=[...new Set(slideIndexes)].sort((a,b)=>a-b)
+      const bitmaps=indexes.length===slideIndexes.length&&indexes.every((value,i)=>value===slideIndexes[i])&&
+        pngs?.length===indexes.length&&pngs.reduce((size,png)=>size+png.length,0)<=SLIDE_IMAGE_LIMIT?pngs:undefined
+      return Boolean(await copyClipboard('slides',{indexes,...(cut?{cut:true}:{}),...(bitmaps?{pngs:bitmaps}:{})}))
+    },
+    async copyElements({slideIndex,sourceIds,cut,clipboardToken}){
+      const result=await copyClipboard('elements',{index:slideIndex,sourceIds:[...new Set(sourceIds)],...(cut?{cut:true}:{})})
+      if(!result)return 0
+      elementImageCopy=clipboardToken?{token:clipboardToken,marker:result.marker}:null
+      return result.count
+    },
+    async copyElementsImage(token,png){
+      const copy=elementImageCopy
+      if(!copy||copy.token!==token||clipboardMarker()?.id!==copy.marker.id||disposed)return false
+      const {marker}=await readClipboard(false)
+      if(disposed||elementImageCopy!==copy||clipboardMarker()?.id!==copy.marker.id)return false
+      elementImageCopy=null
+      if(marker?.kind!=='elements'||marker.id!==copy.marker.id)return false
+      return writeSystemClipboard(copy.marker,png)
+    },
+    async pasteElements({slideIndex,fitWidthPx,elementReference}) {
+      const current=session
+      if(!current)return null
+      const stillCurrent=captureImageTarget(current)
+      if(!stillCurrent()||current.writeProtected)return null
+      const {marker}=await readClipboard(false)
+      if(marker?.kind!=='elements'||(elementReference&&marker.id!==elementReference)||!stillCurrent())return null
+      const result=await clipboardEdit('clipboard-paste',{kind:'elements',clipboardId:marker.id,index:slideIndex,fitWidthPx})
+      if(result?.slides[0])return {slide:result.slides[0],sourceIds:result.sourceIds}
+      // A successful null reply means the editable copy is unavailable. A failed
+      // request may have applied the edit, so retrying as a picture is unsafe.
+      if(result!==null||!elementReference||!stillCurrent())return null
+      const {marker:latest,markerItem}=await readClipboard(false)
+      if(latest?.kind!=='elements'||latest.id!==elementReference||!markerItem||!stillCurrent())return null
+      const base64=await readClipboardPng(markerItem).catch(()=>'')
+      if(!base64||!stillCurrent())return null
+      const image=await addImageBytes({slideIndex,fitWidthPx,base64,ext:'png',naturalPx:{width:320,height:240}}).catch(()=>null)
+      return image&&'slide' in image?{slide:image.slide,sourceIds:[image.sourceId]}:null
+    },
+    async duplicateElements({slideIndex,sourceIds,fitWidthPx,dxPx,dyPx}) {
+      const result=await clipboardEdit('clipboard-duplicate',{index:slideIndex,sourceIds:[...new Set(sourceIds)],fitWidthPx,dxPx,dyPx})
+      return result?.slides[0]?{slide:result.slides[0],sourceIds:result.sourceIds}:null
+    },
+    pasteSlide:({afterIndex,fitWidthPx,mode='theme'})=>pasteSlideClipboard(afterIndex,fitWidthPx,mode),
+    repasteSlide:({mode,fitWidthPx})=>lastClipboardPaste?pasteSlideClipboard(lastClipboardPaste.index,fitWidthPx,mode,true):Promise.resolve(null),
     async beginHistoryBatch(){
       const current=requireSession()
       if(recovery||!host.getState(fileId).lease)return false
@@ -616,17 +868,18 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     },
     async getNotes(slideIndex: number) {
       const current = session
-      if (disposed || !current || !host.getState(fileId).lease) return ''
+      // Sessions opened without a lease are server-authorized reads of signed packages.
+      if (disposed || !current || (current.authority && !host.getState(fileId).lease)) return ''
       const result = await call(current.revision, current.generation, 'notes', {index: slideIndex})
       if (typeof result?.text !== 'string') throw hostError('INVALID_RESPONSE', 'speaker notes')
       return result.text
     },
     async setTransition(input: SetTransitionOp) {
-      const raw = await applyOps([op('setTransition', {target: {slide: input.slideIndex}, kind: input.kind})])
-      if (raw) transitions.set(input.slideIndex, input.kind)
-      return raw !== null
+      const targets=input.slideIndex===-1?(await fetchDeck()).slides.map((_,index)=>index):[input.slideIndex]
+      const raw = await applyOps(targets.map(slide=>op('setTransition',{target:{slide},kind:input.kind})))
+      return raw!==null&&raw.transaction?.applied!==false
     },
-    async getTransition(slideIndex: number) { return transitions.get(slideIndex) ?? 'none' as TransitionKind },
+    async getTransition(slideIndex: number) { return (await fetchSlideInfo(slideIndex)).transition },
     async setSlideHidden(input: SetSlideHiddenOp) {
       const raw = await applyOps([op('setHidden', {target: {slide: input.slideIndex}, hidden: input.hidden})])
       if (!raw?.changed?.length) return null
@@ -635,34 +888,30 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     async getSections() { return sections },
     async setSections(input: SectionInfo[]) {
       const raw = await applyOps([op('setSections', {sections: input})])
-      if (!raw) return null
-      sections = input
-      return sections
+      return raw && raw.transaction?.applied !== false ? raw.sections ?? sections : null
     },
     async addSection(input: AddSectionOp) {
       const raw = await applyOps([op('addSection', {atSlideIndex: input.atSlideIndex, name: input.name})])
-      if (!raw) return null
-      sections = raw.sections ?? sections
-      return sections
+      return raw && raw.transaction?.applied !== false ? raw.sections ?? sections : null
     },
     async renameSection(input: RenameSectionOp) {
       const raw = await applyOps([op('renameSection', {id: input.id, name: input.name})])
-      if (!raw) return null
-      sections = raw.sections ?? sections
-      return sections
+      return raw && raw.transaction?.applied !== false ? raw.sections ?? sections : null
     },
     async removeSection(input: RemoveSectionOp) {
       const raw = await applyOps([op('removeSection', {id: input.id})])
-      if (!raw) return null
-      sections = raw.sections ?? sections
-      return sections
+      return raw && raw.transaction?.applied !== false ? raw.sections ?? sections : null
+    },
+    async removeSectionSlides(input: RemoveSectionSlidesOp) {
+      const raw = await applyOps([op('removeSectionSlides', {id: input.id})])
+      if (!raw?.order) return null
+      return {...slideUpdateFrom(raw.order, await fetchDeck()), sections: raw.sections ?? sections}
     },
     async moveSection(input: MoveSectionOp) {
       const raw = await applyOps([op('moveSection', {id: input.id, dir: input.dir})])
       if (!raw?.order) return null
-      sections = raw.sections ?? []
       const deck = await fetchDeck()
-      return {...slideUpdateFrom(raw.order, deck), sections}
+      return {...slideUpdateFrom(raw.order, deck), sections: raw.sections ?? sections}
     },
     async undo() {
       const current = session
@@ -735,10 +984,26 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     },
     getComments: fetchComments,
     async getAnimations(index:number):Promise<AnimationItem[]>{const current=requireSession();return await call(current.revision,current.generation,'animations',{index}) as AnimationItem[]},
-    getShapeKeys: async (): Promise<ShapeKey[]> => [],
-    getShowTiming: async (): Promise<ShowTiming> => ({advanceMs: null, narrationIds: []}),
-    getHeaderFooter: async () => ({footer: null, slideNum: false, date: null}),
-    async getLink(index:number,sourceId:string):Promise<LinkTargetOp|null>{return (await api.getSlideLinks(index)).find(link=>link.sourceId===sourceId)?.target??null},
+    async getShapeKeys(slideIndex: number) { return (await fetchSlideInfo(slideIndex)).shapeKeys },
+    async getShowTiming(slideIndex: number) { return (await fetchSlideInfo(slideIndex)).timing },
+    async getHeaderFooter(slideIndex: number) { return (await fetchSlideInfo(slideIndex)).headerFooter },
+    async getLink(index:number,sourceId:string):Promise<LinkTargetOp|null>{
+      const current=requireSession(),generation=current.generation
+      const links=await api.getSlideLinks(index)
+      const direct=links.find(link=>link.sourceId===sourceId)
+      if(direct)return direct.target
+      if(!links.length||!sourceId.startsWith('e_'))return null
+      // Editor hit testing uses canvas IDs. API clients can also pass a durable shape ID.
+      const slide=await fetchSlide(index)
+      if(session!==current||current.generation!==generation)return null
+      const nodes=[...slide.nodes]
+      for(let i=0;i<nodes.length;i++){
+        const node=nodes[i]!
+        if(node.durableId===sourceId)return links.find(link=>link.sourceId===node.sourceId)?.target??null
+        if(node.type==='group')nodes.push(...node.children)
+      }
+      return null
+    },
     async getSlideLinks(index:number){const current=requireSession();return await call(current.revision,current.generation,'links',{index}) as Array<{sourceId:string;target:LinkTargetOp}>},
     async getRunLinks(index:number){const current=requireSession();return await call(current.revision,current.generation,'run-links',{index}) as Awaited<ReturnType<SlidesApi['getRunLinks']>>},
     async getChartData(index:number,sourceId:string){const current=requireSession();return await call(current.revision,current.generation,'chart-data',{index,sourceId}) as Awaited<ReturnType<SlidesApi['getChartData']>>},
@@ -768,8 +1033,23 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       return await fetchSlide(raw.changed[0]!)
     },
     async editBackground(input) {
-      if (input.kind === 'image') return null
-      requireSession()
+      const current=requireSession()
+      if(input.kind==='image'){
+        const stillCurrent=captureImageTarget(current)
+        if(!stillCurrent())return null
+        let source:{sourceSlide:number}|{bytesBase64:string;ext:string}
+        if(input.pick===false)source={sourceSlide:input.sourceSlideIndex??input.slideIndex}
+        else{
+          const picked=await pickLocalPicture()
+          const image=picked&&await imageBytes(picked)
+          if(!image||image.bytesBase64.length>SLIDE_IMAGE_LIMIT||!stillCurrent())return null
+          source=image
+        }
+        const raw=await editPictureMedia(current,{mode:'background',slide:input.slideIndex,tile:input.mode==='tile',...source})
+        if(!raw?.changed?.length)return null
+        const {slides}=await fetchDeck()
+        return {order:slides.map(slide=>slide.partPath??''),slides:raw.changed.map(index=>slides[index]!).filter(Boolean)}
+      }
       const slides = input.slideIndex === -1 ? (await fetchDeck()).slides.map((_, index) => index) : [input.slideIndex]
       const ops = slides.map(slide => input.kind === 'hideGraphics'
         ? op('setBackground', {target: {slide}, kind: 'graphics', hidden: input.hidden})
@@ -783,7 +1063,16 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       const deck = await fetchDeck()
       return {order: deck.slides.map(slide => slide.partPath ?? ''), slides: await Promise.all(raw.changed.map(fetchSlide))}
     },
-    editImageFill: graceful,
+    async editImageFill(input) {
+      if(!input.targets.length)return null
+      const current=requireSession(),stillCurrent=captureImageTarget(current)
+      if(!stillCurrent())return null
+      const picked=input.source??await pickLocalPicture()
+      const image=picked&&await imageBytes(picked)
+      if(!image||image.bytesBase64.length>SLIDE_IMAGE_LIMIT||!stillCurrent())return null
+      const result=await editPictureMedia(current,{mode:'fill',slide:input.slideIndex,tile:input.mode==='tile',targets:input.targets,...image})
+      return result?.slide??null
+    },
     async editPictureSrcRect(input) {
       const current = requireSession()
       const box = input.boxPx && input.fitWidthPx
@@ -809,7 +1098,18 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
-    setShapeGeometry: graceful,
+    async setShapeGeometry(input) {
+      if(input.preview)return null
+      const scale=requireSession().size.cx/Math.max(1,input.fitWidthPx)
+      const toEmu=(value:number)=>Math.round(value*scale)
+      const {w,h,cmds}=input.pathPx
+      const raw=await applyOps([op('setShapeCustomGeometry',{
+        target:{slide:input.slideIndex,el:input.sourceId},
+        path:{w:toEmu(w),h:toEmu(h),cmds:cmds.map(command=>({op:command.op,pts:command.pts.map(toEmu)}))},
+        ...(input.groupId?{group:input.groupId}:{}),
+      })])
+      return raw?.changed?.length?await fetchSlide(raw.changed[0]!):null
+    },
     async setTextAnchor(input) {
       const raw = await applyOps([op('setTextAnchor', {target: {slide: input.slideIndex, el: input.sourceId}, anchor: input.anchor})])
       if (!raw?.changed?.length) return null
@@ -825,7 +1125,16 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
-    editConnectorEndpoints: graceful,
+    async editConnectorEndpoints(input) {
+      const scale=requireSession().size.cx/Math.max(1,input.fitWidthPx)
+      const point=(x:number,y:number)=>({x:Math.round(x*scale),y:Math.round(y*scale)})
+      const raw=await applyOps([op('setConnectorEndpoints',{
+        target:{slide:input.slideIndex,el:input.sourceId},
+        p1:point(input.x1Px,input.y1Px),p2:point(input.x2Px,input.y2Px),
+        start:input.start,end:input.end,
+      })])
+      return raw?.changed?.length?await fetchSlide(raw.changed[0]!):null
+    },
     cancelTransformPreview: graceful,
     async setSlideSize(input) {
       const raw=await applyOps([op('setSlideSize',{cx:input.cx,cy:input.cy})])
@@ -843,7 +1152,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       const raw = await applyOps(times.map(time => op('setAdvanceTime', {target: {slide: time.slideIndex}, ms: time.ms})))
       return raw !== null && session === current
     },
-    saveRecording: graceful, clearNarration: graceful,
+    saveRecording: (input:SaveRecordingOp) => editRecording({kind:'save',slides:input.slides}),
+    clearNarration: (indexes:number[]) => editRecording({kind:'clear',indexes}),
     async setLink(input){const raw=await applyOps([op('setLink',{target:{slide:input.slideIndex,el:input.sourceId},link:input.target})]);if(!raw?.changed?.length)return null;onChange();return await fetchSlide(input.slideIndex)},
     async addTable(input) {
       const current = requireSession()
@@ -878,7 +1188,30 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (!raw?.changed?.length) return null
       return {slide: await fetchSlide(raw.changed[0]!), sourceId: createdId(raw)}
     },
-    addInk: graceful, addImageBytes,
+    async addInk(input) {
+      const current=requireSession()
+      const {base64,slideIndex,xPx,yPx,wPx,hPx,fitWidthPx,payload}=input
+      if(!base64||base64.length>SLIDE_IMAGE_LIMIT)return null
+      if(!inkQueue||inkQueue.session!==current||inkQueue.revision!==current.revision||inkQueue.generation!==current.generation){
+        inkQueue={session:current,revision:current.revision,generation:current.generation,done:Promise.resolve()}
+      }
+      const queue=inkQueue, lease=host.getState(fileId).lease
+      const write=queue.done.then(async()=>{
+        const active=host.getState(fileId).lease
+        if(disposed||session!==current||opening||recovery||current.revision!==queue.revision||
+          current.generation!==queue.generation||!lease||active?.editorId!==lease.editorId||
+          active.leaseEpoch!==lease.leaseEpoch)return null
+        const result=await editPictureMedia(current,{mode:'ink',slide:slideIndex,ext:'png',bytesBase64:base64,
+          xPx,yPx,wPx,hPx,fitWidthPx,inkPayload:payload})
+        if(!result?.slide)return null
+        queue.generation=result.generation
+        const sourceId=createdId(result)
+        return sourceId?{slide:result.slide,sourceId}:null
+      })
+      queue.done=write.then(()=>{},()=>{})
+      return write
+    },
+    addImageBytes,
     async replacePictureBytes(input) {
       if (!input.base64 || input.base64.length > SLIDE_IMAGE_LIMIT) return {error:'unsupported' as const, ext:input.ext}
       return applyImage({mode:'replace', ...input})
@@ -1060,7 +1393,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       }))
       return result?.slide && result.sourceId ? {slide:result.slide,sourceId:result.sourceId} : null
     },
-    presenterStart: unavailable, presenterSwap: unavailable, presenterEnd: unavailable,
+    presenterStart: async () => ({audience:false}), presenterSwap: async () => false, presenterEnd: async () => {},
     onShowSync: noEvent, onShowInk: noEvent, onAudienceNav: noEvent,
     async openAiModelSettings() {
       const open = (window.parent as Window & {dyofficeOpenEditorSettings?: (target: 'models' | 'skills', caller: Window) => void}).dyofficeOpenEditorSettings
@@ -1183,6 +1516,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     dispose() {
       disposed = true
       slideImages?.dispose()
+      for(const url of mediaUrls) URL.revokeObjectURL(url)
+      mediaUrls.clear()
       recovery?.reject(hostError('UNAVAILABLE', 'disposed'))
       recovery = null
       for (const controller of controllers) controller.abort()
@@ -1191,7 +1526,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       pendingOpen = null
       historyHandlers.clear()
       openedHandlers.clear()
-      transitions.clear()
+      slideInfo = undefined
       sections = []
       csrf = undefined
     },

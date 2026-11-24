@@ -10,13 +10,12 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   materializeSlide,
+  hasSlideNumberField,
   parseClrMap,
   parseTheme,
   resolveSchemeColor,
   type OpenedPptx,
   type Slide,
-  type SlideElement,
-  type TextElement,
 } from '@genoffice/pptx-engine'
 import {
   buildRenderSlide,
@@ -439,12 +438,6 @@ export function buildAllRenderSlides(opened: OpenedPptx, fitWidthPx: number): Re
  * metadata; unchanged render trees stay in the renderer, keyed by their part path. */
 export function buildSlideUpdate(session: Session, before: string[], changed: number[] = []) {
   const previous = new Map(before.map((path, i) => [path, i]))
-  const hasNumber = (el: SlideElement): boolean =>
-    el.type === 'group'
-      ? el.children.some(hasNumber)
-      : !!(el as TextElement).text?.paragraphs.some((p) =>
-          p.runs.some((r) => r.field === 'slidenum'),
-        )
   const update: SlideUpdate = {
     order: session.opened.deck.slides.map((s) => s.path),
     slides: session.opened.deck.slides.flatMap((s, i) => {
@@ -452,7 +445,7 @@ export function buildSlideUpdate(session: Session, before: string[], changed: nu
       const renumber =
         oldIndex !== undefined &&
         oldIndex !== i &&
-        [...s.elements, ...(s.decorations ?? [])].some(hasNumber)
+        hasSlideNumberField(s)
       return oldIndex === undefined || changed.includes(i) || renumber
         ? [rebuildSlide(session, i)!]
         : []

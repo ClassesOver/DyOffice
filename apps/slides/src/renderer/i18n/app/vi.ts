@@ -260,6 +260,8 @@ export const vi = {
   appOutlineNoText: '(Không có văn bản)',
   appSectionHeaderTitle: 'Nhấp để thu gọn/mở rộng; nhấp chuột phải để quản lý phần',
   appNotesLabel: 'Ghi chú',
+  appNotesTooLong: "Ghi chú của diễn giả trên trang chiếu {slide} vượt quá giới hạn {limit} ký tự. Hãy rút ngắn ghi chú để lưu.",
+  appNotesWriteFailed: "Không thể ghi chú của diễn giả trên trang chiếu {slide}. Hãy thử lưu lại.",
   appNotesClickToAdd: 'Bấm để thêm ghi chú',
   appNotesPlaceholder: 'Bấm để thêm ghi chú diễn giả (được lưu vào tệp .pptx)',
   appNotesShow: 'Hiện ghi chú',

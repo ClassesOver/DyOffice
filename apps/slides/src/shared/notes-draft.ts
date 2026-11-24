@@ -1,3 +1,6 @@
+/** Maximum UTF-16 length accepted by the Web presentation session. */
+export const WEB_NOTES_TEXT_LIMIT = 65_536
+
 /** Notes text typed but not yet written back, with the stored text it started from. */
 export interface NotesDraft {
   index: number

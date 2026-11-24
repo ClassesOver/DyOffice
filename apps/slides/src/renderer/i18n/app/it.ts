@@ -275,6 +275,8 @@ export const it = {
   appSectionHeaderTitle:
     'Fai clic per comprimere/espandere; fai clic con il pulsante destro per gestire la sezione',
   appNotesLabel: 'Note',
+  appNotesTooLong: "Le note del relatore nella diapositiva {slide} superano il limite di {limit} caratteri. Accorciale per salvare.",
+  appNotesWriteFailed: "Impossibile scrivere le note del relatore nella diapositiva {slide}. Prova a salvare di nuovo.",
   appNotesClickToAdd: 'Fai clic per aggiungere note',
   appNotesPlaceholder: 'Fai clic per aggiungere le note del relatore (salvate nel file .pptx)',
   appNotesShow: 'Mostra note',

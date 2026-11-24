@@ -19,6 +19,8 @@ export function deleteSelectedVertex(ctx: ActionCtx): void {
 export interface EditPointsCommit {
   /** Slide the drag started on: a page switch mid-drag must not redirect the flush */
   slideIndex: number
+  /** Canvas width at the time of the drag; the receiving bridge converts to EMUs. */
+  fitWidthPx: number
   sourceId: string
   path: { w: number; h: number; cmds: PathCmd[] }
 }

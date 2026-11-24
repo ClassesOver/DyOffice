@@ -134,3 +134,53 @@ for(const legacy of [true,false])test(legacy?'browser assistant merges BIFF XLS,
  assert.deepEqual(await f.files.readFile(f.alice.token,initial.fileId,initial.revision),base)
  recordVerifiedOfficeEffect('xlsx','merge_attached_workbooks')
 })
+
+test('browser Data ribbon merges a locally selected workbook and saves its values',{skip:!sheetsDirectory,timeout:120000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ const directory=await mkdtemp(join(tmpdir(),'dyoffice-sheets-ribbon-merge-'))
+ f.cleanup.push(()=>rm(directory,{recursive:true,force:true}))
+ await buildSheetsGateway(join(directory,'gateway.mjs'))
+ const runtime=await configuredSheetsRuntime({
+  DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
+  DYOFFICE_NATIVE_XLSX_DIRECTORY:sheetsDirectory,
+ },{enabled:true})
+ f.cleanup.unshift(()=>runtime.close())
+ const base=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+ const initial=(await importFile(f,f.alice.token,base,'target.xlsx')).file
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,...runtime})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-xlsx/?fileId='+initial.fileId)
+ await expect(page.locator('#univer-container canvas').first()).toBeVisible({timeout:30000})
+ await page.getByRole('button',{name:'Data',exact:true}).click()
+ const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('button',{name:'Merge Workbooks',exact:true}).click()])
+ const opened=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/sheets/merge-sources/open'))
+ await chooser.setFiles({name:'local.csv',mimeType:'text/csv',buffer:Buffer.from('Label,Total\nParity,42\n')})
+ const response=await opened
+ assert.equal(response.status(),200,await response.text())
+ const save=page.locator('.ribbon-tabs .qa-btn').first()
+ try { await expect(save).toBeEnabled({timeout:15000}) }
+ catch(error) { t.diagnostic(await page.locator('.workbook-status').innerText()); throw error }
+ const head=async()=>(await f.files.openFile(f.alice.token,initial.fileId)).file.revision
+ assert.equal(await head(),initial.revision)
+ await save.click()
+ await expect.poll(head,{timeout:30000}).not.toBe(initial.revision)
+ const saved=await f.files.readFile(f.alice.token,initial.fileId,await head())
+ const before=await runtime.sheetsNative.inspect(base),after=await runtime.sheetsNative.inspect(saved)
+ const imported=after.sheets.find(sheet=>!before.sheets.some(old=>old.name===sheet.name))
+ assert.ok(imported)
+ const range=await runtime.sheetsNative.readRange(saved,imported.name,{startRow:1,endRow:1,startColumn:0,endColumn:1})
+ assert.deepEqual(range.cells.map(cell=>cell.value),['Parity',42])
+ await page.reload()
+ await expect(page.getByRole('tab',{name:imported.name,exact:true})).toBeVisible({timeout:30000})
+})
