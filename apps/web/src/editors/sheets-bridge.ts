@@ -27,7 +27,7 @@ type Session = {openingViewport?:OpeningViewport; revision: string; file: Workbo
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
 const mergeExtensions = ['xlsx','xlsm','xls','csv','tsv'] as const
 const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean;getExportLayout?:(sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {})
+export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean;getExportLayout?:(sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
