@@ -39,6 +39,34 @@ export async function docxFormatDetails(bytes: Uint8Array): Promise<string> {
         `${rows.length} 行 × ${Math.max(0, ...rows.map((row) => row.length))} 列`,
       ])
       if (block.table.widthPct) details.add(`表格宽度 ${block.table.widthPct}%`)
+      if (block.table.fill) details.add(`表格底色 #${block.table.fill.replace(/^#/u, '')}`)
+      if (block.table.align && block.table.align !== 'left')
+        details.add(`表格${block.table.align === 'center' ? '居中' : '右对齐'}`)
+      const borders = [
+        ...Object.values(block.table.borders ?? {}),
+        ...cells.flatMap((cell) => Object.values(cell.borders ?? {})),
+      ]
+      if (borders.length) {
+        const styles = [
+          ...new Set(
+            borders
+              .map((border) => border.style)
+              .filter((style) => style !== 'nil' && style !== 'none'),
+          ),
+        ]
+        const colors = [
+          ...new Set(
+            borders.flatMap((border) =>
+              border.color && border.color !== 'auto'
+                ? [`#${border.color.replace(/^#/u, '')}`]
+                : [],
+            ),
+          ),
+        ]
+        details.add(
+          `表格边框${styles.length ? ` ${styles.join('/')}` : ''}${colors.length ? ` ${colors.join(', ')}` : ''}`,
+        )
+      }
       if (cells.some((cell) => cell.fill))
         details.add(
           `单元格底色 ${[...new Set(cells.flatMap((cell) => (cell.fill ? [`#${cell.fill.replace(/^#/u, '')}`] : [])))].join(', ')}`,
@@ -112,14 +140,76 @@ function fillDetails(element: SlideElement): string[] {
   return []
 }
 
+interface ElementPosition {
+  element: SlideElement
+  x: number
+  y: number
+  cx: number
+  cy: number
+  parentGroups: string[]
+}
+
+function positionedElements(
+  elements: SlideElement[],
+  parent: {
+    x: number
+    y: number
+    scaleX: number
+    scaleY: number
+    offsetX: number
+    offsetY: number
+  } = {
+    x: 0,
+    y: 0,
+    scaleX: 1,
+    scaleY: 1,
+    offsetX: 0,
+    offsetY: 0,
+  },
+  parentGroups: string[] = [],
+): ElementPosition[] {
+  const result: ElementPosition[] = []
+  for (const element of elements) {
+    const frame = element.transform.offset
+    const x = parent.x + (frame.x - parent.offsetX) * parent.scaleX
+    const y = parent.y + (frame.y - parent.offsetY) * parent.scaleY
+    result.push({
+      element,
+      x,
+      y,
+      cx: frame.cx * parent.scaleX,
+      cy: frame.cy * parent.scaleY,
+      parentGroups,
+    })
+    if (element.type !== 'group') continue
+    const childOffset = element.childOffset ?? { x: 0, y: 0, cx: frame.cx, cy: frame.cy }
+    const groupName = element.name ? `「${element.name}」` : '未命名组合图形'
+    result.push(
+      ...positionedElements(
+        element.children,
+        {
+          x,
+          y,
+          scaleX: childOffset.cx ? (frame.cx * parent.scaleX) / childOffset.cx : parent.scaleX,
+          scaleY: childOffset.cy ? (frame.cy * parent.scaleY) / childOffset.cy : parent.scaleY,
+          offsetX: childOffset.x,
+          offsetY: childOffset.y,
+        },
+        [...parentGroups, groupName],
+      ),
+    )
+  }
+  return result
+}
+
 export async function pptxFormatDetails(bytes: Uint8Array): Promise<string> {
   if (bytes.byteLength > MAX_DETAIL_MODEL_BYTES) return ''
   const { openPptx } = await import('@genoffice/pptx-engine')
   const { deck } = await openPptx(bytes)
   const lines: string[] = []
   for (const [slideIndex, slide] of deck.slides.entries()) {
-    for (const element of slide.elements) {
-      const { x, y, cx, cy } = element.transform.offset
+    for (const position of positionedElements(slide.elements)) {
+      const { element, x, y, cx, cy, parentGroups } = position
       const placement = `左 ${+(x / EMU_PER_INCH).toFixed(1)} in，上 ${+(y / EMU_PER_INCH).toFixed(1)} in，宽 ${+(cx / EMU_PER_INCH).toFixed(1)} in，高 ${+(cy / EMU_PER_INCH).toFixed(1)} in`
       const details = element.type === 'text' || element.type === 'shape' ? runDetails(element) : []
       if (element.type === 'text' || element.type === 'shape') {
@@ -145,8 +235,9 @@ export async function pptxFormatDetails(bytes: Uint8Array): Promise<string> {
       const shape =
         element.type === 'shape' && element.presetGeometry ? `，${element.presetGeometry}` : ''
       const styling = details.length ? `；${details.join('；')}` : ''
+      const groupPath = parentGroups.length ? `组合图形 ${parentGroups.join(' / ')} 内 ` : ''
       lines.push(
-        `- 第 ${slideIndex + 1} 页 ${name}${shape}“${quote(elementText(element))}”：${placement}${styling}`,
+        `- 第 ${slideIndex + 1} 页 ${groupPath}${name}${shape}“${quote(elementText(element))}”：${placement}${styling}`,
       )
       if (lines.length >= 240) break
     }
