@@ -13,6 +13,102 @@ const callbackRecorder = () => {
 }
 const delay = () => new Promise(resolve=>setTimeout(resolve,30))
 
+test('a pre-stream Office 429 honors Retry-After and retries the same turn', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  const requests = [], {calls,callbacks} = callbackRecorder()
+  const transport = createSseAgentTransport({createTurnId:()=> 'limited',fetchImpl:async (url,init)=>{
+    requests.push([url,init.body])
+    if(requests.length===1)return new Response(null,{status:429,headers:{'Retry-After':'3'}})
+    return stream(event('delta',{text:'recovered'})+event('done',{}))
+  }})
+  const done = new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{
+    ...callbacks,onDone(){callbacks.onDone();resolve()}
+  }))
+  await new Promise(setImmediate)
+  assert.deepEqual(calls,[])
+  t.mock.timers.tick(2999)
+  assert.equal(requests.length,1)
+  t.mock.timers.tick(1)
+  await done
+  assert.equal(requests.length,2)
+  assert.deepEqual(requests[1],requests[0])
+  assert.deepEqual(calls,[['delta','recovered'],['done']])
+})
+
+test('Office 429 without Retry-After backs off and eventually fails once', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  let attempts = 0
+  const {calls,callbacks} = callbackRecorder()
+  const transport = createSseAgentTransport({fetchImpl:async ()=>{
+    attempts++
+    return new Response(null,{status:429})
+  }})
+  const done = new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{
+    ...callbacks,onDone(){callbacks.onDone();resolve()}
+  }))
+  await new Promise(setImmediate)
+  for (const [index,wait] of [1000,2000,4000].entries()) {
+    assert.equal(attempts,index+1)
+    assert.deepEqual(calls,[])
+    t.mock.timers.tick(wait-1)
+    await new Promise(setImmediate)
+    assert.equal(attempts,index+1)
+    t.mock.timers.tick(1)
+    await new Promise(setImmediate)
+  }
+  await done
+  assert.equal(attempts,4)
+  assert.deepEqual(calls,[['error','AI stream HTTP 429'],['done']])
+})
+
+test('stopping while rate limited neither resends the request nor cancels an unstarted turn', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  const requests = [], {calls,callbacks} = callbackRecorder()
+  const transport=createSseAgentTransport({fetchImpl:async url=>{
+    requests.push(url)
+    return new Response(null,{status:429,headers:{'Retry-After':'5'}})
+  }})
+  const handle=transport.stream({system:'',messages:[],tools:[]},callbacks)
+  await new Promise(setImmediate)
+  assert.deepEqual(calls,[])
+  handle.cancel()
+  t.mock.timers.tick(5000)
+  await new Promise(setImmediate)
+  assert.deepEqual(requests,['/api/v1/ai/turns'])
+  assert.deepEqual(calls,[['done']])
+})
+
+test('an SSE rate limit after a tool call never replays the submitted turn', async () => {
+  let attempts = 0
+  const {calls,callbacks} = callbackRecorder()
+  const transport = createSseAgentTransport({fetchImpl:async ()=>{
+    attempts++
+    return stream(event('tool_call',{id:'edit',name:'write',input:{}})+event('error',{reason:'PROVIDER_RATE_LIMITED',message:'Provider rate limited'})+event('done',{}))
+  }})
+  await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{
+    ...callbacks,onDone(){callbacks.onDone();resolve()}
+  }))
+  assert.equal(attempts,1)
+  assert.deepEqual(calls.map(([kind])=>kind),['tool_call','error','done'])
+})
+
+test('a Retry-After beyond the remaining Office deadline fails without an early retry', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  let attempts = 0
+  const {calls,callbacks} = callbackRecorder()
+  const transport = createSseAgentTransport({timeoutMs:2000,fetchImpl:async ()=>{
+    attempts++
+    return new Response(null,{status:429,headers:{'Retry-After':'3'}})
+  }})
+  const done = new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{
+    ...callbacks,onDone(){callbacks.onDone();resolve()}
+  }))
+  await new Promise(setImmediate)
+  assert.deepEqual(calls,[['error','AI stream HTTP 429'],['done']])
+  await done
+  assert.equal(attempts,1)
+})
+
 test('Office answers when transcript sync stalls and saves the turn after sync recovers',{timeout:9000},async t=>{
   const answer=Promise.withResolvers(),persisted=Promise.withResolvers()
   const deadline=setTimeout(()=>answer.reject(Error('Office never started the model turn while transcript sync stalled')),8000)
