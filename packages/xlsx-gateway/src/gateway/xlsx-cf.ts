@@ -4,6 +4,8 @@
 /// Highlight styles intern as new dxf entries in the stylesheet.
 
 import { decodeAttribute } from './xlsx-sheets.ts'
+import { findRootChild } from './xlsx-root-tail.ts'
+import { childElements } from './xlsx-style-entries.ts'
 
 export class CfEditError extends Error {}
 
@@ -305,11 +307,21 @@ export function applyCfRules(
   }
 
   const sections: string[] = []
+  const retainedPriorities = new Map(approximate.map((item) => [item.priority, item]))
+  let previousSource = 0
+  let previousRetained = 0
   for (const rule of rules) {
     const sqref = rule.ranges.map(toRef).join(' ')
     const normalized = normalizeSqref(sqref)
-    const source =
-      rule.source && approximate.find((item) => item.priority === rule.source?.priority)
+    const sourcePriority = rule.source?.priority ?? 0
+    const source = sourcePriority > 0 ? retainedPriorities.get(sourcePriority) : undefined
+    if (sourcePriority > 0) {
+      if ((source && sourcePriority < previousSource) || sourcePriority < previousRetained) {
+        throw new CfEditError('This conditional formatting rule must keep its original priority.')
+      }
+      previousSource = Math.max(sourcePriority, previousSource)
+      if (source) previousRetained = sourcePriority
+    }
     if (source && rule.source?.unchanged && source.sqref === normalized) continue
     if (
       source ||
@@ -414,11 +426,7 @@ function linkedMessage(block: string): string {
 /// The base halves live in <conditionalFormatting> blocks; the twins live
 /// here linked by x14:id (mirroring how x14 data validation parks in its
 /// own extension in xlsx-dv.ts).
-const X14_CF_EXT_URI = '{78C0D931-6437-407d-A8EE-F0AAD7539E65}'
-const X14_CF_EXT_OPEN_RE = new RegExp(
-  `<ext\\b[^>]*\\buri="${X14_CF_EXT_URI.replace(/[{}]/g, '\\$&')}"[^>]*>`,
-  'i',
-)
+const X14_CF_EXT_URI = '{78c0d931-6437-407d-a8ee-f0aad7539e65}'
 
 /// Drops the x14 twins of deleted base blocks: the <x14:cfRule> entries in
 /// the {78C0D931…} extension whose id matches a deleted block's <x14:id>,
@@ -429,19 +437,31 @@ const X14_CF_EXT_OPEN_RE = new RegExp(
 /// Excel flags for repair.
 function removeX14CfTwins(xml: string, deleted: readonly PreservedBlock[]): string {
   if (deleted.length === 0) return xml
-  const extOpen = X14_CF_EXT_OPEN_RE.exec(xml)
-  if (!extOpen) return xml
-  if (extOpen[0].endsWith('/>')) return xml
-  const close = xml.indexOf('</ext>', extOpen.index)
-  if (close === -1) return xml
-  const start = extOpen.index + extOpen[0].length
-  const cleaned = cleanX14CfContent(xml.slice(start, close), deleted)
-  if (cleaned === xml.slice(start, close)) return xml
-  const next = xml.slice(0, start) + cleaned + xml.slice(close)
-  if (cleaned.includes('<')) return next
-  // `close` is an index into the original xml; in `next` the closing tag
-  // sits past the cleaned content instead.
-  return dropEmptyCfExt(next, extOpen.index, start + cleaned.length)
+  const position = findRootChild(xml, 'worksheet', 'extLst')
+  if (!position) return xml
+  const [list] = childElements(xml.slice(position.start, position.end))
+  if (!list) return xml
+  const extension = childElements(list.inner).find(
+    (child) =>
+      /(?:^|:)ext$/.test(child.name) &&
+      cfAttribute(child.opening, 'uri')?.toLowerCase() === X14_CF_EXT_URI,
+  )
+  if (!extension) return xml
+  const cleaned = cleanX14CfContent(extension.inner, deleted)
+  if (cleaned === extension.inner) return xml
+  const replacement = cleaned.trim()
+    ? extension.opening +
+      cleaned +
+      extension.xml.slice(extension.opening.length + extension.inner.length)
+    : ''
+  const inner =
+    list.inner.slice(0, extension.start) +
+    replacement +
+    list.inner.slice(extension.start + extension.xml.length)
+  const wrapper = inner.trim()
+    ? list.opening + inner + list.xml.slice(list.opening.length + list.inner.length)
+    : ''
+  return xml.slice(0, position.start) + wrapper + xml.slice(position.end)
 }
 
 function cleanX14CfContent(content: string, deleted: readonly PreservedBlock[]): string {
@@ -481,24 +501,6 @@ function cleanX14CfContent(content: string, deleted: readonly PreservedBlock[]):
     )
   }
   return out
-}
-
-/// Removes the (now empty) {78C0D931…} <ext> and the <extLst> around it
-/// when that was its only extension — an empty extLst is what Excel flags
-/// for repair. `close` is the index of the ext's </ext> in `xml`.
-function dropEmptyCfExt(xml: string, extStart: number, close: number): string {
-  const end = close + '</ext>'.length
-  const stripped = xml.slice(0, extStart) + xml.slice(end)
-  const lstOpenAt = xml.lastIndexOf('<extLst', extStart)
-  if (lstOpenAt === -1) return stripped
-  const lstOpen = /<extLst\b[^>]*>/.exec(xml.slice(lstOpenAt, extStart))?.[0]
-  if (lstOpen === undefined) return stripped
-  const lstInnerStart = lstOpenAt + lstOpen.length
-  const lstClose = xml.indexOf('</extLst>', lstInnerStart)
-  if (lstClose === -1 || lstClose < extStart) return stripped
-  const inner = xml.slice(lstInnerStart, extStart) + xml.slice(end, lstClose)
-  if (inner.includes('<')) return stripped
-  return xml.slice(0, lstOpenAt) + xml.slice(lstClose + '</extLst>'.length)
 }
 
 function serializeRule(wireRule: CfWireRule, priority: number, dxfs: DxfSink): string {

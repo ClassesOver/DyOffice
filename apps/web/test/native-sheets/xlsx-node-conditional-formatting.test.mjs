@@ -165,6 +165,10 @@ test('Web Node imports conditional formatting and preserves rules outside the ed
         rule: { type: 'iconSet' },
       }
       const saved = await save(source, [original, colorScale, originalBar, originalIconSet, added])
+      await assert.rejects(
+        () => save(source, [original, colorScale, originalIconSet, originalBar, added]),
+        /Invalid workbook input/,
+      )
       const output = await JSZip.loadAsync(saved)
       const xml = await output.file(sheetPath).async('string')
       assert.ok(xml.includes(unsupported))
@@ -256,12 +260,13 @@ test('Web Node imports conditional formatting and preserves rules outside the ed
         '<dataBar showValue="0"><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar>' +
         `<extLst><ext uri="${fx}"><ex:id>${guid}</ex:id></ext></extLst></cfRule></conditionalFormatting>`
       const extension =
-        '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}">' +
+        '<s:extLst xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        "<s:ext uri='{78C0D931-6437-407d-A8EE-F0AAD7539E65}'>" +
         '<ex:conditionalFormattings><ex:conditionalFormatting>' +
         '<ex:cfRule type="dataBar" id="{22222222-2222-2222-2222-222222222222}"><ex:dataBar axisPosition="none"/></ex:cfRule>' +
         `<ex:cfRule type="dataBar" id="${guid}"><ex:dataBar axisPosition="middle" minLength="0" maxLength="100" gradient="0" negativeBarColorSameAsPositive="0">` +
         '<ex:cfvo type="autoMin"/><ex:cfvo type="autoMax"/><ex:negativeFillColor rgb="FFFFFF00"/><ex:axisColor rgb="FF000080"/>' +
-        '</ex:dataBar></ex:cfRule><xm:sqref>A2:A3</xm:sqref></ex:conditionalFormatting></ex:conditionalFormattings></ext></extLst>'
+        '</ex:dataBar></ex:cfRule><xm:sqref>A2:A3</xm:sqref></ex:conditionalFormatting></ex:conditionalFormattings></s:ext></s:extLst>'
       const enhanced = await JSZip.loadAsync(
         await readFile(new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url)),
       )
