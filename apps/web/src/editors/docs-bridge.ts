@@ -233,13 +233,13 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     },
     async exportHtml(name:string,html:string){download(new Blob([html],{type:'text/html;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.html');return {ok:true}},
     exportPdf: unavailable,
-    async exportMarkdown(name:string,md:string,images:Parameters<DesktopApi['exportMarkdown']>[2]=[]){
+    async exportMarkdown(name:string,md:string,images?:Parameters<DesktopApi['exportMarkdown']>[2]){
       if(disposed)return {ok:false,error:text.unavailable}
       try{
-        const file=await prepareMarkdownDownload(name,md,images,window.location.origin)
+        const file=await prepareMarkdownDownload(name,md,images ?? [],window.location.origin)
         if(disposed)return {ok:false,error:text.unavailable}
         download(file.blob,file.name)
-        return {ok:true,path:file.name,imagesDropped:file.imagesDropped}
+        return images === undefined ? {ok:true} : {ok:true,path:file.name,imagesDropped:file.imagesDropped}
       }catch(error){return {ok:false,error:error instanceof RangeError?error.message:text.unavailable}}
     },
     pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
