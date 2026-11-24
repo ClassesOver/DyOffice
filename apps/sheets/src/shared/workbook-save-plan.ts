@@ -142,6 +142,7 @@ export function mapWorkbookSaveRequest(
   const cfStates = request.cfStates.map((state) => ({
     sheetName: resolveSheetName(state.sheetId),
     rules: state.rules,
+    ...(state.removedSourcePriorities ? { removedSourcePriorities: state.removedSourcePriorities } : {}),
   }))
   const dvStates = request.dvStates.map((state) => ({
     sheetName: resolveSheetName(state.sheetId),

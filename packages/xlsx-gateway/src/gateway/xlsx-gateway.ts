@@ -68,6 +68,7 @@ import {
   applyFilterState,
   applyRowVisibilityState,
   applyTableFilterState,
+  hasUneditableAutoFilter,
   FilterEditError,
 } from './xlsx-filter.ts'
 import { normalizeOoxmlPartPrefix } from './xlsx-namespace.ts'
@@ -152,9 +153,12 @@ import {
 } from './xlsx-hyperlinks.ts'
 import {
   applyStructuralOps,
+  hasSharedFormula,
   inferWorksheetAddresses,
   isShiftingOp,
   materializeSharedFormulaGroups,
+  omitWorksheetTagAttributes,
+  readWorksheetTagAttribute,
   type SharedFormulaCell,
   shiftChartReferences,
   shiftCrossSheetFormulas,
@@ -163,6 +167,7 @@ import {
   shiftTablePart,
   shiftVmlObjectAnchors,
   StructuralShiftError,
+  translateSharedFormula,
   type TableColumnInsertion,
 } from './xlsx-structure.ts'
 import { StylesheetEditor } from './xlsx-styles.ts'
@@ -209,8 +214,11 @@ export interface SheetHyperlinkEdits {
 export interface SheetCfState {
   readonly sheetName: string
   readonly rules: readonly CfWireRule[]
+  readonly removedSourcePriorities?: readonly number[]
   /** add to the sheet's existing rules instead of replacing them */
   readonly append?: boolean
+  /** preserve rules omitted because the editor cannot represent them */
+  readonly preserveUneditable?: boolean
 }
 
 export interface SheetDvState {
@@ -258,6 +266,23 @@ export interface ImportedXlsx {
   readonly snapshot: WorkbookSnapshot
   readonly sheetNamesById: Readonly<Record<string, string>>
 }
+
+interface ImportedWorkbookCell extends CellState {
+  readonly rich?: WorkbookRichRun[]
+  readonly arrayRef?: string
+}
+
+type ImportedWorksheet = Omit<WorksheetState, 'cells'> & {
+  readonly cells: Readonly<Record<string, ImportedWorkbookCell>>
+}
+
+type ImportedWorkbookWithCellDetails = Omit<ImportedXlsx, 'snapshot'> & {
+  readonly snapshot: Omit<WorkbookSnapshot, 'sheets'> & {
+    readonly sheets: readonly ImportedWorksheet[]
+  }
+}
+
+type ReadRunStyle = (propertiesXml: string) => Omit<WorkbookRichRun, 'text'>
 
 export interface CellEdit {
   readonly sheetName: string
@@ -554,14 +579,27 @@ export async function assembleWithJsZip(source: Buffer, plan: MutationPlan): Pro
   }
 }
 
-export async function readBasicWorkbook(
+export function readBasicWorkbook(
   buffer: Buffer,
   { includeFormulaCache = false }: { includeFormulaCache?: boolean } = {},
 ): Promise<ImportedXlsx> {
+  return readWorkbookCells(buffer, includeFormulaCache)
+}
+
+/** Workbook cells with their cached values and the editor's display metadata. */
+export function readWorkbookWithCellDetails(buffer: Buffer, readRunStyle: ReadRunStyle) {
+  return readWorkbookCells(buffer, true, readRunStyle)
+}
+
+async function readWorkbookCells(
+  buffer: Buffer,
+  includeFormulaCache: boolean,
+  readRunStyle?: ReadRunStyle,
+): Promise<ImportedWorkbookWithCellDetails> {
   const zip = await createBufferEntrySource(buffer)
   const workbookXml = await zip.readText('xl/workbook.xml')
-  const sharedStrings = await readSharedStrings(zip)
-  const sheets: WorksheetState[] = []
+  const sharedStrings = await readSharedTextEntries(zip, readRunStyle)
+  const sheets: ImportedWorksheet[] = []
   const sheetNamesById: Record<string, string> = {}
   const sheetPattern = /<sheet\b((?:"[^"]*"|'[^']*'|[^>"'])*?)\/?>/g
   let match: RegExpExecArray | null
@@ -584,7 +622,12 @@ export async function readBasicWorkbook(
     sheets.push({
       id,
       name: decodedName,
-      cells: parseWorksheetCells(inferWorksheetAddresses(worksheetXml), sharedStrings, includeFormulaCache),
+      cells: parseWorksheetCells(
+        inferWorksheetAddresses(worksheetXml),
+        sharedStrings,
+        includeFormulaCache,
+        readRunStyle,
+      ),
     })
     sheetNamesById[id] = decodedName
   }
@@ -1599,7 +1642,11 @@ export async function planCellEditsToXlsx(
     if (worksheetXml === undefined || stylesheet === null) continue
     worksheetXmls.set(
       state.sheetName,
-      applyCfRules(worksheetXml, state.rules, stylesheet, { append: state.append }),
+      applyCfRules(worksheetXml, state.rules, stylesheet, {
+        append: state.append,
+        preserveUneditable: state.preserveUneditable,
+        removedSourcePriorities: state.removedSourcePriorities,
+      }),
     )
   }
 
@@ -2576,12 +2623,14 @@ async function applyRoutedFilterState(
     return
   }
   const { table, area } = routed
-  pkg.write(
-    table.path,
-    applyTableFilterState(table.xml, { area, ...tablePartCounts(table.xml) }, state.filter),
+  const tableXml = applyTableFilterState(
+    table.xml, { area, ...tablePartCounts(table.xml) }, state.filter, state.preserveUneditable,
   )
+  pkg.write(table.path, tableXml)
   touchedEntries.add(table.path)
-  pkg.write(worksheetPath, applyRowVisibilityState(worksheetXml, state))
+  pkg.write(worksheetPath, applyRowVisibilityState(
+    worksheetXml, state, state.preserveUneditable === true && hasUneditableAutoFilter(tableXml, 'table'),
+  ))
   touchedEntries.add(worksheetPath)
 }
 
@@ -2857,20 +2906,16 @@ function patchFormulaCachedValue(
   if (!existing || existing[3] === undefined) return worksheetXml
   const body = existing[3] ?? ''
   // The cached value belongs immediately after the formula, before extensions.
-  const formulaAndCache = /^(\s*<f\b[^>]*?(?:\/>|>[\s\S]*?<\/f>))(\s*)(?:<v\b[^>]*?(?:\/>|>[\s\S]*?<\/v>))?/
+  const formulaAndCache =
+    /^(\s*<f\b[^>]*?(?:\/>|>[\s\S]*?<\/f>))(\s*)(?:<v\b[^>]*?(?:\/>|>[\s\S]*?<\/v>))?/
   if (!formulaAndCache.test(body)) return worksheetXml
   const attrs = `${existing[1] ?? ''}${existing[2] ?? ''}`
   // Formula results carry t="str" for text, t="e" for an engine-typed error,
   // no t (numeric default) otherwise; booleans use t="b" with 1/0. A null
   // result drops the cached value entirely.
   const numeric = typeof value === 'number' && Number.isFinite(value)
-  // Collapse the leftover whitespace too: group1's space before r= survives
-  // the strip, and re-splicing it per rewrite grew one blank per rewrite.
-  const stripped = attrs
-    .replace(/\st="[^"]*"/g, '')
-    .split(/\s+/)
-    .filter(Boolean)
-    .join(' ')
+  // Trim the spaces around the removed attributes without touching other values.
+  const stripped = omitWorksheetTagAttributes(attrs, ['t']).trim()
   let typeAttr = ''
   let valueXml = ''
   if (numeric) {
@@ -2885,7 +2930,10 @@ function patchFormulaCachedValue(
     typeAttr = ' t="str"'
     valueXml = `<v>${escapeCellText(String(value))}</v>`
   }
-  const children = body.replace(formulaAndCache, (_match, formula, space) => `${formula}${space}${valueXml}`)
+  const children = body.replace(
+    formulaAndCache,
+    (_match, formula, space) => `${formula}${space}${valueXml}`,
+  )
   const replacement = `<c r="${address}"${stripped ? ` ${stripped}` : ''}${typeAttr}>${children}</c>`
   return worksheetXml.replace(cellPattern, () => replacement)
 }
@@ -2953,7 +3001,7 @@ function materializeEditedSharedFormulaGroups(
   worksheetXml: string,
   cellMutations: SheetCellItems<CellMutation>,
 ): string {
-  if (!worksheetXml.includes('t="shared"')) return worksheetXml
+  if (!hasSharedFormula(worksheetXml)) return worksheetXml
   const rewritten = new Set<string>()
   for (const [rowNumber, columns] of cellMutations) {
     for (const [column, mutation] of columns) {
@@ -3491,13 +3539,19 @@ function lettersToColumn(letters: string): number {
 /// keep stale cached values.
 function existingArrayRef(cellXml: string): string | undefined {
   if (cellXml === '') return undefined
-  const ref = /<f\b[^>]*\bt="array"[^>]*\bref="([^"]+)"/.exec(cellXml)?.[1]
+  const attributes = /<f(?=[\s/>])([^>]*)>/.exec(cellXml)?.[1]
+  return attributes && readWorksheetTagAttribute(attributes, 't') === 'array'
+    ? validatedArrayRef(attributes)
+    : undefined
+}
+
+function validatedArrayRef(attributes: string): string | undefined {
+  const ref = readWorksheetTagAttribute(attributes, 'ref')
   if (ref === undefined) return undefined
   // The extent must name a real range; anything else is left to the default
   // spelling rather than written out as a broken array master.
-  const [start, end] = ref.split(':')
-  if (start === undefined || !isGridCellAddress(start)) return undefined
-  if (end !== undefined && !isGridCellAddress(end)) return undefined
+  const addresses = ref.split(':')
+  if (addresses.length > 2 || !addresses.every(isGridCellAddress)) return undefined
   return ref
 }
 
@@ -3551,10 +3605,13 @@ function parseCell(worksheetXml: string, address: string): CellState {
 
 function parseWorksheetCells(
   worksheetXml: string,
-  sharedStrings: readonly string[],
+  sharedStrings: readonly CellText[],
   includeFormulaCache: boolean,
-): Readonly<Record<string, CellState>> {
-  const cells: Record<string, CellState> = {}
+  readRunStyle?: ReadRunStyle,
+): Readonly<Record<string, ImportedWorkbookCell>> {
+  const cells: Record<string, ImportedWorkbookCell> = {}
+  const sharedMasters = new Map<string, SharedFormulaCell & { formula: string }>()
+  const sharedFollowers: { address: string; id: string }[] = []
   const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g
   let match: RegExpExecArray | null
   while ((match = cellPattern.exec(worksheetXml)) !== null) {
@@ -3562,23 +3619,46 @@ function parseWorksheetCells(
     const address = /(?:^|\s)r="([^"]*)"/.exec(attributes)?.[1]
     if (!address || !isGridCellAddress(address)) continue
     const body = match[2] ?? ''
-    const formula = /<f(?:\s[^>]*[^/>])?>([\s\S]*?)<\/f>/.exec(body)?.[1]
+    const formulaNode = /<f(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(body)
+    const formulaAttributes = formulaNode?.[1] ?? ''
+    const formulaType =
+      formulaAttributes === '' ? undefined : readWorksheetTagAttribute(formulaAttributes, 't')
+    const isShared = formulaType === 'shared'
+    let formula = formulaNode?.[2]
+    if (isShared) {
+      const id = readWorksheetTagAttribute(formulaAttributes, 'si')
+      if (formula === undefined || formula.trim() === '') {
+        formula = undefined
+        if (id !== undefined) sharedFollowers.push({ address, id })
+      } else if (
+        id !== undefined &&
+        readWorksheetTagAttribute(formulaAttributes, 'ref') !== undefined
+      ) {
+        const { startRow, startColumn } = parseRef(address)
+        sharedMasters.set(id, {
+          row: startRow,
+          column: startColumn,
+          formula: decodeXmlText(formula),
+        })
+      }
+    }
     if (formula !== undefined && !includeFormulaCache) {
       cells[address] = { value: null, formula: `=${decodeXmlText(formula)}` }
       continue
     }
-    const type = /(?:^|\s)t="([^"]*)"/.exec(attributes)?.[1]
+    const type = readWorksheetTagAttribute(attributes, 't')
     if (type === 'inlineStr') {
-      const text = [...body.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
-        .map((textMatch) => decodeCellText(textMatch[1] ?? ''))
-        .join('')
-      cells[address] = { value: text }
+      const inline = /<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/.exec(body)?.[1] ?? ''
+      cells[address] = parseCellText(inline, readRunStyle)
     } else {
       const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
-      if (rawValue === undefined || (formula !== undefined && rawValue === '' && type !== 'str')) {
+      if (
+        rawValue === undefined ||
+        ((formula !== undefined || isShared) && rawValue === '' && type !== 'str')
+      ) {
         cells[address] = { value: null }
       } else if (type === 's') {
-        cells[address] = { value: sharedStrings[Number(rawValue)] ?? '' }
+        cells[address] = sharedStrings[Number(rawValue)] ?? { value: '' }
       } else if (type === 'b') {
         cells[address] = { value: rawValue === '1' }
       } else if (type === 'str') {
@@ -3591,7 +3671,30 @@ function parseWorksheetCells(
       }
     }
     if (formula !== undefined) {
-      cells[address] = { value: cells[address]!.value, formula: `=${decodeXmlText(formula)}` }
+      const arrayRef =
+        readRunStyle && formulaType === 'array' ? validatedArrayRef(formulaAttributes) : undefined
+      cells[address] = {
+        ...cells[address]!,
+        formula: `=${decodeXmlText(formula)}`,
+        ...(arrayRef === undefined ? {} : { arrayRef }),
+      }
+    }
+  }
+  // Resolve followers once the entire worksheet has supplied its masters.
+  for (const { address, id } of sharedFollowers) {
+    const master = sharedMasters.get(id)
+    if (master === undefined) continue
+    const { startRow, startColumn } = parseRef(address)
+    const translated = translateSharedFormula(
+      master.formula,
+      startRow - master.row,
+      startColumn - master.column,
+    )
+    if (translated === null) continue
+    cells[address] = {
+      ...cells[address]!,
+      value: includeFormulaCache ? cells[address]!.value : null,
+      formula: `=${translated}`,
     }
   }
   return cells
@@ -3599,16 +3702,50 @@ function parseWorksheetCells(
 
 async function readSharedStrings(source: EntrySource): Promise<readonly string[]> {
   if (!(await source.has('xl/sharedStrings.xml'))) return []
+  return parseSharedStringsXml(await source.readText('xl/sharedStrings.xml'))
+}
+
+async function readSharedTextEntries(
+  source: EntrySource,
+  readRunStyle?: ReadRunStyle,
+): Promise<CellText[]> {
+  if (!(await source.has('xl/sharedStrings.xml'))) return []
   const xml = await source.readText('xl/sharedStrings.xml')
-  return parseSharedStringsXml(xml)
+  return Array.from(xml.matchAll(sharedStringPattern), (item) =>
+    parseCellText(item[1] ?? '', readRunStyle),
+  )
 }
 
 export function parseSharedStringsXml(xml: string): string[] {
-  return [...xml.matchAll(/<si(?:\s[^>]*)?>([\s\S]*?)<\/si>/g)].map((itemMatch) =>
-    [...(itemMatch[1] ?? '').matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
-      .map((textMatch) => decodeCellText(textMatch[1] ?? ''))
-      .join(''),
-  )
+  return Array.from(xml.matchAll(sharedStringPattern), (item) => parseCellText(item[1] ?? '').value)
+}
+
+const sharedStringPattern = /<si(?=[\s/>])[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g
+type CellText = { readonly value: string; readonly rich?: WorkbookRichRun[] }
+const plainTextRun = { bold: false, italic: false, underline: false, strikethrough: false }
+
+function parseCellText(xml: string, readRunStyle?: ReadRunStyle): CellText {
+  const runs: WorkbookRichRun[] = []
+  let value = ''
+  let styled = false
+  // Treat phonetic guides as a single element so their nested text is skipped.
+  const contents =
+    /<rPh(?=[\s/>])[^>]*?(?:\/>|>[\s\S]*?<\/rPh>)|<r(?:\s[^>]*)?>([\s\S]*?)<\/r>|<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g
+  for (const [, runXml, plainText] of xml.matchAll(contents)) {
+    if (runXml === undefined && plainText === undefined) continue
+    const runText =
+      runXml === undefined ? undefined : /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/.exec(runXml)?.[1]
+    const text = decodeCellText(plainText ?? runText ?? '')
+    value += text
+    if (readRunStyle) {
+      const properties =
+        runXml === undefined ? undefined : /<rPr(?:\s[^>]*)?>[\s\S]*?<\/rPr>/.exec(runXml)?.[0]
+      const style = properties === undefined ? plainTextRun : readRunStyle(properties)
+      styled ||= properties !== undefined && Object.values(style).some(Boolean)
+      runs.push({ text, ...style })
+    }
+  }
+  return runs.length > 1 || styled ? { value, rich: runs } : { value }
 }
 
 /** Cell addresses outside the Excel grid cannot exist in a valid file; skip them. Exported for tests. */

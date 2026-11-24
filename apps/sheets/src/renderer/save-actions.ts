@@ -469,6 +469,7 @@ function canSaveInPlace(ctx: SaveContext, state: LazyWorkbookState): boolean {
     ctx.applySavedWorkbook &&
     !ctx.externalLinkOps?.()?.broken.length &&
     externalLinkFormulaValueCount(state) === 0 &&
+    j.cfDirty.size === 0 &&
     structuralOps.length === 0 &&
     sheetOps.length === 0 &&
     visualAdditions.length === 0 &&

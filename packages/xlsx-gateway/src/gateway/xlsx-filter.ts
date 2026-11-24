@@ -5,6 +5,8 @@
 /// part instead (Excel stores table filters there, never on the worksheet) —
 /// see `applyTableFilterState` and `applyRowVisibilityState`.
 
+import { findRootChild } from './xlsx-root-tail'
+
 export class FilterEditError extends Error {}
 
 interface CellArea {
@@ -37,6 +39,8 @@ export interface SheetFilterState {
   } | null
   readonly hiddenRows: readonly number[]
   readonly visibilityRange: CellArea
+  /** The Web snapshot contains only criteria its editor can represent. */
+  readonly preserveUneditable?: boolean | undefined
 }
 
 const CUSTOM_OPERATORS = new Set([
@@ -48,28 +52,63 @@ const CUSTOM_OPERATORS = new Set([
   'lessThanOrEqual',
 ])
 
+const AUTO_FILTER = /<((?:[\w.-]+:)?)autoFilter(?=[\s/>])/
+const FILTER_COLUMN =
+  /<((?:[\w.-]+:)?)filterColumn(?=[\s/>])([^>]*?)(?:\/>|>[\s\S]*?<\/\1filterColumn\s*>)/g
+const OPAQUE_CRITERIA =
+  /<(?:[\w.-]+:)?(?:top10|dynamicFilter|colorFilter|iconFilter|dateGroupItem|extLst)(?=[\s/>])/
+
+function directAutoFilter(xml: string, root: 'worksheet' | 'table') {
+  // A custom sheet view can have its own saved filter, below the worksheet's root.
+  return AUTO_FILTER.test(xml) ? findRootChild(xml, root, 'autoFilter') : null
+}
+
+export function hasUneditableAutoFilter(xml: string, root?: 'table'): boolean {
+  const range = root === undefined ? null : directAutoFilter(xml, root)
+  const filter = root === undefined ? xml : range === null ? '' : xml.slice(range.start, range.end)
+  return [...filter.matchAll(FILTER_COLUMN)].some(([column]) => OPAQUE_CRITERIA.test(column))
+}
+
 export function applyFilterState(worksheetXml: string, state: SheetFilterState): string {
-  const element = state.filter === null ? '' : serializeAutoFilter(state.filter)
-  const existing = /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/.exec(
-    worksheetXml,
-  )
+  const existing = directAutoFilter(worksheetXml, 'worksheet')
+  const raw = existing ? worksheetXml.slice(existing.start, existing.end) : ''
+  const element =
+    state.filter === null
+      ? ''
+      : serializeAutoFilter(
+          toRef(state.filter.range),
+          state.filter.columns,
+          0,
+          raw,
+          state.preserveUneditable === true,
+        )
   let xml = worksheetXml
   if (existing) {
-    xml =
-      worksheetXml.slice(0, existing.index) +
-      element +
-      worksheetXml.slice(existing.index + existing[0].length)
+    xml = worksheetXml.slice(0, existing.start) + element + worksheetXml.slice(existing.end)
   } else if (element !== '') {
     xml = insertAfterSheetData(worksheetXml, element)
   }
-  return applyRowVisibilityState(xml, state)
+  return applyRowVisibilityState(
+    xml,
+    state,
+    state.preserveUneditable === true && hasUneditableAutoFilter(element),
+  )
 }
 
 /// The worksheet half of a table-routed filter: row visibility only. The
 /// `<autoFilter>` element itself lives in the table part, and a worksheet
 /// element overlapping a table is invalid OOXML that Excel repairs away.
-export function applyRowVisibilityState(worksheetXml: string, state: SheetFilterState): string {
-  return applyRowVisibility(worksheetXml, state.visibilityRange, new Set(state.hiddenRows))
+export function applyRowVisibilityState(
+  worksheetXml: string,
+  state: SheetFilterState,
+  preserveHidden = false,
+): string {
+  return applyRowVisibility(
+    worksheetXml,
+    state.visibilityRange,
+    new Set(state.hiddenRows),
+    preserveHidden,
+  )
 }
 
 /// Geometry of the table part a filter routed into, in final (post-shift)
@@ -93,15 +132,17 @@ export function applyTableFilterState(
   tableXml: string,
   route: TableFilterRoute,
   filter: SheetFilterState['filter'],
+  preserveUneditable = false,
 ): string {
-  const filterPattern = /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/
+  const existing = directAutoFilter(tableXml, 'table')
   if (route.headerRowCount === 0) {
-    return tableXml.replace(filterPattern, '')
+    return existing ? tableXml.slice(0, existing.start) + tableXml.slice(existing.end) : tableXml
   }
+  const raw = existing ? tableXml.slice(existing.start, existing.end) : ''
   const ref = toRef({ ...route.area, endRow: route.area.endRow - route.totalsRowCount })
-  let element = `<autoFilter ref="${ref}"/>`
+  let offset = 0
   if (filter !== null) {
-    const offset = filter.range.startColumn - route.area.startColumn
+    offset = filter.range.startColumn - route.area.startColumn
     const width = route.area.endColumn - route.area.startColumn + 1
     for (const column of filter.columns) {
       const colId = column.colId + offset
@@ -109,32 +150,67 @@ export function applyTableFilterState(
         throw new FilterEditError('A filter column falls outside its table and cannot be saved.')
       }
     }
-    const columns = [...filter.columns]
-      .sort((left, right) => left.colId - right.colId)
-      .map((column) => serializeFilterColumn(column, offset))
-      .join('')
-    if (columns !== '') element = `<autoFilter ref="${ref}">${columns}</autoFilter>`
   }
-  if (filterPattern.test(tableXml)) {
-    return tableXml.replace(filterPattern, () => element)
+  const element = serializeAutoFilter(
+    ref,
+    filter?.columns ?? [],
+    offset,
+    raw,
+    filter !== null && preserveUneditable,
+  )
+  if (existing) {
+    return tableXml.slice(0, existing.start) + element + tableXml.slice(existing.end)
   }
   return tableXml.replace(/<table\b[^>]*>/, (open) => `${open}${element}`)
 }
 
-function serializeAutoFilter(filter: NonNullable<SheetFilterState['filter']>): string {
-  const ref = toRef(filter.range)
-  const columns = [...filter.columns]
+function serializeAutoFilter(
+  ref: string,
+  columns: readonly FilterColumnState[],
+  offset: number,
+  previous: string,
+  preserveUneditable: boolean,
+): string {
+  const prefix = AUTO_FILTER.exec(previous)?.[1] ?? ''
+  const raw = preserveUneditable ? previous : ''
+  const opening = /^<[^>]+>/.exec(raw)?.[0] ?? ''
+  const refAttribute = /\sref\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(opening)
+  const fileRef = refAttribute?.[1] ?? refAttribute?.[2]
+  const snapshot = new Set(columns.map((column) => column.colId + offset))
+  const entries = columns.map((column) => ({
+    colId: column.colId + offset,
+    xml: serializeFilterColumn(column, offset, prefix),
+  }))
+  for (const [part, , attrs] of raw.matchAll(FILTER_COLUMN)) {
+    if (!OPAQUE_CRITERIA.test(part)) continue
+    const id = /(?:^|\s)colId\s*=\s*(?:"(\d+)"|'(\d+)')/.exec(attrs ?? '')
+    const colId = Number(id?.[1] ?? id?.[2])
+    if (!Number.isSafeInteger(colId))
+      throw new FilterEditError('The existing filter column has no valid index.')
+    if (snapshot.has(colId)) continue
+    if (fileRef?.replaceAll('$', '').toUpperCase() !== ref) {
+      throw new FilterEditError('Clear the existing advanced filter before changing its range.')
+    }
+    entries.push({ colId, xml: part })
+  }
+  const body = entries
     .sort((left, right) => left.colId - right.colId)
-    .map((column) => serializeFilterColumn(column, 0))
+    .map((entry) => entry.xml)
     .join('')
-  return columns === ''
-    ? `<autoFilter ref="${ref}"/>`
-    : `<autoFilter ref="${ref}">${columns}</autoFilter>`
+  // Keep attributes and local namespace declarations from the original wrapper.
+  const header = refAttribute
+    ? opening.replace(refAttribute[0], ` ref="${ref}"`).replace(/\/?\s*>$/, '')
+    : `<${prefix}autoFilter ref="${ref}"`
+  return body === '' ? `${header}/>` : `${header}>${body}</${prefix}autoFilter>`
 }
 
 /// `columnOffset` re-bases wire colIds (relative to the snapshot range's
 /// first column) onto the element's own left edge; worksheet snapshots pass 0.
-function serializeFilterColumn(column: FilterColumnState, columnOffset: number): string {
+function serializeFilterColumn(
+  column: FilterColumnState,
+  columnOffset: number,
+  prefix: string,
+): string {
   const colId = column.colId + columnOffset
   if (colId < 0) {
     throw new FilterEditError('A filter column falls outside its range and cannot be saved.')
@@ -143,9 +219,9 @@ function serializeFilterColumn(column: FilterColumnState, columnOffset: number):
   if (column.values !== undefined || column.blank) {
     const blank = column.blank ? ' blank="1"' : ''
     const values = (column.values ?? [])
-      .map((value) => `<filter val="${escapeXmlAttribute(value)}"/>`)
+      .map((value) => `<${prefix}filter val="${escapeXmlAttribute(value)}"/>`)
       .join('')
-    parts.push(`<filters${blank}>${values}</filters>`)
+    parts.push(`<${prefix}filters${blank}>${values}</${prefix}filters>`)
   }
   if (column.customs) {
     for (const custom of column.customs.filters) {
@@ -162,13 +238,13 @@ function serializeFilterColumn(column: FilterColumnState, columnOffset: number):
           custom.operator === undefined || custom.operator === 'equal'
             ? ''
             : ` operator="${custom.operator}"`
-        return `<customFilter${operator} val="${escapeXmlAttribute(String(custom.val))}"/>`
+        return `<${prefix}customFilter${operator} val="${escapeXmlAttribute(String(custom.val))}"/>`
       })
       .join('')
-    parts.push(`<customFilters${and}>${filters}</customFilters>`)
+    parts.push(`<${prefix}customFilters${and}>${filters}</${prefix}customFilters>`)
   }
   if (parts.length === 0) return ''
-  return `<filterColumn colId="${colId}">${parts.join('')}</filterColumn>`
+  return `<${prefix}filterColumn colId="${colId}">${parts.join('')}</${prefix}filterColumn>`
 }
 
 /// Schema order places autoFilter after sheetData (and after the protection
@@ -195,6 +271,7 @@ function applyRowVisibility(
   worksheetXml: string,
   range: CellArea,
   hiddenRows: ReadonlySet<number>,
+  preserveHidden: boolean,
 ): string {
   const firstDataRow = range.startRow + 1
   const seen = new Set<number>()
@@ -206,6 +283,9 @@ function applyRowVisibility(
       const rowIndex = Number(rowNumber) - 1
       if (rowIndex < firstDataRow || rowIndex > range.endRow) return full
       seen.add(rowIndex)
+      // The Web cannot re-evaluate the retained criteria, so keep rows the
+      // file already hid and add the rows hidden by the new snapshot.
+      if (preserveHidden && /(?:^|\s)hidden="(?:1|true)"/.test(attributes)) return full
       const withoutHidden = attributes.replace(/\s*hidden="[^"]*"/, '')
       const hidden = hiddenRows.has(rowIndex) ? ' hidden="1"' : ''
       return `<row${withoutHidden}${hidden}${close}`

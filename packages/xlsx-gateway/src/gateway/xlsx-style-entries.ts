@@ -11,11 +11,14 @@
 /// rewritten. The resolution rule matches the sidecar's mc_children
 /// (visuals.rs): mc:Fallback, else the first mc:Choice.
 
-interface ChildElement {
+export interface ChildElement {
   /// qualified name as written
   readonly name: string
   /// the element's full markup
   readonly xml: string
+  /// Offset relative to the containing element's inner markup.
+  readonly start: number
+  readonly opening: string
   /// markup between the start and end tags; '' for a self-closing element
   readonly inner: string
 }
@@ -27,7 +30,7 @@ const MARKUP =
 
 /// Top-level child elements of an element's inner markup, matched by depth so
 /// nested blocks (an AlternateContent inside a Choice) stay whole.
-function childElements(inner: string): ChildElement[] {
+export function childElements(inner: string): ChildElement[] {
   const children: ChildElement[] = []
   let depth = 0
   let open: { name: string; start: number; innerStart: number } | null = null
@@ -41,6 +44,8 @@ function childElements(inner: string): ChildElement[] {
         children.push({
           name: open.name,
           xml: inner.slice(open.start, at + markup.length),
+          start: open.start,
+          opening: inner.slice(open.start, open.innerStart),
           inner: inner.slice(open.innerStart, at),
         })
         open = null
@@ -49,7 +54,7 @@ function childElements(inner: string): ChildElement[] {
       continue
     }
     if (selfClosing) {
-      if (depth === 0) children.push({ name, xml: markup, inner: '' })
+      if (depth === 0) children.push({ name, xml: markup, start: at, opening: markup, inner: '' })
       continue
     }
     if (depth === 0) open = { name, start: at, innerStart: at + markup.length }

@@ -3,6 +3,10 @@
 /// `<conditionalFormatting>` section from it (mirroring the filter recipe).
 /// Highlight styles intern as new dxf entries in the stylesheet.
 
+import { decodeAttribute } from './xlsx-sheets.ts'
+import { findRootChild } from './xlsx-root-tail.ts'
+import { childElements } from './xlsx-style-entries.ts'
+
 export class CfEditError extends Error {}
 
 export interface CfCellArea {
@@ -18,6 +22,7 @@ export interface CfWireRule {
   readonly ranges: readonly CfCellArea[]
   readonly stopIfTrue: boolean
   readonly rule: Record<string, unknown>
+  readonly source?: { readonly priority: number; readonly unchanged: boolean } | undefined
 }
 
 export interface DxfSink {
@@ -85,6 +90,144 @@ interface PreservedBlock {
 export interface CfApplyOptions {
   /** keep every existing section and add the rules after them (headless callers without the full rule set) */
   readonly append?: boolean | undefined
+  /** Keep rules the Web editor cannot include in its snapshot. */
+  readonly preserveUneditable?: boolean | undefined
+  readonly removedSourcePriorities?: readonly number[] | undefined
+}
+
+const CF_BLOCK_RE =
+  /<conditionalFormatting\b[^>]*?\/>|<conditionalFormatting\b[^>]*>[\s\S]*?<\/conditionalFormatting>/g
+const CORE_SPREADSHEET_NAMESPACE = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+const XML_TAG_CONTENT = `(?:[^>"']|"[^"]*"|'[^']*')*?`
+const XML_OPENING_TAG = new RegExp(`^<${XML_TAG_CONTENT}>`)
+const EDITABLE_CF_TYPES = new Set([
+  'cellIs',
+  'expression',
+  'containsText',
+  'notContainsText',
+  'beginsWith',
+  'endsWith',
+  'containsBlanks',
+  'notContainsBlanks',
+  'containsErrors',
+  'notContainsErrors',
+  'duplicateValues',
+  'uniqueValues',
+  'top10',
+  'colorScale',
+  'dataBar',
+  'iconSet',
+])
+const CELL_IS_OPERATORS = new Set([
+  'equal',
+  'notEqual',
+  'lessThan',
+  'lessThanOrEqual',
+  'greaterThan',
+  'greaterThanOrEqual',
+  'between',
+  'notBetween',
+])
+
+function cfAttribute(openingTag: string, name: string): string | undefined {
+  for (const [, key, double, single] of openingTag.matchAll(
+    /\s([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g,
+  )) {
+    const value = double ?? single
+    if (key === name && value !== undefined) return decodeAttribute(value)
+  }
+}
+
+function cfOpeningTag(xml: string): string {
+  return XML_OPENING_TAG.exec(xml)?.[0] ?? ''
+}
+
+function spreadsheetCfPrefix(xml: string): string {
+  const declarations = [...xml.matchAll(/\sxmlns:([\w.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)]
+  const used = new Set(
+    [...xml.matchAll(/<([\w.-]+):(?:conditionalFormatting|cfRule)(?=[\s/>])/g)].map(
+      ([, alias]) => alias,
+    ),
+  )
+  const core = new Set(
+    declarations
+      .filter(([, , double, single]) => (double ?? single) === CORE_SPREADSHEET_NAMESPACE)
+      .map(([, alias]) => alias!)
+      .filter((alias) => used.has(alias)),
+  )
+  if (
+    declarations.some(
+      ([, alias, double, single]) =>
+        core.has(alias!) && (double ?? single) !== CORE_SPREADSHEET_NAMESPACE,
+    )
+  ) {
+    throw new CfEditError('Conditional formatting uses a rebound spreadsheet namespace prefix.')
+  }
+  return core.size === 0
+    ? ''
+    : `(?:${[...core].map((alias) => alias.replaceAll('.', '\\.') + ':').join('|')})`
+}
+
+function cfElement(tag: string, prefix: string): RegExp {
+  return new RegExp(
+    `<((?:${prefix})?)${tag}(?=[\\s/>])${XML_TAG_CONTENT}(?:\\/>|>[\\s\\S]*?<\\/\\1${tag}\\s*>)`,
+    'g',
+  )
+}
+
+function cfChildTag(xml: string, tag: string): string {
+  return new RegExp(`<(?:[\\w.-]+:)?${tag}(?=[\\s/>])${XML_TAG_CONTENT}>`).exec(xml)?.[0] ?? ''
+}
+
+function cfEditKind(xml: string): {
+  type: string
+  mode: 'editable' | 'unsupported' | 'approximate'
+} {
+  const openingTag = cfOpeningTag(xml)
+  const type = cfAttribute(openingTag, 'type')
+  const result = (mode: 'editable' | 'unsupported' | 'approximate') => ({ type: type ?? '', mode })
+  if (type === undefined || !EDITABLE_CF_TYPES.has(type)) return result('unsupported')
+  if (type === 'cellIs') {
+    const operator = cfAttribute(openingTag, 'operator')
+    if (!CELL_IS_OPERATORS.has(operator ?? '')) return result('unsupported')
+    const formulas = [
+      ...xml.matchAll(/<(?:[\w.-]+:)?formula(?:\s[^>]*)?>([^<]*)<\/(?:[\w.-]+:)?formula\s*>/g),
+    ]
+    if (formulas.length < (operator === 'between' || operator === 'notBetween' ? 2 : 1))
+      return result('unsupported')
+    if (formulas.some(([, value]) => !value?.trim() || !Number.isFinite(Number(value))))
+      return result('approximate')
+  }
+  if (type === 'iconSet') {
+    const name = cfAttribute(cfChildTag(xml, 'iconSet'), 'iconSet') ?? '3TrafficLights1'
+    if (!OOXML_ICON_SETS.has(name)) return result('approximate')
+  }
+  if (type === 'dataBar') {
+    const bar = cfChildTag(xml, 'dataBar')
+    // The UI can render these extents but the serializer cannot write them.
+    if (
+      cfAttribute(bar, 'minLength') !== undefined ||
+      cfAttribute(bar, 'maxLength') !== undefined
+    ) {
+      return result('approximate')
+    }
+  }
+  if (type === 'iconSet' || type === 'colorScale' || type === 'dataBar') {
+    for (const [stop] of xml.matchAll(/<(?:[\w.-]+:)?cfvo(?=[\s/>])[^>]*>/g)) {
+      const kind = cfAttribute(stop, 'type')
+      const value = cfAttribute(stop, 'val')
+      if (
+        kind !== 'min' &&
+        kind !== 'max' &&
+        (!['num', 'percent', 'percentile'].includes(kind ?? '') ||
+          !value?.trim() ||
+          !Number.isFinite(Number(value)))
+      ) {
+        return result('approximate')
+      }
+    }
+  }
+  return result('editable')
 }
 
 export function applyCfRules(
@@ -94,39 +237,108 @@ export function applyCfRules(
   options: CfApplyOptions = {},
 ): string {
   if (options.append) return appendCfRules(worksheetXml, rules, dxfs)
+  const prefix = options.preserveUneditable ? spreadsheetCfPrefix(worksheetXml) : ''
+  const cfBlocks = options.preserveUneditable
+    ? cfElement('conditionalFormatting', prefix)
+    : CF_BLOCK_RE
+  const cfRules = cfElement('cfRule', prefix)
   // Blocks whose cfRule carries an extLst are the base half of an x14
   // extension (linked via x14:id) — kept verbatim and guarded below. The
   // x14 part in the worksheet extLst is left alone except when a whole
   // block is deleted (see removeX14CfTwins).
   const preserved: PreservedBlock[] = []
-  let xml = worksheetXml.replace(
-    /<conditionalFormatting\b[^>]*>[\s\S]*?<\/conditionalFormatting>|<conditionalFormatting\b[^>]*\/>/g,
-    (block) => {
-      if (!/<extLst\b/.test(block)) return ''
-      const sqref = /\bsqref="([^"]*)"/.exec(block)?.[1]
-      if (sqref === undefined) throw new CfEditError(linkedMessage(block))
-      preserved.push({ sqref, text: block, matched: false })
-      return block
-    },
-  )
+  const approximate: { sqref: string; type: string; priority: number }[] = []
+  const removed = new Set(options.removedSourcePriorities)
+  const deletedTwins: PreservedBlock[] = []
+  const editablePriorities = new Set<number>()
+  let keptUneditable = false
+  let xml = worksheetXml.replace(cfBlocks, (block) => {
+    const extended = /<(?:[\w.-]+:)?extLst\b/.test(block)
+    const sqref = cfAttribute(cfOpeningTag(block), 'sqref')
+    if (options.preserveUneditable) {
+      let keepBlock = false
+      const filtered = block.replace(cfRules, (rule) => {
+        const { type, mode } = cfEditKind(rule)
+        const priority = Number(cfAttribute(cfOpeningTag(rule), 'priority'))
+        const linked = /<(?:[\w.-]+:)?extLst\b/.test(rule)
+        if (mode !== 'editable' || linked) {
+          if (removed.has(priority)) {
+            if (linked && sqref !== undefined)
+              deletedTwins.push({ sqref, text: rule, matched: false })
+            return ''
+          }
+          if (sqref !== undefined && (mode === 'approximate' || linked)) {
+            approximate.push({ sqref: normalizeSqref(sqref), type, priority })
+          }
+          keptUneditable = keepBlock = true
+          return rule
+        }
+        if (Number.isSafeInteger(priority) && priority > 0) editablePriorities.add(priority)
+        return ''
+      })
+      return keepBlock ? filtered : ''
+    }
+    if (!extended) return ''
+    if (sqref === undefined) throw new CfEditError(linkedMessage(block))
+    preserved.push({ sqref, text: block, matched: false })
+    return block
+  })
 
   // x14 rules and preserved blocks keep their priorities; new rules take
   // max+1 values.
+  const usedPriorities = new Set<number>()
   let priority = 0
-  for (const match of xml.matchAll(/<(?:\w+:)?cfRule\b[^>]*?\spriority="(\d+)"/g)) {
-    const seen = Number(match[1])
-    if (seen > priority) priority = seen
+  for (const match of xml.matchAll(/<(?:\w+:)?cfRule\b[^>]*>/g)) {
+    const seen = Number(cfAttribute(match[0], 'priority'))
+    if (!Number.isSafeInteger(seen) || seen <= 0) continue
+    priority = Math.max(priority, seen)
+    usedPriorities.add(seen)
   }
+  // Keep the raw rules' precedence relative to existing editable rules.
+  const reusable = keptUneditable
+    ? [...editablePriorities].filter((value) => !usedPriorities.has(value)).sort((a, b) => a - b)
+    : []
+  priority = Math.max(priority, reusable.at(-1) ?? 0)
+  let reused = 0
   const nextPriority = (): number => {
+    if (reused < reusable.length) return reusable[reused++]!
     priority += 1
     return priority
   }
 
   const sections: string[] = []
+  const retainedPriorities = new Map(approximate.map((item) => [item.priority, item]))
+  let previousSource = 0
+  let previousRetained = 0
   for (const rule of rules) {
     const sqref = rule.ranges.map(toRef).join(' ')
+    const normalized = normalizeSqref(sqref)
+    const sourcePriority = rule.source?.priority ?? 0
+    const source = sourcePriority > 0 ? retainedPriorities.get(sourcePriority) : undefined
+    if (sourcePriority > 0) {
+      if ((source && sourcePriority < previousSource) || sourcePriority < previousRetained) {
+        throw new CfEditError('This conditional formatting rule must keep its original priority.')
+      }
+      previousSource = Math.max(sourcePriority, previousSource)
+      if (source) previousRetained = sourcePriority
+    }
+    if (source && rule.source?.unchanged && source.sqref === normalized) continue
+    if (
+      source ||
+      (!rule.source &&
+        approximate.some(
+          (item) =>
+            item.sqref === normalized &&
+            (item.type === rule.rule.type ||
+              (item.type === 'cellIs' && rule.rule.type === 'highlightCell')),
+        ))
+    ) {
+      throw new CfEditError(
+        'This range has conditional formatting that cannot be edited without losing its original settings.',
+      )
+    }
     const linked = preserved.find(
-      (block) => !block.matched && normalizeSqref(block.sqref) === normalizeSqref(sqref),
+      (block) => !block.matched && normalizeSqref(block.sqref) === normalized,
     )
     if (linked) {
       // Only a byte-identical round trip proves the rule is unchanged; any
@@ -162,22 +374,18 @@ export function applyCfRules(
       const at = xml.indexOf(block.text)
       if (at !== -1) xml = xml.slice(0, at) + xml.slice(at + block.text.length)
     }
-    xml = removeX14CfTwins(xml, deleted)
   }
+  xml = removeX14CfTwins(xml, [...deleted, ...deletedTwins])
 
   if (sections.length === 0) return xml
   const body = sections.join('')
-  const remaining = preserved.filter((block) => block.matched)
-  const last = remaining[remaining.length - 1]
+  const last = [...xml.matchAll(cfBlocks)].at(-1)
   if (last) {
-    const end = xml.lastIndexOf(last.text) + last.text.length
+    const end = last.index + last[0].length
     return xml.slice(0, end) + body + xml.slice(end)
   }
   return insertBeforeTail(xml, body)
 }
-
-const CF_BLOCK_RE =
-  /<conditionalFormatting\b[^>]*?\/>|<conditionalFormatting\b[^>]*>[\s\S]*?<\/conditionalFormatting>/g
 
 function appendCfRules(xml: string, rules: readonly CfWireRule[], dxfs: DxfSink): string {
   if (rules.length === 0) return xml
@@ -218,11 +426,7 @@ function linkedMessage(block: string): string {
 /// The base halves live in <conditionalFormatting> blocks; the twins live
 /// here linked by x14:id (mirroring how x14 data validation parks in its
 /// own extension in xlsx-dv.ts).
-const X14_CF_EXT_URI = '{78C0D931-6437-407d-A8EE-F0AAD7539E65}'
-const X14_CF_EXT_OPEN_RE = new RegExp(
-  `<ext\\b[^>]*\\buri="${X14_CF_EXT_URI.replace(/[{}]/g, '\\$&')}"[^>]*>`,
-  'i',
-)
+const X14_CF_EXT_URI = '{78c0d931-6437-407d-a8ee-f0aad7539e65}'
 
 /// Drops the x14 twins of deleted base blocks: the <x14:cfRule> entries in
 /// the {78C0D931…} extension whose id matches a deleted block's <x14:id>,
@@ -233,80 +437,70 @@ const X14_CF_EXT_OPEN_RE = new RegExp(
 /// Excel flags for repair.
 function removeX14CfTwins(xml: string, deleted: readonly PreservedBlock[]): string {
   if (deleted.length === 0) return xml
-  const extOpen = X14_CF_EXT_OPEN_RE.exec(xml)
-  if (!extOpen) return xml
-  if (extOpen[0].endsWith('/>')) return xml
-  const close = xml.indexOf('</ext>', extOpen.index)
-  if (close === -1) return xml
-  const start = extOpen.index + extOpen[0].length
-  const cleaned = cleanX14CfContent(xml.slice(start, close), deleted)
-  if (cleaned === xml.slice(start, close)) return xml
-  const next = xml.slice(0, start) + cleaned + xml.slice(close)
-  if (cleaned.includes('<')) return next
-  // `close` is an index into the original xml; in `next` the closing tag
-  // sits past the cleaned content instead.
-  return dropEmptyCfExt(next, extOpen.index, start + cleaned.length)
+  const position = findRootChild(xml, 'worksheet', 'extLst')
+  if (!position) return xml
+  const [list] = childElements(xml.slice(position.start, position.end))
+  if (!list) return xml
+  const extension = childElements(list.inner).find(
+    (child) =>
+      /(?:^|:)ext$/.test(child.name) &&
+      cfAttribute(child.opening, 'uri')?.toLowerCase() === X14_CF_EXT_URI,
+  )
+  if (!extension) return xml
+  const cleaned = cleanX14CfContent(extension.inner, deleted)
+  if (cleaned === extension.inner) return xml
+  const replacement = cleaned.trim()
+    ? extension.opening +
+      cleaned +
+      extension.xml.slice(extension.opening.length + extension.inner.length)
+    : ''
+  const inner =
+    list.inner.slice(0, extension.start) +
+    replacement +
+    list.inner.slice(extension.start + extension.xml.length)
+  const wrapper = inner.trim()
+    ? list.opening + inner + list.xml.slice(list.opening.length + list.inner.length)
+    : ''
+  return xml.slice(0, position.start) + wrapper + xml.slice(position.end)
 }
 
 function cleanX14CfContent(content: string, deleted: readonly PreservedBlock[]): string {
   const ids = new Set<string>()
   const sqrefOnly = new Set<string>()
+  const prefix = '[\\w.-]+:'
+  const innerText = (element: string) =>
+    element.slice(cfOpeningTag(element).length, element.lastIndexOf('</')).trim()
   for (const block of deleted) {
-    const blockIds = [...block.text.matchAll(/<x14:id>(.*?)<\/x14:id>/g)].map((m) =>
-      (m[1] ?? '').trim(),
-    )
+    const blockIds = [...block.text.matchAll(cfElement('id', prefix))]
+      .map(([element]) => innerText(element).toLowerCase())
+      .filter(Boolean)
     if (blockIds.length === 0) sqrefOnly.add(normalizeSqref(block.sqref))
     else for (const id of blockIds) ids.add(id)
   }
   let out = content
+  const rules = cfElement('cfRule', prefix)
+  const groups = cfElement('conditionalFormatting', prefix)
   if (ids.size > 0) {
-    out = out.replace(/<x14:cfRule\b[^>]*?id="([^"]*)"[^>]*?\/>/g, (m, id) =>
-      ids.has(String(id).trim()) ? '' : m,
-    )
-    out = out.replace(/<x14:cfRule\b[^>]*?id="([^"]*)"[^>]*?>[\s\S]*?<\/x14:cfRule>/g, (m, id) =>
-      ids.has(String(id).trim()) ? '' : m,
-    )
-    out = out.replace(
-      /<x14:conditionalFormatting\b[^>]*>[\s\S]*?<\/x14:conditionalFormatting>/g,
-      (m) => (m.includes('<x14:cfRule') ? m : ''),
-    )
-    out = out.replace(/<x14:conditionalFormatting\b[^>]*?\/>/g, '')
+    out = out.replace(groups, (group) => {
+      const updated = group.replace(rules, (rule) => {
+        const id = cfAttribute(cfOpeningTag(rule), 'id')?.trim().toLowerCase()
+        return id && ids.has(id) ? '' : rule
+      })
+      return updated !== group && !/<(?:[\w.-]+:)?cfRule(?=[\s/>])/.test(updated) ? '' : updated
+    })
   }
   if (sqrefOnly.size > 0) {
-    out = out.replace(
-      /<x14:conditionalFormatting\b[^>]*>[\s\S]*?<\/x14:conditionalFormatting>/g,
-      (m) => {
-        const sq = /<xm:sqref>([^<]*)<\/xm:sqref>/.exec(m)?.[1] ?? ''
-        return sqrefOnly.has(normalizeSqref(sq)) ? '' : m
-      },
-    )
+    out = out.replace(groups, (group) => {
+      const sqref = cfElement('sqref', prefix).exec(group)?.[0]
+      return sqref && sqrefOnly.has(normalizeSqref(innerText(sqref))) ? '' : group
+    })
   }
-  if (ids.size > 0 || sqrefOnly.size > 0) {
-    out = out.replace(
-      /<x14:conditionalFormattings\b[^>]*>[\s\S]*?<\/x14:conditionalFormattings>/g,
-      (m) => (/<x14:conditionalFormatting[\s/>]/.test(m) ? m : ''),
+  if (out !== content) {
+    out = out.replace(cfElement('conditionalFormattings', prefix), (wrapper) =>
+      /<(?:[\w.-]+:)?conditionalFormatting(?=[\s/>])/.test(wrapper) ? wrapper : '',
     )
-    out = out.replace(/<x14:conditionalFormattings\b[^>]*?\/>/g, '')
   }
   return out
-}
-
-/// Removes the (now empty) {78C0D931…} <ext> and the <extLst> around it
-/// when that was its only extension — an empty extLst is what Excel flags
-/// for repair. `close` is the index of the ext's </ext> in `xml`.
-function dropEmptyCfExt(xml: string, extStart: number, close: number): string {
-  const end = close + '</ext>'.length
-  const stripped = xml.slice(0, extStart) + xml.slice(end)
-  const lstOpenAt = xml.lastIndexOf('<extLst', extStart)
-  if (lstOpenAt === -1) return stripped
-  const lstOpen = /<extLst\b[^>]*>/.exec(xml.slice(lstOpenAt, extStart))?.[0]
-  if (lstOpen === undefined) return stripped
-  const lstInnerStart = lstOpenAt + lstOpen.length
-  const lstClose = xml.indexOf('</extLst>', lstInnerStart)
-  if (lstClose === -1 || lstClose < extStart) return stripped
-  const inner = xml.slice(lstInnerStart, extStart) + xml.slice(end, lstClose)
-  if (inner.includes('<')) return stripped
-  return xml.slice(0, lstOpenAt) + xml.slice(lstClose + '</extLst>'.length)
 }
 
 function serializeRule(wireRule: CfWireRule, priority: number, dxfs: DxfSink): string {
@@ -630,7 +824,7 @@ function normalizeSqref(sqref: string): string {
     .split(/\s+/)
     .filter(Boolean)
     .map((part) => {
-      const [a, b] = part.replace(/\$/g, '').split(':')
+      const [a, b] = part.replace(/\$/g, '').toUpperCase().split(':')
       return b === undefined || b === a ? a! : `${a}:${b}`
     })
     .sort()

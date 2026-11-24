@@ -86,6 +86,8 @@ export interface LazyWorkbookState {
   /// keys out so nothing bleeds through (Excel semantics).
   readonly rowColStyleKeys: Map<string, Set<string>>
   readonly appliedCfSheets: Set<string>
+  /// Rules installed from the file, before the editor changed their configurations.
+  cfSourceRules?: Map<string, Map<string, { priority: number; snapshot: string }>>
   readonly appliedFilterSheets: Set<string>
   readonly appliedDvSheets: Set<string>
   /// Sheets whose last range read predated the sidecar's indexingComplete:

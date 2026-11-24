@@ -6402,6 +6402,18 @@ function rowIndexRanges(worksheet: UniverWorksheet, rows: number[]): IRange[] {
 /// Snapshots the full CF rule set of every dirty sheet (Univer's model is
 /// the wire format; the gateway maps it to OOXML and fails closed on shapes
 /// it cannot represent).
+type LiveCfRule = ReturnType<UniverWorksheet['getConditionalFormattingRules']>[number]
+
+function snapshotCfRule({ ranges, stopIfTrue, rule }: LiveCfRule): WorkbookCfState['rules'][number] {
+  return {
+    ranges: ranges.map(({ startRow, endRow, startColumn, endColumn }) => ({
+      startRow, endRow, startColumn, endColumn,
+    })),
+    stopIfTrue: stopIfTrue === true,
+    rule: { ...rule },
+  }
+}
+
 export function collectCfStates(
   runtime: UniverRuntime | null,
   state: LazyWorkbookState,
@@ -6413,27 +6425,21 @@ export function collectCfStates(
     if (isSheetRemoved(state.editJournal, sheetId)) continue
     const worksheet = workbook.getSheetBySheetId(sheetId)
     if (!worksheet) continue
-    const rules = (
-      worksheet as unknown as {
-        getConditionalFormattingRules(): {
-          ranges: IRange[]
-          stopIfTrue?: boolean
-          rule: Record<string, unknown>
-        }[]
-      }
-    ).getConditionalFormattingRules()
+    const rules = worksheet.getConditionalFormattingRules()
+    const sources = state.cfSourceRules?.get(sheetId)
+    const missing = new Map(sources)
     states.push({
       sheetId,
-      rules: rules.map((rule) => ({
-        ranges: rule.ranges.map((range) => ({
-          startRow: range.startRow,
-          endRow: range.endRow,
-          startColumn: range.startColumn,
-          endColumn: range.endColumn,
-        })),
-        stopIfTrue: rule.stopIfTrue === true,
-        rule: rule.rule,
-      })),
+      rules: rules.map((rule) => {
+        const snapshot = snapshotCfRule(rule)
+        const source = sources?.get(rule.cfId)
+        if (source === undefined) return snapshot
+        missing.delete(rule.cfId)
+        return { ...snapshot, source: {
+          priority: source.priority, unchanged: JSON.stringify(snapshot) === source.snapshot,
+        } }
+      }),
+      ...(missing.size ? { removedSourcePriorities: [...missing.values()].map(source => source.priority) } : {}),
     })
   }
   return states
@@ -7100,14 +7106,20 @@ async function applyConditionalRules(
   }
   journalSuppression.active = true
   try {
+    const sources = new Map<string, { priority: number; snapshot: string }>()
     for (const rule of prepared) {
       try {
         const built = buildConditionalRule(worksheet, state.file.dxfStyles, rule)
-        if (built) worksheet.addConditionalFormattingRule(built)
+        if (!built) continue
+        worksheet.addConditionalFormattingRule(built)
+        if (rule.priority > 0) {
+          sources.set(built.cfId, { priority: rule.priority, snapshot: JSON.stringify(snapshotCfRule(built)) })
+        }
       } catch {
         // An unsupported rule must not break the rest of the sheet.
       }
     }
+    if (sources.size) (state.cfSourceRules ??= new Map()).set(sheetId, sources)
   } finally {
     journalSuppression.active = false
   }
