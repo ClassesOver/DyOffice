@@ -109,6 +109,26 @@ test('a Retry-After beyond the remaining Office deadline fails without an early 
   assert.equal(attempts,1)
 })
 
+test('a retry timer waking after the Office deadline never resends the turn', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  let now = 0
+  t.mock.method(performance,'now',()=>now)
+  const requests = [], {calls,callbacks} = callbackRecorder()
+  const transport = createSseAgentTransport({timeoutMs:2000,fetchImpl:async url=>{
+    requests.push(url)
+    return new Response(null,{status:429,headers:{'Retry-After':'1'}})
+  }})
+  transport.stream({system:'',messages:[],tools:[]},callbacks)
+  await new Promise(setImmediate)
+  assert.deepEqual(calls,[])
+  now = 2500
+  // Run the earlier retry timer while the deadline callback is still queued.
+  t.mock.timers.tick(1000)
+  await new Promise(setImmediate)
+  assert.deepEqual(requests,['/api/v1/ai/turns'])
+  assert.deepEqual(calls,[['error','AI stream timed out'],['done']])
+})
+
 test('Office answers when transcript sync stalls and saves the turn after sync recovers',{timeout:9000},async t=>{
   const answer=Promise.withResolvers(),persisted=Promise.withResolvers()
   const deadline=setTimeout(()=>answer.reject(Error('Office never started the model turn while transcript sync stalled')),8000)
@@ -221,8 +241,10 @@ test('localizes Office model timeouts from both the server and browser deadlines
 test('a rejected Harness model admission cannot finalize the shared turn',async()=>{
   const harnessResume={taskId:'task',documentId:'document',revision:'revision'}
   const statuses=[]
-  for(const response of [new Response(null,{status:409}),stream(event('error',{message:'Provider failed'}))]){
+  for(const response of [new Response(null,{status:409}),new Response(null,{status:429,headers:{'Retry-After':'0'}}),stream(event('error',{message:'Provider failed'}))]){
+    let attempts=0
     const transport=createSseAgentTransport({harnessResume,fetchImpl:async(_url,init)=>{
+      attempts++
       assert.deepEqual(JSON.parse(init.body).harnessResume,harnessResume)
       return response
     }})
@@ -230,8 +252,13 @@ test('a rejected Harness model admission cannot finalize the shared turn',async(
       onDelta(){},onToolCall(){},onError(message,disposition){statuses.push([message,disposition])},
       onDone(disposition){statuses.push(['done',disposition]);resolve()},
     }))
+    assert.equal(attempts,1)
   }
-  assert.deepEqual(statuses,[['AI stream HTTP 409','harness-admission-unconfirmed'],['done','harness-admission-unconfirmed'],['Provider failed',undefined],['done',undefined]])
+  assert.deepEqual(statuses,[
+    ['AI stream HTTP 409','harness-admission-unconfirmed'],['done','harness-admission-unconfirmed'],
+    ['AI stream HTTP 429','harness-admission-unconfirmed'],['done','harness-admission-unconfirmed'],
+    ['Provider failed',undefined],['done',undefined],
+  ])
 })
 
 test('cancel aborts stream and requests explicit server cancellation', async()=>{

@@ -135,13 +135,14 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
         }
         else if (event === 'done') finish()
       }
-      deadline = setTimeout(() => {
+      const expire = () => {
         if (finished) return
         controller.abort()
         void reader?.cancel().catch(() => {})
         requestCancellation()
         finish(endpoint === OFFICE_TURNS_ENDPOINT && isChinese() ? modelTimeoutZh : 'AI stream timed out')
-      }, timeoutMs)
+      }
+      deadline = setTimeout(expire, timeoutMs)
       void (async () => {
         try {
           if (options.getCsrfToken) {
@@ -158,6 +159,10 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
           let response: Response
           for (let attempt = 0; ; attempt++) {
             if (finished || controller.signal.aborted) return
+            if (attempt > 0 && performance.now() >= expiresAt) {
+              expire()
+              return
+            }
             dispatched = true
             response = await fetchImpl(endpoint, init)
             // A pre-stream rejection can be retried. Never replay a Harness
