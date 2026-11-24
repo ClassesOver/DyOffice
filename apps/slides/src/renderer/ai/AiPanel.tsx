@@ -2380,6 +2380,7 @@ export function AiPanel({
               {entry.role === 'user' && entry.skills && (
                 <AiSkillChips lang={lang} names={entry.skills} />
               )}
+              {groupByRequest && !!entry.tools?.length && <ToolChipList tools={entry.tools} requestRunning={!!entry.streaming} />}
               {entry.role === 'assistant' && !entry.text && entry.streaming && (!groupByRequest || !entry.tools?.length) ? (
                 <span className="ai-typing-row">
                   <AiTypingIndicator
@@ -2393,7 +2394,7 @@ export function AiPanel({
               ) : (
                 <span dir="auto">{entry.text}</span>
               )}
-              {entry.tools && entry.tools.length > 0 && <ToolChipList tools={entry.tools} requestRunning={groupByRequest ? !!entry.streaming : undefined} />}
+              {!groupByRequest && !!entry.tools?.length && <ToolChipList tools={entry.tools} />}
               {entry.role === 'assistant' && entry.usage && (
                 <div className="ai-message-usage">
                   <AiUsageChip usage={entry.usage} lang={lang} />

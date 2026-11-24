@@ -293,8 +293,9 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  }
  const conversation=assistant.workspace.conversation
  const messages:ReactNode=<>
-  {items.map((item,index)=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<>{!!item.files?.length&&<SentAttachments atts={item.files} previews={{}}/>}<Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/></>:busy&&item.role==='assistant'&&index===items.length-1&&!item.tools?.length?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}
+  {items.map((item,index)=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>
    {!!item.tools?.length&&<ToolChipList tools={item.tools} requestRunning={busy&&index===items.length-1}/>}
+   {item.text?<>{!!item.files?.length&&<SentAttachments atts={item.files} previews={{}}/>}<Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/></>:busy&&item.role==='assistant'&&index===items.length-1&&!item.tools?.length?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}
   </div>)}
   {error&&<p role="alert">{error}</p>}
  </>
