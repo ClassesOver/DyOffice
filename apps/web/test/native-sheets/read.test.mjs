@@ -151,4 +151,3 @@ test('Node XLSX keeps sparse layout beyond the last value and returns intersecti
  assert.deepEqual(rule.cfvos,[{kind:'min'},{kind:'percentile',value:'50'},{kind:'max'}])
  assert.equal(rule.ranges.length,2)
 })
-})

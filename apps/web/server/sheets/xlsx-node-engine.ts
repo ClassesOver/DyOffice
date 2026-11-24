@@ -406,10 +406,10 @@ function readRange(sheet: ParsedSheet,r: Bounds) {
   )
   return {
     cells,
-    rows: [],
-    merges: [],
+    rows:sheet.rows.filter(row=>row.row>=r.startRow&&row.row<=r.endRow),
+    merges:sheet.merges.filter(area=>area.startRow<=r.endRow&&area.endRow>=r.startRow&&area.startColumn<=r.endColumn&&area.endColumn>=r.startColumn),
     hyperlinks: [],
-    conditionalRules: [],
+    conditionalRules: sheet.conditionalRules,
     autoFilter: sheet.autoFilter,
     autoFilterColumns: sheet.autoFilterColumns,
     dataValidations: [],
