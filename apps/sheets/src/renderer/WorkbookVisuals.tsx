@@ -1229,7 +1229,8 @@ function EditableShapeVisual({
           container.style.top = `${rect.top}px`
           container.style.width = `${rect.width}px`
           container.style.height = `${rect.height}px`
-          container.appendChild(host.cloneNode(true))
+          if (isChart) container.classList.add('chart-move-outline')
+          else container.appendChild(host.cloneNode(true))
           document.body.appendChild(container)
           // Pointer capture keeps delivering events to the hidden host.
           host.style.visibility = 'hidden'
@@ -1246,7 +1247,7 @@ function EditableShapeVisual({
         setDrag(null)
         setDragActive(false)
         const committed = (Math.abs(dx) > 2 || Math.abs(dy) > 2) && commitDrag(mode, corner, dx, dy)
-        if (committed && ghostRef.current) {
+        if (committed && ghostRef.current && !isChart) {
           parkDropGhost(visual.id, ghostRef.current, event.currentTarget)
           ghostRef.current = null
         } else {
@@ -1254,6 +1255,12 @@ function EditableShapeVisual({
         }
       }}
       onPointerCancel={(event) => {
+        removeGhost(event.currentTarget)
+        setDrag(null)
+        setDragActive(false)
+      }}
+      onLostPointerCapture={(event) => {
+        if (!dragActiveRef.current) return
         removeGhost(event.currentTarget)
         setDrag(null)
         setDragActive(false)
