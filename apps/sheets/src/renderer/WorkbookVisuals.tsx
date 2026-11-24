@@ -197,6 +197,14 @@ export interface InstalledVisualFrame {
 }
 
 const installedFrames = new Map<string, InstalledVisualFrame[]>()
+interface VisualInstallation extends Disposable {
+  workbook: ReturnType<ActiveWorkbook['getWorkbook']>
+  sessionId: string
+  sheetId: string
+  records: Map<string, { signature: string; disposables: Disposable[] }>
+}
+
+const activeInstallations = new WeakMap<UniverRuntime, VisualInstallation>()
 
 export function installedVisualFrames(sheetId: string): readonly InstalledVisualFrame[] {
   return installedFrames.get(sheetId) ?? []
@@ -211,10 +219,41 @@ export function installWorkbookVisuals(
 ): Disposable[] {
   const workbook = runtime.univerAPI.getActiveWorkbook()
   if (!workbook) return []
-  const disposables: Disposable[] = []
+  const model = workbook.getWorkbook()
+  let scope = activeInstallations.get(runtime)
+  if (
+    !scope ||
+    scope.workbook !== model ||
+    scope.sessionId !== file.sessionId ||
+    scope.sheetId !== sheetId
+  ) {
+    scope?.dispose()
+    const records: VisualInstallation['records'] = new Map()
+    scope = {
+      workbook: model,
+      sessionId: file.sessionId,
+      sheetId,
+      records,
+      dispose() {
+        if (activeInstallations.get(runtime) !== this) return
+        for (const record of records.values()) {
+          for (const disposable of record.disposables) disposable.dispose()
+        }
+        records.clear()
+        activeInstallations.delete(runtime)
+        installedFrames.delete(sheetId)
+      },
+    }
+    activeInstallations.set(runtime, scope)
+  }
+  const { records } = scope
+  const liveVisualIds = new Set<string>()
   const frames: InstalledVisualFrame[] = []
   installedFrames.set(sheetId, frames)
-  for (const visual of file.visuals.filter((candidate) => candidate.sheetId === sheetId)) {
+  for (const [visualIndex, visual] of file.visuals
+    .filter((candidate) => candidate.sheetId === sheetId)
+    .entries()) {
+    liveVisualIds.add(visual.id)
     const worksheet = workbook.getSheetBySheetId(visual.sheetId)
     if (!worksheet) continue
     const componentKey = `xlsx-${file.sessionId}-${visual.id}`
@@ -333,11 +372,33 @@ export function installWorkbookVisuals(
           marginY,
         })
       : {}
+    const signature = JSON.stringify({
+      visual,
+      chartEdit: chartEditing?.edits.get(visual.chartPath ?? visual.id),
+      layout,
+      fromRow,
+      fromColumn,
+      toRow,
+      toColumn,
+      visualIndex,
+    })
+    if (records.get(visual.id)?.signature === signature) continue
+    const previous = records.get(visual.id)
+    if (previous) {
+      for (const disposable of previous.disposables) disposable.dispose()
+      records.delete(visual.id)
+    }
     const frame = framed ? { width: frameWidth, height: frameHeight } : undefined
+    // Univer appends a reinstalled float after its siblings. Restore the worksheet
+    // drawing order on the positioned wrapper so overlap hit-testing matches Excel.
+    const setStackingOrder = (node: HTMLDivElement | null): void => {
+      const wrapper = node?.parentElement?.parentElement
+      if (wrapper) wrapper.style.zIndex = String(10 + visualIndex)
+    }
     const component =
       shapeEditing && editable
         ? () => (
-            <div className="xlsx-print-visual" data-print-visual={visual.id}>
+            <div ref={setStackingOrder} className="xlsx-print-visual" data-print-visual={visual.id}>
               <EditableShapeVisual
                 file={file}
                 visual={visual}
@@ -350,7 +411,7 @@ export function installWorkbookVisuals(
             </div>
           )
         : () => (
-            <div className="xlsx-print-visual" data-print-visual={visual.id}>
+            <div ref={setStackingOrder} className="xlsx-print-visual" data-print-visual={visual.id}>
               <WorkbookVisual
                 file={file}
                 visual={visual}
@@ -359,7 +420,7 @@ export function installWorkbookVisuals(
               />
             </div>
           )
-    disposables.push(runtime.univerAPI.registerComponent(componentKey, component))
+    const visualDisposables = [runtime.univerAPI.registerComponent(componentKey, component)]
     const floating = worksheet.addFloatDomToRange(
       range,
       {
@@ -370,9 +431,19 @@ export function installWorkbookVisuals(
       layout,
       `${file.sessionId}-${visual.id}`,
     )
-    if (floating) disposables.push(floating)
+    if (!floating) {
+      visualDisposables[0]!.dispose()
+      continue
+    }
+    visualDisposables.push(floating)
+    records.set(visual.id, { signature, disposables: visualDisposables })
   }
-  return disposables
+  for (const [id, record] of records) {
+    if (liveVisualIds.has(id)) continue
+    for (const disposable of record.disposables) disposable.dispose()
+    records.delete(id)
+  }
+  return [scope]
 }
 
 export interface SparklineGroupState {
