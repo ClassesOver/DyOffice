@@ -1,5 +1,4 @@
-//! Test-only Ubuntu/Docker preflight. Never a runtime admission certificate.
-#[derive(Clone)]
+//! Read-only Ubuntu/Docker observations. Never a runtime admission certificate.
 struct Facts {
     ubuntu: bool,
     docker_marker: bool,
@@ -11,11 +10,9 @@ struct Facts {
     seccomp: bool,
     local_bus: bool,
     docker_socket: bool,
-    opt_in: bool,
 }
-fn validate(f: &Facts) -> Result<(), &'static str> {
-    for (ok, reason) in [
-        (f.opt_in, "explicit diagnostic opt-in missing"),
+fn validate(f: &Facts) -> Vec<&'static str> {
+    let mut reasons: Vec<_> = [
         (f.ubuntu, "Ubuntu 24.04 required"),
         (f.docker_marker, "Docker markers missing"),
         (f.pid1_systemd, "systemd must be PID 1"),
@@ -25,20 +22,20 @@ fn validate(f: &Facts) -> Result<(), &'static str> {
         (f.seccomp, "seccomp filter required"),
         (f.local_bus, "local bus socket missing"),
         (!f.docker_socket, "Docker control socket exposed"),
-    ] {
-        if !ok {
-            return Err(reason);
-        }
-    }
+    ]
+    .into_iter()
+    .filter_map(|(ok, reason)| (!ok).then_some(reason))
+    .collect();
     if !["cpu", "memory", "pids"]
         .iter()
         .all(|v| f.controllers.split_whitespace().any(|c| c == *v))
     {
-        return Err("required controllers missing");
+        reasons.push("required controllers missing");
     }
-    Ok(())
+    reasons
 }
-pub(crate) fn preflight() -> Result<(), &'static str> {
+/// Observes the calling process's namespace. No systemd request or unit launch.
+pub fn prerequisites() -> Vec<&'static str> {
     use std::{fs, os::unix::fs::FileTypeExt};
     let read = |p| fs::read_to_string(p).unwrap_or_default();
     let os = read("/etc/os-release");
@@ -76,14 +73,20 @@ pub(crate) fn preflight() -> Result<(), &'static str> {
         local_bus: socket("/run/dbus/system_bus_socket"),
         docker_socket: !definitely_absent(fs::symlink_metadata("/run/docker.sock"))
             || !definitely_absent(fs::symlink_metadata("/var/run/docker.sock")),
-        opt_in: std::env::var("DYOFFICE_CONTAINER_PROBE").as_deref()
-            == Ok("ubuntu-docker-benign-only"),
     })
+}
+#[cfg(test)]
+pub(crate) fn preflight() -> Result<(), &'static str> {
+    if std::env::var("DYOFFICE_CONTAINER_PROBE").as_deref() != Ok("ubuntu-docker-benign-only") {
+        return Err("explicit diagnostic opt-in missing");
+    }
+    prerequisites().into_iter().next().map_or(Ok(()), Err)
 }
 #[test]
 fn complete_fixture_is_only_a_preflight_match() {
-    assert_eq!(validate(&good()), Ok(()));
+    assert!(validate(&good()).is_empty());
 }
+#[cfg(test)]
 fn good() -> Facts {
     Facts {
         ubuntu: true,
@@ -96,12 +99,11 @@ fn good() -> Facts {
         seccomp: true,
         local_bus: true,
         docker_socket: false,
-        opt_in: true,
     }
 }
 #[test]
 fn every_required_gate_fails_closed() {
-    for key in 0..11 {
+    for key in 0..10 {
         let mut f = good();
         match key {
             0 => f.ubuntu = false,
@@ -114,9 +116,9 @@ fn every_required_gate_fails_closed() {
             7 => f.seccomp = false,
             8 => f.local_bus = false,
             9 => f.docker_socket = true,
-            _ => f.opt_in = false,
+            _ => unreachable!(),
         };
-        assert!(validate(&f).is_err(), "gate {key}");
+        assert_eq!(validate(&f).len(), 1, "gate {key}");
     }
 }
 

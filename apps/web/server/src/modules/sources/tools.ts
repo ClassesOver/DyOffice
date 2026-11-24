@@ -7,7 +7,7 @@ import { object, sourceConnectionFailure, sourceError } from './config.ts'
 import { isAssistantErrorCode, type AssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
 type Sources = Pick<SourceService, 'listSavedMetadata' | 'describe' | 'detail' | 'querySource'>
-type Results = Pick<ReturnType<typeof createWorkspaceSourceResults>, 'capture' | 'save' | 'read' | 'requireDocument'>
+type Results = Pick<ReturnType<typeof createWorkspaceSourceResults>, 'capture' | 'save' | 'read' | 'readPages' | 'requireDocument'>
 const uuid = (value: unknown): string => { if (typeof value !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)) throw sourceError(); return value.toLowerCase() }
 const safeError = (error: unknown) => {
   const raw = (error as { statusCode?: number }).statusCode
@@ -26,13 +26,9 @@ async function runQueryBatch<T>(queries: unknown, currentVersion: () => Promise<
   const statements = parsedSourceQueryBatch(queries)
   if (!statements) throw sourceError()
   const version = await currentVersion()
-  const items = []
-  for (const [index, sql] of statements.entries()) {
-    if (checkGrant) await checkGrant()
-    // Tool admission authorized the first statement's document. Each later statement needs a live file as well.
-    if (index > 0 && requireDocument) await requireDocument()
+  const run = async (sql: string) => {
     try {
-      items.push({ ok: true as const, result: await execute(sql, version) })
+      return { ok: true as const, result: await execute(sql, version) }
     } catch (cause) {
       const error = safeError(cause)
       const statementError = error.statusCode === 400 && (!error.code || error.code === 'SQL_POLICY_REJECTED' || error.code === 'SQL_DATABASE_ERROR')
@@ -40,11 +36,30 @@ async function runQueryBatch<T>(queries: unknown, currentVersion: () => Promise<
         || error.statusCode === 502 && error.code === 'SOURCE_RESULT_UNUSABLE'
         || error.statusCode === 504 && error.code === 'SOURCE_TIMEOUT'
       if (!statementError || (cause as { [sourceConnectionFailure]?: true })?.[sourceConnectionFailure]) throw error
-      items.push({ ok: false as const, status: error.statusCode, code: error.code })
+      return { ok: false as const, status: error.statusCode, code: error.code }
     } finally {
       if (checkGrant) await checkGrant()
     }
   }
+  // 准入逐条检查；查询可重叠。失败后等在途工作结束，再释放任务授权。
+  const items: QueryBatchResult<T>['items'] = []
+  const pending: Promise<void>[] = []
+  let fatal: Error | undefined
+  try {
+    for (const [index, sql] of statements.entries()) {
+      if (fatal) break
+      if (requireDocument) await requireDocument()
+      if (checkGrant) await checkGrant()
+      if (fatal) break
+      pending.push(run(sql).then(
+        item => { items[index] = item },
+        cause => { fatal ??= safeError(cause) },
+      ))
+    }
+  } finally {
+    await Promise.all(pending)
+  }
+  if (fatal) throw fatal
   if (await currentVersion() !== version) throw sourceError(409)
   if (requireDocument) await requireDocument()
   return { items }
@@ -105,6 +120,10 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
         if (name === 'save_query_result') {
           const args = object(call.arguments, ['resultId','name','commandId'])
           return results.save(token, { resultId: uuid(args.resultId), commandId: uuid(args.commandId), name: args.name }, documentId)
+        }
+        if (Object.hasOwn(call.arguments ?? {}, 'pages')) {
+          const { pages } = object(call.arguments, ['pages'])
+          return await results.readPages(token, pages, documentId)
         }
         const args = object(call.arguments, ['resultId','offset','limit'])
         return results.read(token, { resultId: uuid(args.resultId), ...(args.offset === undefined ? {} : { offset: args.offset }), ...(args.limit === undefined ? {} : { limit: args.limit }) }, documentId)

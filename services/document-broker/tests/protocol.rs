@@ -5,6 +5,24 @@ fn valid_control_frame_is_recognized() {
     assert!(validate_frame(GOLDEN));
 }
 #[test]
+fn office_edit_profiles_share_the_generation_zero_control_frame() {
+    let mut input: serde_json::Value = serde_json::from_slice(GOLDEN).unwrap();
+    for (profile, accepted) in [
+        ("docx-edit-v1", true),
+        ("xlsx-edit-v1", true),
+        ("pptx-edit-v1", true),
+        ("pdf-edit-v1", false),
+        ("xlsx-edit-v2", false),
+    ] {
+        input["request"]["profileId"] = profile.into();
+        assert_eq!(
+            validate_frame(&serde_json::to_vec(&input).unwrap()),
+            accepted,
+            "{profile}"
+        );
+    }
+}
+#[test]
 fn untrusted_fields_and_numbers_are_not_protocol() {
     let original: serde_json::Value = serde_json::from_slice(GOLDEN).unwrap();
     for (key, value) in [

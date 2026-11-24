@@ -69,6 +69,7 @@ const rowsBody = rows => (req, res) => { res.writeHead(200, { 'content-type': 'a
 async function queryBatchFixture(t, afterCapture) {
   const f = await fixture(t, { buildApp: false }), targets = await postgresTargets(t, f)
   const sources = createSourceService({ transactions: f.transactions, credentialKeys: credentialKeys(), egressTargets: targets.approvals })
+  f.cleanup.unshift(() => sources.close())
   const stored = createWorkspaceSourceResults({ transactions: f.transactions })
   const results = { ...stored, async capture(token, snapshot, hash) {
     const artifact = await stored.capture(token, snapshot, hash)
@@ -87,6 +88,49 @@ async function queryBatchFixture(t, afterCapture) {
     download: id => access.download(grant.taskId, grant.credential, id),
   }
 }
+
+test('search_objects returns an empty catalog for unmatched table and column searches', async t => {
+  const { sources, token, targets } = await queryBatchFixture(t)
+  const tools = createWorkspaceSourceTools({ sources, results: {} })
+  const search = filters => tools.execute(token, { name: 'search_objects', arguments: { sourceId: 'sales', ...filters } })
+  for (const [filters, columns] of [
+    [{ tablePrefix: 'absent_probe' }, ['table_schema','table_name','table_type']],
+    [{ table: 'absent_probe' }, ['column_name','data_type','is_nullable']],
+    [{ tables: ['public.' + targets.probeTable], columnOffset: 1000 }, ['table_schema','table_name','column_name','data_type','is_nullable']],
+  ]) {
+    const { metadata } = await search(filters)
+    assert.deepEqual(metadata.rows, [])
+    assert.deepEqual(metadata.schema.map(column => column.name), columns)
+    assert.equal(metadata.truncated, false)
+  }
+})
+
+test('a read-only batch reaches four simultaneous PostgreSQL sessions', async t => {
+  const { targets: { admin, probeTable }, workspace } = await queryBatchFixture(t)
+  const lock = await admin.connect()
+  const values = [4, 3, 2, 1]
+  let batch
+  try {
+    await lock.query('BEGIN')
+    await lock.query(`LOCK TABLE ${probeTable} IN ACCESS EXCLUSIVE MODE`)
+    batch = workspace(values.map(i => `SELECT i FROM ${probeTable} WHERE i = ${i}`))
+    batch.catch(() => {})
+    const deadline = Date.now() + 4500
+    let waiting = 0
+    do {
+      const { rows } = await admin.query("SELECT count(DISTINCT pid)::int AS n FROM pg_locks WHERE relation = $1::regclass AND mode='AccessShareLock' AND NOT granted", [probeTable])
+      waiting = rows[0].n
+      if (waiting === 4) break
+      await new Promise(resolve => setTimeout(resolve, 20))
+    } while (Date.now() < deadline)
+    assert.equal(waiting, 4)
+  } finally {
+    await lock.query('ROLLBACK')
+    lock.release()
+    if (batch) await batch
+  }
+  assert.deepEqual((await batch).items.map(item => item.result.preview[0].i), values)
+})
 
 test('query batches return each PostgreSQL statement outcome but abort on source-wide permission loss', async t => {
   const { targets, sources, token, workspace, codex, download } = await queryBatchFixture(t)
@@ -113,21 +157,24 @@ test('query batches return each PostgreSQL statement outcome but abort on source
 
 test('Workspace and Codex reject a source change between captures or after the last capture', async t => {
   let renameAfter, captured
-  const { workspace, codex, inspect, download } = await queryBatchFixture(t, async (sources, token, artifact) => {
+  const { workspace, codex, inspect, download, sources, token } = await queryBatchFixture(t, async (sources, token, artifact) => {
     captured.push(artifact.resultId)
     if (captured.length === renameAfter) {
       await sources.save(token, 'sales', { expectedVersion: artifact.sourceVersion, name: 'Sales ' + artifact.sourceVersion })
     }
   })
   const queries = ['SELECT 1 AS n', 'SELECT 2 AS n']
-  const audits = () => inspect("SELECT id FROM data_source_audit WHERE source_id='sales' AND action='source_queried'")
+  const audits = () => inspect("SELECT id, (detail->>'version')::int AS version FROM data_source_audit WHERE source_id='sales' AND action='source_queried'")
   for (const run of [workspace, codex]) {
     for (renameAfter of [1, 2]) {
       captured = []
-      const before = (await audits()).rowCount
+      const before = new Set((await audits()).rows.map(row => row.id))
+      const { source } = await sources.detail(token, 'sales')
       await assert.rejects(run(queries), { statusCode: 409 })
-      assert.equal((await audits()).rowCount - before, renameAfter, 'no statement runs against the new source version')
-      assert.equal(captured.length, renameAfter)
+      const added = (await audits()).rows.filter(row => !before.has(row.id))
+      assert.ok(captured.length >= renameAfter && captured.length <= queries.length)
+      assert.ok(added.length >= captured.length && added.length <= queries.length)
+      assert.ok(added.every(row => row.version === source.version), 'no statement runs against the new source version')
       if (run === codex) {
         for (const id of captured) await assert.rejects(download(id), { statusCode: 403 })
       }

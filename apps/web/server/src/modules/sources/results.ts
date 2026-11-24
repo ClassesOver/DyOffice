@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
 import { isSourceResultName } from '../../../../../../packages/web-contracts/src/source-results.ts'
+import { MAX_RESULT_PAGES } from '../../../../../../packages/web-contracts/src/source-tools.ts'
 import type { QuerySnapshot } from '../../../../../../packages/web-contracts/src/sources.ts'
 import type {
   WorkspaceSourceResultArtifact, WorkspaceSourceResultCapture, WorkspaceSourceResultList,
@@ -78,6 +79,35 @@ function storedSnapshot(row: Row) {
     if (s.sourceId !== row.source_id || s.sourceVersion !== row.source_version || s.sha256 !== row.sha256 || s.rows.length !== row.row_count || s.truncated !== row.truncated || verified.bytes.length !== row.size_bytes) throw error()
     return verified
   } catch { throw error(500) }
+}
+
+export async function readFrozenPages(input: unknown, load: (id: string) => Promise<QuerySnapshot>) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > MAX_RESULT_PAGES) throw error()
+  const pages = input.map(item => {
+    const p = object(item, ['resultId','offset','limit'])
+    return { id: uuid(p.resultId), offset: integer(p.offset, 0, 0, 10000), limit: integer(p.limit, 1000, 1, 1000) }
+  })
+  const ids = [...new Set(pages.map(p => p.id))]
+  const snapshots = new Map(await Promise.all(ids.map(async id => [id, await load(id)] as const)))
+  const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
+  const budget = Math.floor((8192 - size({ items: [] }) - pages.length) / pages.length)
+  return { items: pages.map(({ id, offset, limit }) => {
+    const s = snapshots.get(id)!
+    const rows: QuerySnapshot['rows'][number][] = []
+    const item = { resultId: id, offset, rows, totalRows: s.rows.length, sourceTruncated: s.truncated, timezone: s.timezone, sha256: s.sha256 }
+    // 按最长续读位置预留空间；宽表的完整列定义可通过单页读取。
+    const envelope = { ...item, nextOffset: 10000, readSingly: true }
+    const columns = size({ ...envelope, schema: s.schema }) <= budget ? { schema: s.schema } : { schemaOmitted: true }
+    let bytes = size({ ...envelope, ...columns })
+    for (const row of s.rows.slice(offset, offset + Math.min(limit, 25))) {
+      bytes += size(row) + 1
+      if (bytes > budget) break
+      rows.push(row)
+    }
+    const next = offset + rows.length
+    return { ...item, ...columns, nextOffset: next < s.rows.length ? next : null,
+      ...(!rows.length && offset < s.rows.length ? { readSingly: true } : {}) }
+  }) }
 }
 
 /** A minimal TS service for small materialized JSONB results, not full spooling
@@ -211,6 +241,10 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
         const rows = snapshot.rows.slice(offset, offset + limit), next = offset + rows.length
         return { artifact: artifact(row), schema: snapshot.schema, timezone: snapshot.timezone, rows, offset, nextOffset: next < snapshot.rows.length ? next : null, totalRows: snapshot.rows.length, sourceTruncated: snapshot.truncated, sha256: snapshot.sha256 }
       })
+    },
+    readPages(token: string, pages: unknown, documentId?: string) {
+      return readFrozenPages(pages, id => access(token, documentId, async (c, p, workspaceId) =>
+        storedSnapshot(await readable(c, p, workspaceId, id, documentId)).snapshot))
     },
     async download(token: string, input: unknown, documentId?: string): Promise<WorkspaceSourceResultDownload & { bytes: Buffer }> {
       const id = uuid(input)

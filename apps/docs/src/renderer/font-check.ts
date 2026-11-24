@@ -1,7 +1,14 @@
 import type { ParsedDoc, TableModel } from '@genoffice/docx-engine'
-import { BUNDLED_FONTS, cssFontFamily, isBundledFont } from './text-layout/font-rules'
+import { CJK_FAMILY_ALIASES } from '@genoffice/i18n'
+import { cssFontFamily, isBundledFont } from './text-layout/font-rules'
 
 const GENERIC = new Set(['serif', 'sans-serif', 'monospace'])
+const fontKey = (name: string) => name.trim().normalize('NFKC').toLowerCase()
+const aliasGroups = new Map<string, readonly string[]>()
+for (const [name, aliases] of Object.entries(CJK_FAMILY_ALIASES)) {
+  const group = [name, ...aliases]
+  for (const spelling of group) aliasGroups.set(fontKey(spelling), group)
+}
 
 /** every distinct font family the document declares */
 export function collectDocFonts(parsed: ParsedDoc): string[] {
@@ -109,7 +116,7 @@ export function symbolFontCovers(family: string, text: string): boolean {
 
 export interface FontSubstitution {
   name: string
-  /** first available family in the fallback chain, null = only bundled fallback left */
+  /** First available family in the fallback chain, or null for browser fallback. */
   substitute: string | null
 }
 
@@ -122,14 +129,19 @@ export function checkMissingFonts(names: string[]): FontSubstitution[] {
   const cx = ctx2d()
   if (!cx) return []
   const out: FontSubstitution[] = []
+  const seen = new Set<string>()
   for (const name of names) {
+    const family = aliasGroups.get(fontKey(name)) ?? [name]
+    const key = fontKey(family[0]!)
+    if (seen.has(key)) continue
+    seen.add(key)
     // a declared bundled face resolves in canvas yet still renders the subset fallback — report it
-    if (!isBundledFont(name) && fontAvailableIn(cx, name)) continue
+    if (family.some((spelling) => !isBundledFont(spelling) && fontAvailableIn(cx, spelling))) continue
     const chain = cssFontFamily(name)
       .split(',')
       .map((s) => s.trim().replace(/^'|'$/g, ''))
       .filter((c) => c !== name && !GENERIC.has(c))
-    const substitute = chain.find((c) => !BUNDLED_FONTS.has(c) && fontAvailableIn(cx, c)) ?? null
+    const substitute = chain.find((c) => !/^GenOffice | GO$/.test(c) && fontAvailableIn(cx, c)) ?? null
     out.push({ name, substitute })
   }
   return out

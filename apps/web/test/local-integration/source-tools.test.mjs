@@ -131,6 +131,23 @@ test('tool definitions expose the five bounded tools with no caller-selectable o
   assert.equal(f.http.requests.length, 0)
 })
 
+test('batch page reads preserve order, source scope and the original frozen rows', async t => {
+  const f = await fixture(t, { alice: rows(5), bob: rows(3, 'Bob') })
+  await f.createSource()
+  const capture = async token => (await f.execute('execute_sql', { sourceId: 'metrics' }, { token })).artifact.resultId
+  const a = await capture(f.alice.token), b = await capture(f.alice.token)
+  await f.createSource({ endpointName: 'bob', token: f.bob.token })
+  const foreign = await capture(f.bob.token)
+  const reads = f.http.requests.length
+  const pages = [a,b,a].map((resultId, offset) => ({ resultId, offset, limit: 1 }))
+  const { items } = await f.execute('read_query_result', { pages })
+  assert.deepEqual(items.map(p => [p.resultId,p.rows]), pages.map(p => [p.resultId, rows(5).slice(p.offset, p.offset + 1)]))
+  await f.execute('read_query_result', { pages: [...pages, { resultId: foreign }] }, { status: 404 })
+  for (const args of [{ pages: [] }, { pages: [...pages,...pages] }, { resultId: a, pages }, { pages: [{ resultId: a, limit: 0 }] }])
+    await f.execute('read_query_result', args, { status: 400 })
+  assert.equal(f.http.requests.length, reads)
+})
+
 test('list_connections exposes only the cookie owner enabled saved connections, excluding missing credentials, disabled and deleted sources', async t => {
   const f = await fixture(t, { alice: rows(2), bob: rows(3, 'Bob') })
   await f.createSource({ sourceId: 'a-enabled' })

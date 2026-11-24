@@ -21,7 +21,9 @@ ENV RUSTUP_TOOLCHAIN=1.93.0 CARGO_TARGET_DIR=/build/services/document-broker/tar
 RUN --network=none rustc --version | grep '^rustc 1.93.0 ' \
  && cargo test --offline --locked --manifest-path services/document-broker/Cargo.toml \
       --lib --no-run --message-format=json > /tmp/cargo-artifacts.jsonl \
- && python3 /opt/select-test-binary.py /tmp/cargo-artifacts.jsonl /out
+ && python3 /opt/select-test-binary.py /tmp/cargo-artifacts.jsonl /out \
+ && cargo build --offline --locked --manifest-path services/document-broker/Cargo.toml --bin manager-preflight \
+ && install -m 0555 "$CARGO_TARGET_DIR/debug/manager-preflight" /out/manager-preflight
 FROM ${UBUNTU_IMAGE}
 ARG SOURCE_COMMIT
 LABEL org.opencontainers.image.revision=${SOURCE_COMMIT}

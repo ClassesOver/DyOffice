@@ -1,16 +1,17 @@
 # Isolated HTTP development; loopback and Secure-cookie mode remain the defaults.
 name: dyoffice-lab
-x-app:
+x-app: &app
   image: dyoffice-lab:local
-  build: &id001
+  build:
     context: ../..
     dockerfile: deploy/docker/Dockerfile
+    target: web
     args:
       NODE_IMAGE: ${NODE_IMAGE:?Set your mirrored Node 22.23.5 bookworm-slim image}
       RUST_IMAGE: ${RUST_IMAGE:?Set your mirrored Rust 1.93.0 slim-bookworm image}
       NPM_REGISTRY: ${NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}
   init: true
-  networks: &id002
+  networks:
   - backend
 services:
   db:
@@ -37,10 +38,7 @@ services:
     - backend
     restart: unless-stopped
   provision:
-    image: dyoffice-lab:local
-    build: *id001
-    init: true
-    networks: *id002
+    <<: *app
     profiles:
     - setup
     command:
@@ -51,10 +49,7 @@ services:
       db:
         condition: service_healthy
   admin:
-    image: dyoffice-lab:local
-    build: *id001
-    init: true
-    networks: *id002
+    <<: *app
     profiles:
     - setup
     command:
@@ -69,10 +64,7 @@ services:
       db:
         condition: service_healthy
   web:
-    image: dyoffice-lab:local
-    build: *id001
-    init: true
-    networks: *id002
+    <<: *app
     command:
     - web
     environment:

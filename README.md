@@ -12,6 +12,9 @@ DyOffice uses PostgreSQL 17 for local accounts and browser sessions. Use the
 create the first administrator, build the workspace, and start the service.
 For a containerized Web and DOCX evaluation with PostgreSQL, follow the
 [Docker Compose setup](deploy/docker/README.zh-CN.md). Production startup is disabled.
+The image includes the Word, XLSX and PPTX frontends. Running all three through
+a private systemd document broker still requires a server-side execution backend;
+see the [broker status](services/document-broker/README.md).
 
 When the service is running on the default port, run the readiness check.
 

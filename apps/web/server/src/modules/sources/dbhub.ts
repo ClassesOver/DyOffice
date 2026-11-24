@@ -108,8 +108,12 @@ async function callDbhub(policy: SourceEgressPolicy, kind: SqlSourceKind, secret
   const run = async ({ client }: Session) => {
     if (!client.transport) throw new Error('DBHub disconnected')
     const result = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: timeoutMs + 4000 })
-    if (result.isError) throw sourceError(400)
-    const response = parseToolResult(result) as { success?: boolean; data?: unknown } | undefined
+    const response = parseToolResult(result) as { success?: boolean; data?: unknown; code?: string } | undefined
+    if (result.isError) {
+      if (response?.code === 'AUTH_FAILED') throw sourceError(403)
+      if (response?.code === 'SOURCE_UNREACHABLE' || response?.code === 'TUNNEL_FAILED') throw sourceError(503)
+      throw sourceError(400)
+    }
     if (response?.success !== true || response.data === undefined) throw sourceError(502)
     return response.data
   }
@@ -124,7 +128,7 @@ async function callDbhub(policy: SourceEgressPolicy, kind: SqlSourceKind, secret
   } catch (error) {
     if ((error as { code?: number }).code === -32001) throw sourceError(504)
     if ((error as { statusCode?: number }).statusCode) throw error
-    throw sourceError(502)
+    throw sourceError(503)
   }
 }
 

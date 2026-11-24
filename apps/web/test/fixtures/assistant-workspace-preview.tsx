@@ -80,6 +80,7 @@ async function mount() {
   })
   function Preview() {
     const showAttachment = new URLSearchParams(location.search).has('attachment')
+    const shortMessage = new URLSearchParams(location.search).has('short')
     const filename = '季度巡检记录_' + 'regional_summary_'.repeat(5) + '2026.xlsx'
     const [draft, setDraft] = useState('分析当前巡检记录')
     return (
@@ -102,7 +103,7 @@ async function mount() {
             <>
               <div key="user" className="ai-msg ai-msg-user">
                 {showAttachment && <SentAttachments atts={[{ path: filename, name: filename, ext: 'xlsx', sizeBytes: 18432 }]} previews={{}} />}
-                <div dir="auto"><Markdown text={showAttachment ? '请核对以下附件。\n\n文件名：' + filename : '帮我分析巡检记录，整理异常要点。'} /></div>
+                {shortMessage ? <span dir="auto">水印 junge</span> : <div dir="auto"><Markdown text={showAttachment ? '请核对以下附件。\n\n文件名：' + filename : '帮我分析巡检记录，整理异常要点。'} /></div>}
               </div>
               <div key="office" className="ai-msg ai-msg-assistant">
                 我会先核对记录，再交给 Codex 分析并汇总结果。

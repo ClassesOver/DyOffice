@@ -185,6 +185,23 @@ test('assistant workspace layouts and explicit delegation in a real browser', as
           assert.equal(overflow, false, 'narrow layouts and long model names must not overflow')
           await page.screenshot({ path: join(output, `workspace-${width}-${theme}.png`) })
         })
+    await t.test('a short user message fits on one line beside its avatar', async () => {
+      await page.setViewportSize({ width: 320, height: 780 })
+      await page.goto(`http://localhost:${server.address().port}/?short`)
+      const row = page.locator('.assistant-chat-row-user')
+      await row.getByRole('img', { name: 'lin' }).waitFor()
+      const dimensions = await row.locator('.ai-msg-user').evaluate(el => {
+        const style = getComputedStyle(el)
+        return {
+          height: el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
+          lineHeight: parseFloat(style.lineHeight),
+          width: el.offsetWidth,
+          available: el.parentElement.offsetWidth,
+          maxWidth: style.maxWidth,
+        }
+      })
+      assert.ok(Math.abs(dimensions.height - dimensions.lineHeight) < 1, JSON.stringify(dimensions))
+    })
     await t.test('multiline user message keeps the attachment and avatar inside a narrow panel', async () => {
       await page.setViewportSize({ width: 320, height: 780 })
       await page.goto(`http://localhost:${server.address().port}/?attachment`)

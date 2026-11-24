@@ -371,6 +371,9 @@
 .assistant-chat-row-user .assistant-chat-message {
   flex: 0 1 auto;
 }
+.assistant-team-feed .assistant-chat-message > .ai-msg-user {
+  max-width: 100%;
+}
 .assistant-user-avatar {
   display: grid;
   place-items: center;
@@ -386,7 +389,6 @@
   line-height: 1;
 }
 .assistant-team-feed .ai-msg-user {
-  max-width: 100%;
   box-sizing: border-box;
   margin: 0;
   padding: 8px 12px;
