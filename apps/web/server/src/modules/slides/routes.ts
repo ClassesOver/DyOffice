@@ -71,6 +71,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.links(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/run-links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.runLinks(token,id,body,signal))
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/layouts', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.layouts(token,id,body,signal))
+    readRoute<Parameters<SlidesSessions['customShows']>[2]>('/api/v1/files/:id/slides/custom-shows', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.customShows(token,id,body,signal))
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/slides', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.slides(token,id,body,signal))
     const clipboardBase={...revisionBody,generation:generationBody}
     const slideIndex={type:'integer',minimum:0,maximum:1048575}

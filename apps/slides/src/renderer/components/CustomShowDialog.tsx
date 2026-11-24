@@ -2,8 +2,7 @@
  * Custom show management dialog — modeled on PowerPoint "Slide Show → Custom Shows".
  *
  * Left column: show list (new/delete/play); right side: the selected show's name, included-page
- * checkboxes and order adjustment. Data is owned by App (persisted per document to localStorage);
- * this only sends back the whole new list.
+ * checkboxes and order adjustment. The editor owns the draft and commits it to the presentation.
  */
 import React, { useState } from 'react'
 import { useI18n } from '../i18n/locale'
@@ -22,20 +21,29 @@ export function isShowSlideIndex(i: unknown, slideCount: number): i is number {
 export function CustomShowDialog({
   shows,
   slideCount,
+  readOnly = false,
+  pending = false,
+  error,
   onChange,
   onPlay,
   onClose,
+  onDiscard,
 }: {
   shows: CustomShow[]
   /** Document page count (checkbox list; stale out-of-range indexes filtered at render/show time) */
   slideCount: number
+  readOnly?: boolean
+  pending?: boolean
+  error?: string | null
   onChange: (shows: CustomShow[]) => void
   onPlay: (show: CustomShow) => void
   onClose: () => void
+  onDiscard?: () => void
 }) {
   const { t } = useI18n()
   const [selId, setSelId] = useState<string | null>(shows[0]?.id ?? null)
-  const sel = shows.find((s) => s.id === selId) ?? null
+  const sel = shows.find((s) => s.id === selId) ?? shows[0] ?? null
+  const locked = readOnly || pending
   // Out-of-range indexes left over after page deletion aren't shown (the show entry filters them too)
   const selIndices = sel ? sel.slideIndices.filter((i) => isShowSlideIndex(i, slideCount)) : []
 
@@ -98,7 +106,7 @@ export function CustomShowDialog({
                 if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
                 e.preventDefault()
                 const ids = shows.map((s) => s.id)
-                const at = ids.indexOf(selId ?? '')
+                const at = ids.indexOf(sel?.id ?? '')
                 const next = e.key === 'ArrowDown' ? at + 1 : at - 1
                 if (next < 0 || next >= ids.length) return
                 setSelId(ids[next]!)
@@ -111,8 +119,8 @@ export function CustomShowDialog({
                 <button
                   key={s.id}
                   role="option"
-                  aria-selected={s.id === selId}
-                  className={`csd-item${s.id === selId ? ' active' : ''}`}
+                  aria-selected={s.id === sel?.id}
+                  className={`csd-item${s.id === sel?.id ? ' active' : ''}`}
                   onClick={() => setSelId(s.id)}
                 >
                   {s.name}
@@ -125,8 +133,8 @@ export function CustomShowDialog({
               ))}
             </div>
             <div className="csd-list-actions">
-              <button onClick={addShow}>{t('paneCsdNew')}</button>
-              <button disabled={!sel} onClick={removeShow}>
+              <button disabled={locked} onClick={addShow}>{t('paneCsdNew')}</button>
+              <button disabled={locked || !sel} onClick={removeShow}>
                 {t('paneCsdDelete')}
               </button>
             </div>
@@ -137,6 +145,7 @@ export function CustomShowDialog({
                 {t('paneCsdName')}
                 <input
                   type="text"
+                  readOnly={locked}
                   value={sel.name}
                   onChange={(e) => patchSel({ name: e.target.value })}
                   placeholder={t('paneCsdNamePlaceholder')}
@@ -150,6 +159,7 @@ export function CustomShowDialog({
                       <label key={i} className="csd-page">
                         <input
                           type="checkbox"
+                          disabled={locked}
                           checked={selIndices.includes(i)}
                           onChange={() => togglePage(i)}
                         />
@@ -171,7 +181,7 @@ export function CustomShowDialog({
                         </span>
                         <span className="csd-order-btns">
                           <button
-                            disabled={posInShow === 0}
+                            disabled={locked || posInShow === 0}
                             onClick={() => movePage(posInShow, -1)}
                             data-tip={t('paneMoveUp')}
                             aria-label={t('paneMoveUp')}
@@ -179,7 +189,7 @@ export function CustomShowDialog({
                             ↑
                           </button>
                           <button
-                            disabled={posInShow === selIndices.length - 1}
+                            disabled={locked || posInShow === selIndices.length - 1}
                             onClick={() => movePage(posInShow, 1)}
                             data-tip={t('paneMoveDown')}
                             aria-label={t('paneMoveDown')}
@@ -197,11 +207,13 @@ export function CustomShowDialog({
             <div className="csd-detail csd-empty">{t('paneCsdCreateHint')}</div>
           )}
         </div>
+        {error && <p role="alert">{error}</p>}
         <div className="modal-actions">
-          <button onClick={onClose}>{t('paneCsdClose')}</button>
+          {error && onDiscard && <button onClick={onDiscard}>{t('paneCancel')}</button>}
+          <button disabled={pending} onClick={onClose}>{t('paneCsdClose')}</button>
           <button
             className="primary"
-            disabled={!sel || selIndices.length === 0}
+            disabled={pending || !sel || selIndices.length === 0}
             onClick={() => sel && onPlay(sel)}
           >
             {t('paneCsdPlay')}

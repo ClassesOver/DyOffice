@@ -22,7 +22,6 @@ import type {
 import type { BrushFormat } from './format-brush'
 import type { InkTool } from './ink'
 import type { SlidesViewMode } from './components/ribbon-shared'
-import type { CustomShow } from './slideshow-utils'
 
 type Set<T> = React.Dispatch<React.SetStateAction<T>>
 
@@ -202,8 +201,6 @@ export interface ActionCtx {
   setSlideShow: Set<SlideShowState | null>
   presenter: { startAt: number } | null
   setPresenter: Set<{ startAt: number } | null>
-  setCustomShows: Set<CustomShow[]>
-  setCustomShowDlgOpen: Set<boolean>
   pendingRehearse: number[] | null
   setPendingRehearse: Set<number[] | null>
   /** A recorded show awaiting "keep the recording?" */

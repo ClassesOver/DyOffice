@@ -4,12 +4,14 @@ import {isRevisionRef} from '../../../../packages/web-contracts/src/api.ts'
 import type {AiDocCreationResult} from '../shell/ai-doc-creation.ts'
 import { hostError } from '../../../../packages/web-contracts/src/errors.ts'
 import type { DesktopApi } from '../../../docs/src/shared/ipc'
+import { validPrintPaper } from '../../../docs/src/shared/print-paper'
 import type { TabsApi } from '../../../shell/src/shared/tabs-api'
 import type { SessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { createSaveGenerationGuard, type SaveTicket } from '../../../../packages/browser-host/src/save-generation.ts'
 import { messages } from './messages.ts'
 import { createAiPdf } from './create-ai-pdf.ts'
-import { copyDocsImageToClipboard } from './docs-image-clipboard.ts'
+import { prepareMarkdownDownload } from './docs-markdown-export.ts'
+import { copyDocsImageToClipboard, fetchDocsClipboardImage, readDocsImage } from './docs-image-clipboard.ts'
 
 // The native DOCX entry does not import the shell TabBar's global declaration.
 // Only these optional, same-origin parent capabilities are used by this bridge.
@@ -84,7 +86,6 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   let panelPrefs = {side:'left' as 'left'|'right',fontSize:'default' as 'default'|'xlarge'|'large'|'custom',customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:true}
   const panelListeners = new Set<(value:typeof panelPrefs)=>void>()
   function download(blob:Blob,name:string){const url=URL.createObjectURL(blob);try{const link=document.createElement('a');link.href=url;link.download=name;link.click()}finally{setTimeout(()=>URL.revokeObjectURL(url),0)}}
-  async function imageBlob(src:string){if(!src.startsWith('data:image/')&&!src.startsWith('blob:'))throw Error(text.unavailable);const response=await fetch(src);if(!response.ok)throw Error(text.unavailable);const blob=await response.blob();if(!['image/png','image/jpeg','image/gif'].includes(blob.type)||blob.size>16*1024*1024)throw Error(text.unavailable);return blob}
   const knowledge=createWebKnowledge(options.knowledgeRequest)
   const createInWorkspace = () => {
     try { return typeof window === 'undefined' ? undefined : (window.parent as ParentTabsWindow)?.dyofficeCreateAiDoc }
@@ -191,13 +192,56 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     setDocPassword: unavailable,writeRecoveryCopy: unavailable,
     async pickImage(){return new Promise<import('../../../docs/src/shared/ipc').PickImageResult|null>((resolve,reject)=>{const input=document.createElement('input');input.type='file';input.accept='image/png,image/jpeg,image/gif';input.hidden=true;const cleanup=()=>input.remove();input.oncancel=()=>{cleanup();resolve(null)};input.onchange=()=>{const file=input.files?.[0];if(!file){cleanup();resolve(null);return}if(!['image/png','image/jpeg','image/gif'].includes(file.type)||file.size>16*1024*1024){cleanup();reject(Error(text.unavailable));return}const reader=new FileReader();reader.onerror=()=>{cleanup();reject(Error(text.unavailable))};reader.onload=()=>{cleanup();resolve({name:file.name,mime:file.type as 'image/png'|'image/jpeg'|'image/gif',base64:String(reader.result).split(',')[1]})};reader.readAsDataURL(file)};document.body.append(input);input.click()})},
     fetchImage: unavailable,
-    async saveImageAs(src:string){try{const blob=await imageBlob(src);download(blob,`image.${blob.type==='image/jpeg'?'jpg':blob.type.split('/')[1]}`);return {ok:true}}catch{return {ok:false,error:text.unavailable}}},
+    fetchClipboardImage: fetchDocsClipboardImage,
+    async saveImageAs(src: string) {
+      try {
+        const { blob, extension } = await readDocsImage(src)
+        download(blob, `image.${extension}`)
+        return { ok: true }
+      } catch {
+        return { ok: false, error: text.unavailable }
+      }
+    },
     async copyImageToClipboard(src:string){try{await copyDocsImageToClipboard(src);return true}catch{throw Error('浏览器未允许图片剪贴板访问，请使用系统复制快捷键。')}},
     listPrinters: async () => [],
-    async print(){try{window.print();return {ok:true}}catch{return {ok:false,error:'浏览器打印不可用。'}}},
+    async print(_scale?: Parameters<DesktopApi['print']>[0], _job?: Parameters<DesktopApi['print']>[1], paper?: Parameters<DesktopApi['print']>[2]) {
+      const geometry = validPrintPaper(paper)
+      const pageStyle = geometry ? window.document.createElement('style') : undefined
+      let started = false
+      const beforePrint = () => { started = true }
+      let afterPrint!: () => void
+      const finished = new Promise<void>(resolve => { afterPrint = resolve })
+      try {
+        if (pageStyle && geometry) {
+          pageStyle.dataset.docsPrintPaper = ''
+          pageStyle.textContent = `@media print { @page { size: ${geometry.widthTwips / 1440}in ${geometry.heightTwips / 1440}in; margin: 0; } }`
+          window.document.head.append(pageStyle)
+        }
+        window.addEventListener('beforeprint', beforePrint)
+        window.addEventListener('afterprint', afterPrint)
+        window.print()
+        // Keep the paper rule and preview alive if the system dialog is asynchronous.
+        if (started) await finished
+        return {ok:true}
+      } catch {
+        return {ok:false,error:locale==='en'?'Browser printing is unavailable.':'浏览器打印不可用。'}
+      } finally {
+        window.removeEventListener('beforeprint', beforePrint)
+        window.removeEventListener('afterprint', afterPrint)
+        pageStyle?.remove()
+      }
+    },
     async exportHtml(name:string,html:string){download(new Blob([html],{type:'text/html;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.html');return {ok:true}},
     exportPdf: unavailable,
-    async exportMarkdown(name:string,md:string){download(new Blob([md],{type:'text/markdown;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.md');return {ok:true}},
+    async exportMarkdown(name:string,md:string,images?:Parameters<DesktopApi['exportMarkdown']>[2]){
+      if(disposed)return {ok:false,error:text.unavailable}
+      try{
+        const file=await prepareMarkdownDownload(name,md,images ?? [],window.location.origin)
+        if(disposed)return {ok:false,error:text.unavailable}
+        download(file.blob,file.name)
+        return images === undefined ? {ok:true} : {ok:true,path:file.name,imagesDropped:file.imagesDropped}
+      }catch(error){return {ok:false,error:error instanceof RangeError?error.message:text.unavailable}}
+    },
     pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
     pickMergeDataSource: unavailable,writeMergeOutput: unavailable,zoteroCommand: unavailable,
     onZoteroRequest:noEvent,

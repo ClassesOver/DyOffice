@@ -19,6 +19,7 @@ import {
   reparseDeck,
   deleteSlide,
   deleteSlideComment,
+  getCustomShows,
   getSections,
   duplicateSlide,
   insertBlankSlide,
@@ -36,6 +37,7 @@ import {
   replaceAllInDeck,
   resetSlideBackground,
   resetSlideLayout,
+  setCustomShows,
   setSections,
   setSlideAdvanceTime,
   setSlideAnimations,
@@ -52,6 +54,7 @@ import {
   ANIM_EFFECTS,
   ANIM_TRIGGERS,
   TRANSITION_KINDS,
+  type CustomShowInfo,
   type SectionInfo,
   type ThemeSpec,
   type SlideAnimation,
@@ -624,6 +627,24 @@ register({
       throw new GuidedError('op "applyHeaderFooter": nothing changed (same settings as before).')
     }
     return { op, after: op.settings }
+  },
+})
+
+register({
+  name: 'setCustomShows',
+  validate(op) {
+    if (!Array.isArray(op.shows) || !op.shows.every(show =>
+      show && typeof show.id === 'string' && typeof show.name === 'string' &&
+      Array.isArray(show.slidePaths) && show.slidePaths.every((path: unknown) => typeof path === 'string'),
+    )) {
+      throw new GuidedError('op "setCustomShows" needs "shows": entries with an id, name, and ordered slidePaths.')
+    }
+  },
+  apply(op, ctx): OpRecord {
+    if (!setCustomShows(ctx.opened, op.shows as CustomShowInfo[])) {
+      throw new GuidedError('op "setCustomShows": use unique show ids and slide paths from this presentation.')
+    }
+    return { op, after: getCustomShows(ctx.opened) }
   },
 })
 

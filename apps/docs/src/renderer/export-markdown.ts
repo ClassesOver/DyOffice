@@ -1,30 +1,21 @@
 import type { Editor } from '@tiptap/core'
 import { isTrackedDeleted } from './ai/doc-utils'
 import { serializeRangeToHtml } from './ai/protocol'
-import { MARKDOWN_MEDIA_DIR_TOKEN, type MarkdownImage } from '../shared/ipc'
+import { MARKDOWN_IMAGE_EXTENSIONS, MARKDOWN_MEDIA_DIR_TOKEN, type MarkdownImage } from '../shared/ipc'
 
 export interface MarkdownExport {
   markdown: string
   images: MarkdownImage[]
 }
 
-const IMAGE_EXT: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/gif': 'gif',
-  'image/bmp': 'bmp',
-  'image/webp': 'webp',
-  'image/svg+xml': 'svg',
-  'image/tiff': 'tif',
-}
-
 function imageExt(src: string): string | null {
   const data = /^data:(image\/[\w.+-]+);base64,/.exec(src)
-  if (data) return IMAGE_EXT[data[1]] ?? null
+  if (data) return MARKDOWN_IMAGE_EXTENSIONS[data[1]] ?? null
+  if (src.startsWith('blob:')) return 'blob' // The browser writer resolves the MIME type.
   if (src.startsWith('genoffice-docx-media://')) {
     const ext = /\.(\w+)$/.exec(src)?.[1]?.toLowerCase()
     if (!ext) return null
-    return Object.values(IMAGE_EXT).includes(ext === 'jpeg' ? 'jpg' : ext) ? ext : null
+    return Object.values(MARKDOWN_IMAGE_EXTENSIONS).includes(ext === 'jpeg' ? 'jpg' : ext) ? ext : null
   }
   return null
 }

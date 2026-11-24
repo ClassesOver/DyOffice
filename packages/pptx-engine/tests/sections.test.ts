@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
   addSection,
+  deleteSlide,
   getSections,
+  insertBlankSlide,
   moveSection,
   moveSlide,
   normalizeSections,
@@ -66,6 +68,23 @@ describe('sections (p14:sectionLst)', () => {
     ])
     // The fixture's first slide has sldId 256
     expect(presXml(opened)).toContain('<p14:sldId id="256"/>')
+  })
+
+  it('keeps the last section empty when a new slide is added after deleting its only slide and reopening', async () => {
+    const opened = await open()
+    addSection(opened, 4, 'Empty after deletion')
+    const expected = getSections(opened).map((section) => ({
+      ...section,
+      slideIndices: section.slideIndices.filter(index => index !== 4),
+    }))
+    expect(deleteSlide(opened, 4)).toBe(true)
+    expect(getSections(opened)).toEqual(expected)
+
+    const reopened = await openPptx(await savePptx(opened))
+    expect(getSections(reopened)).toEqual(expected)
+    expect(insertBlankSlide(reopened, 3)).not.toBeNull()
+    expect(getSections(reopened)).toEqual(expected)
+    expect(getSections(await openPptx(await savePptx(reopened)))).toEqual(expected)
   })
 
   it('addSection: sectionless document auto-gains a default section; then split an existing section', async () => {

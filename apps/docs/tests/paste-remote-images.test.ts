@@ -26,6 +26,19 @@ beforeEach(() => {
 afterEach(() => editor.destroy())
 
 describe('remote image paste', () => {
+  it('uses the Web clipboard reader when the AI media reader is also available', async () => {
+    const fetchClipboardImage = vi.fn().mockResolvedValue({ mime: 'image/png', base64: 'aGVsbG8=' })
+    Object.defineProperty(window, 'desktop', {
+      configurable: true,
+      value: { fetchImage, fetchClipboardImage },
+    })
+    await pasteRemoteImages(editor, [url], url, failed)
+    expect(fetchClipboardImage).toHaveBeenCalledWith(url)
+    expect(fetchImage).not.toHaveBeenCalled()
+    expect(insertImage).toHaveBeenCalledOnce()
+    expect(failed).not.toHaveBeenCalled()
+  })
+
   it('handles a rejected Web bridge without rejecting and preserves the clipboard URL', async () => {
     fetchImage.mockRejectedValue(new Error('此功能当前不可用。'))
     await expect(pasteRemoteImages(editor, [url], url, failed)).resolves.toBeUndefined()

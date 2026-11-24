@@ -30,16 +30,12 @@ const pvPages = (): HTMLElement[] => [
   ...document.querySelectorAll<HTMLElement>('.pagination-preview .pv-page'),
 ]
 
-/** The document's own paper in twips, read off the first preview sheet: the
- * pagination slices pages at the section geometry (96 px per inch), so the
- * sheet's layout box maps back 1:1. `offsetWidth`/`offsetHeight` ignore the
- * preview's visual zoom. Null when no sheet exists yet — the CUPS route then
- * keeps Chromium's default paper rather than printing a wrong size. */
-function paperOfPreview(): PrintPaper | undefined {
-  const page = pvPages()[0]
+/** The preview uses CSS pixels at 96 px per inch. Inline dimensions retain
+ * the fractional pixels for paper sizes such as A4. */
+function paperOfPage(page: HTMLElement | undefined): PrintPaper | undefined {
   if (!page) return undefined
-  const w = page.offsetWidth
-  const h = page.offsetHeight
+  const w = Number.parseFloat(page.style.width) || page.offsetWidth
+  const h = Number.parseFloat(page.style.height) || page.offsetHeight
   if (!(w > 0) || !(h > 0)) return undefined
   return { widthTwips: Math.round(w * 15), heightTwips: Math.round(h * 15) }
 }
@@ -97,12 +93,12 @@ export function PrintDialog({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
-        onClose()
+        if (!printing) onClose()
       }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, printing])
 
   const current = Math.min(page, Math.max(0, pageCount - 1))
   const ready = pageCount > 0
@@ -159,16 +155,22 @@ export function PrintDialog({
     const els = pvPages()
     if (!selected || selected.length === 0 || printing) return
     const sel = new Set(selected)
+    const pages = els.filter((_el, i) => sel.has(i))
+    const last = pages.at(-1)
+    if (!last) return
+    const paper = paperOfPage(browserOnly ? pages[0] : els[0])
+    const app = browserOnly ? last.closest('.app') : null
     setPrinting(true)
-    // pv-print-skip only takes effect in the print stylesheet: the on-screen
-    // (hidden) preview keeps its layout while unselected sheets don't print.
+    app?.classList.add('pv-printing')
     els.forEach((el, i) => el.classList.toggle('pv-print-skip', !sel.has(i)))
-    const scale = setPrintZoom('printer')
+    last.classList.add('pv-print-tail')
+    // The browser print dialog owns scaling. Only the desktop job can invert this zoom.
+    const scale = browserOnly ? 1 : setPrintZoom('printer')
     try {
       const r = await window.desktop.print(
         scale,
         systemDialog ? { deviceName: null } : { deviceName, copies, collate, duplex },
-        paperOfPreview(),
+        paper,
       )
       if (r.ok) {
         onClose()
@@ -177,14 +179,16 @@ export function PrintDialog({
       if (r.error) setStatus(t('appPrintFailed', { error: r.error }))
       // not ok without an error = canceled in the system dialog: keep the dialog open
     } finally {
-      clearPrintZoom()
+      if (!browserOnly) clearPrintZoom()
+      app?.classList.remove('pv-printing')
+      last.classList.remove('pv-print-tail')
       els.forEach((el) => el.classList.remove('pv-print-skip'))
       setPrinting(false)
     }
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={printing ? undefined : onClose}>
       <div className="modal print-dialog" onClick={(e) => e.stopPropagation()}>
         <h2>{t('appPrintTitle')}</h2>
         <div className="print-dialog-body">
@@ -329,7 +333,7 @@ export function PrintDialog({
           </div>
         </div>
         <div className="modal-actions">
-          <button onClick={onClose}>{t('appCancel')}</button>
+          <button disabled={printing} onClick={onClose}>{t('appCancel')}</button>
           <button
             className="primary"
             disabled={!ready || !selected || selected.length === 0 || printing}

@@ -24,6 +24,7 @@ import {
 import { isPresetShapeType } from './preset-shape-types'
 import { custGeomXml, parseCustGeom, validCustGeomPath, type CustGeomPath } from './custgeom'
 import { nextSlideId, nextSlidePath, rememberRemovedSlide, removedSlide, reserveSlideNumbers, retireSlidePath } from './slide-ids'
+import { getCustomShows, removeCustomShowSlide, restoreCustomShowSlide } from './custom-shows'
 import {
   alternateContentBranches,
   generateParagraphXml,
@@ -365,6 +366,7 @@ export {
   normalizeSections,
   type SectionInfo,
 } from './sections'
+export { getCustomShows, setCustomShows, type CustomShowInfo } from './custom-shows'
 export {
   collectSlideBundle,
   importSourceLayout,
@@ -2057,7 +2059,11 @@ const slideBundleOrigins = new WeakMap<SlideBundle, WeakRef<PackageArchive>>()
 export function copySlide(opened: OpenedPptx, sourceIndex: number): SlideBundle | null {
   const slide = opened.deck.slides[sourceIndex]
   if (!slide) return null
-  const bundle = collectSlideBundle(opened.archive, slide.path, patchSlideXml(slide))
+  const copied = collectSlideBundle(opened.archive, slide.path, patchSlideXml(slide))
+  const customShowMemberships = getCustomShows(opened)
+    .filter(show => show.slidePaths.includes(slide.path))
+    .map(({ id, slidePaths }) => ({ id, slidePaths }))
+  const bundle = customShowMemberships.length ? { ...copied, customShowMemberships } : copied
   slideBundleOrigins.set(bundle, new WeakRef(opened.archive))
   return bundle
 }
@@ -2142,6 +2148,7 @@ export function pasteSlide(
     // position, apply the same destination section rules as a thumbnail move.
     const originalIndex = Math.min(original.index, deck.slides.length)
     const slide = registerNewSlide(opened, originalIndex - 1, newPath, original.id)
+    if (slide) restoreCustomShowSlide(opened, newPath, bundle.customShowMemberships ?? [])
     if (slide && originalIndex !== anchorIndex + 1) moveSlide(opened, originalIndex, anchorIndex + 1)
     return slide
   }
@@ -2426,7 +2433,7 @@ export function deleteSlide(opened: OpenedPptx, index: number): boolean {
 
   const sldTag = new RegExp(`<p:sldId\\s[^>]*r:id=["']${rid}["'][^>]*/>`).exec(pres)?.[0]
   if (!sldTag) return false
-  archive.entries.set(presPath, Buffer.from(pres.replace(sldTag, ''), 'utf8'))
+  archive.entries.set(presPath, Buffer.from(removeCustomShowSlide(pres.replace(sldTag, ''), rid), 'utf8'))
   const relTag = new RegExp(`<Relationship\\s[^>]*Id=["']${rid}["'][^>]*/>`).exec(presRels)?.[0]
   if (relTag) {
     archive.entries.set(presRelsPath, Buffer.from(presRels.replace(relTag, ''), 'utf8'))

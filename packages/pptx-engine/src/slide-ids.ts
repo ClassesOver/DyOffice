@@ -55,7 +55,7 @@ export function removedSlide(archive: PackageArchive, path: string): RemovedSlid
   return removedSlides.get(archive)?.get(path)
 }
 
-/** Next p:sldId/@id for a presentation part: max+1, or the lowest free id once a deck sits at the ceiling. */
+/** Next p:sldId/@id: max+1, or the lowest free id once a deck sits at the ceiling. */
 export function nextSlideId(presXml: string, archive?: PackageArchive, restoreId?: number): number {
   const used = new Set<number>()
   for (const [tag] of presXml.matchAll(/<p:sldId\s[^>]*>/g)) {
@@ -64,6 +64,15 @@ export function nextSlideId(presXml: string, archive?: PackageArchive, restoreId
   }
   if (restoreId !== undefined && !used.has(restoreId)) return restoreId
   if (archive) for (const { id } of removedSlides.get(archive)?.values() ?? []) used.add(id)
+  // A cut slide can leave its section membership behind for a live restore.
+  // Those references survive saving and reopening, so fresh slides must also skip them.
+  const sections = /<p14:sectionLst\b[^>]*>([\s\S]*?)<\/p14:sectionLst>/.exec(presXml)?.[1]
+  if (sections) {
+    for (const [tag] of sections.matchAll(/<p14:sldId\s[^>]*>/g)) {
+      const id = numericSlideId(tag)
+      if (id !== undefined) used.add(id)
+    }
+  }
   // Loop-based max: spreading `used` into Math.max overflows the call stack
   // on decks with hundreds of thousands of slides.
   let max = SLIDE_ID_MIN - 1

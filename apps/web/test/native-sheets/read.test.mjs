@@ -124,6 +124,87 @@ test('opening viewport matches a normal Node range and skips oversized cell text
  assert.equal(large.sheets[0].rowCount,12)
 })
 
+test('Node XLSX preserves hidden sheets and reads the active visible sheet in the preview',async t=>{
+ const native=await nodeRuntime(t)
+ const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ const workbook=await zip.file('xl/workbook.xml').async('string')
+ const sheets=[
+  ['Acceptance','veryHidden',1],
+  ['Public',null,2],
+  ['Backstage','hidden',3],
+  ['Dashboard',null,4],
+ ]
+ const workbookSheets=sheets.map(([name,state,id])=>`<sheet name="${name}" sheetId="${id}"${state?` state="${state}"`:''} r:id="rId${id===1?1:id+2}"/>`).join('')
+ const rels=await zip.file('xl/_rels/workbook.xml.rels').async('string')
+ const extraRelationships=sheets.slice(1).map(([, , id])=>`<Relationship Id="rId${id+2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${id}.xml"/>`).join('')
+ zip.file('xl/_rels/workbook.xml.rels',rels.replace('</Relationships>',extraRelationships+'</Relationships>'))
+ const types=await zip.file('[Content_Types].xml').async('string')
+ const extraTypes=sheets.slice(1).map(([,,id])=>`<Override PartName="/xl/worksheets/sheet${id}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
+ zip.file('[Content_Types].xml',types.replace('</Types>',extraTypes+'</Types>'))
+ for(const [name,,id] of sheets.slice(1)){
+  zip.file(`xl/worksheets/sheet${id}.xml`,`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>${name}</t></is></c></row></sheetData></worksheet>`)
+ }
+ const withActiveTab=activeTab=>workbook.replace('<workbookView/>',`<workbookView activeTab="${activeTab}"/>`)
+  .replace(/<sheets>[\s\S]*?<\/sheets>/,`<sheets>${workbookSheets}</sheets>`)
+ zip.file('xl/workbook.xml',withActiveTab(3))
+ const inspected=await native.inspect(await zip.generateAsync({type:'nodebuffer'}),undefined,true)
+ assert.deepEqual(inspected.sheets.map(({name,hidden,veryHidden})=>[name,hidden,veryHidden??false]),[
+  ['Acceptance',true,true],['Public',false,false],['Backstage',true,false],['Dashboard',false,false],
+ ])
+ assert.equal(inspected.activeTab,3)
+ assert.equal(inspected.openingViewport.sheetId,inspected.sheets[3].id)
+ assert.equal(inspected.openingViewport.result.cells[0].value,'Dashboard')
+
+ zip.file('xl/workbook.xml',withActiveTab(2))
+ const stale=await native.inspect(await zip.generateAsync({type:'nodebuffer'}),undefined,true)
+ assert.equal(stale.activeTab,2)
+ assert.equal(stale.openingViewport.sheetId,stale.sheets[1].id)
+ assert.equal(stale.openingViewport.result.cells[0].value,'Public')
+})
+
+test('Node XLSX reads visible workbook and scoped names and cell hyperlinks within the range',async t=>{
+ const native=await nodeRuntime(t)
+ const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ const workbook=await zip.file('xl/workbook.xml').async('string')
+ zip.file('xl/workbook.xml',workbook.replace('</definedNames>',`
+  <definedName name="Global">Acceptance!$B$2</definedName>
+  <definedName name="Scoped" localSheetId="0">IF(Acceptance!$A$1&lt;2,&quot;X&amp;Y&quot;,&quot;Z&quot;)</definedName>
+  <definedName name="Future"><![CDATA[_xlfn._xlws.FILTER(Acceptance!A1:A3,Acceptance!B1:B3<2,"&amp;")]]></definedName>
+  <definedName name="Hidden" hidden="1">Acceptance!$C$2</definedName>
+  <definedName name="_xlnm.Print_Area" localSheetId="0">Acceptance!$A$1:$C$3</definedName>
+ </definedNames>`))
+ zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+  <hyperlinks>
+   <hyperlink ref="$A$1:$A$2" location="'Acceptance'!B2"/>
+   <hyperlink ref="B1" r:id="rIdLink"/>
+   <hyperlink ref="C1" r:id="rIdMissing"/>
+   <hyperlink ref="A3" location="Scoped"/>
+  </hyperlinks>
+ </worksheet>`)
+ zip.file('xl/worksheets/_rels/sheet1.xml.rels',`<rels:Relationships xmlns:rels="http://schemas.openxmlformats.org/package/2006/relationships">
+  <rels:Relationship Id='rIdLink' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+    Target='https://example.test/?a=1&amp;b=2' TargetMode='External'/>
+ </rels:Relationships>`)
+ const bytes=await zip.generateAsync({type:'nodebuffer'})
+ const inspected=await native.inspect(bytes,undefined,true)
+ assert.deepEqual(inspected.definedNames,[
+  {name:'Revenue',formula:'Acceptance!$A$2:$A$3'},
+  {name:'Global',formula:'Acceptance!$B$2'},
+  {name:'Scoped',formula:'IF(Acceptance!$A$1<2,"X&Y","Z")',sheetIndex:0},
+  {name:'Future',formula:'FILTER(Acceptance!A1:A3,Acceptance!B1:B3<2,"&amp;")'},
+ ])
+ assert.equal(inspected.sheets[0].hasScopedDefinedNames,true)
+ const links=await native.readRange(bytes,'Acceptance',{startRow:0,endRow:0,startColumn:0,endColumn:2})
+ assert.deepEqual(links.hyperlinks,[
+  {row:0,column:0,target:"#'Acceptance'!B2"},
+  {row:0,column:1,target:'https://example.test/?a=1&b=2'},
+ ])
+ const below=await native.readRange(bytes,'Acceptance',{startRow:1,endRow:2,startColumn:0,endColumn:0})
+ assert.deepEqual(below.hyperlinks,[{row:2,column:0,target:'#Scoped'}])
+ assert.deepEqual(inspected.openingViewport.result.hyperlinks,[...links.hyperlinks,...below.hyperlinks])
+})
+
 test('Node XLSX keeps sparse layout beyond the last value and returns intersecting merges',async t=>{
  const native=await nodeRuntime(t)
  const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
@@ -150,4 +231,107 @@ test('Node XLSX keeps sparse layout beyond the last value and returns intersecti
  assert.deepEqual(rule.colors,['#FF0000','#FFFF00','#00FF00'])
  assert.deepEqual(rule.cfvos,[{kind:'min'},{kind:'percentile',value:'50'},{kind:'max'}])
  assert.equal(rule.ranges.length,2)
+})
+
+test('Node XLSX restores legacy and x14 validation rules across viewport and range reads',async t=>{
+ const native=await nodeRuntime(t)
+ const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+   xmlns:dv="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+  <sheetData><row r="2"><c r="A2"><v>1</v></c></row></sheetData>
+  <dataValidations count="2">
+   <dataValidation type="list" sqref="\$A\$2 A4:A5" allowBlank="1" showDropDown="1" showInputMessage="1"
+    showErrorMessage="true" errorStyle="warning" errorTitle="Try again" error="A &amp; B" promptTitle="Pick" prompt="Select one">
+    <formula1>&quot;Approved,Rejected&quot;</formula1>
+   </dataValidation>
+   <dataValidation type="whole" operator="between" sqref="B2"><formula1>0</formula1><formula2>10</formula2></dataValidation>
+  </dataValidations>
+  <extLst>
+   <ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}">
+    <dv:dataValidations count="1"><dv:dataValidation type="custom">
+     <dv:formula1><xm:f>A2&lt;2</xm:f></dv:formula1><xm:sqref>C2</xm:sqref>
+    </dv:dataValidation></dv:dataValidations>
+   </ext>
+   <ext uri="unrelated"><dv:dataValidations count="1"><dv:dataValidation type="list"><xm:sqref>D2</xm:sqref></dv:dataValidation></dv:dataValidations></ext>
+  </extLst>
+ </worksheet>`)
+ const bytes=await zip.generateAsync({type:'nodebuffer'})
+ const bounds={startRow:0,endRow:0,startColumn:0,endColumn:0}
+ const result=await native.readRange(bytes,'Acceptance',bounds)
+ const area=(row,col,endRow=row,endCol=col)=>({startRow:row,startColumn:col,endRow,endColumn:endCol})
+ const flags={allowBlank:false,suppressDropdown:false,showInputMessage:false,showErrorMessage:false}
+ assert.deepEqual(result.dataValidations,[
+  {ranges:[area(1,0),area(3,0,4,0)],ruleType:'list',formulas:['"Approved,Rejected"'],
+   allowBlank:true,suppressDropdown:true,showInputMessage:true,showErrorMessage:true,errorStyle:'warning',
+   errorTitle:'Try again',error:'A & B',promptTitle:'Pick',prompt:'Select one'},
+  {ranges:[area(1,1)],ruleType:'whole',operator:'between',formulas:['0','10'],...flags},
+  {ranges:[area(1,2)],ruleType:'custom',formulas:['A2<2'],...flags},
+ ])
+ const inspected=await native.inspect(bytes,undefined,true)
+ assert.deepEqual(inspected.openingViewport.result.dataValidations,result.dataValidations)
+})
+
+test('Node XLSX restores worksheet view, print settings and manual page breaks',async t=>{
+ const native=await nodeRuntime(t)
+ const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ const workbook=await zip.file('xl/workbook.xml').async('string')
+ zip.file('xl/workbook.xml',workbook.replace('</definedNames>',`
+  <definedName name="_xlnm.Print_Area" localSheetId="0">Acceptance!\$A\$1:\$F\$12</definedName>
+  <definedName name="_xlnm.Print_Titles" localSheetId="0">Acceptance!\$1:\$2</definedName></definedNames>`))
+ zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr><tabColor rgb="FFFF3300"/><pageSetUpPr fitToPage="1"/></sheetPr>
+  <sheetViews><sheetView workbookViewId="0" showGridLines="0" showFormulas="1" showRowColHeaders="0" rightToLeft="1"
+   view="pageLayout" zoomScale="75" zoomScaleNormal="130"/></sheetViews>
+  <sheetData><row r="1"><c r="A1"><v>42</v></c></row></sheetData>
+  <customSheetViews><customSheetView guid="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><pageSetup orientation="portrait"/></customSheetView></customSheetViews>
+  <printOptions headings="1" gridLines="1"/>
+  <pageMargins left="0.4" right="0.4" top="1" bottom="1" header="0.5" footer="0.5"/>
+  <pageSetup paperSize="9" orientation="landscape" scale="85" fitToWidth="1" fitToHeight="2"/>
+  <headerFooter differentOddEven="1" differentFirst="1" scaleWithDoc="0"><oddHeader>&amp;LA &amp; B</oddHeader>
+   <oddFooter>&amp;R&amp;P</oddFooter><evenHeader>&amp;CEven</evenHeader><firstFooter>&amp;CFirst</firstFooter></headerFooter>
+  <rowBreaks count="4" manualBreakCount="3"><brk id="99" man="0"/><brk id="4" man="1"/><brk id="2" man="1"/><brk id="2" man="true"/></rowBreaks>
+  <colBreaks count="1" manualBreakCount="1"><brk id="3" man="1"/></colBreaks>
+ </worksheet>`)
+ const bytes=await zip.generateAsync({type:'nodebuffer'})
+ const inspected=await native.inspect(bytes,undefined,true)
+ const {tabColor,showGridLines,showFormulas,showRowColHeaders,rightToLeft,zoomScale}=inspected.sheets[0]
+ assert.deepEqual({tabColor,showGridLines,showFormulas,showRowColHeaders,rightToLeft,zoomScale},{
+  tabColor:'#FF3300',showGridLines:false,showFormulas:true,showRowColHeaders:false,rightToLeft:true,zoomScale:130,
+ })
+ assert.equal(inspected.sheets[0].printArea,'Acceptance!$A$1:$F$12')
+ assert.equal(inspected.sheets[0].printTitles,'Acceptance!$1:$2')
+ assert.equal(inspected.definedNames.some(name=>name.name.startsWith('_xlnm')),false)
+ const result=await native.readRange(bytes,'Acceptance',{startRow:0,endRow:0,startColumn:0,endColumn:0})
+ assert.deepEqual(result.rowBreaks,[2,4])
+ assert.deepEqual(result.colBreaks,[3])
+ assert.deepEqual(result.pageSetup,{
+  orientation:'landscape',paperSize:9,scale:85,fitToWidth:1,fitToHeight:2,fitToPage:true,
+  margins:{left:0.4,right:0.4,top:1,bottom:1,header:0.5,footer:0.5},printGridlines:true,printHeadings:true,
+  oddHeader:'&LA & B',oddFooter:'&R&P',differentOddEven:true,differentFirst:true,headerFooterFixedSize:true,
+  evenHeader:'&CEven',firstFooter:'&CFirst',
+ })
+ assert.deepEqual(inspected.openingViewport.result.pageSetup,result.pageSetup)
+})
+
+test('Node XLSX reopens chart metadata and serves an embedded image by its visual ID',async t=>{
+ const native=await nodeRuntime(t)
+ const source=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+ const chart=(await native.inspect(source)).visuals[0]
+ assert.equal(chart.kind,'chart')
+ assert.equal(chart.chartPath,'xl/charts/chart1.xml')
+ assert.deepEqual(chart.chart.series[0].values,[12.5,7.5])
+
+ const zip=await JSZip.loadAsync(source)
+ const drawingPath='xl/drawings/drawing1.xml'
+ const drawing=await zip.file(drawingPath).async('string')
+ zip.file(drawingPath,drawing.replace(/<xdr:graphicFrame[\s\S]*?<\/xdr:graphicFrame>/,
+  '<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Pixel"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId2"/></xdr:blipFill><xdr:spPr/></xdr:pic>'))
+ zip.file('xl/drawings/_rels/drawing1.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>')
+ const base64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
+ zip.file('xl/media/image1.png',Buffer.from(base64,'base64'))
+ const bytes=await zip.generateAsync({type:'nodebuffer'})
+ const [image]=(await native.inspect(bytes)).visuals
+ assert.equal(image.kind,'image')
+ assert.notEqual(image.id,'image1.png')
+ assert.deepEqual(await native.readMedia(bytes,image.id),{mediaType:'image/png',base64})
 })

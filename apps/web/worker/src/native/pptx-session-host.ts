@@ -1,4 +1,4 @@
-import type {HeaderFooterState,LinkTarget,SectionInfo,SlideAnimation,SlideShapeKey,SlideTransitionKind} from '@genoffice/pptx-engine'
+import type {CustomShowInfo,HeaderFooterState,LinkTarget,SectionInfo,SlideAnimation,SlideShapeKey,SlideTransitionKind} from '@genoffice/pptx-engine'
 export type AnimationItem={sourceId:string;targetName:string}&Omit<SlideAnimation,'spid'>
 type LinkTargetOp=LinkTarget
 export interface SlidePresentationInfo {
@@ -91,6 +91,7 @@ export interface PptxChildSession {
   layouts(expectedGeneration: number, signal?: AbortSignal): Promise<{layouts:Array<{path:string;name:string;layoutType:string;placeholders:Array<{type:string;idx:string;x:number;y:number;cx:number;cy:number;hint:string}>}>;size:{cx:number;cy:number}}>
   masterParts(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterView[]>
   applyMaster(expectedGeneration: number, partPath: string, operation: unknown, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterEditResult>
+  customShows(expectedGeneration: number, signal?: AbortSignal): Promise<CustomShowInfo[]>
   renderAll(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesRenderSlideLike[]>
   outline(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesOutlineView>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{ generation: number; bytes: Uint8Array }>
@@ -215,6 +216,7 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
     layouts(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'layouts',expected}) },
     masterParts(expected,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'masterParts',expected,width}) },
     applyMaster(expected,partPath,operation,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'applyMaster',expected,partPath,operation,width}) },
+    customShows(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'customShows',expected}) },
     renderAll(expected,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'renderAll',expected,width}) },
     outline(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'outline',expected}) },
     exportBytes(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'export',expected}) },

@@ -137,6 +137,8 @@ import {
   ensureBuiltinLayout,
   shouldOfferBuiltinLayouts,
   BUILTIN_LAYOUT_PREFIX,
+  type CustomShowInfo,
+  getCustomShows,
   getSections,
   normalizeSections,
   type SectionInfo,
@@ -455,6 +457,7 @@ function trackSlidesWebContents(wc: WebContents): void {
     closeSaveWaiters.get(wc.id)?.(false)
     closeSaveWaiters.delete(wc.id)
     autoSavePrefByWc.delete(wc.id)
+    customShowDraftByWc.delete(wc.id)
     if (windowRefs.activeWebContents === wc) windowRefs.activeWebContents = null
   })
 }
@@ -673,6 +676,12 @@ setInterval(() => {
 const closeSaveWaiters = new Map<number, (ok: boolean) => void>()
 /** Autosave toggle mirrored from the renderer: files with it on save silently on close and proceed, no dialog */
 const autoSavePrefByWc = new Map<number, boolean>()
+const customShowDraftByWc = new Set<number>()
+
+ipcMain.on('slides:custom-show-draft', (event, pending: unknown) => {
+  if (pending === true && sessions.has(event.sender.id)) customShowDraftByWc.add(event.sender.id)
+  else customShowDraftByWc.delete(event.sender.id)
+})
 
 ipcMain.on('slides:autosave-pref', (event, on: unknown) => {
   autoSavePrefByWc.set(event.sender.id, on === true)
@@ -702,7 +711,7 @@ function requestRendererSave(contents: WebContents): Promise<boolean> {
 
 export function slidesIsDirty(webContentsId: number): boolean {
   const session = sessions.get(webContentsId)
-  return !!session && sessionDirty(session)
+  return !!session && (sessionDirty(session) || customShowDraftByWc.has(webContentsId))
 }
 
 /**
@@ -720,7 +729,8 @@ export async function requestSlidesClose(
   // without a save prompt — the changes are not being discarded. View-only
   // attachments (presenter audience) don't count: they cannot save.
   const shared = sessions.get(contents.id)
-  if (shared && editorAttachedIds(shared).length > 1) return true
+  const hasOtherEditors = !!shared && editorAttachedIds(shared).length > 1
+  if (hasOtherEditors && !customShowDraftByWc.has(contents.id)) return true
   // Autosave on and a path exists: save silently and proceed without bothering the user; only a failed save falls through to the dialog
   if (autoSavePrefByWc.get(contents.id) && sessions.get(contents.id)?.path) {
     if (await requestRendererSave(contents)) return true
@@ -740,6 +750,7 @@ export async function requestSlidesClose(
       : await dialog.showMessageBox(options)
   if (response === 2) return false
   if (response === 1) {
+    if (hasOtherEditors) return true
     // User explicitly discarded changes: also delete the recovery copy, so the next open does not show a pointless recovery prompt
     const session = sessions.get(contents.id)
     if (session?.path) void rm(autosavePathFor(session.path), { force: true }).catch(() => {})
@@ -4422,6 +4433,17 @@ export function registerSlidesIpc(): void {
       ops: [{ op: 'setHidden', target: { slide: op.slideIndex }, hidden: op.hidden }],
     })
     return r ? rebuildSlide(session, op.slideIndex) : null
+  })
+
+  ipcMain.handle('slides:get-custom-shows', (e) => {
+    const session = sessions.get(e.sender.id)
+    return session ? getCustomShows(session.opened) : []
+  })
+  ipcMain.handle('slides:set-custom-shows', (e, shows: CustomShowInfo[]) => {
+    const session = sessions.get(e.sender.id)
+    if (!session || !sessionTxn(session, { ops: [{ op: 'setCustomShows', shows }] })) return null
+    markMetaDirty(session)
+    return getCustomShows(session.opened)
   })
 
   // ── Section management: presentation.xml surgery, riding on snapshot undo and savePptx ──

@@ -272,6 +272,19 @@ export function spillsDynamicArray(formula: string): boolean {
   return functionCalls(formula).some((call) => SPILL_FUNCTIONS.has(call.name.toUpperCase()))
 }
 
+/** Present storage-only markers as the plain function name in the editor. */
+export function withoutFutureFunctionMarkers(formula: string): string {
+  if (!/_xl(?:fn|ws)\./i.test(formula)) return formula
+  let out = ''
+  let cursor = 0
+  for (const call of functionCalls(formula)) {
+    if (!call.marked || !call.name) continue
+    out += formula.slice(cursor, call.start) + call.name
+    cursor = call.end
+  }
+  return out + formula.slice(cursor)
+}
+
 /// Prefixes future-function calls with their storage markers, outside
 /// string literals. Marked calls store the canonical uppercase name.
 export function withFutureFunctionMarkers(formula: string): string {

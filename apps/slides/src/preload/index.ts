@@ -325,6 +325,8 @@ const api: SlidesApi = {
   setAnimations: (op: SetAnimationsOp) => ipcRenderer.invoke('slides:set-animations', op),
   setSlideHidden: (op: SetSlideHiddenOp) => ipcRenderer.invoke('slides:set-hidden', op),
   setSlidesHidden: (op: SetSlidesHiddenOp) => ipcRenderer.invoke('slides:set-slides-hidden', op),
+  getCustomShows: () => ipcRenderer.invoke('slides:get-custom-shows'),
+  setCustomShows: (shows) => ipcRenderer.invoke('slides:set-custom-shows', shows),
   getSections: () => ipcRenderer.invoke('slides:get-sections'),
   setSections: (sections: SectionInfo[]) => ipcRenderer.invoke('slides:set-sections', sections),
   addSection: (op: AddSectionOp) => ipcRenderer.invoke('slides:add-section', op),
@@ -419,6 +421,7 @@ const api: SlidesApi = {
     ipcRenderer.on('slides:deck-changed', listener)
     return () => ipcRenderer.removeListener('slides:deck-changed', listener)
   },
+  reportCustomShowDraft: (pending: boolean) => ipcRenderer.send('slides:custom-show-draft', pending),
   reportCloseSaveResult: (ok: boolean) => ipcRenderer.send('slides:close-save-result', ok === true),
   setAutoSavePref: (on: boolean) => ipcRenderer.send('slides:autosave-pref', on === true),
   isDirty: () => ipcRenderer.invoke('slides:is-dirty'),

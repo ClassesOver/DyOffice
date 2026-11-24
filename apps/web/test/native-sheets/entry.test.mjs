@@ -16,6 +16,7 @@ import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
+import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 
 const sheetsDirectory = process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/',import.meta.url))
 async function fixture(t,{nodeEngine=false}={}) {
@@ -65,8 +66,52 @@ async function fixture(t,{nodeEngine=false}={}) {
   },password)
   assert.equal(status,200)
   errors.length=0
-  return { ...f, original, opened, browser, context, page, origin, errors }
+  return { ...f, original, opened, browser, context, page, origin, errors, planner }
 }
+
+test('Node XLSX preserves existing cell notes when adding a note and saving in Chromium',{timeout:90000},async t=>{
+ const f=await fixture(t,{nodeEngine:true})
+ const request=sheetsSaveRequest('sheet-1',[])
+ request.noteStates=[{sheetId:'sheet-1',notes:[{row:1,column:0,author:'Audit',text:'Existing note on A2'}]}]
+ const plan=await f.planner(f.original,[{id:'sheet-1',name:'Acceptance'}],request)
+ const zip=await JSZip.loadAsync(f.original)
+ for(const path of plan.removedEntries)zip.remove(path)
+ for(const parts of [plan.replaced,plan.added,plan.addedBinary])for(const [path,value] of parts)zip.file(path,value)
+ const commentPart=zip.file(/^xl\/comments\d+\.xml$/)[0]
+ const styledText='<r><rPr><b/></rPr><t xml:space="preserve">Existing note </t></r><r><t>on A2</t></r>'
+ const seededComment=(await commentPart.async('string')).replace(/<t[^>]*>Existing note on A2<\/t>/,styledText)
+ assert.ok(seededComment.includes(styledText))
+ zip.file(commentPart.name,seededComment)
+ const vmlPart=zip.file(/^xl\/drawings\/vmlDrawing\d+\.vml$/)[0]
+ const geometry='width:152pt;height:77pt;z-index:1;visibility:visible'
+ const seededVml=(await vmlPart.async('string')).replace('width:108pt;height:60pt;z-index:1;visibility:hidden',geometry)
+ assert.ok(seededVml.includes(geometry))
+ zip.file(vmlPart.name,seededVml)
+ const {file}=await importFile(f,f.alice.token,await zip.generateAsync({type:'nodebuffer'}),'notes.xlsx')
+ await f.page.goto(f.origin+'/native-xlsx/?fileId='+file.fileId)
+ await expect(f.page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ const notes=()=>f.page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getNotes().map(note=>note.note))
+ await expect.poll(notes).toEqual([expect.stringContaining('Existing note on A2')])
+ await f.page.evaluate(()=>{
+  const sheet=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
+  sheet.getRange('A3').createOrUpdateNote({id:'note-a3',row:2,col:0,width:220,height:90,note:'New note on A3'})
+ })
+ await expect.poll(notes).toEqual(expect.arrayContaining(['New note on A3']))
+ const downloaded=f.page.waitForEvent('download')
+ await f.page.locator('.dyoffice-sheets-download').click()
+ const after=await JSZip.loadAsync(await readFile(await (await downloaded).path()))
+ const comments=await after.file(commentPart.name).async('string')
+ assert.ok(comments.includes(styledText))
+ assert.match(comments,/New note on A3/)
+ assert.ok((await after.file(vmlPart.name).async('string')).includes(geometry))
+ const head=await f.files.openFile(f.alice.token,file.fileId)
+ assert.notEqual(head.file.revision,file.revision)
+ await f.page.reload()
+ await expect(f.page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ await expect.poll(notes).toEqual(expect.arrayContaining([
+  expect.stringContaining('Existing note on A2'),expect.stringContaining('New note on A3'),
+ ]))
+})
 
 test('Node XLSX keeps password-protected ranges locked while saving allowed cells',{timeout:90000},async t=>{
  const f=await fixture(t,{nodeEngine:true})
@@ -227,8 +272,8 @@ test('Name Manager edits a definition and preserves it through native save and r
  await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('F2').getValue()),{timeout:30000}).toBe(12.5)
 })
 
-test('chart format pane edits title and persists it through native save',{timeout:90000},async t=>{
- const f=await fixture(t),fileId=f.opened.file.fileId
+for(const nodeEngine of [false,true]) test(`${nodeEngine?'Node XLSX ':''}chart format pane edits title and persists it through native save`,{timeout:90000},async t=>{
+ const f=await fixture(t,{nodeEngine}),fileId=f.opened.file.fileId
  await f.page.goto(f.origin+'/native-xlsx/?fileId='+fileId)
  const chart=f.page.locator('.xlsx-chart').first();await expect(chart).toBeVisible({timeout:30000})
  await chart.click({button:'right',position:{x:30,y:30}})

@@ -4,7 +4,7 @@
 /// [Content_Types].xml entries. Non-note VML shapes (checkboxes, buttons)
 /// survive a rewrite untouched.
 
-import { encodeXlsxEscapes } from './xlsx-escapes.ts'
+import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
 import {
   allocatePartPath,
   appendRelationship,
@@ -103,12 +103,84 @@ function worksheetRelsPath(worksheetPath: string): string {
   return worksheetPath.replace(/^(xl\/worksheets\/)([^/]+)$/, '$1_rels/$2.rels')
 }
 
+interface XmlBlock {
+  readonly start: number
+  readonly end: number
+  readonly name: string
+  readonly open: string
+  readonly body: string
+  readonly close: string
+}
+
+/** Locate the editable elements without rewriting surrounding XML or namespace bindings. */
+function xmlBlocks(xml: string, name: string): XmlBlock[] {
+  const tags = new RegExp(
+    `<!--[\\s\\S]*?-->|<!\\[CDATA\\[[\\s\\S]*?\\]\\]>|<\\?[\\s\\S]*?\\?>|<(/?)((?:[\\w.-]+:)?${name})(?=[\\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>`,
+    'g',
+  )
+  const blocks: XmlBlock[] = []
+  const openings: Pick<XmlBlock, 'start' | 'name' | 'open'>[] = []
+  for (const match of xml.matchAll(tags)) {
+    const [tag, closing, qualified] = match
+    if (!qualified) continue
+    const index = match.index!
+    const end = index + tag.length
+    if (closing) {
+      const opening = openings.pop()
+      if (opening?.name === qualified) {
+        blocks.push({ ...opening, end, body: xml.slice(opening.start + opening.open.length, index), close: tag })
+      }
+    } else if (tag.endsWith('/>')) {
+      blocks.push({ start: index, end, name: qualified, open: tag, body: '', close: '' })
+    } else {
+      openings.push({ start: index, name: qualified, open: tag })
+    }
+  }
+  return blocks.sort((a, b) => a.start - b.start)
+}
+
+function attribute(tag: string, name: string): string | undefined {
+  for (const match of tag.matchAll(/\s+([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+    if (match[1] === name) return decodeXmlText((match[2] ?? match[3])!)
+  }
+  return undefined
+}
+
+function replaceBlocks(xml: string, blocks: readonly XmlBlock[], replace: (block: XmlBlock) => string): string {
+  let at = 0
+  const parts: string[] = []
+  for (const block of blocks) {
+    if (block.start < at) continue
+    parts.push(xml.slice(at, block.start), replace(block))
+    at = block.end
+  }
+  parts.push(xml.slice(at))
+  return parts.join('')
+}
+
+function rawBlock(block: XmlBlock): string {
+  return block.open + block.body + block.close
+}
+
+function withBody(block: XmlBlock, body: string): string {
+  return block.close
+    ? block.open + body + block.close
+    : block.open.slice(0, -2) + '>' + body + `</${block.name}>`
+}
+
+function prefixOf(block: XmlBlock): string {
+  return block.name.slice(0, block.name.indexOf(':') + 1)
+}
+
+function noteRelationship(xml: string, type: string) {
+  return xmlBlocks(xml, 'Relationship').find(block =>
+    attribute(block.open, 'Type') === type && attribute(block.open, 'TargetMode') !== 'External',
+  )
+}
+
 function relTarget(relsXml: string, type: string): string | null {
-  const pattern = new RegExp(`<Relationship\\b[^>]*Type="${type}"[^>]*/?>`)
-  const found = pattern.exec(relsXml)
-  if (!found) return null
-  const target = / Target="([^"]*)"/.exec(found[0])
-  return target?.[1] ?? null
+  const found = noteRelationship(relsXml, type)
+  return found ? attribute(found.open, 'Target') ?? null : null
 }
 
 async function nextFreePath(
@@ -126,6 +198,13 @@ function cellRef(note: SheetNote): string {
   return `${columnName(note.column)}${note.row + 1}`
 }
 
+function noteXml(prefix: string, ref: string, authorId: number, text: string): string {
+  return (
+    `<${prefix}comment ref="${ref}" authorId="${authorId}">` +
+    `<${prefix}text><${prefix}t xml:space="preserve">${escapeXml(encodeXlsxEscapes(text))}</${prefix}t></${prefix}text></${prefix}comment>`
+  )
+}
+
 function buildCommentsXml(
   notes: readonly SheetNote[],
   overrides: ReadonlyMap<string, LegacyCommentEntry>,
@@ -141,10 +220,7 @@ function buildCommentsXml(
     .map((note) => {
       const ref = cellRef(note)
       const entry = overrides.get(ref) ?? note
-      return (
-        `<comment ref="${ref}" authorId="${authorId(entry.author)}">` +
-        `<text><t xml:space="preserve">${escapeXml(encodeXlsxEscapes(entry.text))}</t></text></comment>`
-      )
+      return noteXml('', ref, authorId(entry.author), entry.text)
     })
     .join('')
   return (
@@ -152,6 +228,76 @@ function buildCommentsXml(
     '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
     `<authors>${authors.map((author) => `<author>${escapeXml(encodeXlsxEscapes(author))}</author>`).join('')}</authors>` +
     `<commentList>${comments}</commentList></comments>`
+  )
+}
+
+function patchCommentsXml(
+  xml: string,
+  notes: readonly SheetNote[],
+  overrides: ReadonlyMap<string, LegacyCommentEntry>,
+  existingLegacy: ReadonlyMap<string, LegacyCommentEntry>,
+): string {
+  const authors = xmlBlocks(xml, 'authors')[0]
+  const list = xmlBlocks(xml, 'commentList')[0]
+  if (!authors || !list) {
+    if (existingLegacy.size === 0) return buildCommentsXml(notes, overrides)
+    throw new NoteEditError('The existing notes part cannot be edited without losing note data.')
+  }
+  const authorBlocks = xmlBlocks(authors.body, 'author')
+  const commentBlocks = xmlBlocks(list.body, 'comment')
+  const authorIds = new Map<string, number>()
+  const recordedAuthorId = (block: XmlBlock): number | undefined => {
+    const raw = attribute(block.open, 'authorId')
+    const id = Number(raw)
+    return raw !== undefined && /^\d+$/.test(raw) && id < authorBlocks.length ? id : undefined
+  }
+  for (const block of commentBlocks) {
+    const id = recordedAuthorId(block)
+    const ref = attribute(block.open, 'ref')
+    const entry = ref === undefined ? undefined : existingLegacy.get(ref)
+    if (id !== undefined && entry) authorIds.set(entry.author, id)
+  }
+  const appendedAuthors: string[] = []
+  const usedAuthors = new Set<number>()
+  const authorPrefix = prefixOf(authors)
+  const commentPrefix = prefixOf(list)
+  const entryXml = (ref: string, { author, text }: LegacyCommentEntry) => {
+    let id = authorIds.get(author)
+    if (id === undefined) {
+      id = authorBlocks.length + appendedAuthors.length
+      authorIds.set(author, id)
+      appendedAuthors.push(
+        `<${authorPrefix}author>${escapeXml(encodeXlsxEscapes(author))}</${authorPrefix}author>`,
+      )
+    }
+    usedAuthors.add(id)
+    return noteXml(commentPrefix, ref, id, text)
+  }
+  const pending = new Map(notes.map(note => [cellRef(note), note]))
+  const commentBody = replaceBlocks(list.body, commentBlocks, (block) => {
+    const originalRef = attribute(block.open, 'ref')
+    const ref = originalRef?.split(':', 1)[0]?.replaceAll('$', '').toUpperCase()
+    const note = ref === undefined ? undefined : pending.get(ref)
+    if (ref === undefined || !note) return ''
+    pending.delete(ref)
+    const entry = overrides.get(ref) ?? note
+    const original = existingLegacy.get(originalRef!)
+    const id = recordedAuthorId(block)
+    if (id !== undefined && original?.author === entry.author && original.text === entry.text) {
+      usedAuthors.add(id)
+      return rawBlock(block)
+    }
+    return entryXml(ref, entry)
+  })
+  const added = [...pending].map(([ref, note]) => entryXml(ref, overrides.get(ref) ?? note))
+  const authorSlots = new Map(authorBlocks.map((block, index) => [block, index]))
+  const authorBody = replaceBlocks(authors.body, authorBlocks, block =>
+    usedAuthors.has(authorSlots.get(block)!) ? rawBlock(block) : `<${block.name}/>`,
+  )
+  return replaceBlocks(xml, [authors, list].sort((a, b) => a.start - b.start), block =>
+    block === authors
+      ? withBody(authors, authorBody + appendedAuthors.join(''))
+      : withBody(list, commentBody + added.join('')),
   )
 }
 
@@ -169,8 +315,8 @@ const FIRST_NOTE_SHAPE_ID = 1025
 
 function nextShapeId(vmlXml: string): number {
   let next = FIRST_NOTE_SHAPE_ID
-  for (const match of vmlXml.matchAll(/\bid="_x0000_s(\d+)"/g)) {
-    const id = Number(match[1])
+  for (const match of vmlXml.matchAll(/\bid\s*=\s*(["'])_x0000_s(\d+)\1/g)) {
+    const id = Number(match[2])
     if (id >= next) next = id + 1
   }
   return next
@@ -184,47 +330,6 @@ interface NoteShapePicture {
   readonly fill: string
   readonly width?: string | undefined
   readonly height?: string | undefined
-}
-
-/// Excel puts a picture into a note by painting that note's shape with a
-/// picture fill — a `<v:fill type="frame">` element carrying the image
-/// relationship on `o:relid` (`r:id` on some producers) — resolved through
-/// the VML part's own rels. The rewrite below throws every Note shape away
-/// and builds fresh ones, so without this map the media is left related but
-/// painted by nothing: the picture is still in the package and no longer
-/// shown by anything. The whole fill element travels with the map so the
-/// relationship, the title, and the recolor/rotate flags survive together.
-/// (WPS writes an empty `<v:imagedata>` on every note; it carries no
-/// relationship and matches nothing here.)
-function noteShapePictures(vmlXml: string): Map<string, NoteShapePicture> {
-  const pictures = new Map<string, NoteShapePicture>()
-  for (const shape of vmlXml.matchAll(/<v:shape\b[\s\S]*?<\/v:shape>/g)) {
-    if (!shape[0].includes('ObjectType="Note"')) continue
-    let tag: string | null = null
-    const fill = /<v:fill\b[^>]*\/>/.exec(shape[0])?.[0]
-    if (fill && fill.includes('type="frame"')) {
-      // Excel writes o:relid; some producers use r:id on the same element.
-      if (/\b(?:o:)?relid="/.test(fill) || /\br:id="/.test(fill)) tag = fill
-    }
-    if (tag === null) {
-      const image = /<v:imagedata\b[^>]*\br:id="([^"]+)"[^>]*\/>/.exec(shape[0])
-      if (image?.[1]) tag = image[0]
-    }
-    if (tag === null) continue
-    const row = /<x:Row>(\d+)<\/x:Row>/.exec(shape[0])
-    const column = /<x:Column>(\d+)<\/x:Column>/.exec(shape[0])
-    if (!row || !column) continue
-    // The shape's own size is the picture's size: a fill is stretched to the
-    // frame it paints, so keeping the frame is what keeps the photograph's
-    // proportions.
-    const style = / style="([^"]*)"/.exec(shape[0])?.[1] ?? ''
-    pictures.set(`${column[1]}:${row[1]}`, {
-      fill: tag,
-      width: /(?:^|;)\s*width:([^;]+)/.exec(style)?.[1],
-      height: /(?:^|;)\s*height:([^;]+)/.exec(style)?.[1],
-    })
-  }
-  return pictures
 }
 
 function noteImageKey(note: SheetNote): string {
@@ -288,28 +393,18 @@ async function writeNotePicture(
   }
 }
 
-/// The picture each note shows, as its shape paints it.
-///
-/// A note that brings a picture of its own gets a new media part and a new
-/// relationship; a note that says nothing about its picture keeps the one it
-/// was already carrying; a note that says `null` loses it.
+/// New or explicitly replaced pictures get their own media relationship.
 async function notePictureFills(
   pkg: MutableNotePackage,
   vmlPath: string,
   notes: readonly SheetNote[],
-  carried: ReadonlyMap<string, NoteShapePicture>,
   touchedEntries: Set<string>,
 ): Promise<Map<string, NoteShapePicture>> {
   const fills = new Map<string, NoteShapePicture>()
   for (const note of notes) {
-    const key = noteImageKey(note)
-    if (note.picture === null) continue
-    if (note.picture !== undefined) {
-      fills.set(key, await writeNotePicture(pkg, vmlPath, note.picture, touchedEntries))
-      continue
+    if (note.picture) {
+      fills.set(noteImageKey(note), await writeNotePicture(pkg, vmlPath, note.picture, touchedEntries))
     }
-    const previous = carried.get(key)
-    if (previous !== undefined) fills.set(key, previous)
   }
   return fills
 }
@@ -319,6 +414,7 @@ function noteShape(
   index: number,
   firstId: number,
   picture?: NoteShapePicture,
+  existingId?: string,
 ): string {
   // Anchor: from one column right of the cell, spanning ~3 columns / 4 rows.
   const anchor = [note.column + 1, 15, note.row, 2, note.column + 4, 15, note.row + 4, 2].join(',')
@@ -336,7 +432,7 @@ function noteShape(
     ? `${picture.width ? `width:${picture.width};` : ''}${picture.height ? `height:${picture.height};` : ''}`
     : 'width:108pt;height:60pt;'
   return (
-    `<v:shape id="_x0000_s${firstId + index}" type="#_x0000_t202"` +
+    `<v:shape id="${existingId === undefined ? `_x0000_s${firstId + index}` : escapeXml(existingId)}" type="#_x0000_t202"` +
     ' style="position:absolute;margin-left:80pt;margin-top:2pt;' +
     `${size}z-index:${index + 1};visibility:hidden"${paint}` +
     '<v:path o:connecttype="none"/>' +
@@ -349,11 +445,25 @@ function noteShape(
   )
 }
 
-/// Drops every Note-typed shape, keeping other legacy objects verbatim.
-function stripNoteShapes(vmlXml: string): string {
-  return vmlXml.replace(/<v:shape\b(?![^>]*\/>)[\s\S]*?<\/v:shape>/g, (shape) =>
-    shape.includes('ObjectType="Note"') ? '' : shape,
-  )
+/** Keep controls and surviving note shapes in their original drawing positions. */
+function keepNoteShapes(xml: string, notes: readonly SheetNote[]) {
+  const wanted = new Set(notes.filter(note => note.picture === undefined).map(noteImageKey))
+  const kept = new Set<string>()
+  const existingIds = new Map<string, string>()
+  const vml = replaceBlocks(xml, xmlBlocks(xml, 'shape'), shape => {
+    const client = xmlBlocks(shape.body, 'ClientData').find(block => attribute(block.open, 'ObjectType') === 'Note')
+    if (!client) return rawBlock(shape)
+    const row = xmlBlocks(client.body, 'Row')[0]?.body.trim()
+    const column = xmlBlocks(client.body, 'Column')[0]?.body.trim()
+    if (row === undefined || column === undefined || !/^\d+$/.test(row) || !/^\d+$/.test(column)) return ''
+    const key = `${Number(column)}:${Number(row)}`
+    const id = attribute(shape.open, 'id')
+    if (id) existingIds.set(key, id)
+    if (!wanted.delete(key)) return ''
+    kept.add(key)
+    return rawBlock(shape)
+  })
+  return { vml, added: notes.filter(note => !kept.has(noteImageKey(note))), existingIds }
 }
 
 function ensureContentTypeOverride(contentTypes: string, partName: string): string {
@@ -381,7 +491,10 @@ function appendRel(relsXml: string, id: string, type: string, target: string): s
 }
 
 function removeRel(relsXml: string, type: string): string {
-  return relsXml.replace(new RegExp(`<Relationship\\b[^>]*Type="${type}"[^>]*/?>`), '')
+  const relationship = noteRelationship(relsXml, type)
+  return relationship
+    ? relsXml.slice(0, relationship.start) + relsXml.slice(relationship.end)
+    : relsXml
 }
 
 async function removeContentTypeOverride(
@@ -442,10 +555,11 @@ export async function applySheetNotes(
     existingVmlTarget === null ? null : resolveRelTarget(worksheetPath, existingVmlTarget)
   let relsChanged = false
 
-  const existingLegacy =
+  const originalComments =
     existingCommentsPath !== null && (await pkg.has(existingCommentsPath))
-      ? parseLegacyComments(await pkg.readText(existingCommentsPath))
-      : new Map<string, LegacyCommentEntry>()
+      ? await pkg.readText(existingCommentsPath)
+      : undefined
+  const existingLegacy = parseLegacyComments(originalComments ?? '')
   const threaded = await syncThreadedComments(
     pkg,
     worksheetPath,
@@ -477,8 +591,8 @@ export async function applySheetNotes(
     relsXml = removeRel(relsXml, COMMENTS_REL_TYPE)
     await removeContentTypeOverride(pkg, existingCommentsPath, touchedEntries)
     if (existingVmlPath !== null && (await pkg.has(existingVmlPath))) {
-      const remaining = stripNoteShapes(await pkg.readText(existingVmlPath))
-      if (/<v:shape\b/.test(remaining)) {
+      const { vml: remaining } = keepNoteShapes(await pkg.readText(existingVmlPath), [])
+      if (xmlBlocks(remaining, 'shape').length) {
         pkg.write(existingVmlPath, remaining)
       } else {
         pkg.remove(existingVmlPath)
@@ -507,30 +621,41 @@ export async function applySheetNotes(
     relsChanged = true
     pkg.add(commentsPath, buildCommentsXml(notes, threaded.legacy))
   } else {
-    pkg.write(commentsPath, buildCommentsXml(notes, threaded.legacy))
+    const comments = originalComments === undefined
+      ? buildCommentsXml(notes, threaded.legacy)
+      : patchCommentsXml(originalComments, notes, threaded.legacy, existingLegacy)
+    if (comments !== originalComments) pkg.write(commentsPath, comments)
   }
   touchedEntries.add(commentsPath)
 
-  // VML part: keep foreign shapes, replace the note shapes.
+  // VML part: append new or explicitly repainted shapes without moving the survivors.
   if (existingVmlPath !== null && (await pkg.has(existingVmlPath))) {
     const original = await pkg.readText(existingVmlPath)
-    const carried = noteShapePictures(original)
-    const vml = stripNoteShapes(original)
-    const end = vml.lastIndexOf('</xml>')
-    if (end === -1) throw new NoteEditError(`${existingVmlPath} is not a VML drawing.`)
-    const firstId = nextShapeId(vml)
-    const pictures = await notePictureFills(pkg, existingVmlPath, notes, carried, touchedEntries)
-    const shapes = notes
-      .map((note, index) => noteShape(note, index, firstId, pictures.get(noteImageKey(note))))
-      .join('')
-    pkg.write(existingVmlPath, vml.slice(0, end) + shapes + vml.slice(end))
-    touchedEntries.add(existingVmlPath)
+    const { vml, added, existingIds } = keepNoteShapes(original, notes)
+    let updated = vml
+    if (added.length) {
+      const end = vml.lastIndexOf('</xml>')
+      if (end === -1) throw new NoteEditError(`${existingVmlPath} is not a VML drawing.`)
+      const firstId = nextShapeId(original)
+      const pictures = await notePictureFills(pkg, existingVmlPath, added, touchedEntries)
+      const shapes = added
+        .map((note, index) => {
+          const key = noteImageKey(note)
+          return noteShape(note, index, firstId, pictures.get(key), existingIds.get(key))
+        })
+        .join('')
+      updated = vml.slice(0, end) + shapes + vml.slice(end)
+    }
+    if (updated !== original) {
+      pkg.write(existingVmlPath, updated)
+      touchedEntries.add(existingVmlPath)
+    }
   } else {
     const vmlPath = await nextFreePath(pkg, (index) => `xl/drawings/vmlDrawing${index}.vml`)
     const rid = nextFreeRelationshipId(relsXml)
     relsXml = appendRel(relsXml, rid, VML_REL_TYPE, `../drawings/${vmlPath.split('/').pop()}`)
     relsChanged = true
-    const pictures = await notePictureFills(pkg, vmlPath, notes, new Map(), touchedEntries)
+    const pictures = await notePictureFills(pkg, vmlPath, notes, touchedEntries)
     const shapes = notes
       .map((note, index) =>
         noteShape(note, index, FIRST_NOTE_SHAPE_ID, pictures.get(noteImageKey(note))),
