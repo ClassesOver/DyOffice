@@ -342,6 +342,7 @@ async function mount(){
    const state=editor?.state()??{dirty:false,blocked:loading==='reading'}
    return {...state,blocked:state.blocked||redacting||recoverRedaction||recoverManual||ribbonBusy||ribbonPending}
   },
+  waitForSave:()=>editor?.waitForSave?.(),
   save:()=>editor?.save()??Promise.resolve(false),
   release:async()=>{},cleanup,
   confirm:()=>window.confirm('PDF 有未保存修改。保存并关闭？'),

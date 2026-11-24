@@ -178,12 +178,12 @@ afterEach(() => {
 })
 
 /** Mount the App and boot into a blank deck at fit zoom 1 (1336x800 container). */
-async function bootApp(): Promise<HTMLElement> {
+async function bootApp(host?: import('../src/renderer/App').SlidesAppHost): Promise<HTMLElement> {
   resizeStage(1336, 800)
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  await act(async () => root!.render(createElement(App)))
+  await act(async () => root!.render(createElement(App,{host})))
   await settle()
   const wrap = container.querySelector<HTMLElement>('.stage-wrap')
   expect(wrap, 'editor should boot into a blank deck').not.toBeNull()
@@ -210,6 +210,29 @@ describe('App rejected text commit', () => {
 })
 
 describe('App analysis delivery save consent',()=>{
+ it('waits through renderer dirty-state cleanup after the host save returns',async()=>{
+  const api=makeSlidesApi() as any
+  let handle:any,finishSave!:(result:{ok:true;path:string})=>void
+  api.consumePendingOpen=async()=>({path:'save.pptx',slides:[blankSlide()],defaultFont:'Arial'})
+  api.isDirty=vi.fn(async()=>true)
+  api.save=()=>new Promise(resolve=>{finishSave=resolve})
+  window.slidesApi=api
+  await bootApp({inPlaceSave:true,onEditorReady:value=>{handle=value}})
+  const saving=handle.saveAndWait()
+  await settle()
+  const waiting=handle.waitForSave()
+  expect(waiting).toBeDefined()
+  let settled=false
+  void waiting!.then(()=>{settled=true})
+  await settle()
+  expect(settled).toBe(false)
+  finishSave({ok:true,path:'save.pptx'})
+  await act(async()=>{expect(await saving).toBe(true)})
+  await waiting
+  expect(settled).toBe(true)
+  expect(handle.waitForSave()).toBeUndefined()
+ })
+
  it('holds blur and timer saves after insertion until an explicit save',async()=>{
   const interval=vi.spyOn(window,'setInterval'),api=makeSlidesApi() as any
   let generation=1,handle:any

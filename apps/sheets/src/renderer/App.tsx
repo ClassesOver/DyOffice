@@ -642,6 +642,8 @@ export interface SheetsEditorHandle {
   save(): Promise<boolean>
   /** Commit the editor and await formula/chart work without writing the file. */
   flush(): Promise<boolean>
+  /** Wait for the current save and its renderer-side journal/reopen work to finish. */
+  waitForSave(): Promise<void> | undefined
   /** Wait behind any current save and drain late edits; fail closed if still dirty. */
   prepareHandoff(): Promise<void>
   nameWithAi(): Promise<void>
@@ -796,6 +798,7 @@ export function App({
       prepareHandoff: async()=>{const runtime=univerRef.current,state=lazyWorkbookRef.current;if(runtime&&state&&fitsFullLoad(workbookCellCounts(state.file.sheets)))await startFullLoad(runtime,lazyWorkbookRef,setMessage)},
       save: async () => (await handleSave('save')).ok,
       flush: () => saveGateRef.current.run(flushEditor),
+      waitForSave: () => saveGateRef.current.waitForCurrent(),
       saveAndWait,
       saveForDownload: saveAndWait,
       nameWithAi,

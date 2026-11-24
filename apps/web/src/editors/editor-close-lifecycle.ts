@@ -2,6 +2,7 @@
 export function createEditorCloseLifecycle(options:{
  state:()=>{dirty:boolean;blocked:boolean}
  save:()=>Promise<boolean>
+ waitForSave?:()=>Promise<void>|undefined
  release:()=>Promise<void>
  cleanup:()=>void
  confirm:()=>boolean
@@ -11,6 +12,12 @@ export function createEditorCloseLifecycle(options:{
  let disposed=false,checking:Promise<boolean>|null=null,disposing:Promise<boolean>|null=null
  const clean=()=>{const state=options.state();return !state.dirty&&!state.blocked}
  async function check(){
+  if(disposed)return true
+  while(true){
+   const pending=options.waitForSave?.()
+   if(!pending)break
+   await pending
+  }
   if(disposed)return true
   const state=options.state()
   if(state.blocked){options.notify();return false}

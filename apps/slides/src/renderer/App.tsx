@@ -369,6 +369,8 @@ export interface SlidesEditorHandle {
   analysis?:import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   /** Run the renderer's full save flow (flush the edit overlay + notes, then save in place). */
   saveAndWait(): Promise<boolean>
+  /** Wait for active saves through renderer-side dirty-state cleanup. */
+  waitForSave(): Promise<void> | undefined
   /** True when the session or the local speaker notes have unsaved changes. */
   isDirty(): boolean
   /** A background continuation may use this saved deck without flushing any local drafts. */
@@ -1181,12 +1183,15 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
 
   const analysisConsent=useRef(createAnalysisSaveConsent())
   const analysisApplying=useRef(false),analysisSaving=useRef(0)
+  const activeSaves=useRef(new Set<Promise<boolean>>())
+  const waitForSave=():Promise<void>|undefined=>activeSaves.current.size? (async()=>{
+    while(activeSaves.current.size)await Promise.allSettled([...activeSaves.current])
+  })():undefined
   const save = useCallback(
-    async (quiet = false,automatic=false): Promise<boolean> => {
-      if(analysisApplying.current)return false
+    (quiet = false,automatic=false): Promise<boolean> => {
+      if(analysisApplying.current)return Promise.resolve(false)
       analysisSaving.current++
-      try {
-        return await analysisConsent.current.run(automatic, async () => {
+      const operation=analysisConsent.current.run(automatic, async () => {
           if (!await commitCustomShows()) return false
           const migrated = migratedCustomShows.current
           const saved = await fileActions.save(() => ctxRef.current, quiet)
@@ -1200,9 +1205,13 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
           }
           return saved
         }, ok => ok, false)
-      } finally {
+      let tracked:Promise<boolean>
+      tracked=operation.finally(()=>{
         analysisSaving.current--
-      }
+        activeSaves.current.delete(tracked)
+      })
+      activeSaves.current.add(tracked)
+      return tracked
     },
     [commitCustomShows],
   )
@@ -1216,6 +1225,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   useEffect(() => {
     host?.onEditorReady?.({
       saveAndWait: () => saveRef.current(true),
+      waitForSave,
       analysis:{captureAnalysis:()=>captureSlideAnalysis({current:(forSave=false)=>{
         const ctx=ctxRef.current,generation=hostRef.current?.analysisGeneration?.()
         if(!ctx.slide||generation==null||(!forSave&&(hostRef.current?.readOnly||analysisSaving.current>0))||ctx.editingActiveRef.current||notesDraftsRef.current.size||ctx.masterItems||effectsInFlight.current||mouseDownRef.current)return null

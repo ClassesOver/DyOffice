@@ -913,7 +913,25 @@ test('Ctrl+S names an untitled Word document from its first paragraph', {timeout
  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
  const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
  await editor.click({timeout:45000});await page.keyboard.insertText('Quarterly review')
+ const dialogs=[]
+ page.on('dialog',async dialog=>{dialogs.push(dialog.message());await dialog.dismiss()})
+ assert.equal(await page.evaluate(()=>window.dyofficeEditorCanClose()),false)
+ assert.match(dialogs.pop(),/未保存/)
+ const rename=page.waitForRequest(r=>r.url().endsWith('/auto-name'))
+ let resumeName
+ const nameGate=new Promise(resolve=>{resumeName=resolve})
+ await page.route('**/auto-name',async route=>{await nameGate;await route.continue()})
  await page.keyboard.press('Control+s')
+ await rename
+ try {
+   await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','pending')
+   await page.evaluate(()=>{
+     window.closeAfterSave=window.dyofficeEditorCanClose()
+   })
+ } finally {resumeName()}
+ assert.equal(await page.evaluate(()=>window.closeAfterSave),true)
+ assert.deepEqual(dialogs,[])
  await expect.poll(async()=>(await f.files.openFile(f.alice.token,file.fileId)).name,{timeout:10000}).toBe('Quarterly review.docx')
  await expect(page.locator('.qa-btn.qa-name-with-ai')).toHaveCount(0)
+ assert.equal(await page.evaluate(()=>window.dyofficeEditorDispose()),true)
 })

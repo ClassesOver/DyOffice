@@ -473,7 +473,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   reportDocumentLoading('rendering')
   const root = createRoot(element)
   root.render(<LocaleProvider initial={locale}><NativeDocument /></LocaleProvider>)
-  const closeState=()=>({dirty:!host.getState(fileId).lease&&syncState==='active'&&wordSync ? wordSync.pending() : !!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||bridge.getState().nativeSaveOutcome==='pending'})
+  const closeState=()=>({dirty:!host.getState(fileId).lease&&syncState==='active'&&wordSync ? wordSync.pending() : !!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||!!bridge.waitForSave()})
   registerDisplayedRevision(()=>{
     const state=closeState(),current=host.getState(fileId)
     const revision=current.revision.revision
@@ -485,7 +485,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   window.addEventListener('beforeunload',beforeUnload)
   const cleanup=()=>{if(disposed)return;disposed=true;clearTimeout(grantExpiry);copyLifetime.abort();clearTimeout(peerSaveTimer);wordSync?.dispose();stopFollowup?.();stopExternalWriting?.();unregisterAnalysis?.();analysisTarget.dispose();window.removeEventListener('beforeunload',beforeUnload);imageAttachments.set([]);assistant?.dispose();realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()}
-  const lifecycle=createEditorCloseLifecycle({state:closeState,save:()=>editorHandle?.save()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;element.inert=value;if(!value)changed()},confirm:()=>window.confirm('文档有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>window.alert('保存仍在进行或结果待确认，请先在文档中核对后再关闭。')})
+  const lifecycle=createEditorCloseLifecycle({state:closeState,waitForSave:bridge.waitForSave,save:()=>editorHandle?.save()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;element.inert=value;if(!value)changed()},confirm:()=>window.confirm('文档有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>window.alert('保存仍在进行或结果待确认，请先在文档中核对后再关闭。')})
   return {
     canClose:lifecycle.canClose,
     dispose:lifecycle.dispose,

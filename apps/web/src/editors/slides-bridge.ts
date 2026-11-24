@@ -181,6 +181,17 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   const controllers = new Set<AbortController>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
   let recovery: Recovery | null = null, confirming = false
+  let activeSaveCount=0,activeSave:Promise<void>|undefined,resolveActiveSave:(()=>void)|undefined
+  function beginActiveSave(){
+    if(activeSaveCount++===0)activeSave=new Promise(resolve=>{resolveActiveSave=resolve})
+    let ended=false
+    return ()=>{
+      if(ended)return
+      ended=true
+      if(--activeSaveCount===0){const resolve=resolveActiveSave;activeSave=undefined;resolveActiveSave=undefined;resolve?.()}
+    }
+  }
+  function waitForSave(){return recovery?undefined:activeSave}
   const inFlight = {count: 0}
   const waiting: (() => void)[] = []
   const historyHandlers = new Set<(state: HistoryState) => void>()
@@ -973,6 +984,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       // flushActiveEdit runs before this point, so an overlay edit that just committed
       // has already marked the session dirty and takes the full receipt path.
       if (!current.dirty) return {ok: true as const, path: host.getState(fileId).name}
+      const finishSave=beginActiveSave()
+      try {
       const generation=current.generation
       const candidate=await firstSlideName(current).catch(()=>undefined)
       let saved: SaveReceipt | undefined
@@ -996,6 +1009,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       current.dirty = false
       if(candidate&&current.generation===generation)await host.nameSavedBlank?.(fileId,saved.revision,candidate).catch(()=>undefined)
       return {ok: true as const, path: host.getState(fileId).name}
+      } finally {finishSave()}
     },
     onHistoryChanged(handler: (state: HistoryState) => void) {
       historyHandlers.add(handler)
@@ -1533,7 +1547,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     }finally{releaseSlot()}
   }
   return {
-    api,guardedSave,guardedApply,getReceipt:()=>committed,getAnalysisGeneration:()=>session?.generation??null,
+    api,guardedSave,guardedApply,waitForSave,getReceipt:()=>committed,getAnalysisGeneration:()=>session?.generation??null,
     confirmSave,
     prepareDownload,exportDraftCopy,hasGeneratedName:()=>Boolean(session?.nameCandidate&&session.dirty&&host.getState(fileId).autoNamePending),
     takeover,

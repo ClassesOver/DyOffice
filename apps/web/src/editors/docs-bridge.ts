@@ -40,6 +40,13 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   let consumed = false, consumedAiDocContent = false, ticket: SaveTicket | null = null
   let nativeSaveOutcome: 'none' | 'pending' | 'accepted' | 'incomplete' = 'none'
   let nativeSaveReasons: readonly string[] = []
+  let activeSave: Promise<void> | undefined
+  let resolveActiveSave: (()=>void) | undefined
+  function finishActiveSave(){
+    activeSave=undefined
+    resolveActiveSave?.()
+    resolveActiveSave=undefined
+  }
   let generatedContentPending = false
   function completeGeneratedContent(accepted:boolean){
     if(!generatedContentPending)return
@@ -53,13 +60,14 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   const noEvent = () => () => {}
   const lifecycle = {
     aiDocumentCreated: completeGeneratedContent,
-    documentOpened() { if(disposed)return; guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
+    documentOpened() { if(disposed)return; finishActiveSave(); guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
     edited() { if(disposed)return; guard.markEdited(); onChange() },
     async beforeSave() {
       if(disposed||takingOver)throw hostError('UNAVAILABLE','disposed or taking over')
       // The native queue may have waited after the download preflight. Do not
       // turn this action into implicit confirmation of an intervening save.
       if (downloading && (disposed || host.getState(fileId).status !== 'idle' || guard.getState().status === 'unknown')) throw hostError('UNAVAILABLE','download not ready')
+      activeSave=new Promise(resolve=>{resolveActiveSave=resolve})
       wordVersion=await options.wordCheckpoint?.()
       nativeSaveOutcome = 'pending'; nativeSaveReasons = []
       if (guard.getState().status === 'unknown') {
@@ -80,6 +88,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       // Native metadata edits do not emit a ProseMirror update. An incomplete
       // native save must not make the Web status claim that those edits landed.
       if (!accepted && host.getState(fileId).status === 'idle' && !guard.getState().dirty) guard.markEdited()
+      finishActiveSave()
       onChange()
     },
   }
@@ -284,5 +293,5 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     }catch(error){if(acquired)await host.releaseLease(fileId).catch(()=>{});throw error}
     finally{takingOver=false;if(!disposed)onChange()}
   }
-  return { api,lifecycle,resolveKnowledgeCitation:knowledge.citationPath,get supportedCreateDocumentTypes() {return typeof createInWorkspace() === 'function' ? ['docx', 'pdf'] as const : []},guardedSave,takeover,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { knowledge.dispose(); completeGeneratedContent(false); disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  return { api,lifecycle,resolveKnowledgeCitation:knowledge.citationPath,get supportedCreateDocumentTypes() {return typeof createInWorkspace() === 'function' ? ['docx', 'pdf'] as const : []},guardedSave,takeover,prepareDownload,waitForSave:()=>activeSave,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { knowledge.dispose(); completeGeneratedContent(false); disposed = true; finishActiveSave(); panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }

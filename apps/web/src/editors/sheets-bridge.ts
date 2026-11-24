@@ -39,6 +39,17 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   const renameListeners = new Set<(name:string)=>void>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
   let recovery: Recovery | null = null, confirming = false
+  let activeSaveCount=0,activeSave:Promise<void>|undefined,resolveActiveSave:(()=>void)|undefined
+  function beginActiveSave(){
+    if(activeSaveCount++===0)activeSave=new Promise(resolve=>{resolveActiveSave=resolve})
+    let ended=false
+    return ()=>{
+      if(ended)return
+      ended=true
+      if(--activeSaveCount===0){const resolve=resolveActiveSave;activeSave=undefined;resolveActiveSave=undefined;resolve?.()}
+    }
+  }
+  function waitForSave(){return recovery?undefined:activeSave}
   let inFlight = 0
   const waiting: (() => void)[] = []
   let csrf: string | undefined, disposed = false, queued = true, pendingEdits = 0
@@ -339,6 +350,8 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async listWorkbookConnections({sessionId}){return workbookConnectionsResultSchema.parse((await extras(sessionId)).connections)},
     async readWorkbookQueries({sessionId}){return workbookQueriesResultSchema.parse((await extras(sessionId)).queries)},
     async saveWorkbookEdits(input){
+      const finishSave=beginActiveSave()
+      try {
       if(saveFence&&!saveFence())throw hostError('UNAVAILABLE','save authorization changed')
       const request=workbookSaveRequestSchema.parse(input),current=session(request.sessionId)
       if (host.getState(fileId).revision.revision!==current.revision) throw hostError('CONFLICT','workbook base')
@@ -359,6 +372,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         // Confirmation resumes that exact save, including its late-edit carry.
         return new Promise<SaveResult>((resolve,reject)=>{recovery={...(saved ? {saved} : {}),resolve,reject};onChange()})
       }
+      } finally {finishSave()}
     },
     async autoRenameWorkbook(sessionId:string,candidate:string){
       const current=session(sessionId)
@@ -517,5 +531,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     supportedMergeExtensions: mergeExtensions,
-    api,workspaceLinks,guardedSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+    api,workspaceLinks,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }
