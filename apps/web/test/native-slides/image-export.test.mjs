@@ -1176,4 +1176,3 @@ test('Ctrl+S names an untitled presentation from the first slide once', {timeout
   await save()
   assert.equal(await name(),title+'.pptx')
 })
-})

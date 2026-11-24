@@ -917,4 +917,3 @@ test('Ctrl+S names an untitled Word document from its first paragraph', {timeout
  await expect.poll(async()=>(await f.files.openFile(f.alice.token,file.fileId)).name,{timeout:10000}).toBe('Quarterly review.docx')
  await expect(page.locator('.qa-btn.qa-name-with-ai')).toHaveCount(0)
 })
-})
