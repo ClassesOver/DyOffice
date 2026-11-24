@@ -3,6 +3,7 @@ import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,typ
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
 import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
 import {GensparkMark} from '../../../docs/src/renderer/components/icons'
+import {ToolChipList,type ToolActivity} from '../../../pdf/src/renderer/ai/AiPanel'
 import type {createEditorAssistant} from './assistant'
 import '@genoffice/ui/ai-model-picker.css'
 import './shared-editor-assistant.css'
@@ -11,7 +12,7 @@ import './ai-dock-theme.css'
 type Assistant=Awaited<ReturnType<typeof createEditorAssistant>>
 type DraftFile=AiAttachmentLike&{image?:AgentImage}
 type ComposerDraft={text:string;files:DraftFile[];skills:string[];version:number}
-type ChatItem={id:number;role:'user'|'assistant';text:string;sender?:'dsh';files?:AiAttachmentLike[];skills?:string[]}
+type ChatItem={id:number;role:'user'|'assistant';text:string;sender?:'dsh';files?:AiAttachmentLike[];skills?:string[];tools?:ToolActivity[]}
 type ImageAttachments=ReadonlyMap<string,{name:string;image:AgentImage}>
 const toolImageAttachments=new WeakMap<AbortSignal,ImageAttachments>()
 export function resolveTurnImageAttachment(reference:string,signal?:AbortSignal){
@@ -42,6 +43,10 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  const language=useRef(lang)
  language.current=lang
  editDone.current=onLocalEditDone
+ const patchReply=(update:(reply:ChatItem)=>Partial<ChatItem>)=>setItems(current=>{
+  const last=current.at(-1)
+  return last?.role==='assistant'?[...current.slice(0,-1),{...last,...update(last)}]:current
+ })
  const loop=useMemo(()=>{
   const attachmentSkill=createAttachmentsSkill({
    list:()=>activeFiles.current,
@@ -75,9 +80,20 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
    // Browser-local attachment handles cannot be recovered after a refresh.
    canCheckpointHarness:()=>!activeFiles.current.length,
    events:{
-    onText:text=>{if(text)recoverableDraft.current=undefined;setItems(current=>{const next=[...current];const last=next.at(-1);if(last?.role==='assistant')last.text=text;return next})},
-    onToolStart:()=>{recoverableDraft.current=undefined},
-    onToolExecuted:({execution})=>{if(localEdit.current==='local'&&execution.mutated&&!execution.isError)localEdit.current='edited'},
+    onText:text=>{if(text){recoverableDraft.current=undefined;patchReply(()=>({text}))}},
+    onToolStart:call=>{
+     recoverableDraft.current=undefined
+     patchReply(last=>({tools:[...(last.tools??[]),{name:call.name,summary:call.name.replace(/[_-]+/g,' '),running:true}]}))
+    },
+    onToolExecuted:({call,execution})=>{
+     if(localEdit.current==='local'&&execution.mutated&&!execution.isError)localEdit.current='edited'
+     patchReply(last=>{
+      const tools=[...(last.tools??[])]
+      if(tools.at(-1)?.running)tools.pop()
+      tools.push({name:call.name,summary:execution.summary,isError:execution.isError,output:execution.output?.slice(0,2000)})
+      return {tools}
+     })
+    },
     onDone:result=>{
      recoverableDraft.current=undefined
      clearActiveAttachments()
@@ -89,6 +105,10 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
      if(notice)setError(notice)
      if(token)assistant.control?.endRun?.(token,{text:[result.text,notice].filter(Boolean).join('\n\n'),cancelled:result.cancelled,failed:result.turnLimit||result.truncated,yielded:result.yielded})
      else if(result.yielded)assistant.control?.reportYield(result.yielded.taskIds)
+     patchReply(last=>({
+      text:result.text||(result.cancelled?(language.current==='zh'?'（已停止）':'(Stopped)'):last.text),
+      tools:last.tools?.filter(tool=>!tool.running),
+     }))
      setBusy(false)
      if(edited&&!result.cancelled&&!result.turnLimit&&!result.truncated&&!result.yielded)editDone.current?.()
     },
@@ -102,6 +122,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
      clearActiveAttachments()
      const token=runToken.current;runToken.current=undefined
      if(token)assistant.control?.endRun?.(token,{text:message,cancelled:false,failed:true})
+     patchReply(last=>({tools:last.tools?.filter(tool=>!tool.running)}))
      setError(message);setBusy(false)
     },
    },
@@ -272,7 +293,9 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  }
  const conversation=assistant.workspace.conversation
  const messages:ReactNode=<>
-  {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<>{!!item.files?.length&&<SentAttachments atts={item.files} previews={{}}/>}<Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/></>:busy&&item.role==='assistant'?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}</div>)}
+  {items.map((item,index)=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<>{!!item.files?.length&&<SentAttachments atts={item.files} previews={{}}/>}<Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/></>:busy&&item.role==='assistant'&&index===items.length-1&&!item.tools?.length?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}
+   {!!item.tools?.length&&<ToolChipList tools={item.tools} requestRunning={busy&&index===items.length-1}/>}
+  </div>)}
   {error&&<p role="alert">{error}</p>}
  </>
  return <div ref={focusRoot} className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>

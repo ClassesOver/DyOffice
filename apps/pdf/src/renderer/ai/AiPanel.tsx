@@ -42,11 +42,12 @@ function countWords(text: string): number {
 
 const PANEL_WIDTH_KEY = 'pdf-ai-panel-width'
 
-interface ToolActivity {
+export interface ToolActivity {
   name: string
   summary: string
   isError?: boolean
   output?: string
+  running?: boolean
 }
 
 interface ChatEntry {
@@ -950,7 +951,7 @@ function StepIcon({ status }: { status: 'running' | 'done' | 'error' }) {
 /** Tool activity group: a single quiet summary row
  *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
  *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
-function ToolChipList({ tools }: { tools: ToolActivity[] }) {
+export function ToolChipList({ tools, requestRunning }: { tools: ToolActivity[]; requestRunning?: boolean | undefined }) {
   const { t: tr } = useI18n()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
@@ -964,17 +965,23 @@ function ToolChipList({ tools }: { tools: ToolActivity[] }) {
     })
   }
 
-  const open = userOpen ?? false
-  const label = tr('aiWorkedSteps', { n: tools.length })
+  const runningTool = tools.find((tool) => tool.running)
+  const anyRunning = requestRunning ?? !!runningTool
+  const open = userOpen ?? (requestRunning === undefined && !!runningTool)
+  const label = anyRunning
+    ? [tr('aiGroupWorking'), requestRunning && runningTool?.name].filter(Boolean).join(' · ')
+    : tr('aiWorkedSteps', { n: tools.length })
 
   return (
-    <div className="ai-work-group">
+    <div className="ai-work-group" data-manual-toggle={requestRunning !== undefined && userOpen !== null ? true : undefined}>
       <button
         type="button"
-        className={`ai-work-group-summary`}
+        className={`ai-work-group-summary${anyRunning ? ' running' : ''}`}
         aria-expanded={open}
+        title={requestRunning && runningTool ? label : undefined}
         onClick={() => setUserOpen(!open)}
       >
+        {anyRunning && !open && <span className="ai-tool-chip-spinner" aria-hidden />}
         <span className="ai-work-group-label">{label}</span>
         <span className={`ai-tool-chip-caret${open ? ' open' : ''}`} aria-hidden>
           ›
@@ -983,9 +990,9 @@ function ToolChipList({ tools }: { tools: ToolActivity[] }) {
       <div className={`ai-work-group-body${open ? ' open' : ''}`}>
         <div className="ai-work-group-body-inner">
           {tools.map((tool, j) => {
-            const hasOutput = !!tool.output
+            const hasOutput = !tool.running && !!tool.output
             const isOpen = expanded.has(j)
-            const stepStatus = tool.isError ? 'error' : 'done'
+            const stepStatus = tool.running ? 'running' : tool.isError ? 'error' : 'done'
             return (
               <div key={j} className="ai-step-row">
                 <span className={`ai-step-icon ${stepStatus}`} aria-hidden>

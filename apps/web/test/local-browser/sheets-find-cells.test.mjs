@@ -190,6 +190,9 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  await expect(assistant.locator('.ai-msg-error')).toHaveCount(0)
  if(!live){
   await expect(assistant.getByText('AA1001、AB1002',{exact:true})).toBeVisible()
+  const replies=assistant.locator('.ai-msg-assistant')
+  await expect(replies).toHaveCount(2)
+  await expect(replies.last().locator('.ai-work-group-summary')).toHaveText(/2 个步骤/)
   await assistant.locator('textarea').fill('审计工作表工具')
   await assistant.getByRole('button',{name:'发送',exact:true}).click()
   const success=assistant.getByText('已核对审计工作表',{exact:true})
