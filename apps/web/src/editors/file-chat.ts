@@ -13,9 +13,10 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
   const path='/api/v1/files/'+fileId+'/assistant-chat'
   const lifetime=new AbortController(),listeners=new Set<()=>void>()
   const records=new Map<string,Stored>(),outbox=new Map<string,Message>(),local=new Set<string>()
+  const hidden=new Set<string>()
   const consumed=new WeakMap<object,Set<string>>()
   let cursor=0,closed=false,timer:ReturnType<typeof setTimeout>,active:Promise<void>|undefined
-  let remote:Stored[]=[]
+  let remote:Stored[]=[],hidePendingHistory=false
   function refresh(){
     if(active)return active
     if(closed)return Promise.resolve()
@@ -31,7 +32,13 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
           const batch=await request<Batch>(path,'POST',{after:cursor,updates},signal)
           if(closed)return
           for(const u of updates)if(outbox.get(key(u))===u)outbox.delete(key(u))
-          for(const m of batch.messages){records.set(key(m),m);if(!local.has(m.turnId))changed=true}
+          for(const m of batch.messages){
+            // A sync started before reset can return several old pages alongside new local turns.
+            if(hidePendingHistory&&!local.has(m.turnId))hidden.add(m.turnId)
+            if(hidden.has(m.turnId))continue
+            records.set(key(m),m);if(!local.has(m.turnId))changed=true
+          }
+          if(!batch.hasMore)hidePendingHistory=false
           cursor=batch.cursor
           if(!batch.hasMore&&outbox.size===0)break
         }
@@ -58,6 +65,7 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
       restoreConsumedTurns(ids){for(const id of ids)seen.add(id)},
       async history(){
         await refresh()
+        if(hidden.has(turnId))return []
         const additions:AgentMessage[]=[]
         for(const user of [...records.values()].filter(m=>m.role==='user').sort((a,b)=>a.order-b.order)){
           const answer=records.get(user.turnId+':assistant')
@@ -88,8 +96,16 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
     if(closed||!user||user.sender||answer?.state!=='streaming')return
     return attach(turnId,loop,answer.seq,answer.text)
   }
+  function reset(){
+    hidePendingHistory=true
+    for(const m of records.values())hidden.add(m.turnId)
+    for(const id of local)hidden.add(id)
+    records.clear();remote=[]
+    void refresh()
+    for(const notify of listeners)notify()
+  }
   const unbind=bindFileChat(transport,start)
   void refresh()
-  return {resume,read:()=>remote,subscribe:(listener:()=>void)=>{listeners.add(listener);return ()=>{listeners.delete(listener)}},
+  return {resume,reset,read:()=>remote,subscribe:(listener:()=>void)=>{listeners.add(listener);return ()=>{listeners.delete(listener)}},
     dispose(){unbind();closed=true;clearTimeout(timer);lifetime.abort();outbox.clear();listeners.clear()}}
 }

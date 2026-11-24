@@ -1,4 +1,4 @@
-import { AssistantConversation, useAiPanelResize, useAssistantFocusRoot } from '@genoffice/ui'
+import { AssistantConversation, useAssistantFileHistory, useAiPanelResize, useAssistantFocusRoot } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import {
   AiPanelSideButton,
@@ -196,6 +196,7 @@ export function AiChatPanel({
   readonly onCollapse: () => void
 }): React.JSX.Element {
   const { t, lang } = useI18n()
+  const hasFileHistory = useAssistantFileHistory(assistantWorkspace)
   /** messages queued while a reply runs; the pump re-sends them through onSend on settle */
   const msgQueue = useChatRunQueue<readonly AttachmentMeta[]>({
     busy: aiBusy,
@@ -404,11 +405,12 @@ export function AiChatPanel({
             lang={lang}
             onMove={(side) => window.desktopApi.setAiPanelPrefs({ side })}
           />}
-          {(chat.length > 0 || historicChat.length > 0) && (
+          {(chat.length > 0 || historicChat.length > 0 || hasFileHistory) && (
             <button
               className="ai-header-btn"
               onClick={() => {
                 msgQueue.clear()
+                assistantWorkspace?.fileHistory?.reset()
                 onNewChat()
               }}
               data-tip={t('aiNewChat')}
@@ -432,7 +434,7 @@ export function AiChatPanel({
       {!assistantWorkspace && assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
 
       <div className="ai-chat" ref={chatRef} onScroll={onChatScroll}>
-        <AssistantConversation workspace={assistantWorkspace}>
+        <AssistantConversation workspace={assistantWorkspace} navs={[citationNav, fileNav]}>
         {/* Past conversation (read-only transcript), shown continuously with the current turn */}
         {historicChat.length > 0 && (
           <>

@@ -186,3 +186,20 @@ test('completion does not overwrite a new target selected while a task runs', as
   await pending
   assert.equal(f.workspace.snapshot().selected.id, 'channel:peer')
 })
+
+test('reset hides existing task cards only in chat; new and explicitly reopened cards are visible', () => {
+  const f = fixture(), workspace = f.workspace
+  const peerTask = { taskId: 'old', from: 'office', to: 'peer', instruction: 'Analyze', state: 'running' }
+  f.patch({tasks: [peerTask]})
+  assert.equal(workspace.hasConversationTasks(), true)
+  workspace.resetConversationTasks()
+  assert.equal(workspace.hasConversationTasks(), false)
+  assert.deepEqual(workspace.snapshot().conversationTasks, [])
+  f.patch({tasks: [{...peerTask, state: 'succeeded'}, {...peerTask, taskId: 'new'}]})
+  assert.equal(workspace.hasConversationTasks(), true)
+  assert.deepEqual(workspace.snapshot().conversationTasks.map(t => t.id), ['channel:new'])
+  assert.deepEqual(workspace.snapshot().teamTasks.map(t => t.id), ['channel:old', 'channel:new'])
+  workspace.openConversation('channel:old')
+  assert.deepEqual(workspace.snapshot().conversationTasks.map(t => t.id), ['channel:old', 'channel:new'])
+  assert.equal(workspace.snapshot().focusRequest.task, 'channel:old')
+})

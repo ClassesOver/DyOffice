@@ -1,8 +1,8 @@
 import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT_IMAGE_EXTS,type AgentImage,type AttachedSkill} from '@genoffice/agent-core'
 import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
-import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
-import {GensparkMark} from '../../../docs/src/renderer/components/icons'
+import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAssistantFileHistory,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
+import {GensparkMark,IconNewChat} from '../../../docs/src/renderer/components/icons'
 import {ToolChipList,type ToolActivity} from '../../../pdf/src/renderer/ai/AiPanel'
 import type {createEditorAssistant} from './assistant'
 import '@genoffice/ui/ai-model-picker.css'
@@ -24,6 +24,8 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  const [files,setFiles]=useState<DraftFile[]>([]),[attaching,setAttaching]=useState(false)
  const [skills,setSkills]=useState<string[]>([]),[readingSkills,setReadingSkills]=useState(false)
  const pendingSkills=useRef<AbortController|undefined>(undefined),draftVersion=useRef(0)
+ const chatVersion=useRef(0)
+ const hasFileHistory=useAssistantFileHistory(assistant.workspace)
  const activeFiles=useRef<readonly DraftFile[]>([]),addingFiles=useRef(false)
  const activeImages=useRef<ImageAttachments|undefined>(undefined)
  const clearActiveAttachments=()=>{activeFiles.current=[];activeImages.current=undefined}
@@ -138,7 +140,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   let mounted=true
   const attempted=new Set<string>()
   const check=()=>{
-   if(!mounted||resuming.current||pendingSkills.current||loop.busy||loop.messages.length||seq.current||!continuationRevision())return
+   if(!mounted||resuming.current||pendingSkills.current||loop.busy||loop.messages.length||seq.current||chatVersion.current||!continuationRevision())return
    const task=coding.snapshot().find(item=>{
     if(!item.continuationModelId||attempted.has(item.id))return false
     if(assistant.catalog.entries.some(entry=>entry.id===item.continuationModelId))return true
@@ -164,10 +166,12 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
     }catch{
      if(mounted&&!observer.signal.aborted)setError(lang==='zh'?'无法继续原对话。请在任务卡片查看结果。':'Could not continue the original conversation. See the task card for its result.')
     }finally{
-     if(resuming.current===observer)resuming.current=undefined
-     if(mounted&&!started){
-      localEdit.current=undefined;setBusy(false)
-      if(!observer.signal.aborted)check()
+     if(resuming.current===observer){
+      resuming.current=undefined
+      if(mounted&&!started){
+       localEdit.current=undefined;setBusy(false)
+       if(!observer.signal.aborted)check()
+      }
      }
     }
    })()
@@ -215,9 +219,11 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  },[assistant,loop])
  async function attach(load:()=>ReturnType<Assistant['api']['pickAttachments']>){
   if(busy||loop.busy||addingFiles.current||pendingSkills.current)return
+  const version=chatVersion.current
   addingFiles.current=true;setAttaching(true);setError('')
   try{
    const {accepted,rejected}=await load(),next:DraftFile[]=[]
+   if(version!==chatVersion.current)return
    let imageChars=files.reduce((sum,file)=>sum+(file.image?.base64.length??0),0)
    for(const file of accepted){
     if(files.some(item=>item.path===file.path)||next.some(item=>item.path===file.path))continue
@@ -227,6 +233,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
     }
     if(ATTACHMENT_IMAGE_EXTS.has(file.ext)){
      const result=await assistant.api.readAttachmentImage(file.path)
+     if(version!==chatVersion.current)return
      if(!result.ok||!result.base64||!result.mime){rejected.push(result.error??file.name);continue}
      // Leave room for the prompt, document context, and tool results in the request.
      if(imageChars+result.base64.length>8*1024*1024){
@@ -239,8 +246,8 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
    }
    if(next.length){draftVersion.current++;setFiles(current=>[...current,...next])}
    if(rejected.length)setError(rejected.join(' · '))
-  }catch(error){setError(error instanceof Error?error.message:String(error))}
-  finally{addingFiles.current=false;setAttaching(false)}
+  }catch(error){if(version===chatVersion.current)setError(error instanceof Error?error.message:String(error))}
+  finally{if(version===chatVersion.current){addingFiles.current=false;setAttaching(false)}}
  }
  function toggleSkill(name:string){
   if(pendingSkills.current)return
@@ -291,6 +298,17 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   }
   resuming.current?.abort();loop.cancel()
  }
+ function newChat(){
+  chatVersion.current++;draftVersion.current++
+  pendingSkills.current?.abort();pendingSkills.current=undefined;setReadingSkills(false)
+  resuming.current?.abort();resuming.current=undefined
+  assistant.workspace.fileHistory?.reset();loop.reset();assistant.control?.resetConversation?.()
+  runToken.current=undefined;recoverableDraft.current=undefined;localEdit.current=undefined
+  clearActiveAttachments();addingFiles.current=false;setAttaching(false);setFiles([]);setSkills([])
+  setItems([]);setBusy(false);setError('')
+  inputRef.current?.focus()
+ }
+ const newChatLabel=lang==='zh'?'新对话':'New chat'
  const conversation=assistant.workspace.conversation
  const messages:ReactNode=<>
   {items.map((item,index)=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>
@@ -302,9 +320,11 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  return <div ref={focusRoot} className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>
   <button ref={railRef} type="button" className="ai-rail" hidden={!collapsed} aria-label={lang==='zh'?'展开 AI 助手':'Expand AI assistant'} onClick={()=>changeCollapsed(false)}><GensparkMark size={22}/></button>
   <section hidden={collapsed} className="shared-editor-assistant ai-panel" aria-label={lang==='zh'?'Office 助手':'Office assistant'}>
-  <header className="shared-editor-assistant-head ai-panel-header"><span className="ai-panel-title"><GensparkMark size={22}/>{lang==='zh'?'AI 助手':'AI Assistant'}</span><div className="ai-panel-header-actions"><button type="button" className="ai-header-btn ai-panel-collapse" aria-label={lang==='zh'?'收起 AI 助手':'Collapse AI assistant'} onClick={()=>changeCollapsed(true)}><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14m6-10-3 3 3 3"/></svg></button></div></header>
+  <header className="shared-editor-assistant-head ai-panel-header"><span className="ai-panel-title"><GensparkMark size={22}/>{lang==='zh'?'AI 助手':'AI Assistant'}</span><div className="ai-panel-header-actions">
+   {(items.length>0||hasFileHistory)&&<button type="button" className="ai-header-btn" onClick={newChat} data-tip={newChatLabel} aria-label={newChatLabel}><IconNewChat size={16}/></button>}
+   <button type="button" className="ai-header-btn ai-panel-collapse" aria-label={lang==='zh'?'收起 AI 助手':'Collapse AI assistant'} onClick={()=>changeCollapsed(true)}><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14m6-10-3 3 3 3"/></svg></button></div></header>
   {assistant.workspace.panel}
-  <div className="shared-assistant-feed ai-chat">{!items.length&&<div className="ai-chat-empty"><div className="ai-chat-empty-title">{lang==='zh'?'可以帮你做什么？':'How can I help?'}</div><div className="ai-chat-empty-body">{lang==='zh'?'总结内容、核对信息，或描述需要完成的修改。':'Summarize content, check details, or describe a change.'}</div></div>}{conversation?conversation(messages):messages}</div>
+  <div className="shared-assistant-feed ai-chat">{!items.length&&!hasFileHistory&&<div className="ai-chat-empty"><div className="ai-chat-empty-title">{lang==='zh'?'可以帮你做什么？':'How can I help?'}</div><div className="ai-chat-empty-body">{lang==='zh'?'总结内容、核对信息，或描述需要完成的修改。':'Summarize content, check details, or describe a change.'}</div></div>}{conversation?conversation(messages,assistantNav?[assistantNav]:[]):messages}</div>
   <div className="shared-editor-assistant-composer ai-composer">
    <AiComposer value={draft} busy={busy||readingSkills} textareaRef={inputRef} ariaLabel={lang==='zh'?'消息':'Message'} placeholder={lang==='zh'?'描述你想完成的事…':'Describe what you want done…'} hintIdle="" hintBusy="" sendLabel={lang==='zh'?'发送':'Send'} stopLabel={lang==='zh'?'停止':'Stop'} iconOnly header={<>
    <AiSkillChips lang={lang} names={skills} onRemove={toggleSkill}/>

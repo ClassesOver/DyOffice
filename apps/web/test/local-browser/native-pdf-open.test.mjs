@@ -21,7 +21,7 @@ import {renderPdfPages} from '../../server/src/pdf/raster.mjs'
 
 const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const liveImageConfig=process.env.DYOFFICE_LIVE_PDF_IMAGE_CONFIG
-test('native PDF assistant saves a rotation and reopens the new revision',{skip:!directory,timeout:60000},async t=>{
+test('native PDF assistant starts a new chat without losing the draft or pending page rotation',{skip:!directory,timeout:60000},async t=>{
  const origin='http://localhost:4274',f=await fileFixture(t,{origin,buildApp:false})
  const fixture=await PDFDocument.create()
  for(let index=0;index<3;index++)fixture.addPage([240,300]).drawText('Page '+(index+1),{x:20,y:200})
@@ -44,7 +44,7 @@ test('native PDF assistant saves a rotation and reopens the new revision',{skip:
    ? 'event: tool_call\ndata: '+JSON.stringify({id:'native-rotation',name:'apply_ops',input:{ops:[{op:'rotatePages',pages:[2],dir:90}]}})
    : calls.length===2
    ? 'event: tool_call\ndata: '+JSON.stringify({id:'native-read',name:'read_pages',input:{start:2}})
-   : 'event: delta\ndata: {"text":"Rotation queued"}'
+   : 'event: delta\ndata: '+JSON.stringify({text:calls.length===3?'Rotation queued':'## Fresh PDF reply\n\n[第二页](pdfnav://page/2)'})
   return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
  })
  await page.goto(origin)
@@ -57,9 +57,12 @@ test('native PDF assistant saves a rotation and reopens the new revision',{skip:
  await expect(ready).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
- await assistant.getByRole('textbox',{name:'消息'}).fill('把第二页顺时针旋转九十度')
+ const composer=assistant.getByRole('textbox',{name:'消息'}),newChat=assistant.getByRole('button',{name:'新对话',exact:true})
+ await expect(newChat).toHaveCount(0)
+ await composer.fill('把第二页顺时针旋转九十度')
  await assistant.getByRole('button',{name:'发送',exact:true}).click()
  await expect(assistant.getByText('Rotation queued',{exact:true})).toBeVisible({timeout:20000})
+ await expect(newChat).toBeVisible()
  const reply=assistant.locator('.ai-msg-assistant')
  await expect(reply).toHaveCount(1)
  const steps=reply.locator('.ai-work-group-summary')
@@ -82,6 +85,15 @@ test('native PDF assistant saves a rotation and reopens the new revision',{skip:
  assert.ok(!calls[0].tools.some(tool=>tool.name==='rotate_pages'))
  const results=calls[1].messages.filter(message=>message.role==='tool').flatMap(message=>message.results)
  assert.ok(results.some(result=>result.name==='apply_ops'&&!result.isError))
+ await composer.fill('仅回复新的 PDF 问题')
+ await newChat.click()
+ await expect(newChat).toHaveCount(0)
+ await expect(composer).toHaveValue('仅回复新的 PDF 问题')
+ await expect(composer).toBeFocused()
+ await expect(assistant.getByText('Rotation queued',{exact:true})).toHaveCount(0)
+ await assistant.getByRole('button',{name:'发送',exact:true}).click()
+ await expect(assistant.getByText('Fresh PDF reply',{exact:true})).toBeVisible()
+ assert.doesNotMatch(JSON.stringify(calls.at(-1).messages),/把第二页顺时针旋转九十度|Rotation queued/)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  await page.locator('.ribbon-tabs .qa-btn').first().click()
@@ -94,6 +106,13 @@ test('native PDF assistant saves a rotation and reopens the new revision',{skip:
  await page.reload()
  await reopened
  await expect(ready).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'AI 助手',exact:true}).click()
+ await expect(assistant.getByText('Fresh PDF reply',{exact:true})).toBeVisible()
+ await assistant.getByRole('link',{name:'第二页',exact:true}).click()
+ await expect(page.locator('.pdf-thumb').nth(1)).toHaveClass(/pdf-thumb-active/)
+ await newChat.click()
+ await expect(assistant.getByText('Fresh PDF reply',{exact:true})).toHaveCount(0)
+ await expect(newChat).toHaveCount(0)
  recordVerifiedOfficeEffect('pdf','apply_ops.rotatePages')
 })
 

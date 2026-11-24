@@ -55,6 +55,8 @@ export function createAssistantWorkspace(options: {
     focusedTask = '',
     focusRequest: WorkspaceFocusRequest | null = null,
     focusRequests = 0
+  const hiddenConversationTasks = new Set<string>()
+  const visibleInConversation = (task: TeamTask) => !hiddenConversationTasks.has(task.id)
   const directChannelTasks = new Set<string>()
   const listeners = new Set<() => void>()
   const notify = () => {
@@ -128,18 +130,27 @@ export function createAssistantWorkspace(options: {
     ]
   }
   return {
-    snapshot: () => ({
-      targets: targets(),
-      selected,
-      pending,
-      notice,
-      tasks: options.coding?.snapshot() ?? [],
-      channel: options.channel?.snapshot(),
-      teamTasks: teamTasks(),
-      view,
-      focusedTask,
-      focusRequest,
-    }),
+    snapshot() {
+      const tasks = teamTasks()
+      return {
+        targets: targets(),
+        selected,
+        pending,
+        notice,
+        tasks: options.coding?.snapshot() ?? [],
+        channel: options.channel?.snapshot(),
+        teamTasks: tasks,
+        conversationTasks: tasks.filter(visibleInConversation),
+        view,
+        focusedTask,
+        focusRequest,
+      }
+    },
+    hasConversationTasks: () => teamTasks().some(visibleInConversation),
+    resetConversationTasks() {
+      for (const task of teamTasks()) hiddenConversationTasks.add(task.id)
+      notify()
+    },
     subscribe(listener: () => void) {
       listeners.add(listener)
       return () => {
@@ -158,6 +169,7 @@ export function createAssistantWorkspace(options: {
       notify()
     },
     openConversation(id: string) {
+      hiddenConversationTasks.delete(id)
       view = 'chat'
       focusedTask = id
       focusRequest = { id: ++focusRequests, view: 'chat', task: id }

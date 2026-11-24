@@ -11,12 +11,16 @@ const formats={
 const uuid=(x:unknown):x is string=>typeof x==='string'&&/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/iu.test(x)
 const bound=(x:string,n:number)=>x.slice(0,n).replace(/[\uD800-\uDBFF]$/u,'')
 type Row={who:string;text:string}
-let transcript:{fileId:string;rows:Row[]}|undefined
+let transcript:{fileId:string;rows:Row[];generation:number}|undefined
 const listeners=new Set<()=>void>()
 function publish(value:typeof transcript){transcript=value;for(const listener of listeners)listener()}
-function subscribe(listener:()=>void){listeners.add(listener);return ()=>{listeners.delete(listener)}}
+export function subscribeDocumentHandoff(listener:()=>void){listeners.add(listener);return ()=>{listeners.delete(listener)}}
+export function hasDocumentHandoffMessages(fileId:string){return transcript?.fileId===fileId&&transcript.rows.length>0}
+export function resetDocumentHandoffMessages(fileId:string){
+ if(transcript?.fileId===fileId)publish({...transcript,rows:[],generation:transcript.generation+1})
+}
 export function DocumentHandoffMessages({fileId}:{fileId:string}) {
- const value=useSyncExternalStore(subscribe,()=>transcript)
+ const value=useSyncExternalStore(subscribeDocumentHandoff,()=>transcript)
  if(value?.fileId!==fileId)return null
  return <>{value.rows.map((row,i)=><article key={i} className="assistant-chat-row"><div className="assistant-chat-message"><strong>{row.who}</strong><p dir="auto" style={{whiteSpace:'pre-wrap'}}>{row.text}</p></div></article>)}</>
 }
@@ -33,10 +37,10 @@ export function mountDocumentHandoff(o:{
  const spec=o.format==='pdf'?documentHandoffPdfTools(o.pdfTools):formats[o.format]
  let grant:{ticket:string;origin:string;expires:number;write:boolean}|undefined,checking=false,activated=false,started=false
  let job:{id:string;state:string;revision?:string;reply?:string}|undefined
- let lastReview='',rows:Row[]=[]
+ let lastReview=''
  const followupScope=crypto.randomUUID()
  const turns=new Map<string,{id:string;question:string;answer:string;state:string}>()
- const notify=()=>publish({fileId:o.fileId,rows:[...rows]})
+ const append=(row:Row)=>{if(!signal.aborted&&transcript?.fileId===o.fileId)publish({...transcript,rows:[...transcript.rows,row]})}
  const en=()=>document.documentElement.lang.startsWith('en')
  const valid=()=>!signal.aborted&&grant?.write===true&&grant.expires>Date.now()&&o.ready()
  const receipt=(state:string)=>{if(job)job.state=state}
@@ -46,6 +50,7 @@ export function mountDocumentHandoff(o:{
    if(event.isTrusted&&active&&!(event.target as Element|null)?.closest?.('.ai-panel,.ai-dock'))active.abort()
  }
  async function write(topic:string,baseRevision:string,skill:ReturnType<typeof readHandoffSkill>,runner:NonNullable<ReturnType<typeof documentHandoffEditor>>) {
+   const generation=transcript?.generation
    const j=job!,work=active=new AbortController(),check=()=>valid()&&!work.signal.aborted
    const taskSignal=AbortSignal.any([signal,work.signal])
    let mutated=false,toolFailed=false
@@ -66,8 +71,7 @@ export function mountDocumentHandoff(o:{
    } catch {receipt(work.signal.aborted?'conflict':'failed')}
    finally{
      active=undefined
-     if(j.state!=='saved')rows.push({who:'DyOffice',text:en()?'Writing was not confirmed.':'未确认完成写入。'})
-     notify()
+     if(j.state!=='saved'&&transcript?.generation===generation)append({who:'DyOffice',text:en()?'Writing was not confirmed.':'未确认完成写入。'})
    }
  }
  async function ask(id:string,question:string,runner:NonNullable<ReturnType<typeof documentHandoffEditor>>) {
@@ -109,7 +113,7 @@ export function mountDocumentHandoff(o:{
      return
    }
    if(!activated){activated=true;o.activate()}
-   if(!job){job={id:request.id,state:'planning'};rows=[];notify()}
+   if(!job){job={id:request.id,state:'planning'};publish({fileId:o.fileId,rows:[],generation:0})}
    if(job.id!==request.id)return
    const a=o.assistant(),runner=a&&documentHandoffEditor(a.transport)
    if(!started && (a===null||a&&!a.available)){started=true;receipt('noModel')}
@@ -118,8 +122,9 @@ export function mountDocumentHandoff(o:{
      void write(request.topic,request.baseRevision,readHandoffSkill(request.skill),runner)
    }
    const review=request.review
-   if(job.state==='saved'&&review?.state==='ready'&&typeof review.text==='string'&&review.text!==lastReview){
-     lastReview=bound(review.text,4000);rows.push({who:'DSH',text:lastReview});notify()
+   if(job.state==='saved'&&review?.state==='ready'&&typeof review.text==='string'){
+     const text=bound(review.text,4000)
+     if(text!==lastReview){lastReview=text;append({who:'DSH',text})}
    }
    const q=data.followup
    let followup

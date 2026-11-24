@@ -366,7 +366,7 @@ export function AssistantTeamConversation({
   const native = flatten(children).filter(
     (node) =>
       !(
-        snapshot.teamTasks.length &&
+        snapshot.conversationTasks.length &&
         isValidElement<{ className?: string }>(node) &&
         node.props.className?.includes('ai-chat-empty')
       ),
@@ -375,7 +375,7 @@ export function AssistantTeamConversation({
     id: 'office:' + (isValidElement(node) ? (node.key ?? index) : index),
     node,
   }))
-  for (const task of [...snapshot.teamTasks].reverse())
+  for (const task of [...snapshot.conversationTasks].reverse())
     items.push({
       id: task.id,
       node: <TaskMessage task={task} client={client} lang={lang} conversation />,
