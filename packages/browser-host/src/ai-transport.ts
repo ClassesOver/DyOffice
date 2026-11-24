@@ -6,12 +6,34 @@ import {AI_TURN_TIMED_OUT,ASSISTANT_MODEL_DEADLINE_MS} from '../../web-contracts
 
 const MAX_SSE_EVENT_BYTES = 256 * 1024
 const OFFICE_TURNS_ENDPOINT = '/api/v1/ai/turns'
+const RATE_LIMIT_RETRY_DELAYS_MS = [1000, 2000, 4000] as const
+const MAX_RATE_LIMIT_WAIT_MS = 60_000
 const modelTimeoutZh = '等待模型回复超时。请重试、缩短请求，或切换模型。'
 const isChinese = () => globalThis.document?.documentElement.lang.toLowerCase().startsWith('zh')
 const providerFailureZh: Record<ModelConnectionFailure,string> = {
   PROVIDER_AUTH_REJECTED: '模型供应商拒绝了访问，请联系管理员检查模型配置。',
   PROVIDER_RATE_LIMITED: '模型供应商限流或额度不足，请稍后重试或切换模型。',
   PROVIDER_TEMPORARILY_UNAVAILABLE: '模型供应商服务暂时不可用，请稍后重试或切换模型。',
+}
+
+function rateLimitDelay(retryAfter: string | null, fallback: number): number {
+  if (!retryAfter) return fallback
+  if (/^\d+$/.test(retryAfter)) return Number(retryAfter) * 1000
+  const date = Date.parse(retryAfter)
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : fallback
+}
+
+function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, delayMs)
+    signal.addEventListener('abort', finish, { once: true })
+    if (signal.aborted) finish()
+  })
 }
 
 export interface SseTransportOptions {
@@ -54,6 +76,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
     stream(request: AgentStreamRequest, callbacks: AgentStreamCallbacks) {
       const turnId = createTurnId()
       const controller = new AbortController()
+      const expiresAt = performance.now() + timeoutMs
       let finished = false
       let cancelled = false
       let deadline: ReturnType<typeof setTimeout> | undefined
@@ -112,28 +135,47 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
         }
         else if (event === 'done') finish()
       }
-      deadline = setTimeout(() => {
+      const expire = () => {
         if (finished) return
         controller.abort()
         void reader?.cancel().catch(() => {})
         requestCancellation()
         finish(endpoint === OFFICE_TURNS_ENDPOINT && isChinese() ? modelTimeoutZh : 'AI stream timed out')
-      }, timeoutMs)
+      }
+      deadline = setTimeout(expire, timeoutMs)
       void (async () => {
         try {
           if (options.getCsrfToken) {
             csrfProof = await options.getCsrfToken()
             if (typeof csrfProof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(csrfProof)) throw new Error('Invalid CSRF proof')
           }
-          if (finished || controller.signal.aborted) return
-          dispatched = true
-          const response = await fetchImpl(endpoint, {
+          const init = {
             method: 'POST',
             credentials: 'same-origin', mode: 'same-origin', referrerPolicy: 'same-origin', redirect: 'error',
             headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', ...(csrfProof ? { 'x-csrf-token': csrfProof } : {}) },
             body: serializeTurnRequest(turnId, options.modelId, request, options.format, options.documentId,options.continuation,options.harnessResume),
             signal: controller.signal,
-          })
+          } satisfies RequestInit
+          let response: Response
+          for (let attempt = 0; ; attempt++) {
+            if (finished || controller.signal.aborted) return
+            if (attempt > 0 && performance.now() >= expiresAt) {
+              expire()
+              return
+            }
+            dispatched = true
+            response = await fetchImpl(endpoint, init)
+            // A pre-stream rejection can be retried. Never replay a Harness
+            // admission or an accepted SSE stream.
+            if (endpoint !== OFFICE_TURNS_ENDPOINT || options.harnessResume || response.status !== 429) break
+            dispatched = false
+            void response.body?.cancel().catch(() => {})
+            const fallback = RATE_LIMIT_RETRY_DELAYS_MS[attempt]
+            if (finished || fallback === undefined) break
+            const delayMs = rateLimitDelay(response.headers.get('Retry-After'), fallback)
+            if (delayMs > MAX_RATE_LIMIT_WAIT_MS || delayMs >= expiresAt - performance.now()) break
+            await waitForRetry(delayMs, controller.signal)
+          }
           if (!response.ok) throw new Error('AI stream HTTP ' + response.status)
           if (!response.headers.get('content-type')?.toLowerCase().includes('text/event-stream') || !response.body) throw new Error('AI stream response is not SSE')
           accepted = true
