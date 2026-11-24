@@ -1,6 +1,6 @@
 import {DRAFT_META} from './doc-writer'
 import type { OfficeHandoffFailure, OfficeHandoffRunner } from '../file-actions'
-import { AssistantConversation, useAssistantFocusRoot, useAiPanelResize } from '@genoffice/ui'
+import { AssistantConversation, useAssistantFileHistory, useAssistantFocusRoot, useAiPanelResize } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import { showToast } from '../components/toast-bus'
 import {
@@ -416,6 +416,7 @@ export function AiPanel({
   onRevisionRange,
 }: AiPanelProps) {
   const { t, lang } = useI18n()
+  const hasFileHistory = useAssistantFileHistory(assistantWorkspace)
   // Panel chrome follows the UI language; message text follows its own content (dir=auto below)
   const isRtl = lang === 'ar' || lang === 'he'
   const [input, setInput] = useState('')
@@ -1130,11 +1131,13 @@ export function AiPanel({
         } catch {
           if (mounted && !observer.signal.aborted) setRecoveryNotice('unavailable')
         } finally {
-          if (recovering.current === observer) recovering.current = undefined
-          if (mounted && !started) {
-            resumedRun.current = false
-            setBusy(false)
-            if (!observer.signal.aborted) check()
+          if (recovering.current === observer) {
+            recovering.current = undefined
+            if (mounted && !started) {
+              resumedRun.current = false
+              setBusy(false)
+              if (!observer.signal.aborted) check()
+            }
           }
         }
       })()
@@ -1538,9 +1541,11 @@ export function AiPanel({
     setImageAttachments?.([])
     recoveryAllowed.current = false
     recovering.current?.abort()
+    recovering.current = undefined
     resumedRun.current = false
     setRecoveryNotice(undefined)
     runImagesRef.current = new Map()
+    assistantWorkspace?.fileHistory?.reset()
     assistantControl?.resetConversation?.()
     assistantRunTokenRef.current = undefined
     msgQueue.clear()
@@ -1679,7 +1684,7 @@ export function AiPanel({
             lang={lang}
             onMove={(side) => window.desktop.setAiPanelPrefs({ side })}
           />}
-          {(chat.length > 0 || historicChat.length > 0) && (
+          {(chat.length > 0 || historicChat.length > 0 || hasFileHistory) && (
             <button
               className="ai-header-btn"
               onClick={newChat}
@@ -1708,7 +1713,7 @@ export function AiPanel({
       </>}
 
       <div ref={logRef} className="ai-chat" onScroll={onLogScroll}>
-        <AssistantConversation workspace={activityOnly ? undefined : assistantWorkspace}>
+        <AssistantConversation workspace={activityOnly ? undefined : assistantWorkspace} navs={[docNav, fileNav]}>
         {externalActivity}
         {!activityOnly && <>
         {recoveryNotice && <div className="ai-attach-notice" role="alert">

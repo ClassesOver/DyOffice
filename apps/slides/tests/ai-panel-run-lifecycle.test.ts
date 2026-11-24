@@ -73,6 +73,7 @@ vi.mock('react-konva', () => {
   }
 })
 
+import { t } from '../src/renderer/i18n/locale'
 import { AiPanel } from '../src/renderer/ai/AiPanel'
 import { AI_PROVIDERS, type AiSettings, type AttachmentMeta } from '../src/shared/ipc'
 
@@ -210,6 +211,76 @@ describe('AiPanel agent run lifecycle (slides)', () => {
     expect(container.querySelector('.ai-msg-user')).toBeNull()
   })
 
+  it('abandons pending recovery and unlocks the next chat before the old recovery settles', async () => {
+    let finishRecovery!: () => void
+    const resume = vi.fn((_id: string, _signal: AbortSignal) => new Promise<void>(resolve => { finishRecovery = resolve }))
+    const continuation = {
+      revision: () => 'revision',
+      hasModel: () => true,
+      coding: {
+        snapshot: () => [{ id: 'older', continuationModelId: 'model' }, { id: 'other', continuationModelId: 'model' }],
+        subscribe: () => () => {},
+        resume,
+      },
+      fileChat: { resume: vi.fn() },
+    }
+    const fileHistory = { hasMessages: () => true, subscribe: () => () => {}, reset: vi.fn() }
+    const workspace = { fileHistory, panel: null, isOffice: () => true }
+    const control = { register: () => () => {}, resetConversation: vi.fn(), beginRun: () => 'next' }
+    const props = panelProps({ assistantWorkspace: workspace, assistantContinuation: continuation, assistantControl: control })
+    const { root, container } = mount(createElement(AiPanel, props))
+    await flushEffects()
+    expect(resume).toHaveBeenCalledTimes(1)
+    const reset = container.querySelector<HTMLButtonElement>(`button[aria-label="${t('aiNewChat')}"]`)
+    expect(reset).not.toBeNull()
+    act(() => reset!.click())
+    expect(resume.mock.calls[0]![1].aborted).toBe(true)
+    expect(control.resetConversation).toHaveBeenCalledOnce()
+    expect(fileHistory.reset).toHaveBeenCalledOnce()
+    act(() => root.render(createElement(AiPanel, { ...props, preset: { nonce: 1, text: 'Fresh task', autoRun: true } })))
+    await flushEffects()
+    expect(agentHarness.run).toHaveBeenCalledExactlyOnceWith('Fresh task', [], undefined, { text: 'Fresh task', attachments: [] })
+    await act(async () => finishRecovery())
+    expect(continuation.fileChat.resume).not.toHaveBeenCalled()
+    expect(resume).toHaveBeenCalledTimes(1)
+    expect(container.querySelector(`button[aria-label="${t('aiStop')}"]`)).not.toBeNull()
+  })
+
+  it('does not start a pre-reset instruction when its delayed preparation completes', async () => {
+    let finishPrevious!: () => void
+    const before = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { finishPrevious = resolve }))
+    const props = (text: string, nonce: number) => panelProps({
+      onBeforeRun: before, preset: { text, nonce, autoRun: true },
+    })
+    const { root, container } = mount(createElement(AiPanel, props('Old task', 1)))
+    await flushEffects()
+    act(() => container.querySelector<HTMLButtonElement>(`button[aria-label="${t('aiNewChat')}"]`)!.click())
+    act(() => root.render(createElement(AiPanel, props('Fresh task', 2))))
+    await flushEffects()
+    await act(async () => finishPrevious())
+    expect(agentHarness.run).toHaveBeenCalledExactlyOnceWith('Fresh task', [], undefined, { text: 'Fresh task', attachments: [] })
+    expect(window.slidesApi.beginHistoryBatch).toHaveBeenCalledOnce()
+  })
+
+  it('waits for an opening undo batch to close before starting the fresh chat', async () => {
+    let finishOpening!: (opened: boolean) => void
+    const begin = vi.mocked(window.slidesApi.beginHistoryBatch)
+      .mockImplementationOnce(() => new Promise(resolve => { finishOpening = resolve }))
+    const end = vi.mocked(window.slidesApi.endHistoryBatch)
+    const props = (text: string, nonce: number) => panelProps({ preset: { text, nonce, autoRun: true } })
+    const { root, container } = mount(createElement(AiPanel, props('Old task', 1)))
+    await flushEffects()
+    act(() => container.querySelector<HTMLButtonElement>(`button[aria-label="${t('aiNewChat')}"]`)!.click())
+    act(() => root.render(createElement(AiPanel, props('Fresh task', 2))))
+    await flushEffects()
+    expect(begin).toHaveBeenCalledOnce()
+    expect(end).not.toHaveBeenCalled()
+    await act(async () => finishOpening(true))
+    expect(end).toHaveBeenCalledOnce()
+    expect(end.mock.invocationCallOrder[0]).toBeLessThan(begin.mock.invocationCallOrder[1]!)
+    expect(agentHarness.run).toHaveBeenCalledExactlyOnceWith('Fresh task', [], undefined, { text: 'Fresh task', attachments: [] })
+  })
+
   it('retries an unconfirmed batch close before starting the next run', async () => {
     const begin = vi.mocked(window.slidesApi.beginHistoryBatch).mockResolvedValue(true)
     const end = vi.mocked(window.slidesApi.endHistoryBatch)
@@ -320,6 +391,6 @@ describe('AiPanel agent run lifecycle (slides)', () => {
     expect(readAttachmentImage).toHaveBeenCalledWith('/tmp/bad.png')
     expect(agentHarness.run).toHaveBeenCalledWith('Polish this slide', [
       { base64: 'AAAA', mime: 'image/png' },
-    ], undefined, { text: 'Polish this slide' })
+    ], undefined, { text: 'Polish this slide', attachments })
   })
 })

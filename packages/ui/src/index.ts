@@ -177,5 +177,5 @@ export { AssistantParticipants, AssistantAvatar, DelegatedAgentResultCard, deleg
 export type { AssistantControl } from './assistant-control'
 export type { AssistantWorkspace } from './assistant-workspace'
 
-export { AssistantConversation } from './assistant-workspace'
+export { AssistantConversation, useAssistantFileHistory } from './assistant-workspace'
 export { assistantHoldsKeyboard, registerAssistantFocusRoot, useAssistantFocusRoot } from './assistant-focus'

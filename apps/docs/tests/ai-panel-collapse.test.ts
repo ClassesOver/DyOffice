@@ -5,6 +5,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { Editor } from '@tiptap/core'
 import { editorExtensions } from '../src/renderer/editor/extensions'
+import { t } from '../src/renderer/i18n/locale'
 import { AiPanel } from '../src/renderer/ai/AiPanel'
 import { AI_PROVIDERS, type AiSettings } from '../src/shared/ipc'
 import type { AgentStreamRequest, AgentTransport, HarnessCheckpoint } from '@genoffice/agent-core'
@@ -127,6 +128,38 @@ describe('AiPanel Harness continuation', () => {
     messages: [{ role: 'user', text: 'Calculate total' }, { role: 'assistant', text: '', toolCalls: [call] }],
   }
   const result = { id: call.id, name: call.name, output: '{"total":42}' }
+
+  it('accepts a new request while an abandoned recovery is still pending', async () => {
+    const editor = createEditor()
+    let finishRecovery!: () => void
+    const transport = { stream: vi.fn(() => ({ cancel() {} })) }
+    const assistantRecovery = {
+      continuationRevision: () => 'saved-v1', catalog: { entries: [{ id: 'model' }] },
+      coding: {
+        snapshot: () => [{ id: 'old', continuationModelId: 'model' }],
+        subscribe: () => () => {},
+        resume: () => new Promise<void>(resolve => { finishRecovery = resolve }),
+      },
+      fileChat: { resume: vi.fn() },
+    }
+    const assistantWorkspace = {
+      panel: null, isOffice: () => true,
+      fileHistory: { hasMessages: () => true, subscribe: () => () => {}, reset() {} },
+    }
+    const props = panelProps(editor, { transport, assistantRecovery, assistantWorkspace })
+    const panel = mount(createElement(AiPanel, props))
+    try {
+      act(() => panel.container.querySelector<HTMLButtonElement>(`button[aria-label="${t('aiNewChatTitle')}"]`)!.click())
+      await act(async () => panel.root.render(createElement(AiPanel, { ...props, preset: { text: 'Fresh task', nonce: 1, autoRun: true } })))
+      expect(transport.stream).toHaveBeenCalledOnce()
+      await act(async () => finishRecovery())
+      expect(assistantRecovery.fileChat.resume).not.toHaveBeenCalled()
+      expect(panel.container.querySelector('.ai-stop-btn')).not.toBeNull()
+    } finally {
+      panel.cleanup()
+      editor.destroy()
+    }
+  })
 
   it.each([
     ['waits for a clean loaded revision and completes the original reply only once', false],

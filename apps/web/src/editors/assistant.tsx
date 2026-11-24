@@ -1,5 +1,5 @@
 import {createFileChat} from './file-chat'
-import {DocumentHandoffMessages} from './document-handoff'
+import {DocumentHandoffMessages,hasDocumentHandoffMessages,resetDocumentHandoffMessages,subscribeDocumentHandoff} from './document-handoff'
 import {Children,Fragment,isValidElement,useCallback,useEffect,useState,useSyncExternalStore,type ReactNode} from 'react'
 import {createAnalysisDocumentRegistry} from '../../../../packages/browser-host/src/analysis-document-registry.ts'
 import {createAnalysisDeliveryClient} from '../../../../packages/browser-host/src/analysis-delivery-client.ts'
@@ -12,7 +12,7 @@ import {createAssistantClient} from '../../../../packages/browser-host/src/assis
 import {createLocalShellClient} from '../shell/local-client'
 import {createWebAttachments} from './web-attachments'
 import {createUserSkillsClient} from '../shell/user-skills-client'
-import {AiModelPicker,SentAttachments} from '@genoffice/ui'
+import {AiModelPicker,Markdown,SentAttachments,type MarkdownNav} from '@genoffice/ui'
 import {configuredAiTool,createWebAiSearchApi,officeToolsWithConfiguredAiTools} from './web-ai-search-api.ts'
 import {createWebAiMediaApi,createDocumentImageApi} from './web-ai-media-api.ts'
 import {createPdfMediaSkill} from './pdf-media-skill.ts'
@@ -25,7 +25,7 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
     .then(({user}) => user.username?.trim() || user.displayName?.trim() || '')
     .catch(() => '')
   const empty:ReturnType<ReturnType<typeof createFileChat>['read']>=[]
-  function Conversation({children}: {children: ReactNode}) {
+  function Conversation({children,navs}: {children: ReactNode;navs:readonly MarkdownNav[]}) {
     const [name, setName] = useState('')
     useEffect(() => {
       let mounted = true
@@ -33,15 +33,17 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
       return () => { mounted = false }
     }, [])
     const messages=useSyncExternalStore(fileChat?.subscribe??(()=>()=>{}),fileChat?.read??(()=>empty))
+    const hasHandoff=useSyncExternalStore(subscribeDocumentHandoff,()=>!!channelOptions&&hasDocumentHandoffMessages(channelOptions.fileId))
     const visible=(nodes:ReactNode):ReactNode[]=>Children.toArray(nodes).flatMap(node=>
       isValidElement<{children?:ReactNode;className?:string}>(node)&&node.type===Fragment?visible(node.props.children):
-      messages.length&&isValidElement<{className?:string}>(node)&&node.props.className?.includes('ai-chat-empty')?[]:[node])
+      (messages.length>0||hasHandoff)&&isValidElement<{className?:string}>(node)&&node.props.className?.includes('ai-chat-empty')?[]:[node])
     return <AssistantTeamConversation client={workspace} lang={lang()} accountName={name}>
-      {messages.map(m=><div key={m.turnId+':'+m.role} data-sender={m.sender} className={'ai-msg ai-msg-'+m.role} dir="auto" style={{whiteSpace:'pre-wrap'}}>
+      {messages.map(m=><div key={m.turnId+':'+m.role} data-sender={m.sender} className={'ai-msg ai-msg-'+m.role} dir="auto">
         {!!m.attachments?.length&&<SentAttachments atts={m.attachments.map((attachment,index)=>({...attachment,path:m.turnId+':'+index}))} previews={{}}/>}
-        {m.state==='failed'
-          ? <>{m.text&&<span>{m.text}</span>}<small className="assistant-reply-status">{lang()==='zh'?'未完成':'Not completed'}</small></>
-          : m.text||(m.state==='streaming'?(lang()==='zh'?'正在思考…':'Thinking…'):'')}
+        {m.text
+          ? m.role==='assistant'?<Markdown text={m.text} navs={navs}/>:<span style={{whiteSpace:'pre-wrap'}}>{m.text}</span>
+          : m.state==='streaming'?(lang()==='zh'?'正在思考…':'Thinking…'):null}
+        {m.state==='failed'&&<small className="assistant-reply-status">{lang()==='zh'?'未完成':'Not completed'}</small>}
       </div>)}
       {format!=='docx'&&channelOptions&&<DocumentHandoffMessages fileId={channelOptions.fileId}/>}{visible(children)}
     </AssistantTeamConversation>
@@ -143,11 +145,20 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
     return <AssistantWorkspacePanel client={workspace} lang={language} channelConnection={channel&&<ChannelConnection/>}
       deliveries={(!!assistant.catalog.agents?.length||assistant.catalog.assistantChannels&&channelOptions)&&<AnalysisDeliveryPanel client={deliveries} documents={documents} lang={language}/>}/>
   }
+  const fileHistory=channelOptions&&fileChat&&{
+    subscribe(listener:()=>void){
+      const offChat=fileChat.subscribe(listener),offTasks=workspace.subscribe(listener),offHandoff=subscribeDocumentHandoff(listener)
+      return ()=>{offChat();offTasks();offHandoff()}
+    },
+    hasMessages:()=>fileChat.read().length>0||workspace.hasConversationTasks()||hasDocumentHandoffMessages(channelOptions.fileId),
+    reset(){workspace.resetConversationTasks();resetDocumentHandoffMessages(channelOptions.fileId);fileChat.reset()},
+  }
   const noEvent = () => () => {}
   return {
     request:bound.request,sessionProof:bound.proof,
     ...assistant,agents:assistant.catalog.agents??[],modelPicker:<ModelPicker/>,fileChat,continuationRevision:channelOptions?.continuationRevision,
-    workspace:{conversation:(children:ReactNode)=><Conversation>{children}</Conversation>,isOffice:workspace.isOffice,submit:workspace.submit,panel:<WorkspacePanel/>},
+    workspace:{...(fileHistory?{fileHistory}:{}),
+      conversation:(children:ReactNode,navs:readonly MarkdownNav[]=[])=><Conversation navs={navs}>{children}</Conversation>,isOffice:workspace.isOffice,submit:workspace.submit,panel:<WorkspacePanel/>},
     documents,channel,searchApi,mediaApi,mediaCapabilities:{imageGeneration:configuredTools.has('generate_image'),mediaAnalysis:configuredTools.has('analyze_media'),imageAnalysis:mediaAnalysis.image},control:channel?.control,extraSkills:[...assistant.extraSkills,...additionalSkills,...(pdfMediaSkill?[pdfMediaSkill]:[]),...(analysisInsert?[analysisInsert]:[]),...(channel?[channel.skill]:[])],
     api: {
       // Local compatibility projection only. Full desktop settings and global

@@ -2,6 +2,7 @@ import {bindDocumentHandoff} from '@genoffice/agent-core'
 import { AssistantSendButton, useAssistantFocusRoot, useAiPanelResize } from '@genoffice/ui'
 import {
   AssistantConversation,
+  useAssistantFileHistory,
   AssistantParticipants,
   type AssistantParticipant,
   type AssistantWorkspace,
@@ -326,6 +327,7 @@ export function AiPanel({
   onQueueConsume,
 }: AiPanelProps) {
   const { t, lang } = useI18n()
+  const hasFileHistory = useAssistantFileHistory(assistantWorkspace)
   // Panel chrome follows the UI language; message text follows its own content (dir=auto below)
   const isRtl = lang === 'ar' || lang === 'he'
   const [input, setInput] = useState('')
@@ -654,6 +656,7 @@ export function AiPanel({
 
   /** Synchronous re-entry guard between runWith trigger and loop.run (see the comment inside runWith) */
   const runStartingRef = useRef(false)
+  const conversationEpoch = useRef(0)
   /**
    * Resolves the in-flight queue page run: AgentLoop reports completion through
    * events rather than a promise, so onDone/onError hand the outcome back here.
@@ -672,6 +675,9 @@ export function AiPanel({
   /** Wall-clock start of the current run, drives the elapsed badge */
   const runStartedAtRef = useRef(0)
   const historyBatchActiveRef = useRef(false)
+  const openingBatch = useRef<Promise<boolean> | undefined>(undefined)
+  const closingBatch = useRef<Promise<void> | undefined>(undefined)
+  const batchEpoch = useRef(0)
   const inputEditedSinceRunRef = useRef(false)
   /** This run's rollback batch — carried onto the QC entry when a QC pass
       follows (mid-turn segments never show the action toolbar) */
@@ -713,19 +719,33 @@ export function AiPanel({
     })
   }
 
-  const finishHistoryBatch = async () => {
-    if (!historyBatchActiveRef.current) return
-    let id: number | null
+  // A reset can arrive while the undo batch is opening or closing. Settle that
+  // batch before starting the next one, and never attach its rollback to a new chat.
+  const beginHistoryBatch = async (epoch: number) => {
+    if (historyBatchActiveRef.current) throw new Error('HISTORY_BATCH_ACTIVE')
+    batchEpoch.current = epoch
+    historyBatchActiveRef.current = true
+    openingBatch.current = window.slidesApi.beginHistoryBatch()
     try {
-      id = await window.slidesApi.endHistoryBatch()
-      historyBatchActiveRef.current = false
-    } catch (error) {
-      console.warn('[slides-history] batch closure not confirmed; retry before the next run:', error)
-      return
+      historyBatchActiveRef.current = await openingBatch.current
+    } finally {
+      openingBatch.current = undefined
     }
-    if (typeof id !== 'number') return
-    runSnapshotIdRef.current = id
-    patchLastAssistant({ snapshotId: id })
+  }
+
+  const finishHistoryBatch = async () => {
+    if (openingBatch.current) await openingBatch.current.catch(() => {})
+    if (closingBatch.current) return closingBatch.current
+    if (!historyBatchActiveRef.current) return
+    closingBatch.current = window.slidesApi.endHistoryBatch().then(id => {
+      historyBatchActiveRef.current = false
+      if (typeof id !== 'number' || batchEpoch.current !== conversationEpoch.current) return
+      runSnapshotIdRef.current = id
+      patchLastAssistant({ snapshotId: id })
+    }).catch(error => {
+      console.warn('[slides-history] batch closure not confirmed; retry before the next run:', error)
+    }).finally(() => { closingBatch.current = undefined })
+    return closingBatch.current
   }
 
   const rollback = async (snapshotId: number) => {
@@ -1388,6 +1408,7 @@ export function AiPanel({
           patchLastAssistant({ usage: runUsageRef.current })
         },
         onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
+          const epoch = conversationEpoch.current
           resumedHarnessRun.current = false
           recoverableDraftRef.current = undefined
           const runToken = assistantRunTokenRef.current
@@ -1420,6 +1441,7 @@ export function AiPanel({
             return next
           })
           void finishHistoryBatch().finally(async () => {
+            if (epoch !== conversationEpoch.current) return
             setBusy(false)
             // Post-generation layout QC: only after a completed run that landed generated pages
             if (cancelled) qcPagesRef.current = []
@@ -1427,10 +1449,11 @@ export function AiPanel({
               if(!generatedDraftReadyRef.current)void runQcPassRef.current()
               else {
                 await runQcPassRef.current()
-                if(!turnLimit&&!truncated&&!yielded)await generatedDraftReadyRef.current?.().catch(()=>{})
+                if(epoch === conversationEpoch.current && !turnLimit&&!truncated&&!yielded)await generatedDraftReadyRef.current?.().catch(()=>{})
               }
             }
             // After the batch closes, so the next queued page opens a fresh one
+            if (epoch !== conversationEpoch.current) return
             const resolveQueueRun = queueRunResolverRef.current
             queueRunResolverRef.current = null
             resolveQueueRun?.(!cancelled)
@@ -1452,6 +1475,7 @@ export function AiPanel({
           else if (yielded) assistantControl?.reportYield(yielded.taskIds)
         },
         onError: (error) => {
+          const epoch = conversationEpoch.current
           if (resumedHarnessRun.current) setRecoveryError(recoveryFailed)
           resumedHarnessRun.current = false
           const draft = recoverableDraftRef.current
@@ -1485,7 +1509,7 @@ export function AiPanel({
           void window.slidesApi
             .aiGskStatus()
             .then((status) => {
-              if (status.loggedIn) return
+              if (epoch !== conversationEpoch.current || status.loggedIn) return
               if ((settingsRef.current?.provider ?? 'genspark') !== 'genspark') return
               setChat((prev) => {
                 const next = [...prev]
@@ -1498,6 +1522,7 @@ export function AiPanel({
             })
             .catch(() => {})
           void finishHistoryBatch().finally(() => {
+            if (epoch !== conversationEpoch.current) return
             setBusy(false)
             const resolveQueueRun = queueRunResolverRef.current
             queueRunResolverRef.current = null
@@ -1516,7 +1541,7 @@ export function AiPanel({
     let mounted = true
     const attempted = new Set<string>()
     const check = () => {
-      if (!mounted || runStartingRef.current || loop.busy || qcRunningRef.current ||
+      if (!mounted || conversationEpoch.current !== 0 || runStartingRef.current || loop.busy || qcRunningRef.current ||
         loop.messages.length || runStartedAtRef.current || !revision()) return
       const task = coding.snapshot().find(item => {
         if (!item.continuationModelId || attempted.has(item.id)) return false
@@ -1544,9 +1569,7 @@ export function AiPanel({
           if (!mounted || observer.signal.aborted) return
           if (!chat || revision() !== run.revision) throw new Error(recoveryFailed)
           // Use the native undo batch, but leave any live notes or composer draft untouched.
-          if (historyBatchActiveRef.current) throw new Error(recoveryFailed)
-          historyBatchActiveRef.current = true
-          historyBatchActiveRef.current = await window.slidesApi.beginHistoryBatch()
+          await beginHistoryBatch(conversationEpoch.current)
           if (!mounted || observer.signal.aborted) return
           if (revision() !== run.revision) throw new Error(recoveryFailed)
           resumedHarnessRun.current = true
@@ -1556,16 +1579,18 @@ export function AiPanel({
         } catch {
           if (mounted && !observer.signal.aborted) setRecoveryError(recoveryFailed)
         } finally {
-          if (recoveryObserver.current === observer) recoveryObserver.current = undefined
-          if (!started) {
-            resumedHarnessRun.current = false
-            await finishHistoryBatch()
-            if (mounted) setBusy(false)
-          }
-          runStartingRef.current = false
-          if (!started && mounted && !observer.signal.aborted) {
-            runStartedAtRef.current = 0
-            check()
+          if (recoveryObserver.current === observer && !started) await finishHistoryBatch()
+          if (recoveryObserver.current === observer) {
+            recoveryObserver.current = undefined
+            runStartingRef.current = false
+            if (!started && mounted) {
+              resumedHarnessRun.current = false
+              setBusy(false)
+              if (!observer.signal.aborted) {
+                runStartedAtRef.current = 0
+                check()
+              }
+            }
           }
         }
       })()
@@ -1739,6 +1764,7 @@ export function AiPanel({
     // otherwise two sets of bubbles get pushed and the earlier assistant placeholder stays at "thinking" forever.
     // qcRunningRef: the post-generation QC pass edits the deck outside the main loop — no concurrent runs
     if (!instruction || !loop || loop.busy || runStartingRef.current || qcRunningRef.current) return
+    const epoch = conversationEpoch.current
     const runToken = assistantControl?.beginRun?.(instruction, opts?.continuationToken)
     if (assistantControl?.beginRun && !runToken) return
     assistantRunTokenRef.current = runToken
@@ -1812,13 +1838,14 @@ export function AiPanel({
             modelInstruction += `\n\n(${NO_SCREENSHOT_NOTE})`
           }
         }
-        // Clear the flag before run: loop.run sets running synchronously, leaving no re-entry window
-        runStartingRef.current = false
+        if (epoch !== conversationEpoch.current) return
         await onBeforeRunRef.current?.()
+        if (epoch !== conversationEpoch.current) return
         await finishHistoryBatch()
-        if (historyBatchActiveRef.current) throw new Error('HISTORY_BATCH_ACTIVE')
-        historyBatchActiveRef.current = true
-        historyBatchActiveRef.current = await window.slidesApi.beginHistoryBatch()
+        if (epoch !== conversationEpoch.current) return
+        await beginHistoryBatch(epoch)
+        if (epoch !== conversationEpoch.current) return
+        runStartingRef.current = false
         const draft = opts?.composerDraft
         recoverableDraftRef.current = sharedTransport && draft !== undefined
           ? { text: draft, attachments: sentAtts, skills: sentSkills }
@@ -1827,11 +1854,12 @@ export function AiPanel({
         loop.run(modelInstruction, images,undefined,opts?.continuationToken?undefined:{text:shown,attachments:sentAtts})
       })
       .catch(() => {
+        if (epoch !== conversationEpoch.current) return
         runStartingRef.current = false
         const token = assistantRunTokenRef.current
         assistantRunTokenRef.current = undefined
         if (token) assistantControl?.endRun?.(token, {text:'The presentation task failed.',cancelled:false,failed:true})
-        void finishHistoryBatch().finally(() => setBusy(false))
+        void finishHistoryBatch().finally(() => { if (epoch === conversationEpoch.current) setBusy(false) })
       })
   }
 
@@ -1885,6 +1913,7 @@ export function AiPanel({
         resolve(false)
         return
       }
+      const epoch = conversationEpoch.current
       runStartingRef.current = true
       instructionRef.current = instruction
       lastInstructionRef.current = instruction
@@ -1906,20 +1935,19 @@ export function AiPanel({
       queueRunResolverRef.current = resolve
       void Promise.resolve(onBeforeRunRef.current?.())
         .then(async () => {
+          if (epoch !== conversationEpoch.current) return
           await finishHistoryBatch()
-          if (historyBatchActiveRef.current) throw new Error('HISTORY_BATCH_ACTIVE')
-          historyBatchActiveRef.current = true
-          return window.slidesApi.beginHistoryBatch()
-        })
-        .then((ok) => {
-          historyBatchActiveRef.current = ok
+          if (epoch !== conversationEpoch.current) return
+          await beginHistoryBatch(epoch)
+          if (epoch !== conversationEpoch.current) return
           runStartingRef.current = false
           loop.run(instruction)
         })
         .catch(() => {
+          if (epoch !== conversationEpoch.current) return
           runStartingRef.current = false
           queueRunResolverRef.current = null
-          void finishHistoryBatch().finally(() => setBusy(false))
+          void finishHistoryBatch().finally(() => { if (epoch === conversationEpoch.current) setBusy(false) })
           resolve(false)
         })
     })
@@ -1994,6 +2022,7 @@ export function AiPanel({
     qcPagesRef.current = []
     const access = accessRef.current
     if (pages.length === 0 || !access || qcRunningRef.current || !isQcEnabled()) return
+    const epoch = conversationEpoch.current
     qcRunningRef.current = true
     const controller = new AbortController()
     qcAbortRef.current = controller
@@ -2114,14 +2143,16 @@ export function AiPanel({
     } finally {
       qcRunningRef.current = false
       qcAbortRef.current = null
-      const finalText = renderEntry()
-      patchLastAssistant({
-        streaming: false,
-        text: finalText,
-        snapshotId: runSnapshotIdRef.current ?? qcSnapshotId ?? undefined,
-      })
-      persistMessage('assistant', finalText)
-      setBusy(false)
+      if (epoch === conversationEpoch.current) {
+        const finalText = renderEntry()
+        patchLastAssistant({
+          streaming: false,
+          text: finalText,
+          snapshotId: runSnapshotIdRef.current ?? qcSnapshotId ?? undefined,
+        })
+        persistMessage('assistant', finalText)
+        setBusy(false)
+      }
     }
   }
   runQcPassRef.current = runQcPass
@@ -2151,6 +2182,20 @@ export function AiPanel({
     })
 
   const newChat = () => {
+    conversationEpoch.current++
+    recoveryObserver.current?.abort()
+    recoveryObserver.current = undefined
+    resumedHarnessRun.current = false
+    setRecoveryError('')
+    runStartingRef.current = false
+    recoverableDraftRef.current = undefined
+    assistantRunTokenRef.current = undefined
+    assistantWorkspace?.fileHistory?.reset()
+    assistantControl?.resetConversation?.()
+    queueRunResolverRef.current?.(false)
+    queueRunResolverRef.current = null
+    qcPagesRef.current = []
+    if (!qcRunningRef.current) void finishHistoryBatch()
     msgQueue.clear()
     dismissClarify()
     qcAbortRef.current?.abort()
@@ -2268,7 +2313,7 @@ export function AiPanel({
             lang={lang}
             onMove={(side) => window.slidesApi.setAiPanelPrefs({ side })}
           />
-          {(chat.length > 0 || historicChat.length > 0) && (
+          {(chat.length > 0 || historicChat.length > 0 || hasFileHistory) && (
             <button
               className="ai-header-btn"
               onClick={newChat}

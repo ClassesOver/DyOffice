@@ -11,6 +11,7 @@ export interface WorkspaceTarget {
   kind: 'office' | 'harness' | 'channel'
 }
 export interface TeamTask {
+  restored?: boolean | undefined
   id: string
   executionId: string
   agent: Pick<WorkspaceTarget, 'name' | 'origin'>
@@ -55,6 +56,10 @@ export function createAssistantWorkspace(options: {
     focusedTask = '',
     focusRequest: WorkspaceFocusRequest | null = null,
     focusRequests = 0
+  let hasReset = false
+  const conversationVisibility = new Map<string, boolean>()
+  const visibleInConversation = (task: TeamTask) =>
+    conversationVisibility.get(task.id) ?? !(hasReset && task.restored)
   const directChannelTasks = new Set<string>()
   const listeners = new Set<() => void>()
   const notify = () => {
@@ -88,6 +93,7 @@ export function createAssistantWorkspace(options: {
     return [
       ...(options.coding?.snapshot().map((task) => ({
         id: 'harness:' + task.id,
+        restored: task.restored,
         executionId: task.id,
         targetId: 'harness:' + task.agent.id,
         agent: task.agent,
@@ -128,18 +134,28 @@ export function createAssistantWorkspace(options: {
     ]
   }
   return {
-    snapshot: () => ({
-      targets: targets(),
-      selected,
-      pending,
-      notice,
-      tasks: options.coding?.snapshot() ?? [],
-      channel: options.channel?.snapshot(),
-      teamTasks: teamTasks(),
-      view,
-      focusedTask,
-      focusRequest,
-    }),
+    snapshot() {
+      const tasks = teamTasks()
+      return {
+        targets: targets(),
+        selected,
+        pending,
+        notice,
+        tasks: options.coding?.snapshot() ?? [],
+        channel: options.channel?.snapshot(),
+        teamTasks: tasks,
+        conversationTasks: tasks.filter(visibleInConversation),
+        view,
+        focusedTask,
+        focusRequest,
+      }
+    },
+    hasConversationTasks: () => teamTasks().some(visibleInConversation),
+    resetConversationTasks() {
+      hasReset = true
+      for (const task of teamTasks()) conversationVisibility.set(task.id, false)
+      notify()
+    },
     subscribe(listener: () => void) {
       listeners.add(listener)
       return () => {
@@ -158,6 +174,7 @@ export function createAssistantWorkspace(options: {
       notify()
     },
     openConversation(id: string) {
+      conversationVisibility.set(id, true)
       view = 'chat'
       focusedTask = id
       focusRequest = { id: ++focusRequests, view: 'chat', task: id }

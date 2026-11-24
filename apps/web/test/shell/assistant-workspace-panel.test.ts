@@ -154,8 +154,12 @@ test('team conversation interleaves members with Office messages and never switc
     const back = [...host.querySelectorAll('button')].find(
       (button) => button.textContent === 'View in conversation',
     )!
+    await act(async () => client.resetConversationTasks())
+    expect(feed.querySelector('.assistant-task-message')).toBeNull()
+    expect(host.querySelector('.assistant-workspace .assistant-task-message')).not.toBeNull()
     await act(async () => back.click())
     expect(client.snapshot().view).toBe('chat')
+    expect(feed.querySelector('.assistant-task-title')?.textContent).toBe('Calculate')
   } finally {
     await act(async () => root.unmount())
     client.dispose()
