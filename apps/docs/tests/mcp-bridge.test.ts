@@ -75,6 +75,28 @@ function install(editor: Editor) {
   return { send, uninstall }
 }
 
+it('clears AI highlights inside formatted tables while preserving the cell fill', async () => {
+  const editor = createEditor([para('Report')])
+  const { send, uninstall } = install(editor)
+  try {
+    expect((await send('insert_content', {
+      afterBlockIndex: 0,
+      html: '<table><tr><th>Revenue</th></tr><tr><td>100</td></tr></table>',
+    })).ok).toBe(true)
+    const cell = () => editor.view.dom.querySelector<HTMLElement>('tr :is(th, td)')!
+    const fill = cell().style.backgroundColor
+    expect(fill).toBeTruthy()
+    expect((await send('apply_ops', {
+      ops: [{ op: 'setParagraphFormat', target: { blockIndexes: [1] }, align: 'center' }],
+    })).ok).toBe(true)
+    expect(cell().querySelector<HTMLElement>('p')?.style.textAlign).toBe('center')
+    expect(cell().style.backgroundColor).toBe(fill)
+    expect(editor.view.dom.querySelector('table .ai-changed')).toBeNull()
+  } finally {
+    uninstall()
+  }
+})
+
 describe('MCP bridge read_blocks', () => {
   it('returns the full block HTML instead of the clipped preview', async () => {
     const long = 'A sentence that is far longer than a block-list preview. '.repeat(12).trim()

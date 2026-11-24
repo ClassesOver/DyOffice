@@ -50,6 +50,7 @@ import { TABLE_TRAILING_SKIP } from '../editor/extensions'
 import { countWords, findNumId, type NumIds } from './protocol'
 import { DOC_NAV_SCHEME, navigateToBlock, parseDocNavHref } from './doc-nav'
 import {
+  clearAiChangedFlags,
   markDocSeen,
   type AiCommentsAccess,
   type AiDocExtras,
@@ -627,24 +628,6 @@ export function AiPanel({
   const notesAccessRef = useRef(notesAccess)
   notesAccessRef.current = notesAccess
 
-  /** drop every aiChanged flag; silent = skip undo history (auto-accept path) */
-  const clearAiHighlights = (silent = false) => {
-    const view = editorRef.current.view
-    let tr = view.state.tr
-    let touched = false
-    view.state.doc.forEach((node, offset) => {
-      if (node.attrs.aiChanged) {
-        tr = tr.setNodeMarkup(offset, undefined, { ...node.attrs, aiChanged: false })
-        touched = true
-      }
-    })
-    if (silent) tr = tr.setMeta('addToHistory', false)
-    if (touched) {
-      view.dispatch(tr)
-      // AI-pipeline housekeeping, not a user edit: keep the freshness baseline current
-      markDocSeen(editorRef.current)
-    }
-  }
   /** instruction of the in-flight run */
   const instructionRef = useRef('')
   /** document state before the run's first edit — attached to the turn's final
@@ -943,7 +926,7 @@ export function AiPanel({
           if (execution.mutated) {
             // tracking off: accept immediately (same tick, so the yellow never paints);
             // tracking on: revisions stay pending, handled in the Review tab
-            if (!trackChangesRef.current) clearAiHighlights(true)
+            if (!trackChangesRef.current) clearAiChangedFlags(editorRef.current)
           }
           // mind maps ride the UI-only display side channel onto the message
           const display = execution.display

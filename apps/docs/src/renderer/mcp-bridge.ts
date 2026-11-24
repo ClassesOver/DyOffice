@@ -1,7 +1,7 @@
 import type { Editor } from '@tiptap/react'
 import { BLANK_BULLET_NUM_ID, BLANK_ORDERED_NUM_ID } from '@genoffice/docx-engine'
 import type { McpCommandMessage, McpEditorCommand } from '../shared/ipc'
-import { executeTool, markDocSeen } from './ai/tools'
+import { clearAiChangedFlags, executeTool } from './ai/tools'
 import { findNumId, type NumIds } from './ai/protocol'
 import { save, type FileActionContext } from './file-actions'
 
@@ -58,23 +58,6 @@ interface ReadBlocksInput {
   startBlockIndex: number
   endBlockIndex: number
   offset?: number
-}
-
-/** mirror of AiPanel's clearAiHighlights: auto-accept the external edit, keeping undo history */
-function clearAiChangedFlags(editor: Editor): void {
-  const view = editor.view
-  let tr = view.state.tr
-  let touched = false
-  view.state.doc.forEach((node, offset) => {
-    if (node.attrs.aiChanged) {
-      tr = tr.setNodeMarkup(offset, undefined, { ...node.attrs, aiChanged: false })
-      touched = true
-    }
-  })
-  if (!touched) return
-  tr = tr.setMeta('addToHistory', false)
-  view.dispatch(tr)
-  markDocSeen(editor)
 }
 
 /**

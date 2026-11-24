@@ -810,6 +810,18 @@ export function markDocSeen(editor: Editor): void {
   docBaseline.set(editor, editor.state.doc)
 }
 
+/** Clear temporary edit highlights, including paragraphs nested in table cells. */
+export function clearAiChangedFlags(editor: Editor): void {
+  const { view } = editor
+  const tr = view.state.tr
+  view.state.doc.descendants((node, pos) => {
+    if (node.attrs.aiChanged) tr.setNodeAttribute(pos, 'aiChanged', false)
+  })
+  if (!tr.docChanged) return
+  view.dispatch(tr.setMeta('addToHistory', false))
+  markDocSeen(editor)
+}
+
 /** A streamed load tail is not a user edit: appending at the end keeps every block index the model saw valid. */
 export function carryDocSeen(editor: Editor, before: ProseMirrorNode): void {
   if (docBaseline.get(editor) === before) docBaseline.set(editor, editor.state.doc)
