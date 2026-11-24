@@ -4,14 +4,6 @@
 
 此目录内置于仓库，提供**隔离测试模板，不是生产发布**。暂不使用 HTTPS；网络绑定、端口和对外 origin 可配置，默认仍是 `127.0.0.1:3080` 与 `http://localhost:3080`。
 
-## 文档任务代理（broker）
-
-Word、XLSX、PPTX 的编辑界面运行在浏览器。镜像的 `web` 构建阶段会使用 Web 服务自身的静态资源加载器，逐项验证三个编辑器的入口、Vite 清单和引用的资源。构建通过只说明这些前端文件可用。
-
-服务端的文档任务需要另一条链路：Web 校验用户、文件版本与编辑租约 → broker 接收被授权的任务 → 通过**容器私有**的 systemd D-Bus 为文档引擎启动受限单元 → 回收结果并清理该单元。Web 不直接接触宿主 systemd 或 Docker socket。
-
-当前 [broker 实现](../../services/document-broker/README.md) 尚不能接收、执行真实任务。`DYOFFICE_DOCUMENT_BACKEND=broker-required` 会在 Web 监听前报 `document broker unavailable`，删除 `docx-only` 则会进入开发子进程路径，两者均不能提供三种编辑器的完整隔离部署。下述启动命令仅对应现有 DOCX 开发基线。隔离环境的前置条件和验收项目见[容器就绪说明](CONTAINER-READINESS.zh-CN.md)。
-
 ## HTTP 模式与明确风险
 
 默认 `DYOFFICE_INSECURE_HTTP_DEV=0`：会话仍使用 `__Host-*; HttpOnly; Secure; SameSite=Lax`。本次已用 Chromium 在 localhost 上验证登录和刷新。其他浏览器对 localhost 安全上下文的处理需独立核验。
@@ -46,10 +38,9 @@ DYOFFICE_INSECURE_HTTP_DEV=1
 
 ## 默认华为源
 
-- Docker 运行镜像通过华为云 Debian 源安装 Noto CJK 和 Liberation 替代字体，并在构建时验证字体可用。
 - npm 默认 `https://repo.huaweicloud.com/repository/npm/`，可通过 `NPM_REGISTRY` 覆盖。构建副本中重写 npmjs/npmmirror 的锁定下载地址，保留版本与 integrity；未知外链拒绝，绝不静默回源。下载内容通过锁文件的 SHA-512 校验。
 - Node/Rust/PostgreSQL（宿主依赖另有 Redis）需用户提前同步官方兼容镜像到**自己的华为 SWR**，填真实镜像地址，建议固定 digest。没有虚构公共镜像或发布好的 DyOffice image。私有 SWR 需预先登录。
-- Rust 的 `wasm32-wasip1` 组件默认从华为云下载。华为云 Cargo 公共镜像缺少锁定的 `calamine 0.37.0`，Cargo 保留 crates.io；限制外网时可在 SWR 构建镜像预置与锁文件匹配的 crate 缓存。最终 Node 镜像只接收生成的 XLSX runner。
+- Rust 构建阶段需要 `rustup target add wasm32-wasip1` 和锁定的 Cargo 依赖。默认 Rust 官方镜像从上游下载目标和 crates。限制外网的环境应使用已预装该目标并配置可信 crate 缓存或镜像的 SWR 构建镜像。最终 Node 镜像只接收生成的 XLSX runner。
 - 官方 npm 说明：https://www.huaweicloud.com/zhishi/npm.html
 - 镜像加速适用限制：https://support.huaweicloud.com/bulletin-swr/swr_bulletin_0003.html
 

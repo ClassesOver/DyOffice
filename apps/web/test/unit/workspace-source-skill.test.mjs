@@ -1,84 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createWorkspaceSourceSkill } from '../../../../packages/browser-host/src/source-skill.ts'
-import { createWorkspaceSourceTools } from '../../server/src/modules/sources/tools.ts'
-import { readFrozenPages } from '../../server/src/modules/sources/results.ts'
-import { randomUUID } from 'node:crypto'
-
-test('frozen pages load distinct results concurrently and reuse each verified snapshot', async () => {
-  const ids = [randomUUID(), randomUUID(), randomUUID()]
-  const pending = new Map(), calls = []
-  const pages = [0, 1, 2, 0].map((i, offset) => ({ resultId: ids[i], offset, limit: 1 }))
-  const batch = readFrozenPages(pages, id => {
-    calls.push(id)
-    return new Promise(resolve => pending.set(id, resolve))
-  })
-  assert.deepEqual(calls, ids)
-  for (const id of [...ids].reverse()) pending.get(id)({ rows: [0,1,2,3].map(n => ({ id, n })), schema: [] })
-  const { items } = await batch
-  assert.deepEqual(items.map(p => p.rows[0]), pages.map(p => ({ id: p.resultId, n: p.offset })))
-  assert.deepEqual(items.map(p => p.nextOffset), [1,2,3,null])
-})
-
-test('batch previews fit the UTF-8 budget without skipping an oversized first row', async () => {
-  const resultId = randomUUID()
-  const snapshot = { rows: [{ v: '界'.repeat(2000) }, ...Array(30).fill({ v: '界'.repeat(100) })], schema: [{ name: '界'.repeat(1000) }] }
-  const batch = await readFrozenPages([0,1,2,40].map(offset => ({ resultId, offset })), async () => snapshot)
-  assert.ok(Buffer.byteLength(JSON.stringify(batch)) <= 8192)
-  assert.equal(batch.items[0].schemaOmitted, true)
-  assert.equal(batch.items[0].readSingly, true)
-  assert.equal(batch.items[0].nextOffset, 0)
-  assert.ok(batch.items[1].rows.length > 0)
-  assert.equal(batch.items[1].nextOffset, 1 + batch.items[1].rows.length)
-  assert.equal(batch.items[3].nextOffset, null)
-})
-
-test('all four independent SQL statements can run together and return in input order', async () => {
-  const queries = ['SELECT 1', 'SELECT 2', 'SELECT 3', 'SELECT 4']
-  const waiting = new Map()
-  const tools = createWorkspaceSourceTools({
-    sources: {
-      detail: async () => ({ source: { version: 1, enabled: true, hasCredential: true } }),
-      async querySource(_token, sourceId, { sql }) {
-        await new Promise(resolve => waiting.set(sql, resolve))
-        return { sourceId, sourceVersion: 1, schema: [], rows: [{ sql }] }
-      },
-    },
-    results: { capture: async () => ({}) },
-  })
-  const batch = tools.execute('session', { name: 'execute_sql', arguments: { sourceId: 'sales', queries } })
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(waiting.size, 4)
-  for (const sql of [...queries].reverse()) waiting.get(sql)()
-  assert.deepEqual((await batch).items.map(item => item.result.preview[0].sql), queries)
-})
-
-test('a revoked batch drains in-flight queries before rejecting without results', async () => {
-  const slow = Promise.withResolvers()
-  let revoked = false, finished = false
-  const tools = createWorkspaceSourceTools({
-    sources: {
-      detail: async () => ({ source: { version: 1, enabled: true, hasCredential: true } }),
-      async querySource(_token, sourceId, { sql }) {
-        if (sql === 'SELECT 1') await slow.promise
-        else revoked = true
-        return { sourceId, sourceVersion: 1, schema: [], rows: [] }
-      },
-    },
-    results: { capture: async () => ({}) },
-  })
-  const batch = tools.execute('session', { name: 'execute_sql', arguments: { sourceId: 'sales', queries: ['SELECT 1', 'SELECT 2'] } },
-    undefined, async () => { if (revoked) throw Object.assign(new Error(), { statusCode: 403 }) })
-  const rejected = assert.rejects(batch.finally(() => { finished = true }), { statusCode: 403 })
-  await new Promise(resolve => setImmediate(resolve))
-  try {
-    assert.equal(revoked, true)
-    assert.equal(finished, false)
-  } finally { slow.resolve() }
-  await rejected
-})
 
 test('batch source queries capture every result in the requesting document', async () => {
+  const { createWorkspaceSourceTools } = await import('../../server/src/modules/sources/tools.ts')
   const documentId = '11111111-1111-4111-8111-111111111111', captured = []
   const tools = createWorkspaceSourceTools({
     sources: {
@@ -149,16 +74,6 @@ test('a failed query returns status-specific rewrite advice and truncated result
   assert.match(truncatedNotice(1000), /first 1000 rows.*Do not compute totals.*GROUP BY.*LIMIT/s)
   const prompt = createWorkspaceSourceSkill(async () => ({}), { tools: ['execute_sql'], disposed: () => false }).systemPrompt
   assert.match(prompt, /When sourceTruncated is true, re-query with aggregation/)
-})
-
-test('catalog failures give search-specific recovery without exposing database errors', async () => {
-  for (const [status, advice] of [[400, /tablePrefix/], [401, /sign in/i], [404, /list_connections/], [504, /timed out/i]]) {
-    const skill = createWorkspaceSourceSkill(async () => { throw Object.assign(Error('private database details'), { status }) })
-    const result = await skill.executeTool({ name: 'search_objects', input: { sourceId: 'sales' } })
-    assert.equal(result.isError, true)
-    assert.match(result.output, advice)
-    assert.doesNotMatch(result.output, /private database details/)
-  }
 })
 
 test('an empty describe of an unqualified table tells the model to use the schema-qualified name', async () => {

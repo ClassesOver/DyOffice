@@ -112,10 +112,7 @@ pub fn decode_frame(bytes: &[u8]) -> Result<ControlFrame, Error> {
         || !positive(r.job_epoch)
         || r.generation != 0
         || r.policy_version != 1
-        || !matches!(
-            r.profile_id.as_str(),
-            "docx-edit-v1" | "xlsx-edit-v1" | "pptx-edit-v1"
-        )
+        || r.profile_id != "pptx-edit-v1"
         || r.input_size == 0
         || r.input_size > 32 * 1024 * 1024
     {

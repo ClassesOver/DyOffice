@@ -8,8 +8,8 @@
 |---|---|---|
 |npm|`NPM_REGISTRY` 默认 `https://repo.huaweicloud.com/repository/npm/`，可显式配置 HTTPS 镜像|锁文件 1024 个远端包均有 SHA-512；只改构建副本 URL，不改版本或 integrity。保留 `npm ci --ignore-scripts`。没有完整下载或镜像构建证据。|
 |基础镜像|`NODE_IMAGE` / `RUST_IMAGE` / `POSTGRES_IMAGE` 由部署者提供已同步 SWR 地址|没有已验证的公共镜像或 digest。必须记录源镜像、平台、目标 SWR 的实际 `@sha256:…`，不得用伪造 digest 或浮动 tag 宣称可复现。|
-|APT|容器使用华为云的 Debian bookworm 和 bookworm-security 镜像安装 fontconfig、Noto CJK 和 Liberation 字体|保留 Debian 官方签名 keyring；`host/ubuntu-noble.sources.example` 仅用于 Ubuntu 宿主。|
-|Rust/Cargo|Rust 1.93.0 的 WASI 目标默认从华为云下载；Cargo 保留原锁文件和 crates.io|华为云 Cargo 公共索引缺少锁定的 `calamine 0.37.0`。|
+|APT|已有 `host/ubuntu-noble.sources.example` 保留 Ubuntu 官方签名 keyring|只是旧宿主配置示例，当前 Node bookworm-slim Dockerfile 不运行 APT；不能把 Ubuntu noble 源应用到 Debian bookworm。尚无 Ubuntu 容器依赖安装阶段。|
+|Rust/Cargo|旧模板留空/REPLACE，保留 Cargo.lock|没有经验证的华为 rustup 工具链、Cargo index 和 crate tarball 完整镜像，Dockerfile 使用 Rust 1.93.0 单独编译 WASI runner。不能只配置 index 就称为全华为。|
 |原生业务|Dockerfile 调用现有 `build:saas`：Web/PDF 页面、DOCX/XLSX/PPTX 静态资源及 XLSX gateway JavaScript bundle|这些构建产物不等于原生业务运行时。缺少正式 Ubuntu 容器内 zbus/systemd 业务运行时及真实集成验收；不启用 production 或 unsupported 格式。|
 
 ## npm 拒绝式校验

@@ -18,8 +18,7 @@ simulated Manager model remains test-only; neither is exposed by the binary.
   fails closed rather than evicting IDs. This is not durable replay prevention.
 - serde typed structs reject duplicate/unknown/null fields, trailing non-whitespace
   JSON, non-integer counters, unsafe JS integers, noncanonical IDs and deadlines.
-  Only generation-zero DOCX, XLSX and PPTX control frames are understood; a valid
-  frame does not authorize execution. The checked-in PPTX JSON
+  Only the generation-zero PPTX request subset is understood. The checked-in JSON
   fixture is validated by both Rust and the existing TypeScript request validator.
   Rust parsing checks syntax/canonical dates only, not whether a deadline is live.
   Actual admission must separately verify PG authority and monotonic lease budgets;
@@ -175,12 +174,6 @@ from that pinned owner, and checks the well-known owner has not changed. Forward
 or differently namespaced system buses that cannot satisfy PID 1 are unsupported.
 Errors produce a bounded reason and exit 2; invalid arguments exit 64. A successful
 observation exits 0 but **always** reports `execution_available: false`.
-
-On Linux, run `manager-preflight --container` inside the diagnostic container
-to report all missing prerequisites together, including PID 1, UID/GID mapping,
-cgroup mount and controllers, seccomp, and the local bus socket. The command
-checks the manager over D-Bus only if those prerequisites are present. It exits
-2 if any check fails and always reports `isolation_certified: false`.
 
 This adds live bus-owner/manager observations to the Node preflight's socket-presence
 and client-version checks. It does not authenticate a hostile root-controlled host,

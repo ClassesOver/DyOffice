@@ -443,7 +443,7 @@ where
     Ok(())
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod container_diagnostic {
     use super::*;
     #[tokio::test]

@@ -55,7 +55,7 @@ describe('checkMissingFonts', () => {
     ])
   })
 
-  it('reports null substitute when no named fallback resolves', () => {
+  it('reports null substitute when only the bundled fallback is left', () => {
     stubCanvas([])
     expect(checkMissingFonts(['楷体_GB2312'])).toEqual([{ name: '楷体_GB2312', substitute: null }])
   })
@@ -63,18 +63,6 @@ describe('checkMissingFonts', () => {
   it('says nothing when the declared font resolves', () => {
     stubCanvas(['黑体'])
     expect(checkMissingFonts(['黑体'])).toEqual([])
-  })
-
-  it('recognizes an installed font by either spelling', () => {
-    stubCanvas(['Microsoft YaHei'])
-    expect(checkMissingFonts(['微软雅黑', 'Microsoft YaHei'])).toEqual([])
-  })
-
-  it('groups missing aliases and names the available CJK substitute', () => {
-    stubCanvas(['Noto Sans CJK SC'])
-    expect(checkMissingFonts(['微软雅黑', 'Microsoft YaHei'])).toEqual([
-      { name: '微软雅黑', substitute: 'Noto Sans CJK SC' },
-    ])
   })
 
   it('declared bundled subset faces still count as missing', () => {

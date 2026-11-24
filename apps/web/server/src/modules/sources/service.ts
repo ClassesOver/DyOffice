@@ -82,18 +82,12 @@ export async function describeSourceMetadata(
   const maxRows = 1000
   const execution = { ...executionFor(row.kind, row.config), maxRows }
   const tableKeys = batch ? 'table_schema, table_name, ' : ''
-  const columns = requested.length
-    ? [...(batch ? ['table_schema','table_name'] : []),'column_name','data_type','is_nullable']
-    : ['table_schema','table_name','table_type']
-  const projection = columns.join(', ')
   const sql = requested.length
-    ? `SELECT ${projection} FROM information_schema.columns WHERE ${where} ORDER BY ${tableKeys}ordinal_position LIMIT ${maxRows + 1} OFFSET ${columnOffset}`
-    : `SELECT ${projection} FROM information_schema.tables WHERE (${where})${filters} ORDER BY table_name, table_schema`
+    ? `SELECT ${tableKeys}column_name, data_type, is_nullable FROM information_schema.columns WHERE ${where} ORDER BY ${tableKeys}ordinal_position LIMIT ${maxRows + 1} OFFSET ${columnOffset}`
+    : `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE (${where})${filters} ORDER BY table_name, table_schema`
   const allowedTables = [requested.length ? 'information_schema.columns' : 'information_schema.tables']
   const result = await querySqlSource(policy, row.kind, secret, sql, execution, { defaultSchema: database, allowedTables })
-  // DBHub omits column names on zero rows; this catalog projection is known.
-  const catalog = !result.rows.length && !result.names.length ? { rows: [], names: columns, types: columns.map(() => 'string' as const) } : result
-  const snapshot = snapshotFor({ ...row, config: { ...row.config, units: {} } }, execution, catalog)
+  const snapshot = snapshotFor({ ...row, config: { ...row.config, units: {} } }, execution, result)
   return requested.length ? { ...snapshot, nextOffset: snapshot.truncated ? columnOffset + snapshot.rows.length : null } : snapshot
 }
 

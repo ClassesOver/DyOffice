@@ -3,30 +3,8 @@ use dyoffice_document_broker::manager_diagnostic::inspect_system_manager;
 
 #[tokio::main]
 async fn main() {
-    let mut args = std::env::args_os().skip(1);
-    let first = args.next();
-    #[cfg(target_os = "linux")]
-    if first.as_deref() == Some(std::ffi::OsStr::new("--container")) && args.next().is_none() {
-        let mut reasons = dyoffice_document_broker::container_probe::prerequisites();
-        if reasons.is_empty() && inspect_system_manager().await.is_err() {
-            reasons.push("private systemd manager unavailable");
-        }
-        println!(
-            "{}",
-            serde_json::json!({
-                "scope": "read-only-container-prerequisites",
-                "reasons": reasons,
-                "execution_available": false,
-                "isolation_certified": false
-            })
-        );
-        if !reasons.is_empty() {
-            std::process::exit(2);
-        }
-        return;
-    }
-    if first.is_some() {
-        eprintln!("Usage: manager-preflight [--container]");
+    if std::env::args_os().len() != 1 {
+        eprintln!("Usage: manager-preflight (no arguments)");
         std::process::exit(64);
     }
     match inspect_system_manager().await {

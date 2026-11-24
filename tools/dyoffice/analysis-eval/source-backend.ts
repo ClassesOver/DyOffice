@@ -6,7 +6,6 @@ import { executionFor, object, sourceError, sourceId } from '../../../apps/web/s
 import { describeSourceMetadata, snapshotFor } from '../../../apps/web/server/src/modules/sources/service.ts'
 import { querySqlSource } from '../../../apps/web/server/src/modules/sources/sql.ts'
 import { createWorkspaceSourceTools } from '../../../apps/web/server/src/modules/sources/tools.ts'
-import { readFrozenPages } from '../../../apps/web/server/src/modules/sources/results.ts'
 
 /** The trial owns one PostgreSQL connection and an in-memory store for its frozen evidence. */
 export function createEvaluationSourceBackend(sourceDsn: string, documentId: string) {
@@ -64,14 +63,6 @@ export function createEvaluationSourceBackend(sourceDsn: string, documentId: str
       return { artifact, schema: snapshot.schema, timezone: snapshot.timezone, rows, offset, nextOffset: next < snapshot.rows.length ? next : null, totalRows: snapshot.rows.length, sourceTruncated: snapshot.truncated, sha256: snapshot.sha256 }
     },
     async save() { throw sourceError(403) },
-    readPages(_token: string, pages: unknown, id?: string) {
-      checkDocument(id)
-      return readFrozenPages(pages, async resultId => {
-        const entry = frozen.get(resultId)
-        if (!entry || Date.parse(entry.artifact.expiresAt) <= Date.now()) throw sourceError(404)
-        return entry.snapshot
-      })
-    },
   }
   const tools = createWorkspaceSourceTools({ sources, results })
   return {

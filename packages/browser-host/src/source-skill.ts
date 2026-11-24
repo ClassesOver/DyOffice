@@ -110,20 +110,8 @@ const CODE_ADVICE: Partial<Record<AssistantErrorCode, string>> = {
 
 /** Recovery advice so the model rewrites the query instead of retrying it unchanged. */
 export function sourceFailure(name: SourceToolName, status: number | undefined, code?: unknown): string {
-  if (name === 'search_objects') {
-    if (code === 'SOURCE_TIMEOUT' || status === 504) return 'Catalog lookup timed out. Narrow the search to one schema, tablePrefix or qualified table.'
-    if (code === 'SOURCE_RESULT_UNUSABLE' || status === 502 && !code) return 'The connector returned unusable catalog metadata. Try listing tables with schema or tablePrefix; if it persists, test the data connection.'
-  }
   if (name === 'execute_sql' && code === 'RESULT_QUOTA_EXCEEDED') return 'Temporary query results have reached the workspace limit. Reuse an existing result if it answers the question, or wait for temporary results to expire (up to 15 minutes) before running another query.'
   if (isAssistantErrorCode(code) && CODE_ADVICE[code] && (name === 'execute_sql' || !code.startsWith('SQL_'))) return CODE_ADVICE[code]!
-  if (name === 'search_objects') {
-    if (status === 400) return 'Catalog request rejected. List tables using sourceId with optional schema or tablePrefix. To inspect columns, use table or tables with qualified names and omit the list filters.'
-    if (status === 401) return 'The session is no longer authenticated. Sign in again before reading the catalog.'
-    if (status === 403) return 'Catalog access was denied. Check the assigned connection and its visible schemas and tables.'
-    if (status === 404 || status === 409) return 'The requested source or document is no longer available in this context. Use list_connections to check the current sources before retrying.'
-    if (status === 429) return 'Too many catalog requests. Wait briefly before retrying.'
-    return 'Could not read the data source catalog. Check the connection in Data Sources before retrying; table and column metadata are unavailable.'
-  }
   if (name === 'execute_sql' && status === 504) return TIMEOUT_ADVICE
   if (name === 'execute_sql' && status === 502) return CODE_ADVICE.SOURCE_RESULT_UNUSABLE!
   if (name === 'execute_sql' && status === 400) return 'The SQL was rejected by the read-only policy or the database. Window functions, CTEs and ordinary analysis functions are supported; writes and access outside the connection scope are not. Check table and column names against search_objects, check syntax and types, and retry once with the corrected read-only query.'
@@ -144,7 +132,6 @@ export function createWorkspaceSourceSkill(request: Request, options?: { tools: 
       'Use only assigned workspace sources. List sources when the source is unknown. Find tables with schema or tablePrefix, then describe only the qualified tables needed.',
       'Use tables to inspect several table structures in one call. When a required column is missing and metadata.nextOffset is non-null, repeat the same table or tables with columnOffset set to metadata.nextOffset. Read the configured units for displayed columns from config.units. Carry the input unit through SUM or AVG of a column even when the result has a new alias.',
       'Submit independent same-source SQL together using queries. Inspect each item in order and retry only a failed statement after correcting it.',
-      'Use read_query_result with pages for independent reads of frozen results. Each ordered item has its own nextOffset. When readSingly is true, retry that offset with a single resultId.',
       'execute_sql returns a frozen, bounded result and a resultId. Inspect sourceTruncated, units, timezone and hash before drawing conclusions; partial rows do not establish full-dataset totals.',
       ...(options ? [
         'Describe only the source and tables needed. Use the table_schema and table_name returned by metadata to qualify table names. An HTTP source has extraction metadata, not SQL tables.',

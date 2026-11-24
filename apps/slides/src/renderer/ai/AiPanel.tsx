@@ -48,7 +48,6 @@ import {
 } from './slides-skill'
 import { extractJsonObject, parseOutlineJson } from './outline-json'
 import { EditQueueCard } from './EditQueueCard'
-import { shouldShowClarifyNext } from './clarify-navigation'
 import { deriveDeckProgressView, type DeckProgressSnapshot } from './deck-progress-view'
 import {
   buildPageInstruction,
@@ -3320,7 +3319,7 @@ function ClarifyCard({
             </button>
           ) : (
             /* Multi-select waits for an explicit Next; single-select advances by picking. */
-            shouldShowClarifyNext({isLast,multi:!!q.multi,hasOtherText:!!other[q.id]?.trim()}) && (
+            q.multi && (
               <button
                 type="button"
                 className="ai-clarify-next"

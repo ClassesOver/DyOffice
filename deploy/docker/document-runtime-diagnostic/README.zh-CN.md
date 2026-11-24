@@ -50,7 +50,6 @@ cd deploy/docker/document-runtime-diagnostic
 docker compose --profile document-runtime-diagnostic config --quiet
 docker compose --profile document-runtime-diagnostic build --no-cache document-runtime-diagnostic
 docker compose --profile document-runtime-diagnostic up -d document-runtime-diagnostic
-docker compose exec -T document-runtime-diagnostic /opt/dyoffice-diagnostic/manager-preflight --container
 docker compose logs --no-color document-runtime-diagnostic
 docker compose exec -T document-runtime-diagnostic systemctl show dyoffice-probe.service -p ActiveState -p SubState -p Result -p ExecMainStatus
 ```
