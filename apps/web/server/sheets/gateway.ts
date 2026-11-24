@@ -91,7 +91,11 @@ async function planSave(source: EntrySource, sheets: readonly { id: string; name
       new Map(sheets.map((sheet) => [sheet.id, sheet.name])),
       request,
     )
-    return await planWorkbookMutation(source, mapping)
+    return await planWorkbookMutation(source, {
+      ...mapping,
+      cfStates: mapping.cfStates?.map(state => ({ ...state, preserveUneditable: true })),
+      filterStates: mapping.filterStates?.map(state => ({ ...state, preserveUneditable: true })),
+    })
   } catch {
     throw Object.assign(new Error('Invalid workbook edits'), { statusCode: 400 })
   }

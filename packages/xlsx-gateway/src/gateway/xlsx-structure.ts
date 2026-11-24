@@ -91,55 +91,61 @@ export function inferWorksheetAddresses(worksheetXml: string): string {
 
   const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
   const body = worksheetXml.slice(bodyStart, closeIndex)
-  // 常见工作表把地址写在首个属性。只要有例外，就交给下方的完整推断流程。
-  if (!/<(?:row|c)\b(?!\s+r="[^">]*")/.test(body)) return worksheetXml
+  // Typical worksheets already put the canonical address first on every tag.
+  if (!/<(?:row|c)(?=[\s/>])(?!\s+r="[^">]*")/.test(body)) return worksheetXml
   let currentRow = 0
-  let firstRow = true
-  let changed = false
-  const normalizedBody = body.replace(/<row\b[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g, (rowXml) => {
-    const rowOpenEnd = rowXml.indexOf('>')
-    if (rowOpenEnd === -1) return rowXml
-    // The open tag keeps its closing `>` (or `/>`) so a self-closing row is
-    // re-emitted as-is instead of gaining a stray `</row>`.
-    const rowOpen = rowXml.slice(0, rowOpenEnd + 1)
-    const selfClosing = rowOpen.endsWith('/>')
-    const rowBody = selfClosing ? '' : rowXml.slice(rowOpenEnd + 1, rowXml.length - '</row>'.length)
-    const explicitRow = readPositiveInteger(readTagAttribute(rowOpen, 'r'))
-    const rowNumber = explicitRow ?? (firstRow ? 1 : currentRow + 1)
-    firstRow = false
-    currentRow = rowNumber
-    let nextColumn = 0
-    const rowAttributeMissing = readTagAttribute(rowOpen, 'r') === undefined
-    let rowChanged = rowAttributeMissing
-    const normalizedCells = rowBody.replace(/<c\b[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g, (cellXml) => {
-      const cellOpenEnd = cellXml.indexOf('>')
-      if (cellOpenEnd === -1) return cellXml
-      const cellOpen = cellXml.slice(0, cellOpenEnd + 1)
-      const cellSelfClosing = cellOpen.endsWith('/>')
-      const cellBody = cellSelfClosing
-        ? ''
-        : cellXml.slice(cellOpenEnd + 1, cellXml.length - '</c>'.length)
-      const explicitAddress = readTagAttribute(cellOpen, 'r')
-      const parsed = explicitAddress === undefined ? null : parseA1(explicitAddress)
-      nextColumn = parsed === null ? nextColumn + 1 : parsed.column + 1
-      if (explicitAddress !== undefined) return cellXml
-      rowChanged = true
-      const address = `${columnToLetters(nextColumn - 1)}${rowNumber}`
-      const normalizedOpen = addTagAttribute(cellOpen, 'r', address)
-      return cellSelfClosing ? normalizedOpen : `${normalizedOpen}${cellBody}</c>`
-    })
-    const normalizedOpen = rowAttributeMissing
-      ? addTagAttribute(rowOpen, 'r', String(rowNumber))
-      : rowOpen
-    changed ||= rowChanged
-    return selfClosing
-      ? `${normalizedOpen}${normalizedCells}`
-      : `${normalizedOpen}${normalizedCells}</row>`
+  let nextColumn: number | undefined
+  const tags =
+    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\/row\s*>|<(row|c)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/g
+  const normalizedBody = body.replace(tags, (tag, name: string | undefined) => {
+    if (name === undefined) {
+      if (tag.startsWith('</row')) nextColumn = undefined
+      return tag
+    }
+    const attribute = worksheetTagAttribute(tag, 'r')
+    const explicit = attribute?.[2] ?? attribute?.[3]
+    let address: string
+    if (name === 'row') {
+      currentRow = readPositiveInteger(explicit) ?? currentRow + 1
+      nextColumn = tag.endsWith('/>') ? undefined : 0
+      address = explicit ?? String(currentRow)
+    } else if (nextColumn !== undefined) {
+      const column = (explicit === undefined ? null : parseA1(explicit))?.column ?? nextColumn
+      nextColumn = column + 1
+      address = explicit ?? `${columnToLetters(column)}${currentRow}`
+    } else {
+      return tag
+    }
+    if (attribute === undefined) return addTagAttribute(tag, 'r', address)
+    if (attribute[0].trimStart() === `r="${address}"`) return tag
+    const rest = tag.slice(0, attribute.index) + tag.slice(attribute.index + attribute[0].length)
+    return addTagAttribute(rest, 'r', address.replaceAll('"', '&quot;'))
   })
 
-  return changed
-    ? worksheetXml.slice(0, bodyStart) + normalizedBody + worksheetXml.slice(closeIndex)
-    : worksheetXml
+  return normalizedBody === body
+    ? worksheetXml
+    : worksheetXml.slice(0, bodyStart) + normalizedBody + worksheetXml.slice(closeIndex)
+}
+
+const worksheetAttributes = /\s+([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+
+function worksheetTagAttribute(tag: string, name: string): RegExpExecArray | undefined {
+  // Consume whole attributes so another attribute's text cannot look like an address.
+  for (const attribute of tag.matchAll(worksheetAttributes)) {
+    if (attribute[1] === name) return attribute
+  }
+  return undefined
+}
+
+export function readWorksheetTagAttribute(tag: string, name: string): string | undefined {
+  const attribute = worksheetTagAttribute(tag, name)
+  return attribute?.[2] ?? attribute?.[3]
+}
+
+export function omitWorksheetTagAttributes(tag: string, names: readonly string[]): string {
+  return tag.replace(worksheetAttributes, (attribute, name: string) =>
+    names.includes(name) ? '' : attribute,
+  )
 }
 
 function readTagAttribute(tag: string, name: string): string | undefined {
@@ -1270,13 +1276,17 @@ export interface SharedFormulaGroup {
   readonly followers: readonly SharedFormulaCell[]
 }
 
+export function hasSharedFormula(xml: string): boolean {
+  return /\bt\s*=\s*(?:"shared"|'shared')/.test(xml)
+}
+
 export function materializeSharedFormulaGroups(
   xml: string,
   breaks: (group: SharedFormulaGroup) => boolean,
   keeps: (cell: SharedFormulaCell) => boolean,
   untranslatable: 'cached-value' | 'throw',
 ): string {
-  if (!xml.includes('t="shared"')) return xml
+  if (!hasSharedFormula(xml)) return xml
   interface Fragment extends SharedFormulaCell {
     start: number
     end: number
@@ -1288,16 +1298,17 @@ export function materializeSharedFormulaGroups(
   const fragments: Fragment[] = []
   // The open tag is matched alone so a self-closing follower never pairs
   // with a later </f>.
-  const sharedOpen = /<f\b[^>]*?\bt="shared"[^>]*?(\/?)>/g
+  const sharedOpen = /<f(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/g
   let match: RegExpExecArray | null
   while ((match = sharedOpen.exec(xml)) !== null) {
     const openTag = match[0]
-    const si = /\bsi="([^"]+)"/.exec(openTag)?.[1]
+    if (readWorksheetTagAttribute(openTag, 't') !== 'shared') continue
+    const si = readWorksheetTagAttribute(openTag, 'si')
     if (si === undefined) continue
     const openEnd = match.index + openTag.length
     let end = openEnd
     let body = ''
-    if (match[1] !== '/') {
+    if (!openTag.endsWith('/>')) {
       const close = xml.indexOf('</f>', openEnd)
       if (close === -1) continue
       body = xml.slice(openEnd, close)
@@ -1313,18 +1324,18 @@ export function materializeSharedFormulaGroups(
       row: Number(address[2]) - 1,
       column: lettersToColumn(address[1] ?? 'A'),
       si,
-      isAnchor: /\bref="/.test(openTag),
+      isAnchor: readWorksheetTagAttribute(openTag, 'ref') !== undefined,
       body,
     })
   }
   const groups = new Map<string, { anchor: Fragment; followers: Fragment[] }>()
   for (const fragment of fragments) {
-    if (fragment.isAnchor && fragment.body !== '') {
+    if (fragment.isAnchor && fragment.body.trim() !== '') {
       groups.set(fragment.si, { anchor: fragment, followers: [] })
     }
   }
   for (const fragment of fragments) {
-    if (!fragment.isAnchor && fragment.body === '') {
+    if (!fragment.isAnchor && fragment.body.trim() === '') {
       groups.get(fragment.si)?.followers.push(fragment)
     }
   }
@@ -1343,7 +1354,7 @@ export function materializeSharedFormulaGroups(
     let replacement: string
     if (fragment === group.anchor) {
       replacement = `<f${plainFormulaAttributes(fragment.openTag)}>${fragment.body}</f>`
-    } else if (!fragment.isAnchor && fragment.body === '') {
+    } else if (!fragment.isAnchor && fragment.body.trim() === '') {
       const translated = translateSharedFormula(
         formula,
         fragment.row - group.anchor.row,
@@ -1371,7 +1382,11 @@ export function materializeSharedFormulaGroups(
 }
 
 function plainFormulaAttributes(openTag: string): string {
-  return openTag.slice(2, openTag.endsWith('/>') ? -2 : -1).replace(/\s+(?:t|ref|si)="[^"]*"/g, '')
+  return omitWorksheetTagAttributes(openTag.slice(2, openTag.endsWith('/>') ? -2 : -1), [
+    't',
+    'ref',
+    'si',
+  ]).trimEnd()
 }
 
 /// Shifts a single 0-based position; null means it was deleted.
@@ -1964,25 +1979,55 @@ export function translateSharedFormula(
 ): string | null {
   if (rowDelta === 0 && columnDelta === 0) return formula
   let failed = false
-  const translated = formula
-    .split('"')
-    .map((segment, index) =>
-      index % 2 === 1
-        ? segment
-        : segment.replace(
-            FORMULA_REFERENCE_PATTERN,
-            (full, lead: string, qualifier: string | undefined, token: string) => {
-              const moved = translateSharedToken(token, rowDelta, columnDelta)
-              if (moved === null) {
-                failed = true
-                return full
-              }
-              return `${lead}${qualifier === undefined ? '' : `${qualifier}!`}${moved}`
-            },
-          ),
+  const moveReferences = (segment: string) =>
+    segment.replace(
+      FORMULA_REFERENCE_PATTERN,
+      (full, lead: string, qualifier: string | undefined, token: string) => {
+        const moved = translateSharedToken(token, rowDelta, columnDelta)
+        if (moved === null) {
+          failed = true
+          return full
+        }
+        return `${lead}${qualifier === undefined ? '' : `${qualifier}!`}${moved}`
+      },
     )
-    .join('"')
+  const special = /["'\[]/g
+  let translated = ''
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = special.exec(formula)) !== null) {
+    const start = match.index
+    const marker = match[0]
+    const end =
+      marker === '[' ? formulaBracketEnd(formula, start) : formulaQuoteEnd(formula, start, marker)
+    special.lastIndex = end
+    // Keep a single-quoted sheet name with the reference it qualifies.
+    if (marker === "'") continue
+    translated += moveReferences(formula.slice(cursor, start)) + formula.slice(start, end)
+    cursor = end
+  }
+  translated += moveReferences(formula.slice(cursor))
   return failed ? null : translated
+}
+
+function formulaBracketEnd(formula: string, start: number): number {
+  let depth = 1
+  for (let index = start + 1; index < formula.length; index += 1) {
+    const char = formula[index]
+    if (char === "'" && /[\[\]#'@]/.test(formula[index + 1] ?? '')) index += 1
+    else if (char === '[') depth += 1
+    else if (char === ']' && --depth === 0) return index + 1
+  }
+  return formula.length
+}
+
+function formulaQuoteEnd(formula: string, start: number, quote: string): number {
+  for (let index = start + 1; index < formula.length; index += 1) {
+    if (formula[index] !== quote) continue
+    if (formula[index + 1] !== quote) return index + 1
+    index += 1
+  }
+  return formula.length
 }
 
 function translateSharedToken(token: string, rowDelta: number, columnDelta: number): string | null {

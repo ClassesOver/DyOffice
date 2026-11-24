@@ -36,6 +36,7 @@ describe('xlsx-dv sqref rewrite', () => {
     const tag = /<dataValidation\b[^>]*>/.exec(xml)?.[0] ?? ''
     expect(tag).toContain('sqref="$&amp; B1"')
     expect(tag.endsWith('>')).toBe(true)
+    expect(xml).toMatch(/<dataValidations count="2">.*<\/dataValidations><\/worksheet>$/)
   })
 
   it('keeps a surviving area containing $1 literal', () => {

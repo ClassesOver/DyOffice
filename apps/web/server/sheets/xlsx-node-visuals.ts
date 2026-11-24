@@ -9,6 +9,7 @@ type Chart = NonNullable<WorkbookVisualObject['chart']>
 type ChartSeries = Chart['series'][number]
 type Axis = NonNullable<Chart['xAxis']>
 type Anchor = WorkbookVisualObject['anchor']
+type ShapeParagraph = NonNullable<WorkbookVisualObject['paragraphs']>[number]
 type XmlToken = Record<string, unknown> & { ':@'?: Record<string, string>; '#text'?: string }
 type XmlElement = { tag: string; tokens: XmlToken[]; attrs?: Record<string, string> | undefined }
 
@@ -68,6 +69,7 @@ function flag(node?: XmlElement): boolean | undefined {
   if (!node) return undefined
   return !['0', 'false'].includes(attribute(node, 'val') ?? '')
 }
+const trueAttribute = (node: XmlElement | undefined, key: string) => ['1', 'true'].includes(attribute(node, key) ?? '')
 function member<const T extends readonly string[]>(value: string | undefined, allowed: T): T[number] | undefined {
   return value && allowed.includes(value) ? value : undefined
 }
@@ -77,11 +79,10 @@ const flatPlot = (tag: string) => member(tag.replace(/^(bar|line|pie|area)3DChar
 const themeSlots = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink']
 const themeAliases: Record<string, string> = { tx1: 'dk1', tx2: 'dk2', bg1: 'lt1', bg2: 'lt2' }
 
-function color(scope: XmlElement | undefined, theme: readonly string[]): string | undefined {
-  const fill = child(scope, 'solidFill')
-  const direct = attribute(child(fill, 'srgbClr'), 'val') ?? attribute(child(fill, 'sysClr'), 'lastClr')
+function drawingColor(node: XmlElement | undefined, theme: readonly string[]): string | undefined {
+  const direct = attribute(child(node, 'srgbClr'), 'val') ?? attribute(child(node, 'sysClr'), 'lastClr')
   if (direct && /^[\da-f]{6}$/i.test(direct)) return `#${direct.toUpperCase()}`
-  const scheme = child(fill, 'schemeClr')
+  const scheme = child(node, 'schemeClr')
   const slot = attribute(scheme, 'val') ?? ''
   const base = theme[themeSlots.indexOf(themeAliases[slot] ?? slot)]
   if (!base || !/^#[\da-f]{6}$/i.test(base)) return undefined
@@ -91,21 +92,74 @@ function color(scope: XmlElement | undefined, theme: readonly string[]): string 
     : shade !== undefined ? applyTint(base, Math.max(-1, Math.min(0, shade / 100_000 - 1))) : base
 }
 
+const color = (scope: XmlElement | undefined, theme: readonly string[]) => drawingColor(child(scope, 'solidFill'), theme)
+
 const cacheLimit = 4096
-function cachePoints(scope?: XmlElement): (string | undefined)[] {
+type CachePoints = { values: (string | undefined)[]; sourceIndexes?: number[] }
+
+function cachePoints(scope?: XmlElement): CachePoints {
   const level = first(scope, 'lvl')
   const points = [...descendants(level ?? scope)].filter(node => node.tag === 'pt')
-  if (!points.length) return []
+  if (!points.length) return { values: [] }
   const indexed = points.map(point => ({ index: nonnegative(attribute(point, 'idx')), value: text(child(point, 'v')) }))
+  const compact = (): CachePoints => {
+    const emitted = indexed.slice(0, cacheLimit)
+    return { values: emitted.map(point => point.value), sourceIndexes: emitted.map((point, position) => point.index ?? position) }
+  }
   let slots = nonnegative(attribute(first(scope, 'ptCount'), 'val')) ?? 0
   for (const { index } of indexed) {
-    if (index === undefined) return indexed.slice(0, cacheLimit).map(point => point.value)
+    if (index === undefined) return compact()
     slots = Math.max(slots, index + 1)
   }
-  if (slots > cacheLimit) return indexed.slice(0, cacheLimit).map(point => point.value)
-  const result: (string | undefined)[] = Array(slots).fill(undefined)
-  for (const { index, value } of indexed) result[index!] = value
-  return result
+  if (slots > cacheLimit) return compact()
+  const values: (string | undefined)[] = Array(slots).fill(undefined)
+  for (const { index, value } of indexed) values[index!] = value
+  return { values }
+}
+
+function categoryGroups(category: XmlElement | undefined, points: CachePoints): ChartSeries['categoryGroups'] {
+  if (!points.values.length) return undefined
+  const cache = child(child(category, 'multiLvlStrRef'), 'multiLvlStrCache')
+  const outer = children(cache).filter(node => node.tag === 'lvl')[1]
+  const outerPoints = children(outer).filter(node => node.tag === 'pt')
+  if (!outerPoints.length || outerPoints.length > cacheLimit) return undefined
+  const starts: { index: number; label: string }[] = []
+  for (const point of outerPoints) {
+    const index = nonnegative(attribute(point, 'idx'))
+    const label = text(child(point, 'v'))
+    if (index === undefined || !label) return undefined
+    starts.push({ index, label })
+  }
+  starts.sort((a, b) => a.index - b.index)
+
+  // Oversized or idx-less caches use document order for the detail labels.
+  // Walk their source positions in idx order, then express each group's
+  // members as a contiguous span of emitted positions.
+  const ordered = points.sourceIndexes?.map((index, position) => ({ index, position })).sort((a, b) => a.index - b.index)
+  const pointCount = nonnegative(val(cache, 'ptCount')) ?? (ordered ? ordered.at(-1)!.index + 1 : points.values.length)
+  const groups: NonNullable<ChartSeries['categoryGroups']> = []
+  let cursor = 0
+  for (const [position, { index, label }] of starts.entries()) {
+    const next = starts[position + 1]?.index ?? pointCount
+    if (!ordered) {
+      const end = Math.min(next, points.values.length)
+      if (index < end) groups.push({ label, start: index, end })
+      continue
+    }
+    while (cursor < ordered.length && ordered[cursor]!.index < index) cursor++
+    let start = points.values.length
+    let end = 0
+    const firstMember = cursor
+    while (cursor < ordered.length && ordered[cursor]!.index < next) {
+      const emitted = ordered[cursor++]!.position
+      start = Math.min(start, emitted)
+      end = Math.max(end, emitted + 1)
+    }
+    if (cursor === firstMember) continue
+    if (end - start !== cursor - firstMember) return undefined
+    groups.push({ label, start, end })
+  }
+  return groups.length ? groups : undefined
 }
 
 const formula = (scope?: XmlElement) => text(first(scope, 'f'))?.trim() || undefined
@@ -130,8 +184,10 @@ function parseSeries(series: XmlElement, plot: XmlElement, index: number, theme:
   const cachedName = text(first(tx, 'v'))
   const category = child(series, 'cat') ?? child(series, 'xVal')
   const value = child(series, 'val') ?? child(series, 'yVal')
+  const categoryCache = cachePoints(category)
+  const groups = categoryGroups(category, categoryCache)
   const blanks: number[] = []
-  const values = cachePoints(value).map((point, index) => {
+  const values = cachePoints(value).values.map((point, index) => {
     const number = finite(point)
     if (number === undefined) blanks.push(index)
     return number ?? 0
@@ -155,7 +211,8 @@ function parseSeries(series: XmlElement, plot: XmlElement, index: number, theme:
   })
   return {
     name: cachedName ?? `Series${index + 1}`, nameRef: cachedName === undefined ? formula(tx) : undefined,
-    categories: cachePoints(category).map(point => point ?? ''), values,
+    categories: categoryCache.values.map(point => point ?? ''), values,
+    ...(groups ? { categoryGroups: groups } : {}),
     ...(blanks.length ? { blanks } : {}),
     numberFormat: format(value), categoryFormat: format(category),
     color: color(sp, theme) ?? theme[4 + (nonnegative(val(series, 'idx')) ?? index) % 6],
@@ -319,6 +376,161 @@ function pictureCrop(blipFill?: XmlElement): WorkbookVisualObject['crop'] {
   return { left, top, right, bottom }
 }
 
+function readShapeParagraphs(body: XmlElement | undefined, theme: readonly string[]): ShapeParagraph[] {
+  return children(body).filter(node => node.tag === 'p').slice(0, 200).map(paragraph => {
+    const properties = child(paragraph, 'pPr')
+    const margin = finite(attribute(properties, 'marL'))
+    const indent = finite(attribute(properties, 'indent'))
+    const numberedBullet = child(properties, 'buAutoNum')
+    const runs: ShapeParagraph['runs'] = []
+    for (const node of children(paragraph)) {
+      if (node.tag === 'br') {
+        runs.push({ text: '\n', bold: false, italic: false, underline: false })
+      } else if (node.tag === 'r' || node.tag === 'fld') {
+        const properties = child(node, 'rPr')
+        const size = finite(attribute(properties, 'sz'))
+        const underline = attribute(properties, 'u')
+        runs.push({
+          text: text(child(node, 't')) ?? '',
+          color: color(properties, theme),
+          bold: trueAttribute(properties, 'b'),
+          italic: trueAttribute(properties, 'i'),
+          underline: underline !== undefined && underline !== 'none',
+          size: size === undefined ? undefined : size / 100,
+          caps: member(attribute(properties, 'cap'), ['all', 'small'] as const),
+        })
+      }
+    }
+    return {
+      align: attribute(properties, 'algn'),
+      marginLeft: margin === undefined ? undefined : margin / 12_700,
+      indent: indent === undefined ? undefined : indent / 12_700,
+      bulletScheme: numberedBullet ? attribute(numberedBullet, 'type') ?? 'arabicPeriod' : undefined,
+      bulletStartAt: nonnegative(attribute(numberedBullet, 'startAt')),
+      bulletChar: numberedBullet ? undefined : attribute(child(properties, 'buChar'), 'char') || undefined,
+      runs,
+    }
+  })
+}
+
+type VisualBase = Pick<WorkbookVisualObject, 'id' | 'sheetId' | 'anchor' | 'name' | 'drawingPath' | 'drawingIndex' | 'editAs' | 'altText'>
+
+function readShape(node: XmlElement, base: VisualBase, theme: readonly string[]): WorkbookVisualObject | undefined {
+  const properties = child(node, 'spPr')
+  const body = child(node, 'txBody')
+  const bodyProperties = child(body, 'bodyPr')
+  const textBox = trueAttribute(child(child(node, 'nvSpPr'), 'cNvSpPr'), 'txBox')
+  const shapeType = attribute(child(properties, 'prstGeom'), 'prst') ??
+    (textBox && !child(properties, 'custGeom') ? 'rect' : undefined)
+  const paragraphs = readShapeParagraphs(body, theme)
+  const plain = paragraphs.length ? paragraphs.map(paragraph => paragraph.runs.map(run => run.text).join('')).join('\n') : undefined
+  if (!shapeType && !plain) return undefined
+
+  const style = child(node, 'style')
+  function styleColor(name: string): string | undefined {
+    const reference = child(style, name)
+    if (name !== 'fontRef' && ['0', '1000'].includes(attribute(reference, 'idx') ?? '')) return 'none'
+    return drawingColor(reference, theme)
+  }
+  const line = child(properties, 'ln')
+  const width = nonnegative(attribute(line, 'w'))
+  const xfrm = child(properties, 'xfrm')
+  const angle = finite(attribute(xfrm, 'rot'))
+  const extent = angle ? child(xfrm, 'ext') : undefined
+  const frameWidth = finite(attribute(extent, 'cx'))
+  const frameHeight = finite(attribute(extent, 'cy'))
+  return {
+    ...base,
+    kind: 'shape',
+    shapeType,
+    fillColor: child(properties, 'noFill') ? 'none' : color(properties, theme) ?? styleColor('fillRef') ?? 'none',
+    lineColor: child(line, 'noFill') ? 'none' : color(line, theme) ?? styleColor('lnRef') ?? 'none',
+    lineWidth: width === undefined ? undefined : width / 12_700,
+    lineDash: val(line, 'prstDash'),
+    lineCap: attribute(line, 'cap'),
+    flipH: trueAttribute(xfrm, 'flipH'),
+    flipV: trueAttribute(xfrm, 'flipV'),
+    rotation: angle === undefined ? undefined : angle / 60_000,
+    frameWidth: frameWidth && frameWidth > 0 ? frameWidth : undefined,
+    frameHeight: frameHeight && frameHeight > 0 ? frameHeight : undefined,
+    textColor: styleColor('fontRef'),
+    textAnchor: attribute(bodyProperties, 'anchor'),
+    textVertOverflow: attribute(bodyProperties, 'vertOverflow'),
+    textHorzOverflow: attribute(bodyProperties, 'horzOverflow'),
+    paragraphs: paragraphs.length ? paragraphs : undefined,
+    text: plain,
+  }
+}
+
+type GroupBox = { x: number; y: number; width: number; height: number }
+const groupTransform = (node: XmlElement) => child(child(node, 'grpSpPr'), 'xfrm')
+const transformValue = (transform: XmlElement | undefined, part: string, key: string) => integer(attribute(child(transform, part), key))
+const supportedGroupTransform = (transform: XmlElement | undefined) =>
+  !finite(attribute(transform, 'rot')) && !trueAttribute(transform, 'flipH') && !trueAttribute(transform, 'flipV')
+const groupChildTags = new Set(['grpSp', 'sp', 'cxnSp', 'pic', 'graphicFrame'])
+
+function readGroupShapes(group: XmlElement, base: VisualBase, theme: readonly string[]): WorkbookVisualObject[] {
+  const shapeVisuals: WorkbookVisualObject[] = []
+  const rootTransform = groupTransform(group)
+  const width = transformValue(rootTransform, 'ext', 'cx')
+  const height = transformValue(rootTransform, 'ext', 'cy')
+  if (width === undefined || height === undefined || width <= 0 || height <= 0) return shapeVisuals
+  let ordinal = 0
+  function expand(node: XmlElement, box: GroupBox, depth: number) {
+    const transform = groupTransform(node)
+    if (depth > 32 || !supportedGroupTransform(transform)) return
+    const originX = transformValue(transform, 'chOff', 'x') ?? 0
+    const originY = transformValue(transform, 'chOff', 'y') ?? 0
+    const extentX = transformValue(transform, 'chExt', 'cx') ?? 0
+    const extentY = transformValue(transform, 'chExt', 'cy') ?? 0
+    const scaleX = extentX > 0 ? box.width / extentX : 1
+    const scaleY = extentY > 0 ? box.height / extentY : 1
+    for (const entry of children(node)) {
+      if (!groupChildTags.has(entry.tag)) continue
+      const nonvisual = first(entry, 'cNvPr')
+      if (trueAttribute(nonvisual, 'hidden')) continue
+      const nested = entry.tag === 'grpSp'
+      const transform = nested ? groupTransform(entry)
+        : entry.tag === 'graphicFrame' ? child(entry, 'xfrm') : child(child(entry, 'spPr'), 'xfrm')
+      const x = transformValue(transform, 'off', 'x')
+      const y = transformValue(transform, 'off', 'y')
+      const width = transformValue(transform, 'ext', 'cx')
+      const height = transformValue(transform, 'ext', 'cy')
+      if (x === undefined || y === undefined || width === undefined || height === undefined || width < 0 || height < 0) continue
+      const childBox = {
+        x: box.x + (x - originX) * scaleX,
+        y: box.y + (y - originY) * scaleY,
+        width: width * scaleX,
+        height: height * scaleY,
+      }
+      if (nested) {
+        if (childBox.width > 0 && childBox.height > 0) expand(entry, childBox, depth + 1)
+        continue
+      }
+      const id = `${base.id}-${++ordinal}`
+      if (entry.tag !== 'sp' && entry.tag !== 'cxnSp') continue
+      const { fromRow, fromColumn, fromRowOffset, fromColumnOffset } = base.anchor
+      const anchor = {
+        fromRow, fromColumn,
+        fromRowOffset: fromRowOffset + Math.round(childBox.y),
+        fromColumnOffset: fromColumnOffset + Math.round(childBox.x),
+        toRow: fromRow, toColumn: fromColumn,
+        toRowOffset: fromRowOffset + Math.round(childBox.y + childBox.height),
+        toColumnOffset: fromColumnOffset + Math.round(childBox.x + childBox.width),
+      }
+      if (![anchor.fromRowOffset, anchor.fromColumnOffset, anchor.toRowOffset, anchor.toColumnOffset].every(Number.isSafeInteger)) continue
+      // The save gateway edits physical anchors. A child has no independent anchor.
+      const shape = readShape(entry, {
+        id, sheetId: base.sheetId, drawingPath: base.drawingPath, anchor,
+        name: attribute(nonvisual, 'name'), altText: attribute(nonvisual, 'descr') || undefined,
+      }, theme)
+      if (shape) shapeVisuals.push(shape)
+    }
+  }
+  expand(group, { x: 0, y: 0, width, height }, 0)
+  return shapeVisuals
+}
+
 async function readRelationships(read: ZipText, part: string): Promise<Map<string, XmlElement>> {
   const root = roots(await read(relsPathFor(part))).find(node => node.tag === 'Relationships')
   return new Map(children(root).flatMap(node => {
@@ -367,22 +579,33 @@ export async function readWorkbookVisuals(
         const id = `visual-${++ordinal}`
         if (drawingIndex > 10_000) break
         // Save-side indices count every physical anchor, including unsupported
-        // alternate-content branches. Only top-level chart/image anchors render here.
+        // alternate-content branches. Only top-level anchors render here.
         if (!directAnchors.has(entry.tokens)) continue
         const anchor = readAnchor(entry)
         const nonvisual = first(entry, 'cNvPr')
-        if (!anchor || ['1', 'true'].includes(attribute(nonvisual, 'hidden') ?? '')) continue
+        if (!anchor || trueAttribute(nonvisual, 'hidden')) continue
         const name = attribute(nonvisual, 'name')
         const editAs = entry.tag === 'twoCellAnchor'
           ? member(attribute(entry, 'editAs'), ['twoCell', 'oneCell', 'absolute'] as const) ?? 'twoCell' : undefined
         const altText = attribute(nonvisual, 'descr') || undefined
         const base = { id, sheetId, anchor, name, drawingPath, drawingIndex, editAs, altText }
+        const group = child(entry, 'grpSp')
+        if (group) {
+          for (const shape of readGroupShapes(group, base, theme)) result.push(shape)
+          continue
+        }
         const chartNode = first(child(entry, 'graphicFrame'), 'chart')
         if (chartNode) {
           const chartPath = internalTarget(drawingRels, drawingPath, attribute(chartNode, 'id'), 'chart')
           if (!chartPath || !/^xl\/charts\/.+\.xml$/.test(chartPath) || !hasPart(chartPath)) continue
           const chart = readChart(await read(chartPath), theme)
           if (chart) result.push({ ...base, kind: 'chart', chartPath, chart })
+          continue
+        }
+        const shapeNode = child(entry, 'sp') ?? child(entry, 'cxnSp')
+        if (shapeNode) {
+          const shape = readShape(shapeNode, base, theme)
+          if (shape) result.push(shape)
           continue
         }
         const picture = child(entry, 'pic')

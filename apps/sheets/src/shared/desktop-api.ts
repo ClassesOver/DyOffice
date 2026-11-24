@@ -1443,10 +1443,12 @@ export const workbookCfStateSchema = z
             ranges: z.array(cellAreaSchema).min(1).max(100),
             stopIfTrue: z.boolean(),
             rule: z.record(z.string(), z.unknown()),
+            source: z.object({ priority: z.number().int().positive(), unchanged: z.boolean() }).strict().optional(),
           })
           .strict(),
       )
       .max(500),
+    removedSourcePriorities: z.array(z.number().int().positive()).max(500).optional(),
   })
   .strict()
 

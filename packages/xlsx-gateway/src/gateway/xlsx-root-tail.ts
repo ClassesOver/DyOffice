@@ -13,6 +13,34 @@ export interface RootTail {
 const TAGS =
   /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE\b[\s\S]*?>|<\/?[A-Za-z_][\w:.-]*(?:[^>"']|"[^"]*"|'[^']*')*\/?>/g
 
+export function findRootChild(
+  xml: string,
+  root: string,
+  child: string,
+): { start: number; end: number } | null {
+  const stack: string[] = []
+  let start: number | undefined
+  for (const token of xml.matchAll(TAGS)) {
+    const tag = token[0]
+    const name = /^<\/?([\w:.-]+)/.exec(tag)?.[1]
+    if (!name) continue
+    if (tag.startsWith('</')) {
+      if (stack.pop() !== name || stack.length === 0) return null
+      if (stack.length === 1 && start !== undefined) return { start, end: token.index + tag.length }
+      continue
+    }
+    const localName = name.slice(name.lastIndexOf(':') + 1)
+    const selfClosing = tag.endsWith('/>')
+    if (stack.length === 0 && (localName !== root || selfClosing)) return null
+    if (stack.length === 1 && localName === child) {
+      start = token.index
+      if (selfClosing) return { start, end: start + tag.length }
+    }
+    if (!selfClosing) stack.push(name)
+  }
+  return null
+}
+
 /// Locates where a schema-last child belongs in `root`: before the root's own
 /// extLst, or before the root's closing tag. Null when the part is malformed
 /// or the root is self-closing.

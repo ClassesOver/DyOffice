@@ -1,0 +1,130 @@
+import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import JSZip from 'jszip'
+import { workbookRowOutlineResultSchema } from '../../../sheets/src/shared/desktop-api.ts'
+import { buildSheetsGateway } from '../../server/sheets/build.mjs'
+import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
+import { sheetsSaveRequest } from '../helpers/sheets-request.mjs'
+
+const inputFile = new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url)
+const worksheetPart = 'xl/worksheets/sheet1.xml'
+const sparkline = `<extLst><ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">
+  <x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+    <x14:sparklineGroup type="column"><x14:colorSeries rgb="FF123456"/><x14:colorNegative rgb="FFAA0000"/>
+      <x14:sparklines>
+        <x14:sparkline><xm:f><![CDATA['Acceptance'!$A$2:$A$3]]></xm:f><xm:sqref>D2</xm:sqref></x14:sparkline>
+        <x14:sparkline><xm:f>Acceptance!A2:A3</xm:f><xm:sqref>not-a-cell</xm:sqref></x14:sparkline>
+      </x14:sparklines>
+    </x14:sparklineGroup>
+  </x14:sparklineGroups>
+</ext></extLst>`
+const range = { startRow: 0, endRow: 12, startColumn: 0, endColumn: 6 }
+
+test('Node XLSX reopens worksheet outlines and existing sparklines after a value save', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-node-xlsx-layout-'))
+  let runtime
+  t.after(async () => {
+    await runtime?.close()
+    await rm(directory, { recursive: true, force: true })
+  })
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  runtime = await configuredSheetsRuntime(
+    {
+      DYOFFICE_AUTH_MODE: 'local',
+      DYOFFICE_SANDBOX_MODE: 'subprocess',
+      DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+      DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+      DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+    },
+    { enabled: true },
+  )
+
+  const zip = await JSZip.loadAsync(await readFile(inputFile))
+  const worksheet = await zip.file(worksheetPart).async('string')
+  zip.file(
+    worksheetPart,
+    worksheet
+      .replace(
+        '<dimension ',
+        '<sheetPr><outlinePr summaryBelow="0" summaryRight="false"/></sheetPr><dimension ',
+      )
+      .replace('width="18" customWidth="1"', 'width="18" customWidth="1" outlineLevel="1"')
+      .replace('</cols>', '<col min="7" max="7" collapsed="1"/></cols>')
+      .replace(
+        '</sheetData>',
+        '<row r="7" hidden="1"/><row r="8" outlineLevel="2" hidden="1"/>' +
+          '<row r="9" outlineLevel="2"/><row r="10" collapsed="1"/>' +
+          '<row r="11" s="1" ht="20"/><row r="12" s="1" customFormat="0"><c r="A12" s="1"><v>10</v></c></row>' +
+          '<row r="13" s="1" customFormat="true"/></sheetData>',
+      )
+      .replace('</worksheet>', sparkline + '</worksheet>'),
+  )
+  const source = await zip.generateAsync({ type: 'nodebuffer' })
+  const native = runtime.sheetsNative
+
+  async function assertImported(bytes) {
+    const file = await native.inspect(bytes, undefined, true)
+    const sheet = file.sheets[0]
+    assert.deepEqual(sheet.sparklines, [
+      {
+        type: 'column',
+        color: '#123456',
+        negativeColor: '#AA0000',
+        cells: [{ cell: 'D2', sourceRef: "'Acceptance'!$A$2:$A$3" }],
+      },
+    ])
+    assert.equal(sheet.outlineLevelRow, 2)
+    assert.equal(sheet.outlineLevelCol, 1)
+    assert.equal(sheet.outlineSummaryBelow, false)
+    assert.equal(sheet.outlineSummaryRight, false)
+    assert.equal(sheet.columnWidths[0].outlineLevel, 1)
+    assert.equal(sheet.columnWidths[1].collapsed, true)
+    const rows = await native.readRange(bytes, sheet.name, range)
+    assert.equal(rows.rows.find((row) => row.row === 8).outlineLevel, 2)
+    assert.equal(rows.rows.find((row) => row.row === 9).collapsed, true)
+    assert.equal(rows.rows.find((row) => row.row === 10).height, 20)
+    assert.equal(rows.rows.find((row) => row.row === 10).styleIndex, undefined)
+    assert.equal(
+      rows.rows.find((row) => row.row === 11),
+      undefined,
+    )
+    assert.equal(rows.cells.find((cell) => cell.row === 11 && cell.column === 0).styleIndex, 1)
+    assert.equal(rows.rows.find((row) => row.row === 12).styleIndex, 1)
+    const outline = workbookRowOutlineResultSchema.parse(
+      await native.readSheet(bytes, sheet.name, 'outline'),
+    )
+    assert.deepEqual(
+      outline.rows.map((row) => [row.row, row.level, !!row.collapsed, !!row.hidden]),
+      [
+        [7, 2, false, true],
+        [8, 2, false, false],
+        [9, 0, true, false],
+      ],
+    )
+    assert.equal(outline.indexingComplete, true)
+    return sheet
+  }
+
+  const sheet = await assertImported(source)
+  const savedInput = await JSZip.loadAsync(source)
+  const sourceXml = await savedInput.file(worksheetPart).async('string')
+  savedInput.file(
+    worksheetPart,
+    sourceXml.replace("<![CDATA['Acceptance'!$A$2:$A$3]]>", '&apos;Acceptance&apos;!$A$2:$A$3'),
+  )
+  const editable = await savedInput.generateAsync({ type: 'nodebuffer' })
+  const request = sheetsSaveRequest(sheet.id, [{ row: 1, column: 0, writeValue: true, value: 101 }])
+  const plan = await runtime.sheetsWorkbookPlanner(editable, request)
+  const saved = (await native.savePlan(editable, plan)).bytes
+  await assertImported(saved)
+  assert.equal(
+    (await native.readRange(saved, sheet.name, range)).cells.find(
+      (cell) => cell.row === 1 && cell.column === 0,
+    ).value,
+    101,
+  )
+})
