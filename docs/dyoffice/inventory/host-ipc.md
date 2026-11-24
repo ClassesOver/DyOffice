@@ -22,9 +22,9 @@
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | docs | 22 | 49 | 8 | 15 | 23 | 117 |
 | sheets | 18 | 42 | 24 | 20 | 11 | 115 |
-| slides | 155 | 46 | 1 | 7 | 12 | 221 |
+| slides | 157 | 46 | 1 | 7 | 12 | 223 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 205 | 169 | 59 | 52 | 54 | 539 |
+| **all** | 207 | 169 | 59 | 52 | 54 | 541 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -64,6 +64,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `clipboard-os-formats` | `unsupported` | 2 | T09 | No Web equivalent; capability reports unsupported | EMF clipboard formats require OS clipboard access beyond the Async Clipboard API. |
 | `clipboard` | `browser-native` | 5 | T10 | Async Clipboard API (text/plain, text/html, image/png only; user-gesture and permission gated) | Degraded compared with desktop: custom Office formats are not readable/writable from a page. |
 | `screen-capture` | `browser-native` | 5 | T09 | getDisplayMedia / getUserMedia with user prompt | Source enumeration differs (browser picker instead of a source list), recording stays in-page. |
+| `slides-browser-media-lifecycle` | `browser-native` | 2 | T10 | Apply the Web recording budget and revoke browser media object URLs | The browser tracks these values locally. Desktop media arrives as data URLs and does not impose the Web upload budget. |
 | `font-local-install` | `unsupported` | 1 | T10 | No Web equivalent; capability reports unsupported | Installing fonts into the OS is not possible from a page. |
 | `font-catalog` | `server-api` | 3 | T21 | Licensed font assets served by the deployment | Font downloads go through server egress and license review (T00 compatibility baseline). |
 | `font-metrics` | `browser-native` | 2 | T07 | Bundled font assets measured in the page | @genoffice/font-metrics reads font files with Node (5 of 7 source files import Node built-ins); Web must serve the same bundled fonts and prove metric parity before pagination is trusted. |
@@ -431,6 +432,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `slidesApi.insertMedia` | request | invoke `slides:insert-media` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.addMediaBytes` | request | invoke `slides:add-media-bytes` | 2 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getMediaData` | request | invoke `slides:media-data` | 3 | `browser-native` | `slides-deck-session` |
+| `slidesApi.releaseMediaData` | local | — | 3 | `browser-native` | `slides-browser-media-lifecycle` |
 | `slidesApi.pickModel3d` | request | invoke `slides:pick-model3d` | 1 | `browser-native` | `local-pickers` |
 | `slidesApi.addModel3d` | request | invoke `slides:add-model3d` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getModel3dData` | request | invoke `slides:model3d-data` | 2 | `browser-native` | `slides-deck-session` |
@@ -444,11 +446,12 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `slidesApi.applyTheme` | request | invoke `slides:apply-theme` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.setTransition` | request | invoke `slides:set-transition` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getTransition` | request | invoke `slides:get-transition` | 4 | `browser-native` | `slides-deck-session` |
-| `slidesApi.getShowTiming` | request | invoke `slides:get-show-timing` | 3 | `browser-native` | `slides-deck-session` |
+| `slidesApi.getShowTiming` | request | invoke `slides:get-show-timing` | 4 | `browser-native` | `slides-deck-session` |
 | `slidesApi.setAdvanceTimes` | request | invoke `slides:set-advance-times` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.saveRecording` | request | invoke `slides:save-recording` | 1 | `browser-native` | `screen-capture` |
 | `slidesApi.clearNarration` | request | invoke `slides:clear-narration` | 1 | `browser-native` | `screen-capture` |
 | `slidesApi.microphoneAccess` | request | invoke `slides:microphone-access` | 1 | `browser-native` | `screen-capture` |
+| `slidesApi.recordingLimits` | local | — | 1 | `browser-native` | `slides-browser-media-lifecycle` |
 | `slidesApi.getAnimations` | request | invoke `slides:get-animations` | 6 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getShapeKeys` | request | invoke `slides:get-shape-keys` | 3 | `browser-native` | `slides-deck-session` |
 | `slidesApi.setAnimations` | request | invoke `slides:set-animations` | 1 | `browser-native` | `slides-deck-session` |
@@ -469,7 +472,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `slidesApi.addComment` | request | invoke `slides:add-comment` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.deleteComment` | request | invoke `slides:delete-comment` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.nativeClipboard` | request | invoke `slides:native-clipboard` | 4 | `browser-native` | `clipboard` |
-| `slidesApi.beginHistoryBatch` | request | invoke `slides:history-batch-begin` | 6 | `browser-native` | `slides-deck-session` |
+| `slidesApi.beginHistoryBatch` | request | invoke `slides:history-batch-begin` | 4 | `browser-native` | `slides-deck-session` |
 | `slidesApi.endHistoryBatch` | request | invoke `slides:history-batch-end` | 4 | `browser-native` | `slides-deck-session` |
 | `slidesApi.applyEditScript` | request | invoke `slides:apply-edit-script` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.applyTxn` | request | invoke `slides:apply-txn` | 2 | `browser-native` | `slides-deck-session` |
@@ -597,7 +600,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `pdfApi.releaseCertificate` | notify | send `$PDF_CHANNELS.releaseCertificate` | 1 | `unsupported` | `pdf-signing` |
 | `pdfApi.inspectCertificate` | request | invoke `$PDF_CHANNELS.inspectCertificate` | 1 | `unsupported` | `pdf-signing` |
 | `pdfApi.signWithCertificate` | request | invoke `$PDF_CHANNELS.signWithCertificate` | 1 | `unsupported` | `pdf-signing` |
-| `pdfApi.listSavedSignatures` | request | invoke `$PDF_CHANNELS.listSignatures` | 1 | `server-api` | `personal-preferences` |
+| `pdfApi.listSavedSignatures` | request | invoke `$PDF_CHANNELS.listSignatures` | 2 | `server-api` | `personal-preferences` |
 | `pdfApi.addSavedSignature` | request | invoke `$PDF_CHANNELS.addSignature` | 1 | `server-api` | `personal-preferences` |
 | `pdfApi.removeSavedSignature` | request | invoke `$PDF_CHANNELS.removeSignature` | 1 | `server-api` | `personal-preferences` |
 | `pdfApi.getUsername` | request | invoke `$PDF_CHANNELS.getUsername` | 1 | `server-api` | `principal-identity` |
