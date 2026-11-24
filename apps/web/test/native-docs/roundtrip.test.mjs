@@ -15,7 +15,7 @@ import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
 import { hashProtectionPassword, parseDocx, saveDocx } from '../../../../packages/docx-engine/src/index.ts'
 
-const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
+const docsDirectory = process.env.DYOFFICE_TEST_NATIVE_DOCS_DIST ?? fileURLToPath(new URL('../../dist-docs/',import.meta.url))
 async function fixture(t, {beforeCleanup = () => {}, beforeHttpRequest = () => {}, assistantChannels = false} = {}) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-native-docs-'))
   let f, browser, server
@@ -205,8 +205,51 @@ async function openStreamedDshDraft(t) {
 
 test('native Word streams DyOffice writing and shows the returned DSH review', { timeout: 90_000 }, async t => {
   const {f,popup,conversation,fileId,initial,finish} = await openStreamedDshDraft(t)
+  const summary = conversation.locator('.ai-work-group-summary')
+  const summaryPosition = () => summary.evaluate(button => {
+    const reply = button.closest('.ai-msg-assistant').getBoundingClientRect()
+    const caret = button.querySelector('.ai-tool-chip-caret').getBoundingClientRect()
+    return {x: caret.left - reply.left, y: button.getBoundingClientRect().top - reply.top}
+  })
+  const runningPosition = await summaryPosition()
+  const indicator = summary.locator('.ai-tool-chip-spinner')
+  const ripple = await indicator.evaluate(dot => {
+    const [animation] = dot.getAnimations({subtree:true})
+    if (!animation) return null
+    const sample = time => {
+      animation.currentTime = time
+      const {x, y, width, height} = dot.getBoundingClientRect()
+      const ring = getComputedStyle(dot, '::before')
+      return {
+        bounds: [x, y, width, height],
+        dotOpacity: getComputedStyle(dot).opacity,
+        scale: new DOMMatrixReadOnly(ring.transform === 'none' ? undefined : ring.transform).a,
+        ringOpacity: Number(ring.opacity),
+      }
+    }
+    animation.pause()
+    const start = sample(0)
+    const middle = sample(animation.effect.getComputedTiming().duration / 2)
+    return {start, middle}
+  })
+  assert.ok(ripple && ripple.middle.scale > ripple.start.scale, 'The running indicator has an expanding ring')
+  assert.ok(ripple.middle.ringOpacity < ripple.start.ringOpacity, 'The ring fades as it expands')
+  assert.equal(ripple.middle.dotOpacity, ripple.start.dotOpacity)
+  assert.deepEqual(ripple.start.bounds, ripple.middle.bounds)
+  await popup.emulateMedia({reducedMotion: 'reduce'})
+  await expect.poll(() => indicator.evaluate(dot => dot.getAnimations({subtree:true}).length)).toBe(0)
+  await popup.emulateMedia({reducedMotion: 'no-preference'})
   await finish()
   await expect.poll(() => f.page.evaluate(() => window.writeReceipt?.state),{timeout:20_000}).toBe('saved')
+  await expect(summary).not.toHaveClass(/running/)
+  const completedPosition = await summaryPosition()
+  assert.deepEqual(
+    {
+      caretShift: Math.abs(completedPosition.x - runningPosition.x) > 0.5,
+      rowShift: Math.abs(completedPosition.y - runningPosition.y) > 0.5,
+    },
+    {caretShift: false, rowShift: false},
+  )
   const saved = (await f.files.openFile(f.alice.token,fileId)).file
   assert.notEqual(saved.revision, initial)
   assert.equal(await f.page.evaluate(()=>window.writeReceipt.revision),saved.revision)
