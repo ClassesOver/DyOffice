@@ -147,6 +147,7 @@ interface ElementPosition {
   cx: number
   cy: number
   parentGroups: string[]
+  unresolvedGroupRotation: boolean
 }
 
 function positionedElements(
@@ -167,6 +168,7 @@ function positionedElements(
     offsetY: 0,
   },
   parentGroups: string[] = [],
+  unresolvedGroupRotation = false,
 ): ElementPosition[] {
   const result: ElementPosition[] = []
   for (const element of elements) {
@@ -180,6 +182,7 @@ function positionedElements(
       cx: frame.cx * parent.scaleX,
       cy: frame.cy * parent.scaleY,
       parentGroups,
+      unresolvedGroupRotation,
     })
     if (element.type !== 'group') continue
     const childOffset = element.childOffset ?? { x: 0, y: 0, cx: frame.cx, cy: frame.cy }
@@ -196,6 +199,8 @@ function positionedElements(
           offsetY: childOffset.y,
         },
         [...parentGroups, groupName],
+        unresolvedGroupRotation ||
+          Boolean(element.transform.rot || element.transform.flipH || element.transform.flipV),
       ),
     )
   }
@@ -209,7 +214,7 @@ export async function pptxFormatDetails(bytes: Uint8Array): Promise<string> {
   const lines: string[] = []
   for (const [slideIndex, slide] of deck.slides.entries()) {
     for (const position of positionedElements(slide.elements)) {
-      const { element, x, y, cx, cy, parentGroups } = position
+      const { element, x, y, cx, cy, parentGroups, unresolvedGroupRotation } = position
       const placement = `左 ${+(x / EMU_PER_INCH).toFixed(1)} in，上 ${+(y / EMU_PER_INCH).toFixed(1)} in，宽 ${+(cx / EMU_PER_INCH).toFixed(1)} in，高 ${+(cy / EMU_PER_INCH).toFixed(1)} in`
       const details = element.type === 'text' || element.type === 'shape' ? runDetails(element) : []
       if (element.type === 'text' || element.type === 'shape') {
@@ -228,6 +233,9 @@ export async function pptxFormatDetails(bytes: Uint8Array): Promise<string> {
         )
       }
       details.push(...fillDetails(element))
+      if (element.transform.rot) details.push(`旋转 ${(element.transform.rot / 60000).toFixed(1)}°`)
+      if (element.transform.flipH) details.push('水平翻转')
+      if (element.transform.flipV) details.push('垂直翻转')
       if ('stroke' in element && element.stroke?.fill.type === 'solid') {
         details.push(`边框 ${element.stroke.fill.color}`)
       }
@@ -236,8 +244,9 @@ export async function pptxFormatDetails(bytes: Uint8Array): Promise<string> {
         element.type === 'shape' && element.presetGeometry ? `，${element.presetGeometry}` : ''
       const styling = details.length ? `；${details.join('；')}` : ''
       const groupPath = parentGroups.length ? `组合图形 ${parentGroups.join(' / ')} 内 ` : ''
+      const transformNote = unresolvedGroupRotation ? '（组内位置未计入祖先组旋转或翻转）' : ''
       lines.push(
-        `- 第 ${slideIndex + 1} 页 ${groupPath}${name}${shape}“${quote(elementText(element))}”：${placement}${styling}`,
+        `- 第 ${slideIndex + 1} 页 ${groupPath}${name}${shape}“${quote(elementText(element))}”：${placement}${transformNote}${styling}`,
       )
       if (lines.length >= 240) break
     }
