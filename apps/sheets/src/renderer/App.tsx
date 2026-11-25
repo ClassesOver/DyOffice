@@ -3393,7 +3393,7 @@ export function App({
             // in-memory refs must follow the rename (the file's own c:f refs
             // are rewritten independently at save time).
             const previousName =
-              state.editJournal.sheets.renamed.get(params.subUnitId) ??
+              state.editJournal.sheets.renamed.get(params.subUnitId)?.newName ??
               state.editJournal.sheets.added.get(params.subUnitId)?.name ??
               originalName
             recordSheetRename(state.editJournal, params.subUnitId, params.name, originalName)

@@ -6556,6 +6556,7 @@ export function collectNoteStates(
     const fromFile = new Map(
       (fileSheet?.comments ?? []).map((comment) => [`${comment.row}:${comment.column}`, comment]),
     )
+    const ops = state.editJournal.structuralOps.get(sheetId) ?? []
     // the pictures put into this sheet's notes this session
     const pictures = notePicturesFor(state.editJournal, sheetId)
     const threads = threadStore.sheetThreads(sheetId)
@@ -6565,7 +6566,12 @@ export function collectNoteStates(
       .filter((note) => !threaded.has(`${note.row}:${note.col}`))
       .map((note) => {
         const cell = { row: note.row, column: note.col }
-        const comment = fromFile.get(`${note.row}:${note.col}`)
+        const fileRow = screenToFile(ops, 'row', note.row)
+        const fileColumn = screenToFile(ops, 'column', note.col)
+        const comment =
+          fileRow === null || fileColumn === null
+            ? undefined
+            : fromFile.get(`${fileRow}:${fileColumn}`)
         // A plain note where the file (or an earlier save this session) had a
         // thread is a Convert to Note: thread: null drops the on-disk thread.
         const convertedAuthor = threadStore.convertedAuthor(sheetId, note.row, note.col)

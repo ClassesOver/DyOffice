@@ -58,4 +58,31 @@ describe('auto-filter criteria replay on column edits', () => {
     )
     expect(xml).toContain('<autoFilter ref="A1:E10"/>')
   })
+
+  it('shifts single-quoted ranges on the filter and sort state', () => {
+    const xml = applyStructuralOps(
+      worksheet(
+        `<autoFilter ref = 'A1:D10'><sortState caseSensitive='1' ref='A2:D10'>` +
+          `<sortCondition descending='1' ref='C2:C10'></sortCondition></sortState></autoFilter>`,
+      ),
+      [{ kind: 'insert-rows', index: 0, count: 2 }],
+      SHEET,
+    )
+    expect(xml).toMatch(/<autoFilter ref\s*=\s*(["'])A3:D12\1>/)
+    expect(xml).toMatch(/<sortState caseSensitive='1' ref=(["'])A4:D12\1>/)
+    expect(xml).toMatch(/<sortCondition descending='1' ref=(["'])C4:C12\1><\/sortCondition>/)
+  })
+
+  it('drops single-quoted criteria when their column is deleted', () => {
+    const xml = applyStructuralOps(
+      worksheet(
+        `<autoFilter ref="A1:D10">` +
+          `<filterColumn hiddenButton='1' colId = '2'><filters><filter val='x'/></filters></filterColumn>` +
+          `<sortState ref='A2:D10'><sortCondition ref='C2:C10'/></sortState></autoFilter>`,
+      ),
+      [{ kind: 'remove-cols', index: 2, count: 1 }],
+      SHEET,
+    )
+    expect(xml).toContain('<autoFilter ref="A1:C10"></autoFilter>')
+  })
 })

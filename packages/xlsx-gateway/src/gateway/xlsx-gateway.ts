@@ -6,6 +6,8 @@ import { basename, dirname, join } from 'node:path'
 import JSZip from 'jszip'
 import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
 
+import { formatAddress } from '../domain/cell-address.ts'
+import { splitSheetRef } from '../domain/chart-visual.ts'
 import type {
   CellState,
   ChangePlan,
@@ -74,7 +76,12 @@ import {
 import { normalizeOoxmlPartPrefix } from './xlsx-namespace.ts'
 import { resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
-import type { SheetAllocation, SheetEditPlan, SheetElement } from './xlsx-sheets.ts'
+import type {
+  SheetAllocation,
+  SheetEditPlan,
+  SheetElement,
+  WorksheetRenameExemptions,
+} from './xlsx-sheets.ts'
 import {
   addWorksheetOverride,
   addWorksheetRelationship,
@@ -83,6 +90,7 @@ import {
   assertNoSheetScopedDefinedNames,
   buildWorksheetPartXml,
   chartReferencesSheet,
+  createSheetReferenceRenamer,
   classifyRemovedSheetRels,
   definedNamesReferenceSheet,
   definedNamesUseToken,
@@ -97,10 +105,6 @@ import {
   removePartOverride,
   removeRelationshipById,
   tableDisplayName,
-  renameSheetInPivotCacheSource,
-  renameSheetReferencesInChart,
-  renameSheetReferencesInDefinedNames,
-  renameSheetReferencesInWorksheet,
   sanitizeClonedWorksheetXml,
   SheetEditError,
   stripPageSetupRelIds,
@@ -125,7 +129,7 @@ import {
 } from './xlsx-protection.ts'
 import { applyTabColor } from './xlsx-tab-color.ts'
 import { applyThemeState, type WorkbookThemeState } from './xlsx-theme.ts'
-import { applySheetNotes, type SheetNote } from './xlsx-notes.ts'
+import { applySheetNotes, shiftSheetAnnotations, type SheetNote } from './xlsx-notes.ts'
 import {
   applyRedactionNameMirror,
   applyRedactionPart,
@@ -164,6 +168,7 @@ import {
   shiftCrossSheetFormulas,
   shiftDefinedNames,
   shiftDrawingAnchors,
+  shiftPivotTablePart,
   shiftTablePart,
   shiftVmlObjectAnchors,
   StructuralShiftError,
@@ -1270,6 +1275,34 @@ export async function planCellEditsToXlsx(
           touchedEntries,
         )
   const additionPaths = new Map(additions.map((addition) => [addition.name, addition.path]))
+  const renamedAway = new Set(
+    sheetPlan?.renames
+      .filter(({ sheetName, newName }) => sheetName !== newName)
+      .map(({ sheetName }) => sheetName.toLowerCase()),
+  )
+  const preservedReferences = new Map<string, {
+    hyperlinkLocations: Map<string, string>
+    sparklineSources: Map<string, string>
+  }>()
+  const preservedOnWorksheet = (path: string) => {
+    const existing = preservedReferences.get(path)
+    if (existing !== undefined) return existing
+    const preserved = { hyperlinkLocations: new Map<string, string>(), sparklineSources: new Map<string, string>() }
+    preservedReferences.set(path, preserved)
+    return preserved
+  }
+  const checkedAddedSheetReference = (name: string, ref: string | undefined): string => {
+    const lower = name.toLowerCase()
+    if (
+      !additionPaths.has(name) ||
+      !renamedAway.has(lower) ||
+      ref === undefined ||
+      splitSheetRef(ref)?.sheetName.toLowerCase() !== lower
+    ) {
+      throw new SheetEditError(`The reference must point to the added worksheet "${name}".`)
+    }
+    return ref
+  }
   for (const [index, addition] of additions.entries()) {
     const sourceSheetName = sheetPlan?.additions[index]?.sourceSheetName
     if (sourceSheetName === undefined) {
@@ -1624,6 +1657,20 @@ export async function planCellEditsToXlsx(
     const relsExisted = await pkg.has(relsPath)
     const relsXml = relsExisted ? await pkg.readText(relsPath) : null
     const patch = applyHyperlinkEdits(worksheetXml, relsXml, sheet.edits)
+    for (const edit of sheet.edits) {
+      if (edit.targetAddedSheetName !== undefined) {
+        const target = edit.target?.startsWith('#') ? edit.target.slice(1) : undefined
+        const location = checkedAddedSheetReference(edit.targetAddedSheetName, target)
+        preservedOnWorksheet(worksheetPath).hyperlinkLocations.set(
+          formatAddress(edit.row, edit.column),
+          location,
+        )
+      } else {
+        preservedReferences.get(worksheetPath)?.hyperlinkLocations.delete(
+          formatAddress(edit.row, edit.column),
+        )
+      }
+    }
     worksheetXmls.set(sheet.sheetName, ensureRelationshipNamespace(patch.worksheetXml))
     if (patch.relsChanged && patch.relsXml !== null) {
       if (relsExisted) {
@@ -1857,6 +1904,13 @@ export async function planCellEditsToXlsx(
       const worksheetPath =
         additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName))
       pkg.write(worksheetPath, applySparklineAdditions(await pkg.readText(worksheetPath), groups))
+      for (const group of groups) {
+        for (const cell of group.cells) {
+          if (cell.sourceAddedSheetName === undefined) continue
+          const source = checkedAddedSheetReference(cell.sourceAddedSheetName, cell.sourceRef)
+          preservedOnWorksheet(worksheetPath).sparklineSources.set(cell.cell, source)
+        }
+      }
       touchedEntries.add(worksheetPath)
     }
   }
@@ -1908,6 +1962,7 @@ export async function planCellEditsToXlsx(
       additions,
       workbookXml,
       touchedEntries,
+      preservedReferences,
     )
   }
 
@@ -1936,11 +1991,12 @@ export async function planCellEditsToXlsx(
   // assertAddedSheetsKeepRenamedNames).
   const renamedTo = new Map(sheetPlan?.renames.map((rename) => [rename.sheetName, rename.newName]))
   const printAreas = pageSetupStates
-    .filter((state) => state.printArea !== undefined || state.printTitles !== undefined)
+    .filter((state) => state.printArea !== undefined || state.printTitles !== undefined || state.clearPrintTitleRows)
     .map((state) => ({
       sheetName: renamedTo.get(state.sheetName) ?? state.sheetName,
       printArea: state.printArea,
       printTitles: state.printTitles,
+      clearPrintTitleRows: state.clearPrintTitleRows,
     }))
   if (printAreas.length > 0) {
     workbookXml = applyPrintAreas(workbookXml, printAreas)
@@ -2074,6 +2130,7 @@ async function applySheetPlanToPackage(
   additions: readonly SheetAllocation[],
   workbookXml: string,
   touchedEntries: Set<string>,
+  preservedReferences: ReadonlyMap<string, WorksheetRenameExemptions>,
 ): Promise<string> {
   const elements = parseSheetElements(workbookXml)
   const originalNames = elements.map((element) => element.name)
@@ -2191,14 +2248,14 @@ async function applySheetPlanToPackage(
       if (!(await pkg.canPatch(path))) {
         if (await pkg.containsText(path, removal)) {
           throw new SheetEditError(
-            `Another sheet's formulas reference "${removal}" — deleting it is not allowed.`,
+            `Entries on another worksheet reference "${removal}" — deleting it is not allowed.`,
           )
         }
         continue
       }
       if (worksheetReferencesSheet(await pkg.readText(path), removal)) {
         throw new SheetEditError(
-          `Another sheet's formulas reference "${removal}" — deleting it is not allowed.`,
+          `Entries on another worksheet reference "${removal}" — deleting it is not allowed.`,
         )
       }
     }
@@ -2265,47 +2322,46 @@ async function applySheetPlanToPackage(
   }
   for (const part of removedOwnedParts) pkg.remove(part)
 
-  // Renames rewrite every qualified reference in the surviving parts.
-  for (const rename of plan.renames) {
+  // Resolve every reference against its original sheet name, once per part.
+  if (plan.renames.length > 0) {
+    const renamer = createSheetReferenceRenamer(plan.renames)
     for (const path of survivingWorksheetPaths) {
       if (!(await pkg.canPatch(path))) {
-        if (await pkg.containsText(path, rename.sheetName)) {
-          throw new SheetEditError(
-            `${path} references "${rename.sheetName}" but is too large to rewrite — ` +
-              'renaming this sheet cannot be saved.',
-          )
+        for (const { sheetName } of plan.renames) {
+          if (await pkg.containsText(path, sheetName)) {
+            throw new SheetEditError(
+              `${path} references "${sheetName}" but is too large to rewrite — ` +
+                'renaming this sheet cannot be saved.',
+            )
+          }
         }
         continue
       }
       const xml = await pkg.readText(path)
-      const renamed = renameSheetReferencesInWorksheet(xml, rename.sheetName, rename.newName)
+      const renamed = renamer.worksheet(xml, preservedReferences.get(path))
       if (renamed !== xml) {
         pkg.write(path, renamed)
         touchedEntries.add(path)
       }
     }
     for (const chartPath of chartPaths) {
-      // Charts cascade-deleted with a removed sheet are already gone from the
-      // package by this point — reading them would throw.
       if (removedOwnedParts.has(chartPath)) continue
       const xml = await pkg.readText(chartPath)
-      const renamed = renameSheetReferencesInChart(xml, rename.sheetName, rename.newName)
+      const renamed = renamer.chart(xml)
       if (renamed !== xml) {
         pkg.write(chartPath, renamed)
         touchedEntries.add(chartPath)
       }
     }
-    // Pivot caches sourced from the renamed sheet keep working only if their
-    // worksheetSource@sheet follows the rename.
     for (const cachePath of pivotCacheDefinitionPaths) {
       const xml = await pkg.readText(cachePath)
-      const renamed = renameSheetInPivotCacheSource(xml, rename.sheetName, rename.newName)
+      const renamed = renamer.pivotCache(xml)
       if (renamed !== xml) {
         pkg.write(cachePath, renamed)
         touchedEntries.add(cachePath)
       }
     }
-    workbookXml = renameSheetReferencesInDefinedNames(workbookXml, rename.sheetName, rename.newName)
+    workbookXml = renamer.definedNames(workbookXml)
   }
 
   const relationshipsPath = 'xl/_rels/workbook.xml.rels'
@@ -2500,9 +2556,8 @@ async function readTextEntry(zip: JSZip, path: string): Promise<string> {
   return entry.async('text')
 }
 
-/// Drawing anchors, table ranges and OLE objects' legacy VML anchors live in
-/// sibling parts wired through the worksheet rels; they must shift with the
-/// same structural op batch or the sheet's visuals and tables would drift.
+/// Drawings, table and pivot ranges, and annotations live in sibling parts
+/// that must shift with the worksheet.
 async function shiftAnchoredSheetParts(
   pkg: PackageEditor,
   worksheetPath: string,
@@ -2518,21 +2573,24 @@ async function shiftAnchoredSheetParts(
   for (const match of worksheetXml.matchAll(/<tablePart\b[^>]*\br:id="([^"]+)"/g)) {
     if (match[1] !== undefined) parts.push({ relId: match[1], kind: 'table' })
   }
-  // The legacy VML part holds the OLE objects' fallback anchors; only needed
-  // when the sheet actually has <oleObjects> (notes-only VML stays untouched).
+  // The legacy VML part may also hold the OLE objects' fallback anchors.
+  // Note shapes are handled separately by shiftSheetAnnotations.
   const legacyRelId = /<legacyDrawing\b[^>]*\br:id="([^"]+)"/.exec(worksheetXml)?.[1]
   if (legacyRelId !== undefined && worksheetXml.includes('<oleObjects')) {
     parts.push({ relId: legacyRelId, kind: 'vml' })
   }
-  if (parts.length === 0) return
+  const shiftsCoordinates = ops.some((op) => 'index' in op)
+  if (parts.length === 0 && !shiftsCoordinates) return
   const relsPath = relsPathFor(worksheetPath)
   if (!(await pkg.has(relsPath))) {
+    if (parts.length === 0) return
     throw new StructuralShiftError(
       `${worksheetPath} has anchored parts but ${relsPath} is missing — ` +
         'rows/columns cannot shift here.',
     )
   }
   const relsXml = await pkg.readText(relsPath)
+  const partKinds = new Map<string, 'drawing' | 'table' | 'vml' | 'pivot'>()
   for (const { relId, kind } of parts) {
     // Two-step lookup: attribute order varies by producer (openpyxl puts
     // Target before Id), so never assume Id precedes Target.
@@ -2547,7 +2605,24 @@ async function shiftAnchoredSheetParts(
           'rows/columns cannot shift here.',
       )
     }
-    const partPath = resolveRelTarget(worksheetPath, target)
+    partKinds.set(resolveRelTarget(worksheetPath, target), kind)
+  }
+  if (shiftsCoordinates) {
+    // Pivot definitions are owned by the worksheet through its relationships.
+    // There is no pivot marker in the worksheet XML to discover them from.
+    const relationships = parseRelationships(
+      normalizeOoxmlPartPrefix(relsXml).replace(
+        /<Relationship\b([^>]*?)>\s*<\/Relationship>/g,
+        '<Relationship$1/>',
+      ),
+    )
+    for (const rel of relationships) {
+      if (!rel.external && rel.type.endsWith('/pivotTable')) {
+        partKinds.set(resolveRelTarget(worksheetPath, rel.target), 'pivot')
+      }
+    }
+  }
+  for (const [partPath, kind] of partKinds) {
     if (!(await pkg.canPatch(partPath))) {
       throw new StructuralShiftError(
         `${partPath} is too large to rewrite — rows/columns cannot shift here.`,
@@ -2560,11 +2635,16 @@ async function shiftAnchoredSheetParts(
         ? shiftDrawingAnchors(xml, ops)
         : kind === 'vml'
           ? shiftVmlObjectAnchors(xml, ops)
-          : shiftTablePart(xml, ops, insertions)
+          : kind === 'pivot'
+            ? shiftPivotTablePart(xml, ops)
+            : shiftTablePart(xml, ops, insertions)
     if (insertions.length > 0) tableInsertions?.push({ partPath, insertions })
     if (shifted === xml) continue
     pkg.write(partPath, shifted)
     touchedEntries.add(partPath)
+  }
+  if (shiftsCoordinates) {
+    await shiftSheetAnnotations(pkg, worksheetPath, worksheetXml, relsXml, ops, touchedEntries)
   }
 }
 
@@ -3658,11 +3738,15 @@ function parseWorksheetCells(
       ) {
         cells[address] = { value: null }
       } else if (type === 's') {
-        cells[address] = sharedStrings[Number(rawValue)] ?? { value: '' }
+        const index = rawValue.trim()
+        const entry = /^\+?\d+$/.test(index) ? sharedStrings[Number(index)] : undefined
+        cells[address] = entry ?? { value: null }
       } else if (type === 'b') {
         cells[address] = { value: rawValue === '1' }
       } else if (type === 'str') {
         cells[address] = { value: decodeCellText(rawValue) }
+      } else if (rawValue.trim() === '') {
+        cells[address] = { value: null }
       } else {
         const numericValue = Number(rawValue)
         cells[address] = {

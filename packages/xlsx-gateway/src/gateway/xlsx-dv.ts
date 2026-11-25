@@ -8,8 +8,29 @@
 /// Excel itself writes for those rules.
 
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
-import { decodeAttribute } from './xlsx-sheets.ts'
-import { childElements, type ChildElement } from './xlsx-style-entries.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import {
+  applyPatches,
+  elementText,
+  escapeXmlAttribute,
+  escapeXmlText,
+  extensionUri,
+  isElement,
+  patchElement,
+  prefixOf,
+  scopedChildren,
+  withBody,
+  withNamespaces,
+  worksheetExtensions,
+  worksheetRoot,
+  X14_CF_EXT_URI,
+  X14_XMLNS,
+  XM_XMLNS,
+  XML_ATTRIBUTE,
+  type Attributes,
+  type ScopedElement,
+  type XmlPatch,
+} from './xlsx-worksheet-xml.ts'
 
 export class DvEditError extends Error {}
 
@@ -50,14 +71,6 @@ const DV_ERROR_STYLE_NAMES: Record<number, string | undefined> = {
 /// conditional-formatting one, and Excel ignores validation rules parked
 /// there — so the block gets an extension of its own.
 const X14_DV_EXT_URI = '{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}'
-const X14_CF_EXT_URI = '{78C0D931-6437-407D-A8EE-F0AAD7539E65}'
-const X14_XMLNS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
-const XM_XMLNS = 'http://schemas.microsoft.com/office/excel/2006/main'
-const WORKSHEET_NAMESPACES = new Set([
-  '', // The gateway also accepts namespace-less worksheet fragments.
-  'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
-  'http://purl.oclc.org/ooxml/spreadsheetml/main',
-])
 const DV_TAIL = new Set([
   'hyperlinks',
   'printOptions',
@@ -338,81 +351,10 @@ function x14Entry(prepared: PreparedRule): string {
   )
 }
 
-type Attributes = ReadonlyMap<string, string>
-interface ScopedElement extends ChildElement {
-  readonly local: string
-  readonly namespace: string | undefined
-  readonly attributes: Attributes
-  readonly namespaces: Attributes
-}
-interface XmlPatch {
-  readonly start: number
-  readonly length: number
-  readonly xml: string
-}
-
-function prefixOf(name: string): string {
-  return name.slice(0, name.indexOf(':') + 1)
-}
-
-function withNamespaces(element: ChildElement, inherited: Attributes): ScopedElement {
-  const attributes = new Map<string, string>()
-  const namespaces = new Map(inherited)
-  for (const [, key, double, single] of element.opening.matchAll(
-    /\s([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g,
-  )) {
-    const value = decodeAttribute(double ?? single ?? '')
-    attributes.set(key!, value)
-    if (key === 'xmlns') namespaces.set('', value)
-    if (key?.startsWith('xmlns:')) namespaces.set(key.slice(6), value)
-  }
-  const prefix = prefixOf(element.name)
-  const namespace = prefix ? namespaces.get(prefix.slice(0, -1)) : (namespaces.get('') ?? '')
-  return { ...element, local: element.name.slice(prefix.length), namespace, attributes, namespaces }
-}
-
-function worksheetRoot(xml: string): ScopedElement | undefined {
-  const node = childElements(xml)[0]
-  const root = node && withNamespaces(node, new Map([['', '']]))
-  return root?.local === 'worksheet' &&
-    root.namespace !== undefined &&
-    WORKSHEET_NAMESPACES.has(root.namespace)
-    ? root
-    : undefined
-}
-
-function scopedChildren(parent: ScopedElement): ScopedElement[] {
-  return childElements(parent.inner).map((child) => withNamespaces(child, parent.namespaces))
-}
-
-function isElement(element: ScopedElement, local: string, namespace: string | undefined): boolean {
-  return element.local === local && element.namespace === namespace
-}
-
 function remainingAreas(ref: string, replaced: ReadonlySet<string>): string {
   const areas = ref.trim().split(/\s+/).filter(Boolean)
   const remaining = areas.filter((area) => !replaced.has(normalizeRef(area)))
   return remaining.length === areas.length && remaining.length > 0 ? ref : remaining.join(' ')
-}
-
-function patchElement(element: ChildElement, xml: string): XmlPatch {
-  return { start: element.start, length: element.xml.length, xml }
-}
-
-function applyPatches(xml: string, patches: XmlPatch[]): string {
-  return patches
-    .sort((left, right) => right.start - left.start || right.length - left.length)
-    .reduce(
-      (out, patch) => out.slice(0, patch.start) + patch.xml + out.slice(patch.start + patch.length),
-      xml,
-    )
-}
-
-function withBody(element: ChildElement, body: string): string {
-  if (element.opening.endsWith('/>')) {
-    return element.opening.slice(0, -2) + '>' + body + '</' + element.name + '>'
-  }
-  return element.opening + body + element.xml.slice(element.opening.length + element.inner.length)
 }
 
 /// An appended entry can outlive the section that bound its aliases.
@@ -429,33 +371,94 @@ function qualifyMovedEntry(entry: ScopedElement, xml: string, target: Attributes
   return xml.slice(0, position) + declarations.join('') + xml.slice(position)
 }
 
-function elementText(inner: string): string {
-  return inner
-    .split(/(<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->)/g)
-    .map((text) =>
-      text.startsWith('<![CDATA[')
-        ? text.slice(9, -3)
-        : text.startsWith('<!--')
-          ? ''
-          : decodeAttribute(text),
-    )
-    .join('')
-}
-
-function extensionUri(extension: ScopedElement): string | undefined {
-  return extension.attributes.get('uri')?.toUpperCase()
-}
-
 function validationSections(extension: ScopedElement): ScopedElement[] {
   return scopedChildren(extension).filter((child) => isElement(child, 'dataValidations', X14_XMLNS))
 }
 
-function worksheetExtensions(root: ScopedElement, children: ScopedElement[]) {
-  const list = children.find((child) => isElement(child, 'extLst', root.namespace))
-  const extensions = list
-    ? scopedChildren(list).filter((child) => isElement(child, 'ext', root.namespace))
-    : []
-  return { list, extensions }
+/// Replay worksheet edits on the x14 rules in place, preserving aliases and
+/// extension payloads. An empty target removes its validation.
+export function rewriteX14DataValidations(
+  xml: string,
+  rewriteFormula: (formula: string) => string,
+  rewriteSqref?: (sqref: string) => string | null,
+): string {
+  if (!xml.includes('dataValidations') || !xml.includes('extLst')) return xml
+  const root = worksheetRoot(xml)
+  if (!root) return xml
+  const { list, extensions } = worksheetExtensions(root, scopedChildren(root))
+  if (!list) return xml
+  const patches: XmlPatch[] = []
+  for (const extension of extensions) {
+    if (extensionUri(extension) !== X14_DV_EXT_URI.toUpperCase()) continue
+    const sections = validationSections(extension).flatMap((section) => {
+      const entries = scopedChildren(section).filter((child) =>
+        isElement(child, 'dataValidation', X14_XMLNS),
+      )
+      let count = entries.length
+      const changed = entries.flatMap((entry) => {
+        const rewritten = rewriteX14ValidationEntry(entry, rewriteFormula, rewriteSqref)
+        if (!rewritten) count -= 1
+        return rewritten === entry.xml ? [] : [patchElement(entry, rewritten)]
+      })
+      if (changed.length === 0) return []
+      const body = applyPatches(section.inner, changed)
+      if (!body.trim()) return [patchElement(section, '')]
+      const opening =
+        count === entries.length
+          ? section.opening
+          : section.opening.replace(XML_ATTRIBUTE, (attribute, prefix: string, name: string) => {
+              if (name !== 'count') return attribute
+              const quote = attribute.at(-1)
+              return `${prefix}${quote}${count}${quote}`
+            })
+      const markup = withBody(section, body)
+      return [patchElement(section, opening + markup.slice(section.opening.length))]
+    })
+    if (sections.length === 0) continue
+    const body = applyPatches(extension.inner, sections)
+    patches.push(patchElement(extension, body.trim() ? withBody(extension, body) : ''))
+  }
+  if (patches.length === 0) return xml
+  const body = applyPatches(list.inner, patches)
+  const worksheet = applyPatches(root.inner, [
+    patchElement(list, body.trim() ? withBody(list, body) : ''),
+  ])
+  return applyPatches(xml, [patchElement(root, withBody(root, worksheet))])
+}
+
+function rewriteX14ValidationEntry(
+  entry: ScopedElement,
+  rewriteFormula: (formula: string) => string,
+  rewriteSqref: ((sqref: string) => string | null) | undefined,
+): string {
+  const fields = scopedChildren(entry)
+  const patches: XmlPatch[] = []
+  const sqref = fields.find((field) => isElement(field, 'sqref', XM_XMLNS))
+  if (sqref && rewriteSqref) {
+    const original = elementText(sqref.inner)
+    const rewritten = rewriteSqref(original)
+    if (!rewritten?.trim()) return ''
+    if (rewritten !== original) {
+      patches.push(patchElement(sqref, withBody(sqref, escapeXmlText(rewritten))))
+    }
+  }
+  for (const field of fields) {
+    if (
+      field.namespace !== X14_XMLNS ||
+      (field.local !== 'formula1' && field.local !== 'formula2')
+    ) {
+      continue
+    }
+    const formula = scopedChildren(field).find((child) => isElement(child, 'f', XM_XMLNS))
+    if (!formula) continue
+    const original = elementText(formula.inner)
+    const rewritten = rewriteFormula(original)
+    if (rewritten !== original) {
+      const updated = patchElement(formula, withBody(formula, escapeXmlText(rewritten)))
+      patches.push(patchElement(field, withBody(field, applyPatches(field.inner, [updated]))))
+    }
+  }
+  return patches.length ? withBody(entry, applyPatches(entry.inner, patches)) : entry.xml
 }
 
 function rewriteExtendedValidations(
@@ -716,17 +719,4 @@ function columnToLetters(column: number): string {
     remaining = Math.floor(remaining / 26)
   }
   return letters
-}
-
-function escapeXmlText(input: string): string {
-  return input.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-}
-
-function escapeXmlAttribute(input: string): string {
-  return input
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('\n', '&#10;')
 }

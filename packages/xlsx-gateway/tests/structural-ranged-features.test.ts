@@ -35,6 +35,15 @@ function replay(trailing: string, ops: readonly StructuralOp[]): string {
 const INSERT_COLUMN: StructuralOp[] = [{ kind: 'insert-cols', index: 0, count: 1 }]
 const REMOVE_COLUMN: StructuralOp[] = [{ kind: 'remove-cols', index: 0, count: 1 }]
 
+it('removes a link to a deleted local target and retains its source cell', () => {
+  const xml = replay(
+    '<hyperlinks><hyperlink ref="B1" location="Data!$A$2"/><hyperlink ref="B2" location="B1"/></hyperlinks>',
+    REMOVE_COLUMN,
+  )
+  expect(xml).toContain('<c r="A1"><v>2</v></c>')
+  expect(xml).toContain('<hyperlinks><hyperlink ref="A2" location="A1"/></hyperlinks>')
+})
+
 describe('ranged feature replay with adjacent self-closing and paired elements', () => {
   it('shifts both data validations when a column is inserted', () => {
     const xml = replay(PAIRED_DV, INSERT_COLUMN)

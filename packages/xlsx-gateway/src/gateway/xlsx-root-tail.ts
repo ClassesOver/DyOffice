@@ -13,30 +13,45 @@ export interface RootTail {
 const TAGS =
   /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE\b[\s\S]*?>|<\/?[A-Za-z_][\w:.-]*(?:[^>"']|"[^"]*"|'[^']*')*\/?>/g
 
-export function findRootChild(
+export function* rootChildren(
   xml: string,
   root: string,
-  child: string,
-): { start: number; end: number } | null {
+): Iterable<{
+  name: string
+  start: number
+  end: number
+}> {
   const stack: string[] = []
-  let start: number | undefined
+  let start = 0
   for (const token of xml.matchAll(TAGS)) {
     const tag = token[0]
     const name = /^<\/?([\w:.-]+)/.exec(tag)?.[1]
     if (!name) continue
     if (tag.startsWith('</')) {
-      if (stack.pop() !== name || stack.length === 0) return null
-      if (stack.length === 1 && start !== undefined) return { start, end: token.index + tag.length }
+      if (stack.pop() !== name || stack.length === 0) return
+      if (stack.length === 1) {
+        yield { name: name.slice(name.lastIndexOf(':') + 1), start, end: token.index + tag.length }
+      }
       continue
     }
     const localName = name.slice(name.lastIndexOf(':') + 1)
     const selfClosing = tag.endsWith('/>')
-    if (stack.length === 0 && (localName !== root || selfClosing)) return null
-    if (stack.length === 1 && localName === child) {
+    if (stack.length === 0 && (localName !== root || selfClosing)) return
+    if (stack.length === 1) {
       start = token.index
-      if (selfClosing) return { start, end: start + tag.length }
+      if (selfClosing) yield { name: localName, start, end: start + tag.length }
     }
     if (!selfClosing) stack.push(name)
+  }
+}
+
+export function findRootChild(
+  xml: string,
+  root: string,
+  child: string,
+): { start: number; end: number } | null {
+  for (const { name, start, end } of rootChildren(xml, root)) {
+    if (name === child) return { start, end }
   }
   return null
 }

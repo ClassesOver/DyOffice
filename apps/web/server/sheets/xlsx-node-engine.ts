@@ -8,7 +8,7 @@ import {readWorksheetValidations} from '../../../../packages/xlsx-gateway/src/ga
 import {parseSheetElements,parseRelationships,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
-import {resolvedStyleEntries} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
+import {childElements,resolvedStyleEntries} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
 import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
@@ -22,6 +22,7 @@ import {applyTint} from '../../../sheets/src/renderer/table-styles'
 import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult} from '../../../sheets/src/shared/desktop-api.ts'
 import { readWorkbookWithCellDetails } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
 import type { WorkbookRichRun } from '../../../../packages/xlsx-gateway/src/shared/edit-schemas.ts'
+import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/src/shared/grid-bounds.ts'
 
 // Isolated Node fallback sidecar for XLSX when the Rust xlsx-sidecar binary is not compiled.
 // Executed inside createCrossPlatformProcess with SHA-256 verification, 2-slot concurrency,
@@ -47,7 +48,7 @@ interface ParsedCell {
 type SheetViewMetadata=Pick<WorkbookFile['sheets'][number],'tabColor'|'showGridLines'|'showFormulas'|'showRowColHeaders'|'rightToLeft'|'zoomScale'|'outlineLevelRow'|'outlineLevelCol'|'outlineSummaryBelow'|'outlineSummaryRight'>
 type SheetMetadata=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'|'autoFilter'|'autoFilterColumns'|'rows'|'merges'|'conditionalRules'|'hyperlinks'|'dataValidations'|'rowBreaks'|'colBreaks'|'pageSetup'>
   & Pick<WorkbookFile['sheets'][number],'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'|'comments'|'tables'|'sparklines'>
-  & { view: SheetViewMetadata }
+  & { view: SheetViewMetadata; dimension?: Bounds }
 type FilterColumn=WorkbookRangeResult['autoFilterColumns'][number]
 const EMPTY_SHEET_METADATA:SheetMetadata={sheetProtection:null,protectedRanges:[],autoFilter:null,autoFilterColumns:[],
   rows:[],merges:[],conditionalRules:[],hyperlinks:[],columnWidths:[],defaultRowHeight:null,defaultColumnWidth:null,freeze:null,
@@ -108,6 +109,7 @@ const metadataXml=new XMLParser({
     &&attrs?.['@_outlineLevel']===undefined&&attrs?.['@_collapsed']===undefined?false:name,
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
+    'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
     'worksheet.sheetData.row',
     'worksheet.cols.col','worksheet.mergeCells.mergeCell','worksheet.sheetViews.sheetView','worksheet.conditionalFormatting',
     'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
@@ -191,7 +193,8 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
   const protection=elements(workbook,'workbookProtection')[0]
   const workbookProtection=protection&&{lockStructure:enabled(attribute(protection.attrs,'lockStructure')),
     hasPassword:attribute(protection.attrs,'workbookPassword')!==undefined||attribute(protection.attrs,'workbookHashValue')!==undefined}
-  return {activeTab:readableIndex(savedTab)??0,visibility,definedNames,scopedSheets,printNames,workbookProtection}
+  const date1904=enabled(attribute(elements(workbook,'workbookPr')[0]?.attrs,'date1904'))
+  return {activeTab:readableIndex(savedTab)??0,visibility,definedNames,scopedSheets,printNames,workbookProtection,date1904}
 }
 
 const filterOperators=['notEqual','greaterThan','greaterThanOrEqual','lessThan','lessThanOrEqual'] as const
@@ -450,6 +453,7 @@ function readConditionalRules(
 }
 function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:ReadonlyMap<string,string>):Omit<SheetMetadata,'comments'|'tables'>{
   const worksheet=metadataXml.parse(xml).worksheet
+  const dimension=sheetArea(attribute(worksheet?.dimension,'ref'))
   const element=worksheet?.sheetProtection
   const parsed=element===undefined?null:parseSheetProtectionAttributes(name=>attribute(element,name))
   const protectedRanges:SheetMetadata['protectedRanges']=[]
@@ -514,6 +518,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   const frozenRows=split('ySplit',1_048_576),frozenColumns=split('xSplit',16_384)
   const frozen=['frozen','frozenSplit'].includes(attribute(pane,'state')??'')
   return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,columnWidths:columns,merges,conditionalRules,hyperlinks,
+    ...(dimension?{dimension}:{}),
     dataValidations:readDataValidations(xml),
     sparklines:readSparklines(worksheet?.extLst?.ext??[],resolveColor),
     rowBreaks:readManualBreaks(worksheet?.rowBreaks?.brk??[],1_048_575),
@@ -533,7 +538,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     },
     freeze:frozen&&(frozenRows||frozenColumns)?{frozenRows,frozenColumns}:null,
     defaultRowHeight:sizeAttribute(format,'defaultRowHeight')||null,defaultColumnWidth:sizeAttribute(format,'defaultColWidth')||null,
-    defaultRowHeightFixed:enabled(attribute(format,'customHeight'))||undefined,baseColumnWidth:sizeAttribute(format,'baseColWidth')??null}
+    defaultRowHeightFixed:enabled(attribute(format,'customHeight'))||undefined,baseColumnWidth:sizeAttribute(format,'baseColWidth')||null}
 }
 
 function positiveStyle(raw:string|undefined){
@@ -624,20 +629,48 @@ const BUILTIN_NUMBER_FORMATS: Record<number, string> = {
 type StyleFontXml = Partial<Record<'color' | 'name' | 'rFont' | 'sz' | 'scheme' | 'vertAlign' | 'b' | 'i' | 'u' | 'strike', XmlElement>>
 type BorderSide = 'top' | 'bottom' | 'left' | 'right' | 'diagonal'
 type StyleBorderXml = XmlElement & Partial<Record<BorderSide, XmlElement & { color?: XmlElement }>>
+type StyleFillXml = {
+  patternFill?: XmlElement & { fgColor?: XmlElement; bgColor?: XmlElement }
+  gradientFill?: { stop?: (XmlElement & { color?: XmlElement })[] }
+}
+
+function readThemeFonts(xml: string): WorkbookFile['themeFonts'] {
+  if (!xml) return undefined
+  const scheme = metadataXml.parse(xml)?.theme?.themeElements?.fontScheme
+  const major = attribute(scheme?.majorFont?.latin, 'typeface')
+  const minor = attribute(scheme?.minorFont?.latin, 'typeface')
+  const minorEa = attribute(scheme?.minorFont?.ea, 'typeface')
+  return major && minor ? { major, minor, ...(minorEa ? { minorEa } : {}) } : undefined
+}
+
+function mixHexColors(first: string, last: string): string {
+  const channels = [1, 3, 5].map(offset => {
+    const a = Number.parseInt(first.slice(offset, offset + 2), 16)
+    const b = Number.parseInt(last.slice(offset, offset + 2), 16)
+    return Math.floor((a + b) / 2).toString(16).padStart(2, '0')
+  })
+  return `#${channels.join('').toUpperCase()}`
+}
 
 async function readWorkbookStyles(text: ZipText) {
-  const xml = await text('xl/styles.xml')
-  const section = (name: string) => new RegExp(`<(?:(?:\\w+):)?${name}\\b[^>]*>([\\s\\S]*?)<\\/(?:(?:\\w+):)?${name}\\s*>`).exec(xml)?.[1] ?? ''
+  const [xml, themeXml] = await Promise.all([text('xl/styles.xml'), text('xl/theme/theme1.xml')])
+  const localName = (name: string) => name.slice(name.lastIndexOf(':') + 1)
+  const root = childElements(xml).find(element => localName(element.name) === 'styleSheet')
+  const sections = childElements(root?.inner ?? '')
+  const entries = (section: string, tag: string) => resolvedStyleEntries(
+    sections.find(element => localName(element.name) === section)?.inner ?? '', tag, true,
+  )
   const formats = new Map<number, string>()
   for (const id of Object.keys(BUILTIN_NUMBER_FORMATS)) formats.set(Number(id), BUILTIN_NUMBER_FORMATS[Number(id)]!)
-  for (const entry of resolvedStyleEntries(section('numFmts'), 'numFmt')) {
+  for (const entry of entries('numFmts', 'numFmt')) {
     const id = Number(readAttribute(entry, 'numFmtId'))
     const code = readAttribute(entry, 'formatCode')
     if (Number.isInteger(id) && code !== undefined) formats.set(id, decodeAttribute(code))
   }
   const parseEntries = (name:string, tag:string) =>
-    resolvedStyleEntries(section(name),tag).map(entry=>metadataXml.parse(entry)[tag])
-  const theme=pivotTheme(await text('xl/theme/theme1.xml'))
+    entries(name,tag).map(entry=>metadataXml.parse(entry)[tag])
+  const theme=pivotTheme(themeXml)
+  const themeFonts = readThemeFonts(themeXml)
   const hex=(value:string|undefined)=>/^(?:[0-9a-f]{2})?[0-9a-f]{6}$/i.test(value??'')?'#'+value!.slice(-6).toUpperCase():undefined
   const indexed=parseEntries('indexedColors','rgbColor').map(color=>hex(attribute(color,'rgb')))
   // ECMA-376 default indexed palette, followed by system text/background.
@@ -651,6 +684,31 @@ async function readWorkbookStyles(text: ZipText) {
     const id=index(attribute(node,'indexed')), rgb=hex(attribute(node,'rgb'))??
       (id<64?indexed[id]:undefined)??hex(palette[id])
     return {rgb,slot:undefined,tint:undefined}
+  }
+  function gradientColor(gradient: StyleFillXml['gradientFill']) {
+    const stops = (gradient?.stop ?? []).flatMap(stop => {
+      const rawPosition = attribute(stop, 'position')
+      const position = Number(rawPosition)
+      const { rgb } = color(stop.color)
+      return rawPosition && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(rawPosition)
+        && Number.isFinite(position) && rgb ? [{ position, rgb }] : []
+    }).sort((a, b) => a.position - b.position)
+    const first = stops[0], last = stops.at(-1)
+    return first && last ? mixHexColors(first.rgb, last.rgb) : undefined
+  }
+  function cellFillColor(fill: StyleFillXml | undefined): ReturnType<typeof color> {
+    const pattern = fill?.patternFill
+    const patternType = attribute(pattern, 'patternType')
+    if (pattern === undefined) {
+      return { rgb: gradientColor(fill?.gradientFill), slot: undefined, tint: undefined }
+    }
+    if (patternType === 'none') return color(undefined)
+    const foreground = color(pattern.fgColor)
+    const background = color(pattern.bgColor)
+    if (patternType !== undefined && patternType !== 'solid' && foreground.rgb && background.rgb) {
+      return { rgb: mixHexColors(foreground.rgb, background.rgb), slot: undefined, tint: undefined }
+    }
+    return foreground.rgb ? foreground : background
   }
   const on = (node: XmlElement | undefined) => node !== undefined && !disabled(attribute(node, 'val'))
   function readRunStyle(xml: string): Omit<WorkbookRichRun, 'text'> {
@@ -694,19 +752,21 @@ async function readWorkbookStyles(text: ZipText) {
   }
   const fonts=parseEntries('fonts','font'),fills=parseEntries('fills','fill'),borders=parseEntries('borders','border')
   const namedProtection=parseEntries('cellStyleXfs','xf').map(xf=>xf?.protection)
-  const styles:WorkbookCellStyle[] = parseEntries('cellXfs','xf').map(xf => {
+  const cellXfs = parseEntries('cellXfs', 'xf')
+  // The grid's column widths use the original face even when the theme replaces it for display.
+  const normalFontName = attribute(fonts[index(attribute(cellXfs[0], 'fontId'))]?.name, 'val')
+  const styles:WorkbookCellStyle[] = cellXfs.map(xf => {
     const id=Number(attribute(xf,'numFmtId')??0)
     const font=fonts[Number(attribute(xf,'fontId')??0)]
-    const pattern=fills[Number(attribute(xf,'fillId')??0)]?.patternFill
+    const fillColor = cellFillColor(fills[Number(attribute(xf, 'fillId') ?? 0)])
     const border=borders[Number(attribute(xf,'borderId')??0)]
     const alignment=xf?.alignment
     const protection=enabled(attribute(xf,'applyProtection'))?xf?.protection:namedProtection[Number(attribute(xf,'xfId')??0)]
-    const foreground=color(pattern?.fgColor)
-    const patternType=attribute(pattern,'patternType')
-    const fillColor=patternType==='none'||!pattern?color(undefined):foreground.rgb?foreground:color(pattern.bgColor)
     const indent=index(attribute(alignment,'indent')),textRotation=index(attribute(alignment,'textRotation'))
+    const fontStyle = fontAndBorder(font, border)
     return {
-      ...fontAndBorder(font, border),
+      ...fontStyle,
+      fontFamily: (fontStyle.fontScheme && themeFonts?.[fontStyle.fontScheme]) ?? fontStyle.fontFamily,
       fillColor:fillColor.rgb,fillColorTheme:fillColor.slot,fillColorTint:fillColor.tint,
       wrapText:enabled(attribute(alignment,'wrapText')),shrinkToFit:enabled(attribute(alignment,'shrinkToFit'))||undefined,
       horizontalAlignment:attribute(alignment,'horizontal'),verticalAlignment:attribute(alignment,'vertical'),
@@ -717,22 +777,21 @@ async function readWorkbookStyles(text: ZipText) {
     }
   })
   if(styles[0]?.locked===false)for(const style of styles.slice(1))style.locked??=true
-  const [, dxfPrefix = '', dxfSection = ''] = /<([\w.-]+:)?dxfs\b[^>]*>([\s\S]*?)<\/\1dxfs\s*>/.exec(xml) ?? []
-  const dxfStyles: WorkbookCellStyle[] = resolvedStyleEntries(dxfSection, dxfPrefix + 'dxf').map(entry => {
-    const dxf = metadataXml.parse(entry).dxf
-    const pattern = dxf?.fill?.patternFill
+  const dxfStyles: WorkbookCellStyle[] = parseEntries('dxfs', 'dxf').map(dxf => {
+    const fill = dxf?.fill as StyleFillXml | undefined
+    const pattern = fill?.patternFill
     const fillColor = color(pattern?.bgColor ?? pattern?.fgColor)
     const format = attribute(dxf?.numFmt, 'formatCode')
     return {
       ...fontAndBorder(dxf?.font, dxf?.border),
       wrapText: false,
-      fillColor: fillColor.rgb,
+      fillColor: pattern === undefined ? gradientColor(fill?.gradientFill) : fillColor.rgb,
       fillColorTheme: fillColor.slot,
       fillColorTint: fillColor.tint,
       numberFormat: format && format !== 'General' ? format : undefined,
     }
   })
-  return {styles,theme,color,dxfStyles,readRunStyle}
+  return {styles,theme,themeFonts,normalFontName,color,dxfStyles,readRunStyle}
 }
 
 async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:readonly string[],
@@ -870,7 +929,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const styling=readWorkbookStyles(text)
     const hasPart=(path:string)=>zip.file(path)!==null
     const imageSources=readCellImageSources(text,hasPart)
-    const [imported, pivots, {styles,theme,dxfStyles}, metadata, workbookXml] = await Promise.all([
+    const [imported, pivots, {styles,theme,themeFonts,normalFontName,dxfStyles}, metadata, workbookXml] = await Promise.all([
       styling.then(({readRunStyle})=>readWorkbookWithCellDetails(bytes,readRunStyle)),
       readPivotMetadata(text), styling, Promise.all([styling,imageSources]).then(([{color,theme},images])=>readSheetMetadata(text,color,theme,images)),
       text('xl/workbook.xml'),
@@ -880,10 +939,15 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const mediaById = new Map<string,string>()
     let imageCount=0
     const parsedSheets: ParsedSheet[] = imported.snapshot.sheets.map(s => {
-      const {styleIndexes,imageCells,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,styleIndexes:undefined,imageCells:undefined}
+      const {styleIndexes,imageCells,dimension,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,styleIndexes:undefined,imageCells:undefined}
       const cells: ParsedCell[] = []
       const cellImages: ParsedSheet['cellImages'] = []
       let rowCount=1,columnCount=1,valueCellCount=0,valueRowCount=0,valueColumnCount=0
+      if(dimension){
+        // Full-axis declarations describe the grid, rather than the used extent.
+        if(dimension.endRow+1<MAX_GRID_ROWS)rowCount=dimension.endRow+1
+        if(dimension.endColumn+1<MAX_GRID_COLUMNS)columnCount=dimension.endColumn+1
+      }
       for (const [addr, cell] of Object.entries(s.cells)) {
         const pos = parseA1(addr)
         if (!pos) continue
@@ -929,7 +993,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       return { id: s.id, name: s.name, cells, cellImages, rowCount, columnCount, valueCellCount, valueRowCount, valueColumnCount,
         ...sheetMetadata }
     })
-    const {activeTab,visibility,definedNames,scopedSheets,printNames,workbookProtection}=readWorkbookMetadata(workbookXml,parsedSheets)
+    const {activeTab,visibility,definedNames,scopedSheets,printNames,workbookProtection,date1904}=readWorkbookMetadata(workbookXml,parsedSheets)
     const visuals=await readWorkbookVisuals(text,parsedSheets,theme,hasPart)
     for (const {id,mediaPath,fillMediaPath} of visuals) {
       const path=mediaPath??fillMediaPath
@@ -972,9 +1036,12 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       activeTab,
       styles,
       ...(theme.length?{themeColors:theme}:{}),
+      ...(themeFonts ? { themeFonts } : {}),
+      ...(normalFontName === undefined ? {} : { normalFontName }),
       dxfStyles,
       visuals,
       definedNames,
+      ...(date1904?{date1904}:{}),
       ...(workbookProtection?{workbookProtection}:{}),
     }
     if(packet.openingViewport===true&&Buffer.byteLength(JSON.stringify(inspection))<=256*1024){

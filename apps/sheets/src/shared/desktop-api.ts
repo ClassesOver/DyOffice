@@ -1507,6 +1507,8 @@ export const workbookPageSetupStateSchema = z
     rightToLeft: z.boolean().optional(),
     printArea: z.union([z.string().min(1).max(255), z.null()]).optional(),
     printTitles: z.union([z.string().regex(/^\d{1,7}:\d{1,7}$/), z.null()]).optional(),
+    /// A structural edit removed the pending repeat rows. Keep file-backed repeat columns.
+    clearPrintTitleRows: z.literal(true).optional(),
     /// Frozen pane counts; both present together, 0/0 removes the pane.
     frozenRows: z.number().int().min(0).max(1_048_575).optional(),
     frozenColumns: z.number().int().min(0).max(16_383).optional(),
@@ -1532,6 +1534,7 @@ export const workbookHyperlinkEditSchema = z
     row: z.number().int().nonnegative().max(1_048_575),
     column: z.number().int().nonnegative().max(16_383),
     target: z.union([z.string().min(1).max(2083), z.null()]),
+    targetAddedSheetId: z.string().min(1).optional(),
   })
   .strict()
 
@@ -2274,6 +2277,7 @@ export const workbookSaveRequestSchema = z
                     cell: z.string().regex(/^[A-Z]{1,3}[1-9][0-9]{0,6}$/),
                     /// Sheet-qualified source range, e.g. `Sheet1!A2:F2`.
                     sourceRef: z.string().min(1).max(512),
+                    sourceAddedSheetId: z.string().min(1).optional(),
                   })
                   .strict(),
               )

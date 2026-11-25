@@ -10,6 +10,8 @@ export interface SparklineCellAdd {
   readonly cell: string
   /// Sheet-qualified source range, e.g. `Sheet1!A2:F2`.
   readonly sourceRef: string
+  /// An added sheet that takes a renamed sheet's former name in this save.
+  readonly sourceAddedSheetName?: string
 }
 
 export interface SparklineGroupAdd {
@@ -22,7 +24,7 @@ export interface SheetSparklineAddition extends SparklineGroupAdd {
   readonly sheetName: string
 }
 
-const SPARKLINE_EXT_URI = '{05C60535-1F16-4fd2-B633-F4F36F0B64E0}'
+export const SPARKLINE_EXT_URI = '{05C60535-1F16-4fd2-B633-F4F36F0B64E0}'
 const X14_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 const XM_NS = 'http://schemas.microsoft.com/office/excel/2006/main'
 const DEFAULT_SERIES_ARGB = 'FF376092'

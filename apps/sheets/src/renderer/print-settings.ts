@@ -188,8 +188,10 @@ export function resolveEffectivePageSetup(
       : mapAreasToScreen(printAreasFromFormula(names?.printArea), ops)
   const printTitles =
     journal.printTitles !== undefined
-      ? journal.printTitles
-      : mapTitleRowsToScreen(printTitleRowsFromFormula(names?.printTitles), ops)
+      ? printTitleRowsFromFormula(journal.printTitles ?? undefined)
+      : journal.clearPrintTitleRows
+        ? null
+        : mapTitleRowsToScreen(printTitleRowsFromFormula(names?.printTitles), ops)
   const header =
     journal.header !== undefined
       ? journal.header

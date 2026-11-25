@@ -260,4 +260,4 @@ Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 
 | [`insert_data_result`](../../../packages/browser-host/src/analysis-insert-skill.ts) | `live` | 见 DOCX、XLSX、PPTX 表 |
 | [`delegate_channel_task`](../../../packages/browser-host/src/assistant-channel.ts) | `live` | 见共享工具表 |
 | [`list_channel_agents`](../../../packages/browser-host/src/assistant-channel.ts) | `live` | 见共享工具表 |
-| [`sources_list`](../../../packages/browser-host/src/source-catalog-skill.ts) | `headless` | 见共享工具表 |
+| [`list_connections`](../../../packages/browser-host/src/source-catalog-skill.ts) | `headless` | 见共享工具表 |

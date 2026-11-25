@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import { collectNoteStates } from '../src/renderer/univer-sync'
 import type { LazyWorkbookState, UniverRuntime } from '../src/renderer/univer-state'
-import type { NotePictureAdd } from '../src/renderer/edit-journal'
+import {
+  createEditJournal,
+  recordNoteChange,
+  recordNotePicture,
+  recordStructuralOp,
+  type NotePictureAdd,
+} from '../src/renderer/edit-journal'
 
 /**
  * The picture a reader put into a note this session.
@@ -27,6 +33,7 @@ function harness(
     editJournal: {
       noteDirty: new Set(['sheet1']),
       notePictures,
+      structuralOps: new Map(),
       sheets: { removed: new Set<string>() },
     },
     file: { sheets: [{ id: 'sheet1', comments: [] }] },
@@ -63,6 +70,28 @@ describe('a picture put into a note', () => {
           name: 'pedigree.png',
         },
       },
+    ])
+  })
+
+  it('keeps pending pictures and picture removals aligned with moved notes', () => {
+    const sheetId = 'sheet1'
+    const journal = createEditJournal()
+    recordNoteChange(journal, sheetId)
+    recordNotePicture(journal, { sheetId, row: 1, column: 2, picture })
+    recordNotePicture(journal, { sheetId, row: 1, column: 3, picture: null })
+    recordNotePicture(journal, { sheetId, row: 0, column: 1, picture })
+    recordStructuralOp(journal, sheetId, { kind: 'remove-rows', index: 0, count: 1 })
+    recordStructuralOp(journal, sheetId, { kind: 'insert-cols', index: 0, count: 1 })
+    const { runtime, state } = harness([
+      { row: 0, col: 2, note: 'new note in deleted picture cell' },
+      { row: 0, col: 3, note: 'with new picture' },
+      { row: 0, col: 4, note: 'picture removed' },
+    ])
+    const [sheet] = collectNoteStates(runtime, { ...state, editJournal: journal })
+    expect(sheet?.notes.map((note) => note.picture)).toEqual([
+      undefined,
+      { mediaType: 'image/png', base64: 'AAAA', widthPx: 128, heightPx: 106, name: 'pedigree.png' },
+      null,
     ])
   })
 

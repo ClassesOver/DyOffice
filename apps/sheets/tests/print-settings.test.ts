@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createEditJournal,
+  recordPageSetup,
+  recordStructuralOp,
+  toSavePageSetupStates,
+} from '../src/renderer/edit-journal'
+import {
   assemblePrintHtml,
   buildSheetPrintPayload,
   layoutSheetPrint,
@@ -204,6 +210,32 @@ describe('resolveEffectivePageSetup', () => {
       printArea: "'S'!$A$1:$K$84",
     })
     expect(setup.printAreas).toEqual([])
+  })
+
+  it('omits title rows expanded past the print layout limit while keeping their save range', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printTitles: '2:22' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-rows', index: 2, count: 1 })
+    const [pending] = toSavePageSetupStates(journal)
+
+    expect(pending?.printTitles).toBe('2:23')
+    const setup = resolveEffectivePageSetup(pending ?? {}, null, {
+      printTitles: "'S'!$1:$2",
+    })
+    expect(setup.printTitles).toBeNull()
+  })
+
+  it('keeps file title columns in preview when all pending title rows were deleted', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printTitles: '2:3' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'remove-rows', index: 1, count: 2 })
+    const [pending] = toSavePageSetupStates(journal)
+    const setup = resolveEffectivePageSetup(pending ?? {}, null, {
+      printTitles: "'S'!$A:$B,'S'!$5:$6",
+    })
+
+    expect(setup.printTitles).toBeNull()
+    expect(setup.printTitleColumns).toBe('A:B')
   })
 
   it('defaults fitToWidth/fitToHeight to one page when the file only sets fitToPage', () => {

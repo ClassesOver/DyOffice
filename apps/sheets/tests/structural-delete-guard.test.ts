@@ -71,6 +71,11 @@ describe('structuralDeleteFormulaError', () => {
     expect(error).toContain('$D$7:$D$9')
   })
 
+  it('allows deletion when matching references belong to external workbooks', async () => {
+    stubFormulas({ sh1: ['=[1]Data!$D$7', "='[1]Data'!$D$7"], sh2: ['=[1]Data!$D$7'] })
+    expect(await structuralDeleteFormulaError(state(), workbook, delD)).toBeNull()
+  })
+
   it('flags a shared-formula follower whose shifted refs sit in the deleted column', async () => {
     // master B1 =SUM(C7:C9) is fine; the follower in C1 reads SUM(D7:D9)
     stubFormulas(

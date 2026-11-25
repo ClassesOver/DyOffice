@@ -1,0 +1,267 @@
+import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import JSZip from 'jszip'
+
+import { buildSheetsGateway } from '../../server/sheets/build.mjs'
+import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
+import { sheetsSaveRequest } from '../helpers/sheets-request.mjs'
+import {
+  createEditJournal,
+  recordHyperlinkEdit,
+  recordSparklineAdd,
+  recordSheetRename,
+  recordSheetInsert,
+  toSaveHyperlinkEdits,
+  toSaveSparklineAdds,
+  toSaveSheetOps,
+} from '../../../sheets/src/renderer/edit-journal.ts'
+
+const original = await readFile(new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url))
+const wbPath = 'xl/workbook.xml',
+  relPath = 'xl/_rels/workbook.xml.rels',
+  contentTypes = '[Content_Types].xml'
+const one = 'xl/worksheets/sheet1.xml',
+  two = 'xl/worksheets/sheet2.xml'
+const main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+const r = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const first = 'sheet-1',
+  second = 'sheet-2'
+const bounds = { startRow: 0, endRow: 4, startColumn: 0, endColumn: 7 }
+const xmlPart = (zip, path) => zip.file(path).async('string')
+
+async function fixture({
+  changeOne = (xml) => xml,
+  columns = '',
+  tail = '',
+  changeWorkbook = (xml) => xml,
+} = {}) {
+  const zip = await JSZip.loadAsync(original)
+  zip.file(
+    wbPath,
+    changeWorkbook(
+      (await xmlPart(zip, wbPath)).replace(
+        '</sheets>',
+        '<sheet name="Other" sheetId="2" r:id="rId3"/></sheets>',
+      ),
+    ),
+  )
+  zip.file(
+    relPath,
+    (await xmlPart(zip, relPath)).replace(
+      '</Relationships>',
+      `<Relationship Id="rId3" Type="${r}/worksheet" Target="worksheets/sheet2.xml"/></Relationships>`,
+    ),
+  )
+  zip.file(
+    contentTypes,
+    (await xmlPart(zip, contentTypes)).replace(
+      '</Types>',
+      '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+    ),
+  )
+  zip.file(one, changeOne(await xmlPart(zip, one)))
+  zip.file(
+    two,
+    `<worksheet xmlns="${main}"><dimension ref="A1:E3"/><sheetData><row r="1"><c r="A1"><v>100</v></c>${columns}</row></sheetData>${tail}</worksheet>`,
+  )
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+test(
+  'Web XLSX keeps cross-sheet sources and pivot output aligned during structural saves',
+  { timeout: 120000 },
+  async (t) => {
+    const dir = await mkdtemp(join(tmpdir(), 'dyoffice-xlsx-reference-structure-'))
+    let runtime
+    t.after(async () => {
+      await runtime?.close()
+      await rm(dir, { recursive: true, force: true })
+    })
+    await buildSheetsGateway(join(dir, 'gateway.mjs'))
+    runtime = await configuredSheetsRuntime(
+      {
+        DYOFFICE_AUTH_MODE: 'local',
+        DYOFFICE_SANDBOX_MODE: 'subprocess',
+        DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+        DYOFFICE_XLSX_NODE_ENGINE: join(dir, 'xlsx-node-engine.mjs'),
+        DYOFFICE_XLSX_GATEWAY_RUNNER: join(dir, 'gateway-process.mjs'),
+      },
+      { enabled: true },
+    )
+    const native = runtime.sheetsNative
+    const read = (bytes, sheet) => native.readRange(bytes, sheet, bounds)
+    const inspect = (bytes) => native.inspect(bytes, undefined, true)
+    const save = async (bytes, sheetOps, sheetOrder, fields = {}) => {
+      const request = { ...sheetsSaveRequest(first, []), sheetOps, sheetOrder, ...fields }
+      return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request)))
+        .bytes
+    }
+    const chartPath = 'xl/charts/chart1.xml'
+    const editPart = async (bytes, path, change) => {
+      const zip = await JSZip.loadAsync(bytes)
+      zip.file(path, change(await xmlPart(zip, path)))
+      return zip.generateAsync({ type: 'nodebuffer' })
+    }
+    const chartRef = async (bytes) =>
+      (await inspect(bytes)).visuals.find((v) => v.chart)?.chart.series[0].valuesRef
+
+    const insertOn = (sheetId) => [
+      { kind: 'insert-rows', sheetId, index: 0, count: 1 },
+      { kind: 'insert-cols', sheetId, index: 0, count: 1 },
+    ]
+    const quoteFormula = "'Q\"1'!$A$1"
+    await t.test('shifts chart sources with an alternate namespace prefix', async () => {
+      const base = await fixture()
+      const canonical = await editPart(base, chartPath, (xml) =>
+        xml.replace('Acceptance!$A$2:$A$3', 'Other!$A$1:$A$2'),
+      )
+      const alternate = await editPart(canonical, chartPath, (xml) =>
+        xml.replaceAll('xmlns:c=', 'xmlns:n=').replaceAll('<c:', '<n:').replaceAll('</c:', '</n:'),
+      )
+      assert.equal(await chartRef(alternate), 'Other!$A$1:$A$2')
+      const control = await save(canonical, [], [first, second], {
+        structuralOps: insertOn(second),
+      })
+      const result = await save(alternate, [], [first, second], { structuralOps: insertOn(second) })
+      const actual = await chartRef(result)
+      const expected = await chartRef(control)
+      assert.equal(expected, 'Other!$B$2:$B$3')
+      assert.equal(actual, expected)
+      assert.ok(
+        (await read(result, 'Other')).cells.some(
+          (c) => c.row === 1 && c.column === 1 && c.value === 100,
+        ),
+      )
+    })
+
+    await t.test(
+      'shifts references to a source sheet whose name contains a double quote',
+      async () => {
+        const source = await fixture({
+          changeWorkbook: (xml) =>
+            xml
+              .replace('name="Other"', 'name="Q&quot;1"')
+              .replace(
+                '</definedNames>',
+                `<definedName name="QuotedBookRef">${quoteFormula}</definedName></definedNames>`,
+              ),
+          changeOne: (xml) =>
+            xml.replace(
+              '</row></sheetData>',
+              `<c r="G3"><f>${quoteFormula}</f><v>100</v></c></row></sheetData>`,
+            ),
+          columns: `<c r="B1"><f>${quoteFormula}</f><v>100</v></c>`,
+        })
+        const result = await save(source, [], [first, second], { structuralOps: insertOn(second) })
+        const own = await read(result, 'Q"1'),
+          cross = await read(result, 'Acceptance')
+        assert.ok(own.cells.some((c) => c.row === 1 && c.column === 1 && c.value === 100))
+        const actual = {
+          sameSheet: own.cells.find((c) => c.row === 1 && c.column === 2)?.formula,
+          crossSheet: cross.cells.find((c) => c.row === 2 && c.column === 6)?.formula,
+          defined: (await inspect(result)).definedNames.find((n) => n.name === 'QuotedBookRef')
+            ?.formula,
+        }
+        const movedRef = quoteFormula.replace('$A$1', '$B$2')
+        assert.deepEqual(actual, {
+          sameSheet: '=' + movedRef,
+          crossSheet: '=' + movedRef,
+          defined: movedRef,
+        })
+      },
+    )
+
+    await t.test(
+      'moves the pivot output when the host changes and the source stays put',
+      async () => {
+        const base = await fixture()
+        const withPivot = await save(base, [], [first, second], {
+          edits: [{ sheetId: second, row: 0, column: 5, writeValue: true, value: 'Pivot header' }],
+          pivotAdditions: [
+            {
+              sheetId: second,
+              sourceSheetId: first,
+              sourceArea: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 1 },
+              location: { startRow: 0, startColumn: 5, endRow: 5, endColumn: 6 },
+              name: 'Sales',
+              fieldNames: ['Region', 'Amount'],
+              rowFieldIndices: [0],
+              rowItems: ['East', 'West'],
+              values: [{ fieldIndex: 1, agg: 'sum' }],
+            },
+          ],
+        })
+        const before = (await inspect(withPivot)).sheets[1].pivotTables[0]
+        assert.equal(before.outputRef, 'F1:G6')
+        const result = await save(withPivot, [], [first, second], {
+          structuralOps: insertOn(second),
+        })
+        const after = (await inspect(result)).sheets[1].pivotTables[0]
+        const moved = (await read(result, 'Other')).cells.find((c) => c.value === 'Pivot header')
+        assert.deepEqual([moved.row, moved.column], [1, 6])
+        assert.equal(after.outputRef, 'G2:H7')
+        assert.equal(after.firstDataRow, before.firstDataRow)
+        assert.equal(after.firstDataCol, before.firstDataCol)
+        assert.equal(
+          await xmlPart(await JSZip.loadAsync(result), after.cachePath),
+          await xmlPart(await JSZip.loadAsync(withPivot), before.cachePath),
+        )
+      },
+    )
+
+    await t.test('preserves pending references to a new tab that takes an old name', async () => {
+      const base = await save(await fixture(), [], [first, second], {
+        hyperlinkEdits: [{ sheetId: second, row: 0, column: 4, target: '#Acceptance!A2' }],
+        sparklineAdditions: [
+          {
+            sheetId: second,
+            type: 'line',
+            cells: [{ cell: 'D1', sourceRef: 'Acceptance!$A$2:$A$3' }],
+          },
+        ],
+      })
+      const journal = createEditJournal()
+      const fresh = 'new-acceptance'
+      recordSheetRename(journal, first, 'Archived', 'Acceptance')
+      recordSheetInsert(journal, fresh, 'Acceptance')
+      recordHyperlinkEdit(journal, second, 0, 1, '#Acceptance!A2')
+      recordSparklineAdd(journal, {
+        id: 'fresh-source',
+        sheetId: second,
+        type: 'column',
+        cells: [{ cell: 'C1', sourceRef: 'Acceptance!$A$2:$A$3' }],
+      })
+      const hyperlinkEdits = toSaveHyperlinkEdits(journal),
+        sparklineAdditions = toSaveSparklineAdds(journal)
+      const result = await save(base, toSaveSheetOps(journal), [first, second, fresh], {
+        hyperlinkEdits,
+        sparklineAdditions,
+      })
+      const metadata = await inspect(result)
+      assert.deepEqual(
+        metadata.sheets.map((s) => s.name),
+        ['Archived', 'Other', 'Acceptance'],
+      )
+      const links = (await read(result, 'Other')).hyperlinks
+      assert.equal(links.find((link) => link.column === 1)?.target, '#Acceptance!A2')
+      assert.equal(links.find((link) => link.column === 4)?.target, '#Archived!A2')
+      const sparklines = metadata.sheets[1].sparklines.flatMap((group) => group.cells)
+      assert.equal(sparklines.find((cell) => cell.cell === 'C1')?.sourceRef, 'Acceptance!$A$2:$A$3')
+      assert.equal(sparklines.find((cell) => cell.cell === 'D1')?.sourceRef, 'Archived!$A$2:$A$3')
+      assert.ok(
+        (await read(result, 'Archived')).cells.some(
+          (c) => c.row === 1 && c.column === 0 && c.value === 12.5,
+        ),
+      )
+      assert.ok(
+        !(await read(result, 'Acceptance')).cells.some(
+          (c) => c.row === 1 && c.column === 0 && c.value === 12.5,
+        ),
+      )
+    })
+  },
+)

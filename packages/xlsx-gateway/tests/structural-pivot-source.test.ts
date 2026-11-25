@@ -17,6 +17,7 @@ const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8"?>
   <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/pivotCache/pivotCacheDefinition1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>
+  <Override PartName="/xl/pivotTables/report.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>
 </Types>`
 
 const PACKAGE_RELS = `<?xml version="1.0" encoding="UTF-8"?>
@@ -52,6 +53,15 @@ const CACHE_DEFINITION = `<?xml version="1.0" encoding="UTF-8"?>
   <cacheSource type="worksheet"><worksheetSource ref="A1:C100" sheet="Data"/></cacheSource>
 </pivotCacheDefinition>`
 
+const PIVOT_PATH = 'xl/pivotTables/report.xml'
+const PIVOT_XML = `<p:pivotTableDefinition xmlns:p="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="Sales" cacheId="1">
+  <p:location firstHeaderRow="1" ref="F5:G8" firstDataRow="1" firstDataCol="1" rowPageCount="1" colPageCount="1"/>
+  <p:pageFields count="1"><p:pageField fld="0"/></p:pageFields>
+</p:pivotTableDefinition>`
+const REPORT_RELS = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Target="../pivotTables/report.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Id="rId1"/>
+</Relationships>`
+
 async function fixture(): Promise<Buffer> {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', CONTENT_TYPES)
@@ -59,13 +69,23 @@ async function fixture(): Promise<Buffer> {
   zip.file('xl/workbook.xml', WORKBOOK)
   zip.file('xl/_rels/workbook.xml.rels', WORKBOOK_RELS)
   zip.file('xl/worksheets/sheet1.xml', worksheetXml())
-  zip.file('xl/worksheets/sheet2.xml', worksheetXml())
+  zip.file(
+    'xl/worksheets/sheet2.xml',
+    worksheetXml().replace(
+      '</sheetData>',
+      '<row r="3"><c r="F3" t="inlineStr"><is><t>Region</t></is></c></row>' +
+        '<row r="5"><c r="F5" t="inlineStr"><is><t>Sales</t></is></c></row>' +
+        '</sheetData>',
+    ),
+  )
   zip.file('xl/worksheets/sheet3.xml', worksheetXml())
+  zip.file('xl/worksheets/_rels/sheet2.xml.rels', REPORT_RELS)
+  zip.file(PIVOT_PATH, PIVOT_XML)
   zip.file('xl/pivotCache/pivotCacheDefinition1.xml', CACHE_DEFINITION)
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
-async function plan(ops: SheetStructuralOps[]): Promise<unknown> {
+async function plan(ops: SheetStructuralOps[]) {
   const source = await createBufferEntrySource(await fixture())
   return planCellEditsToXlsx(source, [], ops)
 }
@@ -89,6 +109,43 @@ describe('structural edits against a pivot cache source sheet', () => {
     ])
     expect(mutation).toBeDefined()
   })
+})
+
+describe('structural edits on the sheet hosting a pivot report', () => {
+  it('moves the report with the rows containing its filters and body', async () => {
+    const mutation = await plan([
+      {
+        sheetName: 'Report',
+        ops: [{ kind: 'move-rows', index: 2, count: 6, before: 10 }],
+      },
+    ])
+    expect(mutation.replaced.get(PIVOT_PATH)).toContain(
+      '<location firstHeaderRow="1" ref="F7:G10" firstDataRow="1" firstDataCol="1" rowPageCount="1" colPageCount="1"/>',
+    )
+    const worksheet = mutation.replaced.get('xl/worksheets/sheet2.xml')
+    expect(worksheet).toContain('<c r="F5" t="inlineStr"><is><t>Region</t></is></c>')
+    expect(worksheet).toContain('<c r="F7" t="inlineStr"><is><t>Sales</t></is></c>')
+    expect(mutation.replaced.has('xl/pivotCache/pivotCacheDefinition1.xml')).toBe(false)
+  })
+
+  it('leaves the pivot part untouched after an insert beyond its output', async () => {
+    const mutation = await plan([
+      { sheetName: 'Report', ops: [{ kind: 'insert-rows', index: 8, count: 1 }] },
+    ])
+    expect(mutation.replaced.has(PIVOT_PATH)).toBe(false)
+  })
+
+  it.each([
+    { kind: 'insert-cols', index: 6, count: 1 },
+    { kind: 'insert-rows', index: 3, count: 1 },
+    { kind: 'remove-rows', index: 2, count: 6 },
+    { kind: 'move-rows', index: 5, count: 1, before: 7 },
+  ] as const)(
+    'rejects a structural edit that disrupts the output ($kind at $index)',
+    async (op) => {
+      await expect(plan([{ sheetName: 'Report', ops: [op] }])).rejects.toThrow(StructuralShiftError)
+    },
+  )
 })
 
 describe('non-shifting edits against a pivot cache source sheet', () => {

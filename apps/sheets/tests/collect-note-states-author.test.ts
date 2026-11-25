@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
+import {
+  createEditJournal,
+  recordNoteChange,
+  recordStructuralOp,
+} from '../src/renderer/edit-journal'
 import { threadStore } from '../src/renderer/threaded-comments'
 import { collectNoteStates } from '../src/renderer/univer-sync'
 import type { LazyWorkbookState, UniverRuntime } from '../src/renderer/univer-state'
@@ -33,6 +38,7 @@ function harness(comments: Comment[], live: { row: number; col: number; note: st
     editJournal: {
       noteDirty: new Set(['sheet1']),
       notePictures: [],
+      structuralOps: new Map(),
       sheets: { removed: new Set<string>() },
     },
     file: { sheets: [{ id: 'sheet1', comments }] },
@@ -57,6 +63,20 @@ describe('collectNoteStates author marker', () => {
     const { runtime, state } = harness([comment], [live])
     const [sheet] = collectNoteStates(runtime, state)
     expect(sheet?.notes).toEqual([{ row: 1, column: 2, author: 'Dana', text: 'check Q3\nand Q4' }])
+  })
+
+  it('keeps the author when an existing note moved before the snapshot', () => {
+    const comment = { row: 1, column: 2, author: 'Dana', text: 'original' }
+    const live = { row: 2, col: 3, note: 'Dana:\nedited this session' }
+    const { runtime, state } = harness([comment], [live])
+    const journal = createEditJournal()
+    recordNoteChange(journal, 'sheet1')
+    recordStructuralOp(journal, 'sheet1', { kind: 'insert-rows', index: 0, count: 1 })
+    recordStructuralOp(journal, 'sheet1', { kind: 'insert-cols', index: 0, count: 1 })
+    const [sheet] = collectNoteStates(runtime, { ...state, editJournal: journal })
+    expect(sheet?.notes).toEqual([
+      { row: 2, column: 3, author: 'Dana', text: 'edited this session' },
+    ])
   })
 
   it('keeps an author-less note the file installed verbatim', () => {
