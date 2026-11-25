@@ -139,7 +139,16 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       }
       if (!currentOperation(id,ctx,op)) throw hostError('CONFLICT','superseded lease')
       ctx.lease = lease!; armExpiration(id,ctx); if (!ctx.pending && !ctx.preparing) ctx.status = 'idle'; emit(); return { ...lease! }
-    } catch (error) { if (currentOperation(id,ctx,op)) { ctx.lease = null; clearExpiration(id); if (!ctx.pending && !ctx.preparing) ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'; emit() }; throw error }
+    } catch (error) {
+      const {code,status} = error as HostError & {status?:number}
+      // A transient renewal failure cannot extend the lease or invalidate the last confirmed deadline.
+      if (currentOperation(id,ctx,op) && !(suffix === '/renew' && (code === 'UNAVAILABLE' || status === 429))) {
+        ctx.lease = null; clearExpiration(id)
+        if (!ctx.pending && !ctx.preparing) ctx.status = code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'
+        emit()
+      }
+      throw error
+    }
   }
   function renewLease(fileId: string): Promise<Lease> {
     const id=uuid(fileId),ctx=liveContext(id),lease=ctx.lease

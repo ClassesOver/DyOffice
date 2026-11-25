@@ -13,6 +13,7 @@ export async function lockLease(connection: PoolClient, principal: BusinessPrinc
 }
 export async function databaseTime(connection: PoolClient): Promise<Date> { return (await connection.query('SELECT clock_timestamp() AS now')).rows[0].now }
 export async function assertLiveLease(connection: PoolClient, principal: BusinessPrincipal, fileId: string, epoch: number, editorId: string) {
+  if (principal.dshEdit && (fileId!==principal.dshEdit.fileId||editorId!==principal.dshEdit.editorId)) throw authError(404)
   if (principal.job && editorId!==principal.job.id) throw authError(404)
   const row = await lockLease(connection,principal,fileId), now = await databaseTime(connection)
   if (principal.job ? row?.job_id!==principal.job.id || Number(row?.job_epoch)!==principal.job.epoch : row?.job_id!=null) throw authError(404)

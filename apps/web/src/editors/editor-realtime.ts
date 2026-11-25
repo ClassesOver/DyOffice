@@ -6,7 +6,7 @@ import type { SessionFileHost } from '../../../../packages/browser-host/src/file
 export function mountEditorRealtime(host: SessionFileHost, fileId: string, onChange: () => void,onChannels?:(channels:readonly {conversationId:string;sequence:number}[])=>void) {
   let remoteHead: string | null = null, status: EditorBridgeStatus = 'connecting'
   // Legacy/mocked hosts and non-browser mounts retain the HTTP-only path.
-  if (typeof globalThis.WebSocket !== 'function' || typeof host.getEditorId !== 'function') return { notice: (_locale: 'en' | 'zh') => '', dispose() {} }
+  if ((typeof location!=='undefined'&&new URLSearchParams(location.search).get('guest')==='1') || typeof globalThis.WebSocket !== 'function' || typeof host.getEditorId !== 'function') return { notice: (_locale: 'en' | 'zh') => '', dispose() {} }
   const bridge = createEditorBridge({
     origin: location.origin, fileId, editorId: host.getEditorId(),
     onStatus(next) {

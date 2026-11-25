@@ -147,6 +147,7 @@ import { INDENT_STEP_PX } from './selection-format'
 import {
   fileRangeToScreenRange,
   fileRangeToScreenRanges,
+  hasLocalRowHeight,
   indexedThroughScreenRow,
   mapRangeResultToScreen,
   netAxisDelta,
@@ -2940,7 +2941,7 @@ async function loadFrozenColumnStrip(
       inheritedWrap: inheritedWrapLookup(state.file.styles, mapped.screen.rows, sheet.columnWidths),
       defaultRowHeightPx: defaultRowHeightPx(state, sheetId),
     })
-    trackPreIndexMeasuredRows(`file-${state.file.sha256}:${sheetId}`, stripQualifying)
+    trackPreIndexMeasuredRows(`${state.unitId}:${sheetId}`, stripQualifying)
   } catch {
     state.frozenStripKeys.delete(sheetId)
   }
@@ -3031,7 +3032,7 @@ async function loadFrozenRowStrip(
       inheritedWrap: inheritedWrapLookup(state.file.styles, mapped.screen.rows, sheet.columnWidths),
       defaultRowHeightPx: defaultRowHeightPx(state, sheetId),
     })
-    trackPreIndexMeasuredRows(`file-${state.file.sha256}:${sheetId}`, stripQualifying)
+    trackPreIndexMeasuredRows(`${state.unitId}:${sheetId}`, stripQualifying)
   } catch {
     state.frozenRowStripKeys.delete(sheetId)
   }
@@ -3442,7 +3443,7 @@ async function loadRange(
         })
         coverWrapRows(coverage, freshRows, wrapWindow.startColumn, wrapWindow.endColumn)
       }
-      const sheetKey = `file-${state.file.sha256}:${sheetId}`
+      const sheetKey = `${state.unitId}:${sheetId}`
       if (result.indexingComplete) {
         const qualifyingWithoutMerges = wrapAutoFitRows(
           mapped.screen.cells,
@@ -3461,7 +3462,7 @@ async function loadRange(
         )
         resetStaleWrapAutoHeights(
           runtime,
-          `file-${state.file.sha256}`,
+          state.unitId,
           worksheet,
           stale.reset,
           mapped.screen.rows,
@@ -3898,6 +3899,7 @@ export function applyRowProperties(
   if (rows.length === 0) return
   noteFormulaStreamChunk()
   recordRowStyleKeys(state, sheetId, rows)
+  const ops = state.editJournal.structuralOps.get(sheetId) ?? []
   let applied = state.appliedRowKeys.get(sheetId)
   if (!applied) {
     applied = new Set()
@@ -3947,7 +3949,8 @@ export function applyRowProperties(
           if (custom) worksheet.getSheet().getRowManager().getRowOrCreate(row.row).custom = custom
         }
       }
-      if (row.height !== undefined) {
+      // Range reads may still carry an older height after an in-place save.
+      if (row.height !== undefined && !hasLocalRowHeight(ops, row.row)) {
         const px = Math.round((row.height * 96) / 72)
         // Paint the stored ht first; the open-time wrap measure
         // (wrapAutoFitRows) re-fits auto-mode wrap rows afterwards, matching
@@ -6098,7 +6101,7 @@ async function preloadEntireWorkbookInner(
         inheritedWrap: inheritedWrap,
         defaultRowHeightPx: defaultRowHeightPx(state, sheetId),
       })
-      const sheetKey = `file-${state.file.sha256}:${sheetId}`
+      const sheetKey = `${state.unitId}:${sheetId}`
       if (result.indexingComplete) {
         const qualifyingWithoutMerges = wrapAutoFitRows(
           screen.cells,
@@ -6117,7 +6120,7 @@ async function preloadEntireWorkbookInner(
         )
         resetStaleWrapAutoHeights(
           runtime,
-          `file-${state.file.sha256}`,
+          state.unitId,
           worksheet,
           stale.reset,
           screen.rows,
@@ -6911,7 +6914,7 @@ function applyDataValidations(
 ): void {
   if (state.appliedDvSheets.has(sheetId)) return
   state.appliedDvSheets.add(sheetId)
-  const unitId = `file-${state.file.sha256}`
+  const { unitId } = state
   journalSuppression.active = true
   try {
     for (const [index, rule] of rules.entries()) {

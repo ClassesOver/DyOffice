@@ -9,7 +9,7 @@ import {blankChannelDocument} from './blank-document.ts'
 import {decodeDelegationOrigin,decodeContinuationOrigin,type DelegationOrigin,decodeAgentAction,decodeChannelDataInputs,defaultDshTokenExpiryMinutes,dshTokenExpiryOptions,type SubmitAgentAction,type ChannelTask} from '../../../../../../packages/web-contracts/src/assistant-channel.ts'
 
 export type ChannelCredential={kind:'owner'|'member';token:string}
-type Sealed={kind:'invite'|'application'|'member'|'background';session:string;conversationId:string;id:string;nonce:string;allowCreate?:true}
+type Sealed={kind:'invite'|'application'|'member'|'background';session:string;conversationId:string;id:string;nonce:string;allowCreate?:true;allowEdit?:true}
 type Actor={id:string;member?:Record<string,any>}
 const fail=(statusCode=400)=>Object.assign(Error('Assistant channel unavailable'),{statusCode})
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex')
@@ -73,9 +73,9 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
   return {fileId:file.id,name:file.name,format:file.format,revision:file.current_revision,activity,
    reference:{key:file.object_key,sha256:file.sha256,size:Number(file.size)}}
  }
- function seal(kind:Sealed['kind'],session:string,conversationId:string,id:string,allowCreate=false):string {
+ function seal(kind:Sealed['kind'],session:string,conversationId:string,id:string,allowCreate=false,allowEdit=false):string {
   const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',kind==='background'?backgroundKey:key,iv)
-  const bytes=Buffer.concat([cipher.update(JSON.stringify({kind,session,conversationId,id,nonce:randomBytes(32).toString('base64url'),...(allowCreate?{allowCreate:true}:{})})),cipher.final()])
+  const bytes=Buffer.concat([cipher.update(JSON.stringify({kind,session,conversationId,id,nonce:randomBytes(32).toString('base64url'),...(allowCreate?{allowCreate:true}:{}),...(allowEdit?{allowEdit:true}:{})})),cipher.final()])
   return Buffer.concat([iv,cipher.getAuthTag(),bytes]).toString('base64url')
  }
  function unseal(token:string,kind:Sealed['kind']):Sealed {
@@ -327,16 +327,32 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     return {inviteToken,expiresAt:row.expires_at.toISOString()}
    })
   },
-  async issueDshToken(token:string,conversationId:string,expiresInMinutes:unknown=defaultDshTokenExpiryMinutes,allowCreate:unknown=false) {
-   if(typeof expiresInMinutes!=='number'||!dshTokenExpiryOptions.includes(expiresInMinutes)||typeof allowCreate!=='boolean')throw fail(400)
+  async issueDshToken(token:string,conversationId:string,expiresInMinutes:unknown=defaultDshTokenExpiryMinutes,allowCreate:unknown=false,allowEdit:unknown=false) {
+   if(typeof expiresInMinutes!=='number'||!dshTokenExpiryOptions.includes(expiresInMinutes)||typeof allowCreate!=='boolean'||typeof allowEdit!=='boolean')throw fail(400)
    return owner(token,async(c,p)=>{
     const ch=await channel(c,p,conversationId)
-    if(ch.paused||(!allowCreate&&(!backgroundEnabled||!ch.background_enabled||!ch.file_id)))throw fail(403)
+    if(ch.paused||(!allowCreate&&!(allowEdit&&ch.file_id)&&(!backgroundEnabled||!ch.background_enabled||!ch.file_id)))throw fail(403)
     const membershipId=await createMember(c,p,conversationId,{displayName:'DSH DyOffice',kind:'dsh'},expiresInMinutes)
-    const memberToken=seal('member',token,conversationId,membershipId,allowCreate)
+    const memberToken=seal('member',token,conversationId,membershipId,allowCreate,allowEdit)
     const {rows:[member]}=await c.query('UPDATE assistant_members SET token_hash=$4,dsh_token_issued_at=clock_timestamp(),dsh_token_session_id=$5,dsh_token_envelope=$6 WHERE deployment_id=$1 AND owner_id=$2 AND membership_id=$3 RETURNING *',[...scope(p),membershipId,hash(memberToken),p.sessionId,protectDshToken(memberToken,p,conversationId,membershipId)])
     await event(c,p,conversationId,'member',{membershipId,state:'authorized'})
     return {memberToken,expiresAt:member.expires_at.toISOString(),membershipId}
+   })
+  },
+  async issueEditTicket(token:string,fileId:string,proof:unknown) {
+   const sealed=unseal(token,'member'),id=uuid(fileId)
+   if(sealed.allowEdit!==true)throw fail(403)
+   return owner(sealed.session,async(c,p)=>{
+    const ch=await channel(c,p,sealed.conversationId)
+    const member=await liveMember(c,p,sealed,token)
+    if(ch.paused||member.kind!=='dsh')throw fail(403)
+    const created=id!==ch.file_id
+    if(created&&(sealed.allowCreate!==true||typeof proof!=='string'||!(/^[a-f0-9]{64}$/u.test(proof))||
+     !timingSafeEqual(Buffer.from(proof,'hex'),documentPreviewProof(token,id))))throw fail(403)
+    await loadFile(c,p,id)
+    const ticket=randomBytes(32).toString('base64url')
+    await c.query('SELECT issue_dsh_edit_grant($1,$2,$3,$4,$5)',[randomUUID(),sealed.id,id,created,hash(ticket)])
+    return {ticket}
    })
   },
   async revealDshToken(token:string,conversationId:string,membershipId:string) {
@@ -441,7 +457,7 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     await expire(c,p,sealed.conversationId)
     const tasks=(await c.query("SELECT * FROM task_runtime_channel WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND (sender=$4 OR recipient=$4) ORDER BY (state IN ('queued','running','waiting_peer','cancel_requested','unknown_outcome')) DESC,created_at DESC,task_id LIMIT 64",[...scope(p),sealed.conversationId,actor.id])).rows.map(taskPreview)
     const sequence=Number((await c.query('SELECT sequence FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3',[...scope(p),sealed.conversationId])).rows[0].sequence)
-    return {conversationId:sealed.conversationId,fileId:ch.file_id,paused:ch.paused,canCreate:!ch.paused&&sealed.allowCreate===true,member:memberDto(actor.member!,ch.paused),tasks,sequence}
+    return {conversationId:sealed.conversationId,fileId:ch.file_id,paused:ch.paused,canCreate:!ch.paused&&sealed.allowCreate===true,canEdit:!ch.paused&&sealed.allowEdit===true,member:memberDto(actor.member!,ch.paused),tasks,sequence}
    })
   },
   async memberPreview(token:string,memberId:string) {

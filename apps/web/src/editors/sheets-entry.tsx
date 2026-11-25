@@ -52,7 +52,8 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     const state = host.getState(fileId), sessionId = editor.getWorkbookSessionId()
     if (state.status === 'idle' && state.lease && sessionId && bridge.getWorkbookRevision(sessionId) === state.revision.revision) return state.revision.revision
   }
-  const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision},false,'xlsx',new Set([...WORKBOOK_TOOLS.map(tool=>tool.name),'read_attachment','merge_attached_workbooks']))
+  const guest=new URLSearchParams(location.search).get('guest')==='1'
+  const assistantResult = guest?{assistant:undefined,failure:undefined}:await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision},false,'xlsx',new Set([...WORKBOOK_TOOLS.map(tool=>tool.name),'read_attachment','merge_attached_workbooks']))
   const assistant = assistantResult.assistant
   const workbookImages = assistant && createWorkbookImageApi(assistant.mediaApi)
   const opened = await host.open(fileId)
@@ -67,7 +68,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const copyLifetime = new AbortController()
   const bridge = createSheetsBridge(host,fileId,prefs,{getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
   const documentApi=createWebWorkbookDocumentApi(bridge.api,async input=>downloadWebCsv(input),{language:locale})
-  const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
+  const assistantNotice = guest?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   Object.defineProperty(window,'desktopApi',{value:{...documentApi,...assistant?.api,...(workbookImages?{generateImage:workbookImages.generateImage,fetchImage:workbookImages.fetchImage}:{}),getAiPanelPrefs:async()=>panelPrefs} as unknown as DesktopApi,configurable:true})
@@ -230,7 +231,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
 }
 async function bootstrap() {
   const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
-  const host=createSessionFileHost({expectedRevision:params.get('sourceRevision')??undefined})
+  const host=createSessionFileHost({...(params.get('guest')==='1'&&params.get('editorId')?{editorId:params.get('editorId')!}:{}),expectedRevision:params.get('sourceRevision')??undefined})
   installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
     const mounted=await mountSheetsEditor(host,document.getElementById('root')!,fileId)

@@ -52,6 +52,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   if (prefs.theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = prefs.theme
   let changed = () => {}, editor: SlidesEditorHandle | null = null, disposed = false, closing=false
+  const guest=new URLSearchParams(location.search).get('guest')==='1'
   type AssistantResult=Awaited<ReturnType<typeof loadEditorAssistant>>
   let assistantLoadFinished=false
   let assistantResult:Parameters<typeof editorAssistantNotice>[0]={assistant:undefined,failure:undefined}
@@ -225,7 +226,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const status = !editorMounted ? (takingOver ? text.takingOver : actionError || text.readOnly) : failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status === 'conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
     const notice = realtime.notice(locale)
     const showAssistant=prefs.showAssistant!==false||handoffOpen
-    const assistantNotice=assistantLoadFinished||!showAssistant?editorAssistantNotice(assistantResult,showAssistant,locale):''
+    const assistantNotice=!guest&&(assistantLoadFinished||!showAssistant)?editorAssistantNotice(assistantResult,showAssistant,locale):''
     const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!signed && !state.lease && (loaded || !editorMounted) && !takingOver) || state.status === 'conflict' ? status : actionError
     const lostDraft=loaded&&!failed&&!signed&&!state.lease&&state.status!=='unauthorized'&&state.status!=='unknown'&&!bridge.needsConfirmation()&&(dirty()||bridge.isDirty())
     const recoveryHint=recoveryDownload==='failed'
@@ -274,7 +275,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   reportDocumentLoading('rendering')
   const root = ReactDOM.createRoot(container)
   root.render(<LocaleProvider initial={locale}><NativeSlides /></LocaleProvider>)
-  if(prefs.showAssistant!==false||documentHandoffPeer())void loadEditorAssistant({fileId,editorId:host.getEditorId(),generation:()=>1,continuationRevision},false,'pptx',ASSISTANT_FORMAT_TOOLS.pptx).then(async result=>{
+  if(!guest&&(prefs.showAssistant!==false||documentHandoffPeer()))void loadEditorAssistant({fileId,editorId:host.getEditorId(),generation:()=>1,continuationRevision},false,'pptx',ASSISTANT_FORMAT_TOOLS.pptx).then(async result=>{
     const value=result.assistant
     if(disposed){value?.dispose();return}
     assistantResult=result
@@ -321,7 +322,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
 }
 async function bootstrap() {
   const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
-  const host=createSessionFileHost({expectedRevision:params.get('sourceRevision')??undefined})
+  const host=createSessionFileHost({...(params.get('guest')==='1'&&params.get('editorId')?{editorId:params.get('editorId')!}:{}),expectedRevision:params.get('sourceRevision')??undefined})
   installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
     const mounted = await mountSlidesEditor(host, document.getElementById('root')!, fileId, params.has('sourceRevision'))

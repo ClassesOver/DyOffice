@@ -7,7 +7,7 @@ import { messages } from './messages.ts'
 
 async function bootstrap() {
   const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
-  const host=createSessionFileHost({expectedRevision:params.get('sourceRevision')??undefined})
+  const host=createSessionFileHost({...(params.get('guest')==='1'&&params.get('editorId')?{editorId:params.get('editorId')!}:{}),expectedRevision:params.get('sourceRevision')??undefined})
   installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
     const draftAuthority=await createDraftCopyAuthority(()=>draftCopyParentActive(window))

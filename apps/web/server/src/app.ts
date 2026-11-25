@@ -1,3 +1,4 @@
+import {editorFileToken,registerDshEdit} from './modules/dsh-edit/http.ts'
 import {DEFAULT_OFFICE_EMBED_ORIGINS, validateOfficeEmbedOrigins} from '../../../../packages/web-contracts/src/settings.ts'
 import type { AssistantSourceMode } from '../../../../packages/web-contracts/src/assistant.ts'
 import {createKnowledgeService} from './modules/knowledge/service.ts'
@@ -222,6 +223,10 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       ...(codingConfig.adapters ?? []),
     ], codingConfig.defaultId ?? 'codex') : undefined
     const files = config.objectStore ? createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides || nativePdf ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: nativePdf ? 'editable' : 'unsupported',...(nativePdf?{pdfEditor:'editable' as const}:{}) } : undefined }) : undefined
+    const authorizeNative = assistantChannels&&files
+      ? registerDshEdit(app,{transactions,csrf,origin:config.origin,insecureHttpDev:config.insecureHttpDev,
+        nativeFormats:new Set(Object.entries(files.capabilities).filter(([,value])=>value==='editable').map(([format])=>format))})
+      : (request:import('fastify').FastifyRequest)=>sessions.authenticate(cookies(request).session??'')
     if(assistantChannels)registerAssistantChannelRoutes(app,assistantChannels,csrf,{data:harnessData,baseUrl:config.origin+'/api/v1/agents'},config.objectStore,files,officeEmbedOrigins)
     if(harnesses||assistantChannels){
       registerHarnessDataRoutes(app,harnessData)
@@ -296,13 +301,14 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-docx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
+          if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
           reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src ${docsImageSources}; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
-          await sessions.authenticate(cookies(request).session ?? '')
+          await authorizeNative(request,sessions)
         },
         handler: async (request,reply) => {
           const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-docx'.length)
           if (path === '/' || path === '/index.html') {
-            const opened = await files.openFile(cookies(request).session ?? '',url.searchParams.get('fileId') ?? '')
+            const opened = await files.openFile(editorFileToken(request),url.searchParams.get('fileId') ?? '')
             if (opened.format !== 'docx') throw authError(404)
           }
           // No source fallback and no arbitrary file paths: only verified build assets.
@@ -316,13 +322,14 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-pdf/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
+          if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
           reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
-          await sessions.authenticate(cookies(request).session ?? '')
+          await authorizeNative(request,sessions)
         },
         handler: async (request,reply) => {
           const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-pdf'.length)
           if (path === '/' || path === '/index.html') {
-            const opened = await files.openFile(cookies(request).session ?? '',url.searchParams.get('fileId') ?? '')
+            const opened = await files.openFile(editorFileToken(request),url.searchParams.get('fileId') ?? '')
             if (opened.format !== 'pdf') throw authError(404)
           }
           if (!await nativePdf(request.raw,reply.raw,path)) throw authError(404)
@@ -333,15 +340,16 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-pptx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
+          if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
           // 'wasm-unsafe-eval' keeps harfbuzzjs font shaping working; media-src covers
           // PPTX-embedded audio/video played through the slides renderer.
           reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
-          await sessions.authenticate(cookies(request).session ?? '')
+          await authorizeNative(request,sessions)
         },
         handler: async (request,reply) => {
           const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-pptx'.length)
           if (path === '/' || path === '/index.html') {
-            const opened = await files.openFile(cookies(request).session ?? '',url.searchParams.get('fileId') ?? '')
+            const opened = await files.openFile(editorFileToken(request),url.searchParams.get('fileId') ?? '')
             if (opened.format !== 'pptx') throw authError(404)
           }
           // No source fallback and no arbitrary file paths: only verified build assets.
@@ -355,13 +363,14 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-xlsx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
+          if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
           reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
-          await sessions.authenticate(cookies(request).session ?? '')
+          await authorizeNative(request,sessions)
         },
         handler: async (request,reply) => {
           const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-xlsx'.length)
           if (path === '/' || path === '/index.html') {
-            const opened = await files.openFile(cookies(request).session ?? '',url.searchParams.get('fileId') ?? '')
+            const opened = await files.openFile(editorFileToken(request),url.searchParams.get('fileId') ?? '')
             if (opened.format !== 'xlsx') throw authError(404)
           }
           // No source fallback and no arbitrary file paths: only verified build assets.

@@ -1,8 +1,8 @@
+import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
 import { chatBodySchema } from './assistant-chat.ts'
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import type { createCsrfService } from '../auth/csrf.ts'
-import { cookies } from '../auth/csrf.ts'
 import { authError } from '../auth/sessions.ts'
 import { objectTransferAdmission } from './transfer-admission.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
@@ -18,7 +18,7 @@ const sheetSizes = (maxIndex:number) => ({type:'array',maxItems:maxIndex,items:{
 const sheetLayout = {type:'object',additionalProperties:false,required:['defaultRowHeight','defaultColumnWidth','rows','columns'],properties:{
   defaultRowHeight:{type:'number',exclusiveMinimum:0},defaultColumnWidth:{type:'number',exclusiveMinimum:0},rows:sheetSizes(1048576),columns:sheetSizes(16384),
 }}
-const token = (request: FastifyRequest) => cookies(request).session ?? ''
+const token = (request: FastifyRequest) => editorFileToken(request)
 export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }) {
   const admission = objectTransferAdmission(app)
   const { transfer } = admission
@@ -26,11 +26,8 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
       const credential = token(request)
-      if (!credential) throw authError(401)
       const mutation = !['GET','HEAD','OPTIONS'].includes(request.method)
-      csrf.originCheck(request, mutation)
-      if (mutation) csrf.requireSession(request, credential)
-      await sessions.authenticate(credential)
+      await authenticateEditorFile(request,sessions,csrf,mutation)
       // Hold admission through processing AND response completion. A client
       // disconnect cannot free capacity while object work still owns buffers.
       if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/uploads') || request.routeOptions.url?.endsWith('/purge') || request.routeOptions.url?.endsWith('/finish') || request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads') || request.routeOptions.url?.endsWith('/ai/xlsx-documents') || request.routeOptions.url?.endsWith('/files/new-pdf')))) {

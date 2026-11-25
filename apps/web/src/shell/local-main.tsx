@@ -194,7 +194,8 @@ function installBridge(){
    const id=result.file.fileId
    const saved=type==='docx'?pendingAiDocContents.begin(id,{title,html:content}):null
    notifyFilesChanged()
-   try{await openCreatedDocument(documentTabs,capabilities,id,bound.request)}catch{
+   // The Word editor must write and save the generated body even if another tab is selected.
+   try{await openCreatedDocument(documentTabs,capabilities,id,bound.request,{mountInBackground:type==='docx'})}catch{
     const error=`${type==='pdf'?'PDF':'Word 文档'}已写入工作区，但打开失败。请从最近文件中打开，不要重复创建。`
     if(saved)pendingAiDocContents.complete(id,{ok:false,error})
     throw new Error(error)

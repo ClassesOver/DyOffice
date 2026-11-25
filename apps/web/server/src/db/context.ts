@@ -17,9 +17,10 @@ export type McpEditApproval =
 export type McpFileGrant = McpReadScope & Readonly<{ id: string; approval?: McpEditApproval; resultRevision?: string }>
 const mcpEditKeyPrefix = { 'pdf.rotate': 'mcp_pdf_rotate_', 'xlsx.cells': 'mcp_xlsx_cells_', 'pptx.notes': 'mcp_pptx_notes_', 'docx.paragraph': 'mcp_docx_paragraph_' }
 export const mcpEditKey = (kind: McpEditApproval['kind'], grantId: string) => mcpEditKeyPrefix[kind] + grantId
-type TransactionCredential = BusinessCredential | McpExternalCredential
+export interface DshEditCredential { kind: 'dsh-edit'; token: string }
+type TransactionCredential = BusinessCredential | McpExternalCredential | DshEditCredential
 export type BusinessCredential = SessionCredential | JobCredential
-export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number; job?: Readonly<{ id: string; epoch: number; fileId: string; baseRevision: string }>; mcpRead?: McpFileGrant }
+export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number; job?: Readonly<{ id: string; epoch: number; fileId: string; baseRevision: string }>; mcpRead?: McpFileGrant; dshEdit?: Readonly<{ fileId: string; editorId: string; format: string }> }
 export interface SessionCredential { kind: 'session'; token: string }
 export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3600_000, sessionCredentials }: { pool: Pool; deploymentId: string; idleMs?: number; sessionCredentials?: { verify: (token: string) => void } }) {
   if (!Number.isSafeInteger(idleMs) || idleMs < 1 || idleMs > 2592000000) throw new Error('Invalid session idle lifetime')
@@ -30,7 +31,7 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
     // between initial authorization and the final commit recheck.
     const credential = Object.freeze({ ...input })
     await (admitted ??= assertRuntimePool(pool, 'business'))
-    if (!credential || !['session','job','external-token'].includes(credential.kind) || typeof credential.token !== 'string') throw authError()
+    if (!credential || !['session','job','external-token','dsh-edit'].includes(credential.kind) || typeof credential.token !== 'string') throw authError()
     if (credential.kind==='session' && sessionCredentials) sessionCredentials.verify(credential.token)
     else if (!/^[A-Za-z0-9_-]{43}$/.test(credential.token)) throw authError()
     if (credential.kind==='job' && (Object.keys(credential).some(key => !['kind','jobId','epoch','token'].includes(key)) || typeof credential.jobId!=='string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(credential.jobId) || !Number.isSafeInteger(credential.epoch) || credential.epoch<1)) throw authError()
@@ -48,6 +49,8 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
             return connection.query('SELECT * FROM lock_business_session($1::uuid,$2::text,$3::bigint)', [deploymentId, hash, idleMs])
           case 'job':
             return connection.query('SELECT lock_job_principal($1::uuid,$2::uuid,$3::bigint,$4::text,$5::boolean) AS job', [deploymentId, credential.jobId, credential.epoch, hash, final])
+          case 'dsh-edit':
+            return connection.query('SELECT * FROM lock_dsh_edit_grant($1::uuid,$2::text,$3::bigint,NULL)', [deploymentId, hash, idleMs])
           case 'external-token':
             return connection.query('SELECT * FROM lock_mcp_file_grant($1::uuid,$2::text,$3::bigint,$4::text)', [deploymentId, hash, idleMs, grantMode])
         }
@@ -60,6 +63,7 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
         session: roles.includes('personal') ? ['workspace:read','preferences:read','preferences:write','files:read','files:write'] : [],
         job: ['files:read', 'files:write'],
         'external-token': ['files:read'],
+        'dsh-edit': ['files:read','files:write'],
       }
       const principal: BusinessPrincipal = Object.freeze({
         deploymentId,
@@ -69,6 +73,7 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
         roles,
         scopes: Object.freeze(scopes[credential.kind]),
         ...(job && { job: Object.freeze({ id: job.jobId, epoch: job.epoch, fileId: job.fileId, baseRevision: job.baseRevision }) }),
+        ...(credential.kind === 'dsh-edit' && { dshEdit: Object.freeze({fileId:locked.file_id,editorId:locked.editor_id,format:locked.format}) }),
         ...(credential.kind === 'external-token' && { mcpRead: Object.freeze({
           id: locked.grant_id,
           fileId: locked.file_id,
@@ -96,6 +101,21 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
     async withPrincipalTransaction<T>(credential: BusinessCredential, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) {
       if (credential?.kind !== 'session' && credential?.kind !== 'job') throw authError()
       return transact(credential, operation)
+    },
+    async withDshEditTransaction<T>(credential: DshEditCredential, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) {
+      if (credential?.kind !== 'dsh-edit') throw authError()
+      return transact(credential, operation)
+    },
+    async redeemDshEditTicket(ticket:string,replacement:string) {
+      if (![ticket,replacement].every(token=>/^[A-Za-z0-9_-]{43}$/.test(token))) throw authError()
+      await (admitted ??= assertRuntimePool(pool, 'business'))
+      try {
+        const {rows:[row]} = await pool.query('SELECT * FROM lock_dsh_edit_grant($1::uuid,$2::text,$3::bigint,$4::text)',[deploymentId,tokenHash(ticket),idleMs,tokenHash(replacement)])
+        return {fileId:row.file_id as string,editorId:row.editor_id as string,format:row.format as string}
+      } catch (error) {
+        if ((error as {code?:string}).code==='28000') throw authError()
+        throw error
+      }
     },
     async withMcpReadTransaction<T>(credential: McpExternalCredential, target: McpReadScope, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) {
       if (credential?.kind !== 'external-token') throw authError()
@@ -127,4 +147,4 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
   }
 }
 export type McpPrincipalTransactions = ReturnType<typeof createPrincipalTransactions>
-export type PrincipalTransactions = Pick<McpPrincipalTransactions, 'sessionIdleMs' | 'withPrincipalTransaction'>
+export type PrincipalTransactions = Pick<McpPrincipalTransactions, 'sessionIdleMs' | 'withPrincipalTransaction'> & Partial<Pick<McpPrincipalTransactions, 'withDshEditTransaction'>>

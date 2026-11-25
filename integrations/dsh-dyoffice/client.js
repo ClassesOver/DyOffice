@@ -108,6 +108,11 @@ window.__ModuleLoader__.load({
         h('progress',{'aria-label':label,style:{width:'100%',maxWidth:240,height:6,accentColor:'var(--dsw-alias-brand-primary, Highlight)'}}))
     }
     const previewUrl = () => new URL('../dyoffice-preview', window.location.href)
+    const guestEditorUrl = fileId => {
+      const url = previewUrl()
+      url.searchParams.set('edit', fileId)
+      return url.href
+    }
     const allowsEmbed = (connection, origin) => connection?.origin === origin &&
       (connection?.dshEditorOrigins ?? [connection?.dshEditorOrigin]).includes(window.location.origin)
     const studioStyles = `
@@ -178,11 +183,12 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null)
       const [busy, setBusy] = useState(false)
       const pending = useRef(null)
+      const needsAddress = !defaultOrigin && !code.trim().startsWith('http')
       useEffect(() => () => pending.current?.abort(), [])
       async function connect(event) {
         event.preventDefault()
         if (pending.current || !code.trim()) return
-        if (!address) {
+        if (needsAddress && !address) {
           setError('invalidUrl')
           return
         }
@@ -193,7 +199,7 @@ window.__ModuleLoader__.load({
         try {
           const result = await fetch(previewUrl(), {
             method: 'POST', headers: {'X-DyOffice-Pair': '1', 'Content-Type': 'application/json'},
-            body: JSON.stringify({origin: address, token: code.trim()}), signal: controller.signal,
+            body: JSON.stringify({origin: address ?? '', token: code.trim()}), signal: controller.signal,
           })
           if (result.ok) {
             setCode('')
@@ -208,7 +214,7 @@ window.__ModuleLoader__.load({
           if (!controller.signal.aborted) setBusy(false)
         }
       }
-      const disabled = busy || !code.trim() || !origin.trim()
+      const disabled = busy || !code.trim()
       return h('form', {onSubmit: connect, style: pairStyles.form},
         h('header', null,
           h('h2', {style: pairStyles.heading},
@@ -217,14 +223,14 @@ window.__ModuleLoader__.load({
                 h('path', {d: 'M6 3h8l4 4v14H6z M14 3v4h4 M9 12h6 M9 16h6'}))),
             t('authorization')),
           h('p', {style: pairStyles.hint}, t('pairIntro'))),
-        h('label', {style: pairStyles.field}, t('url'), h('input', {
+        needsAddress && h('label', {style: pairStyles.field}, t('url'), h('input', {
           type: 'url', autoComplete: 'url', spellCheck: false, value: origin,
           onChange: event => setOrigin(event.target.value), disabled: busy,
           placeholder: 'https://office.example.com', 'aria-invalid': error === 'invalidUrl' || undefined, style: pairStyles.input,
         })),
         h('div', {style: pairStyles.field},
           h('label', {style: pairStyles.field}, t('code'), h('input', {
-            type: 'password', autoComplete: 'off', spellCheck: false, maxLength: 2048,
+            type: 'password', autoComplete: 'off', spellCheck: false, maxLength: 4096,
             value: code, onChange: event => setCode(event.target.value), disabled: busy,
             placeholder: t('codeHint'), 'aria-invalid': error === 'invalidCode' || undefined, style: pairStyles.input,
           })),
@@ -533,7 +539,8 @@ window.__ModuleLoader__.load({
         return h('section',{style:{height:'100%',minHeight:0,display:'flex',flexDirection:'column'}},
           h('header',{style:{minWidth:0,display:'flex',justifyContent:'space-between',gap:8,padding:'6px 10px',fontSize:12}},
             h('strong',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},created.name),
-            h('a',{href:created.href,target:'_blank',rel:'noopener noreferrer',style:{...pairStyles.link,whiteSpace:'nowrap'}},t('open'))),
+            h('a',{href:value?.canEdit && !value.paused ? guestEditorUrl(created.fileId) : created.href,
+              target:'_blank',rel:'noopener noreferrer',style:{...pairStyles.link,whiteSpace:'nowrap'}},t('open'))),
           h('iframe',{ref:frame,src:url.href,title:created.name,style:{width:'100%',flex:1,border:0,minHeight:0,background:'Canvas'}}))
       }
       if (!value || value.selectedFile !== selectedFile) return h('div', null, progress,
@@ -547,12 +554,15 @@ window.__ModuleLoader__.load({
       function openLinkedEditor() {
         const origin = serviceOrigin(value.origin)
         if (!origin || !uuid.test(preview.fileId)) return
-        const popup = window.open(origin + '/#/file/' + preview.fileId, '_blank')
+        const guest=value.canEdit===true
+        const popup = window.open(guest ? guestEditorUrl(preview.fileId) : origin + '/#/file/' + preview.fileId, '_blank')
+        if(guest&&popup)popup.opener=null
         setPopupBlocked(!popup)
-        if (popup) editorWindows.set({origin, popup, fileId: preview.fileId, automatic: selectedFile === preview.fileId})
+        if (popup&&!guest) editorWindows.set({origin, popup, fileId: preview.fileId, automatic: selectedFile === preview.fileId})
       }
       const receipt = created?.origin === value.origin && h('p', {role: 'status', style: textStyle},
-        t('created'), '：', h('a', {href: created.href, target: '_blank', rel: 'noopener noreferrer'}, created.name), ' ',
+        t('created'), '：', h('a', {href: value.canEdit && !paused ? guestEditorUrl(created.fileId) : created.href,
+          target: '_blank', rel: 'noopener noreferrer'}, created.name), ' ',
         h('button', {onClick: () => createdDocuments.set(null)}, t('dismiss')))
       const updateToken = h('button', {onClick: () => setUpdating(true)}, t('updateToken'))
       const createPermission = typeof canCreate === 'boolean' && !paused && h('p', null, t(canCreate ? 'canCreate' : 'cannotCreate'))
@@ -563,7 +573,8 @@ window.__ModuleLoader__.load({
         reviewState && h('p', {role:'status'}, t(reviewState)),
         h('header', {style: textStyle},
           h('strong', null, preview.name), ' · ',
-          h('a', {href, target: '_blank', rel: 'noopener noreferrer'}, t('open')),
+          h('a', {href: value.canEdit && !paused ? guestEditorUrl(preview.fileId) : href,
+            target: '_blank', rel: 'noopener noreferrer'}, t('open')),
           (preview.format === 'docx' || writing) && !editing && h('div',null,
             h('button',{onClick:openLinkedEditor},t('syncEdit')),
             (popupBlocked || created?.popupBlocked) && h('p',{role:'status',style:pairStyles.hint},t('syncBlocked')))),
@@ -755,7 +766,8 @@ window.__ModuleLoader__.load({
               const entries=collaboration.read()??new Map()
               const current=entries.get(fileId)??initialCollaboration(receipt,sessionId)
               const snapshot=preview?.fileId===fileId&&uuid.test(preview?.revision??'')?{revision:preview.revision,text:preview.text}:undefined
-              collaboration.set(new Map(entries).set(fileId,{...current,snapshot:current.snapshot??snapshot,topic:current.topic??writing?.topic,inlineChecked:true}))
+              collaboration.set(new Map(entries).set(fileId,{...current,snapshot:current.snapshot??snapshot,
+                topic:current.topic??writing?.topic,canEdit:payload?.canEdit===true,inlineChecked:true}))
             }
             void fetch(url,{signal:controller.signal,cache:'no-store'})
               .then(async response=>update(response.ok?await response.json():null)).catch(()=>update(null))
@@ -784,6 +796,7 @@ window.__ModuleLoader__.load({
             }
           },[fileId,remote,liveFrame])
           const external=useRef(null)
+          const canOpenGuest = entry?.canEdit && (entry.ended || (entry.inlineChecked && !entry.topic))
           const openWindow=()=>{
             const current=collaboration.read()?.get(fileId)??initialCollaboration(receipt,sessionId)
             if(current.ended || remote&&editor?.embedded&&opening){
@@ -839,7 +852,9 @@ window.__ModuleLoader__.load({
             h('header',null,h('span',{className:'dsh-office-filetype'},receipt.name.split('.').at(-1)?.toUpperCase()),
               h('div',{className:'dsh-office-name'},h('strong',{title:receipt.name},receipt.name),
                 revision&&h('small',{title:revision},t('revision'),' · ',revision.slice(0,8))),
-              h('button',{type:'button',onClick:openWindow},t('openWindow'),' ↗')),
+              canOpenGuest
+                ? h('a',{href:guestEditorUrl(fileId),target:'_blank',rel:'noopener noreferrer'},t('openWindow'),' ↗')
+                : h('button',{type:'button',onClick:openWindow},t('openWindow'),' ↗')),
             entry?.popupBlocked&&h('p',{role:'status',style:pairStyles.hint},t('syncBlocked')),
             h('div',{className:'dsh-office-grid'},
               h('div',{className:'dsh-office-canvas'},

@@ -49,10 +49,10 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
   })
   api.post<{Params:{id:string}}>(base+'/channels/:id/invitations',request=>{body(request,[]);return service.invite(owner(request),uuid(request.params.id))})
   api.post<{Params:{id:string}}>(base+'/channels/:id/dsh-token',{bodyLimit:1024},request=>{
-   const value=body(request,['expiresInMinutes','allowCreate'])
+   const value=body(request,['expiresInMinutes','allowCreate','allowEdit'])
    const token=owner(request)
-   if(value.allowCreate===true&&!files)throw Object.assign(Error('Document creation is unavailable'),{statusCode:503})
-   return service.issueDshToken(token,uuid(request.params.id),value.expiresInMinutes,value.allowCreate)
+   if((value.allowCreate===true||value.allowEdit===true)&&!files)throw Object.assign(Error('Document creation is unavailable'),{statusCode:503})
+   return service.issueDshToken(token,uuid(request.params.id),value.expiresInMinutes,value.allowCreate,value.allowEdit)
   })
   api.post<{Params:{id:string;memberId:string}}>(base+'/channels/:id/members/:memberId/dsh-token',{bodyLimit:1024},request=>{
    body(request,[]);return service.revealDshToken(owner(request),uuid(request.params.id),uuid(request.params.memberId))
@@ -104,6 +104,10 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
   if(files)api.post(base+'/member/documents',{bodyLimit:2048},request=>{
    const token=bearer(request),{format,title}=body(request,['format','title'])
    return service.createMemberDocument(token,files,{format,title})
+  })
+  if(files)api.post<{Params:{id:string}}>(base+'/member/documents/:id/edit-ticket',{bodyLimit:1024},request=>{
+   body(request,[])
+   return service.issueEditTicket(bearer(request),uuid(request.params.id),uniqueHeader(request,'x-dyoffice-document-preview'))
   })
   api.post<{Params:{id:string}}>(base+'/member/documents/:id/draft-sync',{bodyLimit:1024},request=>{
    const {origin,write}=body(request,['origin','write'])

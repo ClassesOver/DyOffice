@@ -82,7 +82,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   const registerDraftEditor=(handle:DocsEditorHandle|null)=>{draftEditor=handle?{serialize:()=>handle.serialize()}:null;registerEditor(handle)}
   const unsubscribe = host.subscribe(() => changed())
   let continuationRevision:()=>string|undefined=()=>undefined
-  const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision:()=>continuationRevision()},false,'docx',new Set([...DOCS_AGENT_TOOLS.map(tool=>tool.name),'read_attachment','read_knowledge_file','search_knowledge_base']))
+  const guest=new URLSearchParams(location.search).get('guest')==='1'
+  const assistantResult = guest?{assistant:undefined,failure:undefined}:await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision:()=>continuationRevision()},false,'docx',new Set([...DOCS_AGENT_TOOLS.map(tool=>tool.name),'read_attachment','read_knowledge_file','search_knowledge_base']))
   const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
@@ -92,7 +93,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   if (prefs.theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = prefs.theme
   setAuthorName(prefs.authorName ?? '')
-  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed?'unavailable':'joining'
+  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed||guest?'unavailable':'joining'
   let peerSaveTimer:ReturnType<typeof setTimeout>|undefined
   let checkingWriter=false,nextWriterCheck=0,reopenToSave=false, journalAhead=false, lastSynced=-1
   let syncedSavedRevision:string|undefined
@@ -117,7 +118,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     }catch{/* Another editor may have acquired the lease first. */}finally{checkingWriter=false}
   }
   function onCollabEditor(editor:Editor|null){
-    if(citationMode)return
+    if(citationMode||guest)return
     wordSync?.dispose();wordSync=undefined;clearTimeout(peerSaveTimer)
     syncedSavedRevision=undefined
     if(!editor||disposed||signed)return
@@ -152,7 +153,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     editor:()=>editorHandle?.analysis??null,receipt:()=>bridge.getReceipt(),
     save:check=>bridge.guardedSave(check,async()=>!!editorHandle&&await editorHandle.save()&&!editorHandle.isDirty()&&bridge.getState().nativeSaveOutcome==='accepted')})
   const unregisterAnalysis=assistant?.documents.register(analysisTarget)
-  const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
+  const assistantNotice = guest?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const copyLifetime = new AbortController()
   let naming = false, copyNotice: {message:string;failed:boolean} | undefined

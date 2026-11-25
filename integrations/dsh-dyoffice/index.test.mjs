@@ -12,7 +12,7 @@ test('registers /dyoffice as an input command for the supported Office formats',
     inject(){},
     commands:{register(definition){commands.push(definition)}},
   },{})
-  assert.deepEqual(inject,['commands','llm','skills','workingDirectory'])
+  assert.deepEqual(inject,['commands','llm','skills','workingDirectory','tools'])
   const command=commands.find(value=>value.name==='dyoffice')
   assert.ok(command)
   assert.equal(command.input.hint,'<word|xlsx|pptx|pdf> <instruction>')
@@ -52,7 +52,7 @@ test('the Word create command returns the link to the new document',async t=>{
         if(request.headers['x-dyoffice-document-preview']!==proof)return response.writeHead(403).end()
         return response.end(JSON.stringify({fileId:id,revision:id,text:'Test'}))
       }
-      response.end(JSON.stringify({conversationId:id,member:{membershipId:id},canCreate:true,fileId:null}))
+      response.end(JSON.stringify({conversationId:id,member:{membershipId:id},canCreate:true,fileId:id}))
       return
     }
     const chunks=[]
@@ -69,8 +69,13 @@ test('the Word create command returns the link to the new document',async t=>{
   const origin='http://127.0.0.1:'+server.address().port
   const memberFile=join(directory,'token.json')
   await writeFile(memberFile,JSON.stringify({origin,token:'example-token'}))
-  let command
-  apply({inject(){},tools:{register(){}},commands:{register(value){command=value}}},{memberFile})
+  let command, tool
+  apply({inject(){},tools:{register(value){tool=value}},commands:{register(value){command=value}}},{memberFile})
+  assert.equal(tool?.name,'dyoffice_document')
+  const current=await tool.execute({action:'open'},{signal:t.signal})
+  assert.equal(current.url,origin+'/#/file/'+id)
+  const opened=await tool.execute({action:'create',format:'docx',title:'demo'},{signal:t.signal})
+  assert.deepEqual(opened,{fileId:id,name:'demo.docx',url:origin+'/#/file/'+id})
   const result=await command.handler({rawInput:'word 创建空白文件 demo',signal:new AbortController().signal})
   assert.deepEqual(result,{kind:'success',text:'已创建 demo.docx\n'+origin+'/#/file/'+id})
   let handler
@@ -151,4 +156,54 @@ test('Word review uses the selected DSH model only for the confirmed saved revis
     assert.equal((await request('POST',reviewUrl)).status,200)
   } finally {finish()}
   assert.deepEqual((await preview()).review,{state:'ready',text:'补充活动负责人'})
+})
+
+test('natural language returns a DSH link and only an owner navigation requests an edit ticket',async t=>{
+ const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+ const createdId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+ const ticket='x'.repeat(43),proof='d'.repeat(64),requests=[]
+ let linkedFile=fileId
+ const directory=await mkdtemp(join(tmpdir(),'dsh-guest-'))
+ t.after(()=>rm(directory,{recursive:true,force:true}))
+ const server=createServer((request,response)=>{
+  assert.equal(request.headers.authorization,'Bearer sample-token')
+  if(request.method==='GET')return response.end(JSON.stringify({conversationId:fileId,member:{membershipId:fileId},fileId:linkedFile,canEdit:true}))
+  if(request.url.endsWith('/member/documents'))return response.end(JSON.stringify({fileId:createdId,name:'demo.docx',previewProof:proof}))
+  requests.push([request.url,request.headers['x-dyoffice-document-preview']])
+  response.end(JSON.stringify({ticket}))
+ })
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(()=>new Promise(resolve=>server.close(resolve)))
+ const origin='http://127.0.0.1:'+server.address().port,memberFile=join(directory,'token.json')
+ await writeFile(memberFile,JSON.stringify({origin,token:'sample-token'}))
+ let tool,handler
+ const ctx={get:()=>({getAdvertisedUrl:()=>origin+'/web/'}),commands:{register(){}},tools:{register:value=>{tool=value}},
+  inject:(_keys,callback)=>callback({effect:run=>run(),webServer:{register:value=>{handler=value.handler}}})}
+ apply(ctx,{memberFile})
+ const opened=await tool.execute({action:'open'},{signal:t.signal})
+ const created=await tool.execute({action:'create',format:'docx',title:'demo'},{signal:t.signal})
+ assert.equal(opened.url,origin+'/web/dyoffice-preview?edit='+fileId)
+ assert.equal(created.url,origin+'/web/dyoffice-preview?edit='+createdId)
+ linkedFile=null
+ apply(ctx,{memberFile})
+ assert.equal((await tool.execute({action:'open_recent'},{signal:t.signal})).url,created.url)
+ assert.deepEqual(requests,[])
+ const navigate=async(url,kind,site,destination='document')=>new Promise((resolve,reject)=>{
+  const response={writeHead(status,headers){this.result={status,headers}},end(body){resolve({...this.result,body})}}
+  handler({method:'GET',url,headers:{'sec-fetch-site':site,'sec-fetch-mode':'navigate','sec-fetch-dest':destination}},response,{principal:{kind}}).catch(reject)
+ })
+ assert.equal((await navigate(created.url,'guest','same-origin')).status,403)
+ assert.equal((await navigate(created.url,'owner','cross-site')).status,403)
+ assert.equal((await navigate(opened.url,'owner','same-origin')).status,403)
+ for(const [site,destination] of [['same-origin','iframe'],['none','document']]){
+  const landing=await navigate(created.url,'owner',site,destination)
+  assert.equal(landing.status,200)
+  assert.match(landing.headers['Content-Type'],/^text\/html/)
+  assert.ok(landing.body.includes('href="?edit='+createdId+'" target="_blank"'))
+ }
+ assert.deepEqual(requests,[])
+ const redirect=await navigate(created.url,'owner','same-origin')
+ assert.equal(redirect.status,303)
+ assert.equal(redirect.headers.Location,origin+'/dsh-edit#'+ticket)
+ assert.deepEqual(requests,[[`/api/v1/assistant-channels/member/documents/${createdId}/edit-ticket`,proof]])
 })

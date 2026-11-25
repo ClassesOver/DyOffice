@@ -23,7 +23,12 @@ export function officeSettings(config = {}, originOverride) {
 }
 
 export async function storeOfficeToken(token, originValue, config, signal) {
-  const {origin, memberFile} = officeSettings(config, originValue)
+  const pair = /^(https?:\/\/[^/?#]+)\/#dsh=([A-Za-z0-9_-]{1,2048})$/u.exec(token)
+  if (pair) {
+    originValue = pair[1]
+    token = pair[2]
+  }
+  const {origin, memberFile} = officeSettings(config, originValue || undefined)
   if (!origin) throw Object.assign(Error('Enter the DyOffice URL.'), {status: 400})
   if (!/^[A-Za-z0-9_-]{1,2048}$/.test(token)) throw Object.assign(Error('Invalid authorization token.'), {status: 400})
   const response = await fetch(origin + '/api/v1/assistant-channels/member', {
@@ -94,11 +99,14 @@ export async function connectOffice(signal, config) {
     fileId: identity.fileId,
     paused: identity.paused === true,
     canCreate: identity.canCreate,
+    canEdit: identity.canEdit === true,
     dshEditorOrigin: identity.dshEditorOrigin,
     dshEditorOrigins: identity.dshEditorOrigins,
     createDocument: body => request('/member/documents', body),
     createdPreview: (fileId, proof, after, head) => request('/member/documents/' + fileId + '/preview' + (head ? '?head=1' : after ? '?after=' + after : ''),
       undefined, {'X-DyOffice-Document-Preview': proof}),
+    editTicket: (fileId, proof) => request('/member/documents/' + fileId + '/edit-ticket', {},
+      proof && {'X-DyOffice-Document-Preview': proof}),
     draftSync: (fileId, proof, origin, write) => request('/member/documents/' + fileId + '/draft-sync', {origin, ...(write && {write: true})},
       {'X-DyOffice-Document-Preview': proof}),
     request: (path, body) => request(base + path, body),

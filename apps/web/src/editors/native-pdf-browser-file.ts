@@ -20,9 +20,9 @@ function hasSignatureMarker(bytes:Uint8Array){
 }
 
 /** Session-bound file grant for the desktop PDF renderer in a browser. */
-export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedRevision}:{fileId:string;fetchImpl?:typeof fetch;expectedRevision?:string|undefined}){
+export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedRevision,editorId}:{fileId:string;editorId?:string|undefined;fetchImpl?:typeof fetch;expectedRevision?:string|undefined}){
  const client=createLocalShellClient(fetchImpl),session=await client.bindSession()
- const host=createSessionFileHost({fetchImpl,expectedRevision})
+ const host=createSessionFileHost({fetchImpl,expectedRevision,...(editorId?{editorId}:{})})
  let disposed=false,pending=true,chunks:Promise<Uint8Array>|undefined
  let galleryAccount:[deploymentId:string,userId:string]|undefined
  const assertActive=()=>{if(disposed)throw Error('PDF file grant is closed')}
@@ -57,6 +57,7 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
   }
   const load=()=>host.readBytes(revision.fileId,current.revision)
   const writer=createNativePdfSave({
+   editGrantId:editorId,
    fileId:revision.fileId,path,request:session.request,
    getRevision:()=>current.revision,getPageCount:()=>pageCount,
    async onSaved(receipt){
@@ -230,6 +231,7 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
    replacePages:writer.replacePages,
    insertPdf:writer.insertPdf,
   },getPreferences:createPreferencesClient(session.request).getPreferences,username:async()=>{
+   if(editorId)return 'DSH'
    const {user}=await session.request<{user:{username:string;displayName?:string}}>('/api/v1/auth/me')
    return user.displayName||user.username
   },dispose(){

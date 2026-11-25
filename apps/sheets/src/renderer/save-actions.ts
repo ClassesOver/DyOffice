@@ -470,7 +470,10 @@ function canSaveInPlace(ctx: SaveContext, state: LazyWorkbookState): boolean {
     !ctx.externalLinkOps?.()?.broken.length &&
     externalLinkFormulaValueCount(state) === 0 &&
     j.cfDirty.size === 0 &&
-    structuralOps.length === 0 &&
+    // Sizes are absolute and can be replayed against the saved session.
+    // Defined names still require a split save when structural ops are present.
+    structuralOps.every((op) => op.kind === 'set-row-size' || op.kind === 'set-col-size') &&
+    (structuralOps.length === 0 || !j.definedNames.dirty) &&
     sheetOps.length === 0 &&
     visualAdditions.length === 0 &&
     cellImageAdditions.length === 0 &&

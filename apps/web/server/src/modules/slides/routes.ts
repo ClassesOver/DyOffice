@@ -1,3 +1,4 @@
+import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
 import { Readable } from 'node:stream'
 import { createBrotliCompress } from 'node:zlib'
 import { acceptsBrotli, fastBrotli, minCompressionBytes } from '../../../response-encoding.mjs'
@@ -37,10 +38,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
-      const token = cookies(request).session ?? ''
-      csrf.originCheck(request, true)
-      csrf.requireSession(request, token)
-      await sessions.authenticate(token)
+      await authenticateEditorFile(request,sessions,csrf,true)
     })
     api.addHook('onSend', async (request,reply,payload) => {
       if (request.routeOptions.url !== '/api/v1/files/:id/slides/open' || reply.statusCode !== 200 ||
@@ -53,7 +51,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     })
     function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T & {editorId:string;leaseEpoch:number}, signal: AbortSignal) => Promise<unknown>, bodyLimit = 4096, optionalKeys: string[] = []) {
       api.post(path, { bodyLimit, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: Object.keys(properties).filter(key=>key!=='fitWidthPx'&&!optionalKeys.includes(key)), properties } } }, async (request, reply) => {
-        return withDisconnect(request, reply, signal => operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T & {editorId:string;leaseEpoch:number}, signal))
+        return withDisconnect(request, reply, signal => operation(editorFileToken(request), (request.params as {id: string}).id, request.body as T & {editorId:string;leaseEpoch:number}, signal))
       })
     }
     function readRoute<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T & {editorId:string;leaseEpoch:number}, signal: AbortSignal) => Promise<unknown>) {
@@ -146,7 +144,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     // Current-draft download: binary, generation-fenced, never marks anything saved.
     for(const mode of ['export','recover'] as const)api.post('/api/v1/files/:id/slides/'+mode, { bodyLimit: 4096, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: ['revision','generation','editorId','leaseEpoch'], properties: {...revisionBody, generation: generationBody} } } }, async (request, reply) => {
       return withDisconnect(request, reply, async signal => {
-        const exported = await (mode==='recover'?slides.recoverDraft:slides.exportDraft)(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as {revision: string; generation: number; editorId:string; leaseEpoch:number}, signal)
+        const exported = await (mode==='recover'?slides.recoverDraft:slides.exportDraft)(editorFileToken(request), (request.params as {id: string}).id, request.body as {revision: string; generation: number; editorId:string; leaseEpoch:number}, signal)
         reply.header('Content-Type', 'application/octet-stream')
         reply.header('Content-Disposition', 'attachment; filename="draft.pptx"')
         reply.header('X-Slides-Generation', String(exported.generation))

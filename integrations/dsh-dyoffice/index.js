@@ -3,7 +3,7 @@ import {readFileSync,renameSync,rmSync,writeFileSync} from 'node:fs'
 import {setTimeout as delay} from 'node:timers/promises'
 import {activeStates, connectOffice, officeSettings,storeOfficeToken, route, uuid} from './office.js'
 
-export const inject = ['commands', 'llm', 'skills', 'workingDirectory']
+export const inject = ['commands', 'llm', 'skills', 'workingDirectory', 'tools']
 
 const maxSourceBytes = 10 * 1024 * 1024
 const previewLimit = 100
@@ -23,6 +23,9 @@ function createdPreviews(config) {
   } catch {/* A new profile has no saved previews. */}
   return {
     get:id=>previews.get(id),
+    latest(connectionKey) {
+      return [...previews].reverse().find(([, entry]) => entry.connectionKey === connectionKey)?.[0]
+    },
     set(fileId,entry){
       previews.set(fileId,entry)
       if(previews.size>previewLimit)previews.delete(previews.keys().next().value)
@@ -113,6 +116,37 @@ function createHandler(config, authorizationRequests, createdDocument, creations
     }
     if (peer?.principal.kind !== 'owner') return send(403, {error: 'forbidden'})
     const query = new URL(request.url, 'http://localhost').searchParams
+    if(request.method==='GET'&&query.has('edit')){
+      const fileId = query.get('edit')
+      const site = request.headers['sec-fetch-site']
+      const destination = request.headers['sec-fetch-dest']
+      if (!uuid.test(fileId ?? '') || request.headers['sec-fetch-mode'] !== 'navigate') {
+        return send(403, {error:'forbidden'})
+      }
+      // DSH can open chat links in a sidebar iframe. Open the editor in a new window from there.
+      if ((site === 'same-origin' && destination === 'iframe') || (site === 'none' && destination === 'document')) {
+        response.writeHead(200, {
+          'Content-Type':'text/html; charset=utf-8',
+          'Cache-Control':'no-store',
+          'Content-Security-Policy':"default-src 'none'; frame-ancestors 'self'; base-uri 'none'",
+          'Referrer-Policy':'no-referrer',
+          'X-Content-Type-Options':'nosniff',
+        })
+        return response.end(`<!doctype html><html lang="zh"><meta charset="utf-8"><title>DyOffice</title><p><a href="?edit=${fileId}" target="_blank" rel="noopener noreferrer">在新窗口编辑 DyOffice 文档</a></p></html>`)
+      }
+      if (site !== 'same-origin' || destination !== 'document') {
+        return send(403, {error:'forbidden'})
+      }
+      try {
+        const office=await connectOffice(AbortSignal.timeout(20000),config)
+        const created=createdDocument.get(fileId)
+        if(!office.canEdit||office.paused||(fileId!==office.fileId&&created?.connectionKey!==office.connectionKey))return send(403,{error:'edit_not_authorized'})
+        const {ticket}=await office.editTicket(fileId,fileId===office.fileId?undefined:created.proof)
+        if(!/^[A-Za-z0-9_-]{43}$/.test(ticket))throw Error('Invalid edit ticket')
+        response.writeHead(303,{'Location':office.origin+'/dsh-edit#'+ticket,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+        return response.end()
+      } catch(error){return send(error.status??502,{error:'edit_unavailable'})}
+    }
     if(request.method==='GET'&&query.has('snapshot')){
       const path=query.get('snapshot'),session=query.get('session')
       const extension=path?.match(/\.(docx|xlsx|pptx|pdf)$/iu)?.[1].toLowerCase()
@@ -211,7 +245,7 @@ function createHandler(config, authorizationRequests, createdDocument, creations
     response.once('close', () => abort.abort())
     try {
       const office = await connectOffice(abort.signal, config)
-      const connection = {origin: office.origin, paused: office.paused, canCreate: office.canCreate, dshEditorOrigin: office.dshEditorOrigin, dshEditorOrigins: office.dshEditorOrigins}
+      const connection = {origin: office.origin, paused: office.paused, canCreate: office.canCreate, canEdit: office.canEdit, dshEditorOrigin: office.dshEditorOrigin, dshEditorOrigins: office.dshEditorOrigins}
       if (query.has('connection')) return send(200, connection)
       const readPreview = request => request.catch(error => {
         if ([400, 403, 404].includes(error.status)) return null
@@ -223,7 +257,8 @@ function createHandler(config, authorizationRequests, createdDocument, creations
           ? readPreview(office.createdPreview(fileId, created.proof, after)) : Promise.resolve(null)
         if (inlinePreview) {
           const preview = await previewRequest
-          return send(200, {preview, ...(preview&&created?.writing&&{writing:{topic:created.writing.topic}})})
+          return send(200, {preview, canEdit: office.canEdit && !office.paused && created?.connectionKey === office.connectionKey,
+            ...(preview&&created?.writing&&{writing:{topic:created.writing.topic}})})
         }
         // Polled every 1-2 s: fetch the preview and the task list concurrently.
         const [preview, {tasks}] = await Promise.all([
@@ -254,6 +289,14 @@ export function apply(ctx, config) {
   const authorizationRequests = new Map()
   const creations = new Map()
   const createdDocument = createdPreviews(config)
+  const editLink=(office,fileId)=>{
+    if(!office.canEdit)return office.origin+'/#/file/'+fileId
+    const advertised=ctx.get?.('webApp')?.getAdvertisedUrl()
+    if(!advertised)throw Error('请在 DSH 网页中打开此文档。')
+    const root=new URL(advertised)
+    root.pathname=root.pathname.replace(/\/?$/,'/')
+    return new URL(route.slice(1)+'?edit='+fileId,root).href
+  }
   const ensureOffice = async (signal, agent) => {
     try {
       return await connectOffice(signal, config)
@@ -310,6 +353,52 @@ export function apply(ctx, config) {
       await delay(2000, undefined, {signal})
     }
   }
+  const createDocument = async (office, format, title, writing) => {
+    const document = await office.createDocument({format, title}).catch(error => {
+      if (error.status === 403) throw Error('创建未获授权或频道已暂停。请在 DyOffice 频道分享中允许创建新文档，再更新授权码。')
+      throw error
+    })
+    if (!uuid.test(document.fileId) || typeof document.name !== 'string') throw Error('DyOffice 未返回有效的文档链接。')
+    if (typeof document.previewProof === 'string' && digest.test(document.previewProof)) {
+      createdDocument.set(document.fileId, {format, proof: document.previewProof, connectionKey: office.connectionKey, writing:writing?.(document) ?? null})
+    }
+    return {fileId:document.fileId,name:document.name,url:office.origin+'/#/file/'+document.fileId}
+  }
+  ctx.tools?.register({
+    name: 'dyoffice_document',
+    description: 'Use for natural-language requests to open the current DyOffice channel document, reopen the last document created using the current authorization (open_recent), or create a new blank Word, Excel, PowerPoint, or PDF document in DyOffice. Return the editor link as a Markdown link the user can click. This tool does not write document contents. Never ask for an authorization code in chat; the plugin prompts privately.',
+    parameters: {type:'object',additionalProperties:false,required:['action'],properties:{
+      action: {type:'string', enum:['open','open_recent','create']},
+      format: {type:'string', enum:['docx','xlsx','pptx','pdf'], description:'Required for creating a blank document.'},
+      title: {type:'string', description:'Required for creating a blank document.'},
+    }},
+    output: {
+      schema: {type:'object', additionalProperties:false, required:['fileId','name','url'], properties:{
+        fileId:{type:'string'}, name:{type:'string'}, url:{type:'string'},
+      }},
+      render: (_args,value) => [{type:'text',text:JSON.stringify(value)}],
+    },
+    isConcurrencySafe: () => false,
+    timeoutMs: 330000,
+    async execute({action,format,title},{signal,agent}) {
+      if (action !== 'open' && action !== 'open_recent' && (action !== 'create' || !['docx','xlsx','pptx','pdf'].includes(format) || typeof title !== 'string' || !title.trim())) {
+        throw Error('请指定要创建的文档格式和标题。')
+      }
+      const office = await ensureOffice(signal,agent)
+      if (office.paused) throw Error('DyOffice 频道已暂停。')
+      if (action === 'create') {
+        const result=await createDocument(office,format,title.trim(),null)
+        return {...result,url:editLink(office,result.fileId)}
+      }
+      if (action === 'open_recent') {
+        const fileId = createdDocument.latest(office.connectionKey)
+        if (!fileId) throw Error('当前授权下还没有创建过文档。')
+        return {fileId,name:'最近创建的文档',url:editLink(office,fileId)}
+      }
+      if (!uuid.test(office.fileId)) throw Error('此频道还未绑定文档。可以打开最近创建的 DyOffice 文档，或新建文档。')
+      return {fileId:office.fileId,name:'频道文档',url:editLink(office,office.fileId)}
+    },
+  })
   ctx.inject(['webServer'], scope => {
     scope.effect(() => scope.webServer.register({
       kind: 'exact', path: route, auth: 'required',
@@ -343,16 +432,10 @@ export function apply(ctx, config) {
         if (command.title !== undefined) {
           const office = await ensureOffice(signal, agent)
           const format = command.format === 'word' ? 'docx' : command.format
-          const document = await office.createDocument({format, title: command.title}).catch(error => {
-            if (error.status === 403) throw Error('创建未获授权或频道已暂停。请在 DyOffice 频道分享中勾选“允许 DSH 在我的工作区创建新文档”，生成 Token 后到右侧栏更新凭据。')
-            throw error
-          })
-          if (!uuid.test(document.fileId)) throw Error('DyOffice 未返回有效的文档链接。')
-          if (typeof document.previewProof === 'string' && digest.test(document.previewProof)) {
-            const writing = command.writing ? {id:randomUUID(),topic:command.writing,baseRevision:document.baseRevision,selection:agent?.model?.current(),sessionId:session,...(skill&&{skill})} : null
-            createdDocument.set(document.fileId, {format, proof: document.previewProof, connectionKey: office.connectionKey, writing})
-          }
-          return {kind: 'success', text: `已创建 ${document.name}\n${office.origin}/#/file/${document.fileId}`}
+          const document = await createDocument(office,format,command.title,command.writing
+            ? saved => ({id:randomUUID(),topic:command.writing,baseRevision:saved.baseRevision,selection:agent?.model?.current(),sessionId:session,...(skill&&{skill})})
+            : null)
+          return {kind: 'success', text: `已创建 ${document.name}\n${document.url}`}
         }
         const result = await executeTask({instruction: command.instruction, signal, agent})
         return {

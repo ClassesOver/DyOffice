@@ -864,7 +864,12 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     null,
   )
   const [status, setStatus] = useState('')
-  const [zoom, setZoom] = useState(100)
+  const [zoom, setZoomValue] = useState(100)
+  const zoomFitMode = useRef<ZoomFitMode | null>(null)
+  const setZoom = useCallback((value: number | ((current: number) => number)) => {
+    zoomFitMode.current = null
+    setZoomValue(value)
+  }, [])
   const scrollContainerRef = useRef<HTMLElement>(null)
   /** bumps after every pagination pass: the canvas' page gaps are in place */
   const [layoutRev, setLayoutRev] = useState(0)
@@ -3537,16 +3542,6 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comments])
 
-  /** Uncapped width-fit ratio (%) from the scroller's measured size */
-  const rawFitWidth = useCallback(() => {
-    if (!section) return null
-    const scroller = document.querySelector('.editor-scroll')
-    if (!scroller) return null
-    return ((scroller.clientWidth - 48) / (twipsToPx(section.pageWidth) + markupExtra)) * 100
-  }, [section, markupExtra])
-
-  /** Last auto-fit: if current zoom still equals its value → "fit mode", re-fit on size changes */
-  const lastFitRef = useRef<{ mode: ZoomFitMode; value: number } | null>(null)
   const zoomLiveRef = useRef(zoom)
   useEffect(() => {
     zoomLiveRef.current = zoom
@@ -3557,7 +3552,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     (mode: ZoomFitMode): number | null => {
       if (!section) return null
       const scroller = document.querySelector('.editor-scroll')
-      if (!scroller) return null
+      if (!scroller?.clientWidth || !scroller.clientHeight) return null
       const pad = 48
       const wFit =
         ((scroller.clientWidth - pad) / (twipsToPx(section.pageWidth) + markupExtra)) * 100
@@ -3582,87 +3577,57 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   // through later zooming (a manual zoom-out alone keeps the single column);
   // One Page / Page Width / Text Width turn it off
   const [multipageMode, setMultipageMode] = useState(false)
-  /** fit without touching the arrangement: the resize follow-up / overflow clamp below */
+  /** Apply the selected fit without changing the page arrangement. */
   const refitZoom = useCallback(
     (mode: ZoomFitMode) => {
       const applied = fitZoomFor(mode)
       if (applied == null) return
-      lastFitRef.current = { mode, value: applied }
-      setZoom(applied)
+      setZoomValue(applied)
     },
     [fitZoomFor],
   )
   const zoomFit = useCallback(
     (mode: ZoomFitMode) => {
+      zoomFitMode.current = mode
       setMultipageMode(mode === 'multi')
       refitZoom(mode)
     },
     [refitZoom],
   )
 
-  // On scroller size changes (window/AI-dock/nav-pane toggles): follow with a
-  // re-fit while in fit mode, and clamp any manual zoom back down to width-fit
-  // whenever the page no longer fits horizontally — the canvas must never
-  // overflow the pane on a resize (same contract as the slides stage). A manual
-  // zoom smaller than fit is left alone.
+  // The assistant and navigation panes change the available width. Only an
+  // explicitly selected fit mode follows those changes.
   useEffect(() => {
     const el = document.querySelector('.editor-scroll')
     if (!doc || !el) return
-    let lastWidth = -1
     const ro = new ResizeObserver(() => {
-      const raw = rawFitWidth()
-      if (raw == null) return
-      const widthChanged = el.clientWidth !== lastWidth
-      lastWidth = el.clientWidth
-      const lf = lastFitRef.current
-      if (lf != null && Math.abs(zoomLiveRef.current - lf.value) <= 0.5) {
-        refitZoom(lf.mode) // fit mode: follow the container in the user's chosen fit
-        return
-      }
-      // The overflow test uses the uncapped ratio: a manual zoom that still
-      // fits (or is smaller than fit) is the user's choice and must be kept.
-      // A height-only change (a classic horizontal scrollbar appearing for the
-      // zoomed-in page) must not clamp a zoom the user just chose.
-      if (!widthChanged || zoomLiveRef.current <= raw + 0.5) return
-      refitZoom('width')
+      if (zoomFitMode.current) refitZoom(zoomFitMode.current)
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [doc, refitZoom, rawFitWidth])
-
-  // markup column appearing/disappearing changes the canvas width without a
-  // pane resize: apply the same follow/clamp rules as the ResizeObserver above
-  useEffect(() => {
-    if (!doc) return
-    const raw = rawFitWidth()
-    if (raw == null) return
-    const lf = lastFitRef.current
-    if (lf != null && Math.abs(zoomLiveRef.current - lf.value) <= 0.5) refitZoom(lf.mode)
-    else if (zoomLiveRef.current > raw + 0.5) refitZoom('width')
-  }, [doc, markupExtra, rawFitWidth, refitZoom])
+  }, [doc, refitZoom])
 
   // Read Mode opens at 1:1 — the same page size as the Page Preview — and the
   // user's zoom / fit mode is restored on exit (wheel zoom still works inside).
   // Layout effect: it must snapshot/restore before the ResizeObserver reacts to
   // the .read-mode chrome toggling (RO callbacks fire at layout time, after
-  // layout effects but before passive effects), or zoomFit would rewrite
-  // lastFitRef first; zoomLiveRef is synced here for the same reason.
+  // layout effects but before passive effects).
   const preReadZoomRef = useRef<{
     zoom: number
-    fit: { mode: ZoomFitMode; value: number } | null
+    fit: ZoomFitMode | null
   } | null>(null)
   useLayoutEffect(() => {
     if (readMode) {
-      preReadZoomRef.current = { zoom: zoomLiveRef.current, fit: lastFitRef.current }
-      lastFitRef.current = null
+      preReadZoomRef.current = { zoom: zoomLiveRef.current, fit: zoomFitMode.current }
+      zoomFitMode.current = null
       zoomLiveRef.current = 100
-      setZoom(100)
+      setZoomValue(100)
     } else if (preReadZoomRef.current) {
       const prev = preReadZoomRef.current
       preReadZoomRef.current = null
-      lastFitRef.current = prev.fit
+      zoomFitMode.current = prev.fit
       zoomLiveRef.current = prev.zoom
-      setZoom(prev.zoom)
+      setZoomValue(prev.zoom)
     }
   }, [readMode])
 

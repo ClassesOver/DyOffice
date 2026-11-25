@@ -3329,7 +3329,7 @@ export function App({
               sheet?: { id?: string; name?: string }
             }
           | undefined
-        if (params?.unitId !== `file-${state.file.sha256}`) return
+        if (params?.unitId !== state.unitId) return
         if (SHEET_LIFECYCLE_MUTATIONS.has(event.id)) {
           if (event.id === 'sheet.mutation.insert-sheet') {
             const { id, name } = params.sheet ?? {}
@@ -5565,6 +5565,7 @@ export function App({
     setPageBreakPreviewSheets(new Set())
     const state: LazyWorkbookState = {
       file: selected,
+      unitId: `file-${selected.sha256}`,
       generation: Date.now(),
       loadedRanges: new Map(),
       streamAliases: new Map(),

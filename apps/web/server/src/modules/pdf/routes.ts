@@ -1,3 +1,4 @@
+import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import { cookies, type createCsrfService } from '../auth/csrf.ts'
@@ -71,10 +72,7 @@ export function registerPdfRoutes(
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
-      const token = cookies(request).session ?? ''
-      csrf.originCheck(request, true)
-      csrf.requireSession(request, token)
-      await sessions.authenticate(token)
+      await authenticateEditorFile(request,sessions,csrf,true)
       if (binaryUpload(request.routeOptions.url)) await admission.admit(request, reply, { waitMs: 10_000 })
       if (request.routeOptions.url===signaturesQuery) await admission.admit(request,reply)
     })
@@ -89,7 +87,7 @@ export function registerPdfRoutes(
     },async(request,reply)=>{
       const {revision}=request.body as {revision:string}
       return withDisconnect(request,reply,signal=>admission.transfer(request,reply,()=>
-        pdf.querySignatures(cookies(request).session??'',(request.params as {id:string}).id,revision,signal)))
+        pdf.querySignatures(editorFileToken(request),(request.params as {id:string}).id,revision,signal)))
     })
 
     api.post('/api/v1/files/:id/pdf/ocr',{
@@ -100,7 +98,7 @@ export function registerPdfRoutes(
       }},
     },async(request,reply)=>{
       const {revision,png}=request.body as {revision:string;png:string}
-      return withDisconnect(request,reply,signal=>pdf.ocr(cookies(request).session??'',(request.params as {id:string}).id,revision,png,signal))
+      return withDisconnect(request,reply,signal=>pdf.ocr(editorFileToken(request),(request.params as {id:string}).id,revision,png,signal))
     })
 
     api.post(
@@ -119,7 +117,7 @@ export function registerPdfRoutes(
         },
       },
       async (request,reply) => {
-        const token = cookies(request).session ?? ''
+        const token = editorFileToken(request)
         const fileId = (request.params as { id: string }).id
         const { revision } = request.body as { revision: string }
         return withDisconnect(request,reply,signal=>pdf.inspect(token, fileId, revision,signal))
@@ -142,7 +140,7 @@ export function registerPdfRoutes(
         },
       },
       async (request,reply) => {
-        const token = cookies(request).session ?? ''
+        const token = editorFileToken(request)
         const fileId = (request.params as { id: string }).id
         return withDisconnect(request,reply,signal=>pdf.stageRotate(token, fileId, request.body as PdfUploadInput,signal))
       },
@@ -159,7 +157,7 @@ export function registerPdfRoutes(
           ]},
         },
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stagePageLayout(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfPageLayoutInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stagePageLayout(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfPageLayoutInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/split/uploads',{
       bodyLimit:4096,
@@ -169,7 +167,7 @@ export function registerPdfRoutes(
           pagesPerFile:{type:'integer',minimum:1,maximum:100},
         },
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageSplit(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfSplitInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageSplit(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfSplitInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/extract-pages/uploads',{
       bodyLimit:4096,
@@ -180,7 +178,7 @@ export function registerPdfRoutes(
           name:{type:'string',minLength:1,maxLength:255,pattern:'\\.[pP][dD][fF]$'},
         },
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageExtractPages(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfExtractPagesInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageExtractPages(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfExtractPagesInput,signal)))
 
     for(const staged of [false,true])api.post(
       '/api/v1/files/:id/pdf/page-ops'+(staged?'/uploads':''),
@@ -199,8 +197,8 @@ export function registerPdfRoutes(
         }},
       },
       async (request,reply)=>withDisconnect(request,reply,async signal=>staged
-        ?pdf.stagePageOps(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfPageOpsUploadInput,signal)
-        :pdf.pageOpsAndCommit(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfPageOpsUploadInput,signal)),
+        ?pdf.stagePageOps(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfPageOpsUploadInput,signal)
+        :pdf.pageOpsAndCommit(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfPageOpsUploadInput,signal)),
     )
 
     api.addSchema({$id:'pdf-image-content',type:'object',additionalProperties:false,required:['base64','mime'],properties:{base64:{type:'string',minLength:4,maxLength:Math.ceil(5*1024*1024/3)*4},mime:{enum:['image/png','image/jpeg']}}})
@@ -208,19 +206,19 @@ export function registerPdfRoutes(
     api.post('/api/v1/files/:id/pdf/image-previews/query',{
       bodyLimit:32768,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','operation'],
         properties:{revision:uuidSchema,operation:{type:'object'}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryImagePreview(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryImagePreview']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryImagePreview(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryImagePreview']>[2],signal)))
 
     api.post('/api/v1/files/:id/pdf/images/query',{
       bodyLimit:4096,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision'],properties:{revision:uuidSchema}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryImages(cookies(request).session??'',(request.params as {id:string}).id,request.body as {revision:string},signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryImages(editorFileToken(request),(request.params as {id:string}).id,request.body as {revision:string},signal)))
 
     const redactPatternsSchema={type:'array',minItems:1,maxItems:6,items:{enum:['phone','email','credit-card','ssn','date','iban']}}
     api.post('/api/v1/files/:id/pdf/redactions/query',{
       bodyLimit:4096,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision'],properties:{revision:uuidSchema,patterns:redactPatternsSchema}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryRedactions(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryRedactions']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryRedactions(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryRedactions']>[2],signal)))
     api.post('/api/v1/files/:id/pdf/redacted-copy/uploads',{
       bodyLimit:65536,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch'],oneOf:[{required:['ids']},{required:['regions'],not:{required:['patterns']}}],properties:{baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:mutationProperties.leaseEpoch,patterns:redactPatternsSchema,ids:{type:'array',minItems:1,maxItems:500,uniqueItems:true,items:{type:'string',pattern:'^[a-f0-9]{64}$'}},regions:{type:'array',minItems:1,maxItems:500,items:{type:'object',additionalProperties:false,required:['pageIndex','rect'],properties:{pageIndex:{type:'integer',minimum:0},rect:{type:'array',minItems:4,maxItems:4,items:{type:'number'}}}}},name:{type:'string',minLength:1,maxLength:255,pattern:'\\.[Pp][Dd][Ff]$'}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageRedactedCopy(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfRedactedCopyInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageRedactedCopy(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfRedactedCopyInput,signal)))
 
     api.addContentTypeParser('application/octet-stream',{parseAs:'buffer'},(_request,body,done)=>done(null,body))
     api.post('/api/v1/files/:id/pdf/replace-pages/uploads',{
@@ -231,7 +229,7 @@ export function registerPdfRoutes(
       let pages:number[];try{pages=JSON.parse(query.pages)}catch{throw Object.assign(Error('Bad Request'),{statusCode:400})}
       const leaseEpoch=Number(query.leaseEpoch)
       if(!Buffer.isBuffer(request.body)||!Number.isSafeInteger(leaseEpoch))throw Object.assign(Error('Bad Request'),{statusCode:400})
-      return pdf.stageReplacePages(cookies(request).session??'',(request.params as {id:string}).id,{...query,leaseEpoch,pages} as PdfReplacePagesInput,request.body,signal)
+      return pdf.stageReplacePages(editorFileToken(request),(request.params as {id:string}).id,{...query,leaseEpoch,pages} as PdfReplacePagesInput,request.body,signal)
     })))
 
     api.post('/api/v1/files/:id/pdf/insert-pages/uploads',{
@@ -242,7 +240,7 @@ export function registerPdfRoutes(
       const leaseEpoch=Number(query.leaseEpoch)
       const afterPageIndex=Number(query.afterPageIndex)
       if(!Buffer.isBuffer(request.body)||!Number.isSafeInteger(leaseEpoch)||!Number.isSafeInteger(afterPageIndex))throw Object.assign(Error('Bad Request'),{statusCode:400})
-      return pdf.stageReplacePages(cookies(request).session??'',(request.params as {id:string}).id,{baseRevision:query.baseRevision,editorId:query.editorId,leaseEpoch,idempotencyKey:query.idempotencyKey,afterPageIndex},request.body,signal)
+      return pdf.stageReplacePages(editorFileToken(request),(request.params as {id:string}).id,{baseRevision:query.baseRevision,editorId:query.editorId,leaseEpoch,idempotencyKey:query.idempotencyKey,afterPageIndex},request.body,signal)
     })))
 
     api.post('/api/v1/files/:id/pdf/stamps/uploads',{
@@ -251,7 +249,7 @@ export function registerPdfRoutes(
         {type:'object',additionalProperties:false,required:['op','text'],properties:{op:{const:'set_watermark'},text:{type:'string',maxLength:2000},angle:{type:'number',minimum:-180,maximum:180},opacity:{type:'number',minimum:0,maximum:1},size:{type:'number',minimum:.02,maximum:.5},color:{type:'string',pattern:'^#?[a-fA-F0-9]{6}$'}}},
         {type:'object',additionalProperties:false,required:['op'],properties:{op:{const:'set_header_footer'},header_left:{type:'string',maxLength:2000},header_center:{type:'string',maxLength:2000},header_right:{type:'string',maxLength:2000},footer_left:{type:'string',maxLength:2000},footer_center:{type:'string',maxLength:2000},footer_right:{type:'string',maxLength:2000},page_number:{type:'boolean'},start_at:{type:'integer',minimum:0,maximum:100000},font_size:{type:'number',minimum:4,maximum:72},color:{type:'string',pattern:'^#?[a-fA-F0-9]{6}$'}}},
       ]}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageStamps(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfStampsUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageStamps(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfStampsUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/image-bakes/uploads',{
       bodyLimit:65536,
@@ -261,7 +259,7 @@ export function registerPdfRoutes(
         {type:'object',additionalProperties:false,required:['op','page','image_number'],properties:{op:{const:'crop_image'},page:{type:'integer',minimum:1,maximum:100},image_number:{type:'integer',minimum:1,maximum:1000},left:{type:'number',minimum:0,exclusiveMaximum:1},top:{type:'number',minimum:0,exclusiveMaximum:1},right:{type:'number',minimum:0,exclusiveMaximum:1},bottom:{type:'number',minimum:0,exclusiveMaximum:1}}},
         {type:'object',additionalProperties:false,required:['op','page','image_number'],properties:{op:{const:'remove_image_background'},page:{type:'integer',minimum:1,maximum:100},image_number:{type:'integer',minimum:1,maximum:1000},tolerance:{type:'number',minimum:0,maximum:100}}},
       ]}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageImageBakes(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfImageBakesUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageImageBakes(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfImageBakesUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/image-content/uploads',{
       bodyLimit:7*1024*1024,
@@ -272,7 +270,7 @@ export function registerPdfRoutes(
           {type:'object',additionalProperties:false,required:['op','page','image_number','image'],properties:{op:{const:'replace_image'},page:{type:'integer',minimum:1,maximum:100},image_number:{type:'integer',minimum:1,maximum:1000},image:{$ref:'pdf-image-content#'}}},
         ]}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageImageContent(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfImageContentUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageImageContent(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfImageContentUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/image-edits/uploads',{
       bodyLimit:65536,
@@ -284,7 +282,7 @@ export function registerPdfRoutes(
           {type:'object',additionalProperties:false,required:['op','page','image_number'],properties:{op:{const:'delete_image'},page:{type:'integer',minimum:1,maximum:100},image_number:{type:'integer',minimum:1,maximum:1000}}},
         ]}}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageImageEdits(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfImageEditsUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageImageEdits(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfImageEditsUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/block-moves/uploads',{
       bodyLimit:131072,
@@ -294,7 +292,7 @@ export function registerPdfRoutes(
           type:'object',additionalProperties:false,required:['page','paragraph_text','dx','dy'],properties:{page:{type:'integer',minimum:1,maximum:100},paragraph_text:{type:'string',minLength:1,maxLength:2000},dx:{type:'number',minimum:-100000,maximum:100000},dy:{type:'number',minimum:-100000,maximum:100000}},
         }}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageBlockMoves(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfBlockMovesUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageBlockMoves(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfBlockMovesUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/block-edits/uploads',{
       bodyLimit:1048576,
@@ -307,7 +305,7 @@ export function registerPdfRoutes(
           },
         }}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageBlockEdits(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfBlockEditsUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageBlockEdits(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfBlockEditsUploadInput,signal)))
 
     const pendingImageTarget={page:{type:'integer',minimum:1,maximum:100},image_number:{type:'integer',minimum:1,maximum:1000}}
     const pendingImageEditSchema={oneOf:[
@@ -328,13 +326,13 @@ export function registerPdfRoutes(
     const pendingImageSchema={type:'object',additionalProperties:false,required:['page','image'],properties:{page:{type:'integer',minimum:1,maximum:100},image:{$ref:'pdf-image-content#'},anchor_text:{type:'string',maxLength:2000},placement:{enum:['above','below','left','right']},x:{type:'number',minimum:-100000,maximum:100000},y:{type:'number',minimum:-100000,maximum:100000},width:{type:'number',exclusiveMinimum:0,maximum:100000},height:{type:'number',exclusiveMinimum:0,maximum:100000},layer:{enum:['above_text','below_text']}}}
     api.post('/api/v1/files/:id/pdf/image-inserts/query',{
       bodyLimit:8*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','operation'],properties:{revision:uuidSchema,operation:pendingImageSchema,rotationDelta:{type:'integer',enum:[0,90,180,270]}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryImageInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryImageInserts']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryImageInserts(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryImageInserts']>[2],signal)))
     api.post('/api/v1/files/:id/pdf/draft-inserts/uploads',{
       bodyLimit:32*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','operation'],properties:{...mutationProperties,operation:{type:'object',additionalProperties:false,required:['texts','images'],properties:{texts:{type:'array',minItems:0,maxItems:20,items:textInsertItemSchema},images:{type:'array',maxItems:20,items:pendingImageSchema},imageEdits:{type:'array',maxItems:20,items:pendingImageEditSchema}}}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageDraftInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfDraftInsertsUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageDraftInserts(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfDraftInsertsUploadInput,signal)))
     api.post('/api/v1/files/:id/pdf/draft-inserts/query',{
       bodyLimit:32*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','operation'],properties:{revision:uuidSchema,operation:{type:'object',additionalProperties:false,required:['texts','images'],properties:{texts:{type:'array',minItems:0,maxItems:20,items:textInsertItemSchema},images:{type:'array',maxItems:20,items:pendingImageSchema},imageEdits:{type:'array',maxItems:20,items:pendingImageEditSchema}}}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryDraftInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryDraftInserts']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryDraftInserts(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryDraftInserts']>[2],signal)))
 
     api.post('/api/v1/files/:id/pdf/text-inserts/query',{
       bodyLimit:1048576,
@@ -342,7 +340,7 @@ export function registerPdfRoutes(
         type:'object',additionalProperties:false,required:['revision','operations'],
         properties:{revision:uuidSchema,rotationDeltas:{type:'array',minItems:1,maxItems:20,items:{type:'integer',enum:[0,90,180,270]}},operations:{type:'array',minItems:1,maxItems:20,items:textInsertItemSchema}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryTextInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryTextInserts']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryTextInserts(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryTextInserts']>[2],signal)))
 
     api.post('/api/v1/files/:id/pdf/text-inserts/uploads',{
       bodyLimit:1048576,
@@ -350,7 +348,7 @@ export function registerPdfRoutes(
         type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','operations'],
         properties:{...mutationProperties,operations:{type:'array',minItems:1,maxItems:20,items:textInsertItemSchema}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageTextInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfTextInsertsUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageTextInserts(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfTextInsertsUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/apply-ops/uploads',{
       bodyLimit:64*1024*1024,
@@ -360,19 +358,19 @@ export function registerPdfRoutes(
           snapshot:applyOpsSnapshotSchema,
         },
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageApplyOps(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfApplyOpsUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageApplyOps(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfApplyOpsUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/text-edits/query',{
       bodyLimit:256*1024,
       schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','edits'],properties:{
         revision:uuidSchema,edits:{...applyOpsSnapshotSchema.properties.textEdits,minItems:1},
       }}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryTextEdits(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryTextEdits']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryTextEdits(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryTextEdits']>[2],signal)))
 
     api.post('/api/v1/files/:id/pdf/apply-ops/query',{
       bodyLimit:64*1024*1024,
       schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','snapshot'],properties:{revision:uuidSchema,snapshot:applyOpsSnapshotSchema}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryApplyOps(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryApplyOps']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryApplyOps(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryApplyOps']>[2],signal)))
 
     api.post('/api/v1/files/:id/pdf/form-fields/uploads',{
       bodyLimit:1048576,
@@ -389,7 +387,7 @@ export function registerPdfRoutes(
           }},
         }}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageFormFields(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfFormFieldsUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageFormFields(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfFormFieldsUploadInput,signal)))
 
     api.post('/api/v1/files/:id/pdf/form-values/uploads',{
       bodyLimit:1048576,
@@ -402,7 +400,7 @@ export function registerPdfRoutes(
           }},
         }}},
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageFormValues(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfFormValuesUploadInput,signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageFormValues(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfFormValuesUploadInput,signal)))
 
     for(const staged of [false,true])api.post(
       '/api/v1/files/:id/pdf/update-notes'+(staged?'/uploads':''),
@@ -419,8 +417,8 @@ export function registerPdfRoutes(
         }},
       },
       async (request,reply)=>withDisconnect(request,reply,async signal=>staged
-        ?pdf.stageUpdateNotes(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfNoteUpdateUploadInput,signal)
-        :pdf.updateNotesAndCommit(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfNoteUpdateUploadInput,signal)),
+        ?pdf.stageUpdateNotes(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfNoteUpdateUploadInput,signal)
+        :pdf.updateNotesAndCommit(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfNoteUpdateUploadInput,signal)),
     )
 
     for(const staged of [false,true])api.post(
@@ -437,8 +435,8 @@ export function registerPdfRoutes(
         }},
       },
       async (request,reply)=>withDisconnect(request,reply,async signal=>staged
-        ?pdf.stageDeleteAnnotations(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfAnnotationDeleteUploadInput,signal)
-        :pdf.deleteAnnotationsAndCommit(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfAnnotationDeleteUploadInput,signal)),
+        ?pdf.stageDeleteAnnotations(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfAnnotationDeleteUploadInput,signal)
+        :pdf.deleteAnnotationsAndCommit(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfAnnotationDeleteUploadInput,signal)),
     )
 
     api.post('/api/v1/files/:id/pdf/annotations/query',{
@@ -453,7 +451,7 @@ export function registerPdfRoutes(
           }},
         },
       }},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryAnnotations(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryAnnotations']>[2],signal)))
+    },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryAnnotations(editorFileToken(request),(request.params as {id:string}).id,request.body as Parameters<PdfService['queryAnnotations']>[2],signal)))
 
     for(const staged of [false,true])api.post(
       '/api/v1/files/:id/pdf/annotate'+(staged?'/uploads':''),
@@ -470,8 +468,8 @@ export function registerPdfRoutes(
         }},
       },
       async (request,reply)=>withDisconnect(request,reply,async signal=>staged
-        ?pdf.stageAnnotate(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfAnnotationUploadInput,signal)
-        :pdf.annotateAndCommit(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfAnnotationUploadInput,signal)),
+        ?pdf.stageAnnotate(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfAnnotationUploadInput,signal)
+        :pdf.annotateAndCommit(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfAnnotationUploadInput,signal)),
     )
 
     for(const staged of [false,true])api.post(
@@ -496,8 +494,8 @@ export function registerPdfRoutes(
         },
       },
       async (request,reply)=>withDisconnect(request,reply,async signal=>staged
-        ?pdf.stageTextEdit(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfTextUploadInput,signal)
-        :pdf.editTextAndCommit(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfTextUploadInput,signal)),
+        ?pdf.stageTextEdit(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfTextUploadInput,signal)
+        :pdf.editTextAndCommit(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfTextUploadInput,signal)),
     )
 
     api.post(
@@ -516,7 +514,7 @@ export function registerPdfRoutes(
         },
       },
       async (request,reply) => {
-        const token = cookies(request).session ?? ''
+        const token = editorFileToken(request)
         const fileId = (request.params as { id: string }).id
         return withDisconnect(request,reply,signal=>pdf.rotateAndCommit(token, fileId, request.body as PdfUploadInput,signal))
       },

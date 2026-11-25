@@ -116,6 +116,33 @@ describe('capability-gated document creation',()=>{
 
 import {openCreatedDocument} from '../../src/shell/local-new-sheet'
 import {createDocumentTabs} from '../../src/shell/document-tabs'
+import {createAiDocCreationQueue} from '../../src/shell/ai-doc-creation'
+
+it('lets an AI Word result finish in its original tab when Excel and PowerPoint are selected first',async()=>{
+ const tabs=createDocumentTabs(),queue=createAiDocCreationQueue()
+ const body={title:'Report',html:'<p>Generated Word content</p>'}
+ const saved=queue.begin('word',body)
+ const receipt={fileId:'word',revision:'saved',sha256:'a'.repeat(64),size:100}
+ let resolveWord!:(value:unknown)=>void
+ const request=vi.fn((path:string)=>path==='/api/v1/files/word'?new Promise(resolve=>{resolveWord=resolve}):Promise.resolve(undefined))
+ const opening=openCreatedDocument(tabs,{docx:'editable'},'word',request as any,{mountInBackground:true})
+ tabs.open({id:'slides',name:'Presentation.pptx',format:'pptx',src:'/native-pptx/?fileId=slides'})
+ tabs.open({id:'sheets',name:'Workbook.xlsx',format:'xlsx',src:'/native-xlsx/?fileId=sheets'})
+ tabs.activate('slides')
+ resolveWord({name:'Report.docx',format:'docx',file:{fileId:'word',revision:'blank'},downloadEndpoint:'/api/v1/files/word/content?revision=blank'})
+ try{
+  await opening
+  expect(tabs.list().find(tab=>tab.active)?.id).toBe('slides')
+  expect(tabs.renderedDocuments().map(file=>file.id)).toEqual(['slides','sheets','word'])
+  expect(queue.consume('word')).toEqual(body)
+  queue.complete('word',{ok:true,revision:receipt})
+  await expect(saved).resolves.toEqual(receipt)
+  tabs.activate('sheets');tabs.activate('word')
+  expect(tabs.list().filter(tab=>tab.kind==='docs')).toEqual([{id:'word',kind:'docs',title:'Report.docx',closable:true,active:true}])
+  expect(tabs.renderedDocuments().filter(file=>file.id==='word').map(file=>file.src)).toEqual(['/native-docx/?fileId=word'])
+ }finally{queue.complete('word',{ok:false,error:'Test ended'})}
+})
+
 it('uses the bound #159 reader and does not let a late created-file read steal newer selection',async()=>{
  const tabs=createDocumentTabs();let resolve!:(v:unknown)=>void
  const request=vi.fn((path:string)=>path==='/api/v1/files/new'?new Promise(r=>{resolve=r}):Promise.resolve(undefined))

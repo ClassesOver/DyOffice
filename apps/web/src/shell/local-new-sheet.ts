@@ -60,8 +60,8 @@ export function createLocalNewPdf(deps:LocalNewDeps){
 }
 
 /** Reuse entry validation and navigation tokens without replacing the issuing session. */
-export async function openCreatedDocument(tabs:ReturnType<typeof createDocumentTabs>,capabilities:Record<string,string>,id:string,request:Request){
+export async function openCreatedDocument(tabs:ReturnType<typeof createDocumentTabs>,capabilities:Record<string,string>,id:string,request:Request,options?:{mountInBackground:boolean}){
  const token=tabs.reserveOpen(id)
  const document=await readOpenDocument({bound:{request}},capabilities,id)
- tabs.open(document,token)
+ tabs.open(document,token,options)
 }

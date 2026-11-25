@@ -126,6 +126,23 @@ export function screenToFile(
   return position
 }
 
+/// A resize owns the live height, even when a later insert or move relocated
+/// the row. Walk backwards so each resize is checked in its original space.
+export function hasLocalRowHeight(ops: readonly StructuralOp[], row: number): boolean {
+  let position = row
+  for (let index = ops.length - 1; index >= 0; index -= 1) {
+    const op = ops[index]
+    if (!op) continue
+    if (op.kind === 'set-row-size' && position >= op.start && position <= op.end) return true
+    if ('index' in op && axisOf(op) === 'row') {
+      const previous = screenToFile([op], 'row', position)
+      if (previous === null) return false
+      position = previous
+    }
+  }
+  return false
+}
+
 /// Screen position of a file line, falling back to the nearest earlier
 /// surviving line when it was deleted this session. Positional by design:
 /// inserts or deletes past the line must not move it (Ctrl+End's used-range

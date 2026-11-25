@@ -14,7 +14,7 @@ export function AssistantChannelsPage({request,onOpenDocument,initialChannelId}:
  const history=useRef<HTMLDetailsElement>(null),revealSequence=useRef(0),tokenInput=useRef<HTMLInputElement>(null)
  const clearToken=()=>{revealSequence.current++;setDshToken(null);setCopied(false)}
  const [codeMinutes,setCodeMinutes]=useState(defaultDshTokenExpiryMinutes)
- const [allowCreate,setAllowCreate]=useState(false)
+ const [allowCreate,setAllowCreate]=useState(false),[allowEdit,setAllowEdit]=useState(false)
  const [files,setFiles]=useState<{id:string;name:string}[]>([]),[fileId,setFileId]=useState('')
  const [mobileDetail,setMobileDetail]=useState(!!initialChannelId),[listLoading,setListLoading]=useState(true)
  const channelList=useRef<HTMLElement>(null),channelDetail=useRef<HTMLElement>(null),returningToList=useRef(false)
@@ -66,6 +66,7 @@ export function AssistantChannelsPage({request,onOpenDocument,initialChannelId}:
   <label className="background-service-address">DSH 授权 Token<input ref={tokenInput} readOnly value={visibleToken.memberToken} onFocus={event=>event.currentTarget.select()}/></label>
   <p>有效至 <time dateTime={visibleToken.expiresAt}>{new Date(visibleToken.expiresAt).toLocaleString()}</time>。Token 同时受签发者登录会话有效期约束。</p>
   <div className="background-actions">
+   <button type="button" disabled={busy} onClick={()=>void perform(async()=>{await navigator.clipboard.writeText(location.origin+'/#dsh='+visibleToken.memberToken)})}>复制 DSH 插件授权码</button>
    <button type="button" disabled={busy} onClick={()=>void perform(async()=>{await navigator.clipboard.writeText(visibleToken.memberToken);if(alive.current&&currentRequest.current===request&&currentSelected.current===selected)setCopied(true)})}>{copied?'已复制授权 Token':'复制授权 Token'}</button>
    <button type="button" onClick={()=>{clearToken();if(visibleToken.fromHistory)history.current?.querySelector<HTMLButtonElement>('[data-reveal-id="'+visibleToken.membershipId+'"]')?.focus()}}>隐藏授权码</button>
   </div>
@@ -110,8 +111,9 @@ export function AssistantChannelsPage({request,onOpenDocument,initialChannelId}:
      </select>
     </label>
     <label><input type="checkbox" checked={allowCreate} disabled={busy} onChange={event=>setAllowCreate(event.target.checked)}/> 允许 DSH 在我的工作区创建新文档</label>
-    <button disabled={busy||(!allowCreate&&(!snapshot.backgroundEnabled||snapshot.backgroundAvailable===false))} onClick={()=>void perform(async()=>{
-     const {memberToken,expiresAt,membershipId}=await request<{memberToken:string;expiresAt:string;membershipId:string}>(base+'/channels/'+selected+'/dsh-token','POST',{expiresInMinutes:codeMinutes,allowCreate})
+    <label><input type="checkbox" checked={allowEdit} disabled={busy} onChange={event=>setAllowEdit(event.target.checked)}/> 允许在 DSH 中免登录编辑文档</label>
+    <button disabled={busy||(!allowCreate&&!(allowEdit&&snapshot.fileId)&&(!snapshot.backgroundEnabled||snapshot.backgroundAvailable===false))} onClick={()=>void perform(async()=>{
+     const {memberToken,expiresAt,membershipId}=await request<{memberToken:string;expiresAt:string;membershipId:string}>(base+'/channels/'+selected+'/dsh-token','POST',{expiresInMinutes:codeMinutes,allowCreate,allowEdit})
      if(alive.current&&currentRequest.current===request&&currentSelected.current===selected){setDshToken({channelId:selected,membershipId,memberToken,expiresAt});setCopied(false);await refresh(selected)}
     })}>生成 DSH 授权 Token</button>
    </div>}

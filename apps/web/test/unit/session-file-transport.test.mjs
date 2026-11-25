@@ -211,6 +211,25 @@ test('403 proof refresh retries once, network and 5xx never retry', async (t) =>
     assert.equal(tries, 1)
   }
 })
+test('a temporarily failed renewal keeps only the existing confirmed lease until expiry or rejection', async (t) => {
+  for (const failure of [429, 503, 'network']) {
+    let response = failure
+    const f = fixture(t, (path) => {
+      if (!path.endsWith('/renew')) return
+      if (response === 'network') throw TypeError('network unavailable')
+      return json({}, response)
+    })
+    await f.host.open(f.fileId)
+    const lease = await f.host.acquireLease(f.fileId)
+    await assert.rejects(f.host.renewLease(f.fileId))
+    assert.deepEqual(f.host.getState(f.fileId).lease, lease)
+    assert.equal(f.host.getState(f.fileId).status, 'idle')
+    response = 409
+    await assert.rejects(f.host.renewLease(f.fileId), { code: 'CONFLICT' })
+    assert.equal(f.host.getState(f.fileId).lease, null)
+    assert.equal(f.host.getState(f.fileId).status, 'conflict')
+  }
+})
 test('strict JSON MIME and UTF8 reject invalid responses', async (t) => {
   for (const mode of ['mime', 'utf8']) {
     const f = fixture(t, (path) =>
