@@ -31,22 +31,33 @@ test('session BrowserHost verifies UUID revisions and commits new bytes using it
   t.after(() => reader.dispose())
   assert.deepEqual(Buffer.from(await reader.readBytes(f.fileId,f.initial.revision)),f.original)
 })
-test('lost commit response is reconciled with the same request before another write can start', async t => {
-  let drop = true, commits = []
+test('a rate-limited confirmation still recovers a lost commit response without creating another revision', async t => {
+  const commits = []
   const f = await fixture(t, real => async (path, init) => {
+    if (!path.endsWith('/commits')) return real(path,init)
+    commits.push(JSON.parse(init.body))
+    if (commits.length === 2) {
+      return Response.json({}, { status: 429, headers: { 'retry-after': '1' } })
+    }
     const reply = await real(path,init)
-    if (path.endsWith('/commits')) {
-      commits.push(JSON.parse(init.body))
-      if (drop) { drop = false; await reply.arrayBuffer(); throw new TypeError('controlled lost response') }
+    if (commits.length === 1 && reply.ok) {
+      await reply.arrayBuffer()
+      throw new TypeError('controlled lost response')
     }
     return reply
   })
   const bytes = await changed(f.original,'lost receipt')
   await assert.rejects(() => f.host.save(f.fileId,bytes), { code: 'UNAVAILABLE' })
   assert.equal(f.host.getState(f.fileId).status,'unknown')
+  const persisted = (await f.files.openFile(f.alice.token,f.fileId)).file
+  assert.notEqual(persisted.revision,f.initial.revision)
+  await assert.rejects(() => f.host.reconcile(f.fileId), { status: 429 })
+  assert.equal(f.host.getState(f.fileId).status,'unknown')
+  assert.ok(f.host.getState(f.fileId).lease)
   const recovered = await f.host.reconcile(f.fileId)
-  assert.deepEqual(commits[1],commits[0])
-  assert.equal((await f.files.openFile(f.alice.token,f.fileId)).file.revision,recovered.revision)
+  assert.deepEqual(recovered,persisted)
+  assert.equal(f.host.getState(f.fileId).status,'idle')
+  assert.deepEqual(commits,[commits[0],commits[0],commits[0]])
   assert.equal((await f.transactions.withPrincipalTransaction({ kind: 'session', token: f.alice.token },connection => connection.query('SELECT * FROM revision_commits'))).rowCount,1)
 })
 test('a second editor must take over and the old BrowserHost preserves its conflicted base', async t => {

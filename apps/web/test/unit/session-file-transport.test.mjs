@@ -371,6 +371,24 @@ test('a genuine unknown keeps its originating fence across default reconcile and
  assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,2)
 })
 
+test('a rate-limited first commit can be retried with the same staged upload', async t => {
+  let limited = true
+  const f = fixture(t, path => {
+    if (path.endsWith('/commits') && limited) return json({}, 429)
+  })
+  await f.host.open(f.fileId)
+  await f.host.acquireLease(f.fileId)
+  await assert.rejects(f.host.save(f.fileId, f.bytes), { status: 429 })
+  assert.equal(f.host.getState(f.fileId).status, 'unknown')
+  limited = false
+  const saved = await f.host.reconcile(f.fileId)
+  assert.notEqual(saved.revision, f.ref.revision)
+  assert.equal(f.host.getState(f.fileId).status, 'idle')
+  const commits = f.calls.filter(call => call.path.endsWith('/commits'))
+  assert.equal(commits.length, 2)
+  assert.deepEqual(JSON.parse(commits[1].init.body), JSON.parse(commits[0].init.body))
+})
+
 test('an in-flight commit cannot be reconciled concurrently and erase a later save', async t => {
   let entered, release
   const started = new Promise(resolve => { entered = resolve })
