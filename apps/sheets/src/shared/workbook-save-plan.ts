@@ -1,5 +1,9 @@
 import type { WorkbookSaveRequest } from './desktop-api'
-import type { CellEdit, SheetStructuralOps } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
+import type {
+  CellEdit,
+  SheetHyperlinkEdits,
+  SheetStructuralOps,
+} from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import type { SheetEditPlan } from '@genoffice/xlsx-gateway/gateway/xlsx-sheets'
 import type { StreamingSaveRequest } from '@genoffice/xlsx-gateway/gateway/xlsx-package-io'
 
@@ -50,6 +54,11 @@ export function mapWorkbookSaveRequest(
     const sheetName = addedSheetNames.get(sheetId) ?? sheetNames.get(sheetId)
     if (!sheetName) throw new Error(`Unknown worksheet ${sheetId}.`)
     return sheetName
+  }
+  const resolveAddedSheetName = (sheetId: string): string => {
+    const name = addedSheetNames.get(sheetId)
+    if (name === undefined) throw new Error(`Worksheet ${sheetId} is not being added in this save.`)
+    return name
   }
   let sheetPlan: SheetEditPlan | undefined
   if (request.sheetOps.some((op) => op.kind !== 'set-sheet-tab-color')) {
@@ -128,11 +137,16 @@ export function mapWorkbookSaveRequest(
     hiddenRows: state.hiddenRows,
     visibilityRange: state.visibilityRange,
   }))
-  const linksBySheet = new Map<string, { row: number; column: number; target: string | null }[]>()
-  for (const link of request.hyperlinkEdits) {
-    const sheetName = resolveSheetName(link.sheetId)
+  const linksBySheet = new Map<string, SheetHyperlinkEdits['edits'][number][]>()
+  for (const { sheetId, targetAddedSheetId, ...link } of request.hyperlinkEdits) {
+    const sheetName = resolveSheetName(sheetId)
     const sheetLinks = linksBySheet.get(sheetName) ?? []
-    sheetLinks.push({ row: link.row, column: link.column, target: link.target })
+    sheetLinks.push({
+      ...link,
+      ...(targetAddedSheetId === undefined
+        ? {}
+        : { targetAddedSheetName: resolveAddedSheetName(targetAddedSheetId) }),
+    })
     linksBySheet.set(sheetName, sheetLinks)
   }
   const hyperlinkEdits = [...linksBySheet].map(([sheetName, links]) => ({
@@ -220,9 +234,15 @@ export function mapWorkbookSaveRequest(
     colHiddenItems: pivot.colHiddenItems,
     values: pivot.values,
   }))
-  const sparklineAdditions = request.sparklineAdditions.map(({ sheetId, ...group }) => ({
+  const sparklineAdditions = request.sparklineAdditions.map(({ sheetId, cells, ...group }) => ({
     sheetName: resolveSheetName(sheetId),
     ...group,
+    cells: cells.map(({ sourceAddedSheetId, ...cell }) => ({
+      ...cell,
+      ...(sourceAddedSheetId === undefined
+        ? {}
+        : { sourceAddedSheetName: resolveAddedSheetName(sourceAddedSheetId) }),
+    })),
   }))
   // Slicer panels: same sheetId → sheet name mapping as the other
   // additions; part paths stay package-absolute.

@@ -301,6 +301,24 @@ const WORKBOOK =
   '</sheets></workbook>'
 
 describe('applyPrintAreas', () => {
+  it('clears deleted title rows while retaining the existing title columns', () => {
+    const original = applyPrintAreas(WORKBOOK, [{ sheetName: 'Sheet1', printTitles: 'A:B,2:3' }])
+    const updated = applyPrintAreas(original, [{ sheetName: 'Sheet1', clearPrintTitleRows: true }])
+    expect(updated).toContain("'Sheet1'!$A:$B</definedName>")
+    expect(updated).not.toContain('$2:$3')
+  })
+
+  it('keeps title columns encoded in a CDATA print name when clearing rows', () => {
+    const original = WORKBOOK.replace(
+      '</workbook>',
+      '<definedNames>' +
+        '<definedName name="_xlnm.Print_Titles" localSheetId="0"><![CDATA[\'Sheet1\'!$2:$3,\'Sheet1\'!$A:$B]]></definedName>' +
+        '</definedNames></workbook>',
+    )
+    const updated = applyPrintAreas(original, [{ sheetName: 'Sheet1', clearPrintTitleRows: true }])
+    expect(updated).toContain("'Sheet1'!$A:$B</definedName>")
+  })
+
   it('creates the sheet-scoped _xlnm.Print_Area with absolute references', () => {
     const xml = applyPrintAreas(WORKBOOK, [{ sheetName: 'Sheet1', printArea: 'A1:C10' }])
     expect(xml).toContain(

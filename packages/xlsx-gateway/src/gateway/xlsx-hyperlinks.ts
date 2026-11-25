@@ -14,6 +14,8 @@ export interface HyperlinkEdit {
   /// '#Sheet!A1' = internal anchor (leading '#' stripped into `location`);
   /// anything else = external URL; null removes the link.
   readonly target: string | null
+  /// An added sheet that takes a renamed sheet's former name in this save.
+  readonly targetAddedSheetName?: string
 }
 
 export interface HyperlinkPatch {

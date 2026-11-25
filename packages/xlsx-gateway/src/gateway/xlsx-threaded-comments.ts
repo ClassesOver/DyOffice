@@ -13,7 +13,7 @@ export const THREADED_COMMENTS_REL_TYPE =
 const PERSONS_REL_TYPE = 'http://schemas.microsoft.com/office/2017/10/relationships/person'
 const THREADED_COMMENTS_CONTENT_TYPE = 'application/vnd.ms-excel.threadedcomments+xml'
 const PERSONS_CONTENT_TYPE = 'application/vnd.ms-excel.person+xml'
-const THREADED_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments'
+export const THREADED_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments'
 const WORKBOOK_PATH = 'xl/workbook.xml'
 const WORKBOOK_RELS_PATH = 'xl/_rels/workbook.xml.rels'
 const DEFAULT_PERSONS_PATH = 'xl/persons/person.xml'
@@ -61,6 +61,7 @@ interface ThreadedPackage {
   write(path: string, content: string): void
   add(path: string, content: string): void
   remove(path: string): void
+  removedPaths?(): readonly string[]
 }
 
 interface ThreadEntry {
@@ -164,24 +165,40 @@ export function parseLegacyComments(commentsXml: string): Map<string, LegacyComm
 }
 
 function parseThreads(xml: string): Map<string, ThreadEntry[]> {
-  const threads = new Map<string, ThreadEntry[]>()
+  const entries: Array<ThreadEntry & { readonly ref: string | null }> = []
   for (const match of xml.matchAll(
     /<([\w.-]+:)?threadedComment(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/\1threadedComment\s*>)/g,
   )) {
     const attrs = match[2]!
-    const ref = attribute(attrs, 'ref')
-    if (ref === null) continue
     const textMatch = THREAD_TEXT.exec(match[3] ?? '')
     const done = attribute(attrs, 'done')
-    const entry: ThreadEntry = {
+    entries.push({
       raw: match[0],
+      ref: attribute(attrs, 'ref'),
       id: attribute(attrs, 'id') ?? '',
       personId: attribute(attrs, 'personId') ?? '',
       dT: attribute(attrs, 'dT') ?? '',
       done: done === '1' || done === 'true',
       parentId: attribute(attrs, 'parentId'),
       text: xmlText(textMatch?.[3] ?? ''),
+    })
+  }
+  const entriesById = new Map(entries.map((entry) => [entry.id.toUpperCase(), entry]))
+  const threads = new Map<string, ThreadEntry[]>()
+  for (const entry of entries) {
+    // A reply can omit ref and inherit its parent's cell.
+    let { ref, parentId } = entry
+    const seen = new Set<string>()
+    while (ref === null && parentId) {
+      const key = parentId.toUpperCase()
+      if (seen.has(key)) break
+      seen.add(key)
+      const parent = entriesById.get(key)
+      if (!parent) break
+      ref = parent.ref
+      parentId = parent.parentId
     }
+    if (ref === null) continue
     const list = threads.get(ref)
     if (list) list.push(entry)
     else threads.set(ref, [entry])
@@ -393,9 +410,10 @@ function replaceEntryText(raw: string, text: string): string {
 }
 
 async function nextFreeThreadPath(pkg: ThreadedPackage): Promise<string> {
+  const removed = new Set(pkg.removedPaths?.())
   for (let index = 1; index < 10_000; index += 1) {
     const candidate = `xl/threadedComments/threadedComment${index}.xml`
-    if (!(await pkg.has(candidate))) return candidate
+    if (!removed.has(candidate) && !(await pkg.has(candidate))) return candidate
   }
   throw new Error('No free part name for the threaded comments part.')
 }

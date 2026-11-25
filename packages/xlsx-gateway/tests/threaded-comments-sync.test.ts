@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import JSZip from 'jszip'
 
+import { createBufferEntrySource, planCellEditsToXlsx } from '../src/gateway/xlsx-gateway'
 import { applySheetNotes, type SheetNote } from '../src/gateway/xlsx-notes'
+import type { StructuralOp } from '../src/gateway/xlsx-structure'
 import { personIdFor, threadedMirrorText } from '../src/gateway/xlsx-threaded-comments'
 
 const SHEET_PATH = 'xl/worksheets/sheet1.xml'
@@ -102,6 +105,148 @@ async function run(notes: readonly SheetNote[]) {
   await applySheetNotes(pkgOf(files), SHEET_PATH, notes, touched)
   return { files, touched }
 }
+
+const LEGACY_PATH = 'xl/comments1.xml'
+const THREAD_PATH = 'xl/threadedComments/threadedComment1.xml'
+const VML_PATH = 'xl/drawings/vmlDrawing1.vml'
+const HEADER_VML_PATH = 'xl/drawings/header.vml'
+const SHEET_RELS_PATH = 'xl/worksheets/_rels/sheet1.xml.rels'
+const CONTROL =
+  '<m:shape id="control"><e:ClientData ObjectType="Button"><e:Anchor>1, 0, 1, 0, 2, 0, 2, 0</e:Anchor></e:ClientData></m:shape>'
+const NOTE_SHAPE =
+  '<m:shape id="note"><m:fill o:relid="rId1" type="frame"/><e:ClientData ObjectType="Note"><e:Anchor>1, 15, 0, 2, 4, 15, 4, 2</e:Anchor><e:Row>0</e:Row><e:Column>0</e:Column></e:ClientData></m:shape>'
+const HEADER_VML = '<xml xmlns:m="urn:schemas-microsoft-com:vml"><m:shape id="header"/></xml>'
+const MEDIA_PATH = 'xl/media/note.png'
+const IMAGE_RELS_PATH = 'xl/drawings/_rels/vmlDrawing1.vml.rels'
+
+async function planAnnotationShift(ops: StructuralOp[], notes?: readonly SheetNote[]) {
+  const parts = fixture()
+  const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  parts.set(
+    'xl/workbook.xml',
+    `<workbook xmlns="${main}" xmlns:r="${office}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+  )
+  parts.set(
+    'xl/_rels/workbook.xml.rels',
+    parts
+      .get('xl/_rels/workbook.xml.rels')!
+      .replace(
+        '</Relationships>',
+        `<Relationship Id="rId1" Type="${office}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+      ),
+  )
+  parts.set(
+    SHEET_PATH,
+    `<worksheet xmlns="${main}" xmlns:links="${office}"><sheetData><row r="1"><c r="A1"><v>5</v></c></row></sheetData><legacyDrawing links:id='rId2'/><legacyDrawingHF links:id='rId4'/></worksheet>`,
+  )
+  parts.set(
+    SHEET_RELS_PATH,
+    parts
+      .get(SHEET_RELS_PATH)!
+      .replace(
+        /<Relationship /,
+        `<Relationship Id="rId4" Type="${office}/vmlDrawing" Target="../drawings/header.vml"/><Relationship `,
+      ),
+  )
+  parts.set(HEADER_VML_PATH, HEADER_VML)
+  parts.set(
+    VML_PATH,
+    `<xml xmlns:m="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:e="urn:schemas-microsoft-com:office:excel">${NOTE_SHAPE}${CONTROL}</xml>`,
+  )
+  parts.set(
+    IMAGE_RELS_PATH,
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${office}/image" Target="../media/note.png"/></Relationships>`,
+  )
+  // A producer may omit a reply's ref and anchor it through its parent.
+  parts.set(
+    THREAD_PATH,
+    THREAD_PART.replace(
+      '<threadedComment ref="A1" dT="2024-01-02',
+      '<threadedComment dT="2024-01-02',
+    ),
+  )
+  const zip = new JSZip()
+  for (const [path, xml] of parts) zip.file(path, xml)
+  zip.file(MEDIA_PATH, Uint8Array.of(137, 80, 78, 71))
+  const source = await createBufferEntrySource(await zip.generateAsync({ type: 'nodebuffer' }))
+  return planCellEditsToXlsx(
+    source,
+    [],
+    [{ sheetName: 'Data', ops }],
+    [],
+    undefined,
+    [],
+    [],
+    [],
+    [],
+    [],
+    null,
+    [],
+    [],
+    notes === undefined ? [] : [{ sheetName: 'Data', notes }],
+  )
+}
+
+describe('persisted annotations follow structural edits', () => {
+  it('moves a VML note and a thread through a row move and a column insert', async () => {
+    const plan = await planAnnotationShift([
+      { kind: 'move-rows', index: 0, count: 1, before: 3 },
+      { kind: 'insert-cols', index: 0, count: 1 },
+    ])
+    expect(plan.replaced.get(LEGACY_PATH)).toBe(COMMENTS_PART.replace('ref="A1"', 'ref="B3"'))
+    expect(plan.replaced.get(THREAD_PATH)).toBe(
+      THREAD_PART.replace('ref="A1"', 'ref="B3"').replace(
+        '<threadedComment ref="A1" dT="2024-01-02',
+        '<threadedComment dT="2024-01-02',
+      ),
+    )
+    expect(plan.replaced.get(VML_PATH)).toContain(
+      NOTE_SHAPE.replace('1, 15, 0, 2, 4, 15, 4, 2', '2, 15, 2, 2, 5, 15, 6, 2')
+        .replace('<e:Row>0', '<e:Row>2')
+        .replace('<e:Column>0', '<e:Column>1'),
+    )
+    expect(plan.replaced.get(VML_PATH)).toContain(CONTROL)
+    for (const path of [HEADER_VML_PATH, IMAGE_RELS_PATH, MEDIA_PATH, 'xl/persons/person.xml']) {
+      expect(plan.touchedEntries).not.toContain(path)
+    }
+  })
+
+  it('deletes the thread and replies when their cell is deleted', async () => {
+    const plan = await planAnnotationShift([{ kind: 'remove-rows', index: 0, count: 1 }])
+    expect(plan.removedEntries).toEqual(expect.arrayContaining([LEGACY_PATH, THREAD_PATH]))
+    expect(plan.replaced.get(SHEET_RELS_PATH)).not.toContain('threadedComment')
+    expect(plan.replaced.get('[Content_Types].xml')).not.toContain('threadedComment1.xml')
+    expect(plan.replaced.get(VML_PATH)).not.toContain('ObjectType="Note"')
+    expect(plan.replaced.get(VML_PATH)).toContain(CONTROL)
+    expect(plan.touchedEntries).not.toContain('xl/persons/person.xml')
+  })
+
+  it('adds a fresh note from the snapshot after its former cell is deleted', async () => {
+    const plan = await planAnnotationShift(
+      [{ kind: 'remove-rows', index: 0, count: 1 }],
+      [{ ...A1_DISPLAYED, text: 'Replacement note' }],
+    )
+    expect(plan.removedEntries).toContain(LEGACY_PATH)
+    expect(plan.added.get('xl/comments2.xml')).toContain('Replacement note')
+    expect(plan.replaced.get(SHEET_RELS_PATH)).toContain('../comments2.xml')
+    expect(plan.replaced.get(VML_PATH)).not.toContain('o:relid="rId1"')
+    expect(plan.replaced.get(VML_PATH)).toContain(CONTROL)
+  })
+
+  it('keeps replies anchored through their parent when applying a moved note snapshot', async () => {
+    const plan = await planAnnotationShift(
+      [{ kind: 'insert-rows', index: 0, count: 1 }],
+      [{ ...A1_THREAD, row: 1 }],
+    )
+    expect(plan.replaced.get(THREAD_PATH)).toBe(
+      THREAD_PART.replace('ref="A1"', 'ref="A2"').replace(
+        '<threadedComment ref="A1" dT="2024-01-02',
+        '<threadedComment dT="2024-01-02',
+      ),
+    )
+  })
+})
 
 describe('threaded comments stay in step with note edits', () => {
   it('keeps the thread part and the legacy mirror verbatim when the note is untouched', async () => {

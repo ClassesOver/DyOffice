@@ -4,7 +4,7 @@
 /// [Content_Types].xml entries. Non-note VML shapes (checkboxes, buttons)
 /// survive a rewrite untouched.
 
-import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import {
   allocatePartPath,
   appendRelationship,
@@ -13,15 +13,31 @@ import {
   relsPathFor,
   resolveRelTarget,
 } from './xlsx-drawing-add.ts'
+import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
 import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
 import { nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { shiftCellArea, StructuralShiftError, type StructuralOp } from './xlsx-structure.ts'
+import { parseRef } from './xlsx-table-add.ts'
 import {
   parseLegacyComments,
   syncThreadedComments,
   THREADED_COMMENTS_REL_TYPE,
+  THREADED_NS,
   type LegacyCommentEntry,
   type SheetThread,
 } from './xlsx-threaded-comments.ts'
+import {
+  applyPatches,
+  isElement,
+  patchElement,
+  scopedChildren,
+  withBody as replaceElementBody,
+  withNamespaces,
+  worksheetRoot,
+  XML_ATTRIBUTE,
+  type ScopedElement,
+} from './xlsx-worksheet-xml.ts'
 
 export type { SheetThread, SheetThreadReply } from './xlsx-threaded-comments.ts'
 
@@ -73,8 +89,11 @@ interface MutableNotePackage {
   add(path: string, content: string): void
   addBinary(path: string, bytes: Uint8Array): void
   remove(path: string): void
+  removedPaths?(): readonly string[]
 }
 
+const OFFICE_REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const STRICT_OFFICE_REL_NS = 'http://purl.oclc.org/ooxml/officeDocument/relationships'
 const COMMENTS_REL_TYPE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments'
 const VML_REL_TYPE =
@@ -82,6 +101,9 @@ const VML_REL_TYPE =
 const COMMENTS_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml'
 const CONTENT_TYPES_PATH = '[Content_Types].xml'
+const VML_NS = 'urn:schemas-microsoft-com:vml'
+const VML_EXCEL_NS = 'urn:schemas-microsoft-com:office:excel'
+const VML_OFFICE_NS = 'urn:schemas-microsoft-com:office:office'
 
 function escapeXml(value: string): string {
   return value
@@ -97,10 +119,6 @@ function columnName(index: number): string {
     label = String.fromCharCode(65 + (i % 26)) + label
   }
   return label
-}
-
-function worksheetRelsPath(worksheetPath: string): string {
-  return worksheetPath.replace(/^(xl\/worksheets\/)([^/]+)$/, '$1_rels/$2.rels')
 }
 
 interface XmlBlock {
@@ -172,29 +190,59 @@ function prefixOf(block: XmlBlock): string {
   return block.name.slice(0, block.name.indexOf(':') + 1)
 }
 
-function noteRelationship(xml: string, type: string) {
-  return xmlBlocks(xml, 'Relationship').find(block =>
-    attribute(block.open, 'Type') === type && attribute(block.open, 'TargetMode') !== 'External',
-  )
+function noteRelationship(xml: string, type: string, id?: string) {
+  const strictType = type.replace(OFFICE_REL_NS, STRICT_OFFICE_REL_NS)
+  return xmlBlocks(xml, 'Relationship').find((block) => {
+    const foundType = attribute(block.open, 'Type')
+    return (
+      (foundType === type || foundType === strictType) &&
+      attribute(block.open, 'TargetMode') !== 'External' &&
+      (id === undefined || attribute(block.open, 'Id') === id)
+    )
+  })
 }
 
-function relTarget(relsXml: string, type: string): string | null {
-  const found = noteRelationship(relsXml, type)
+function relTarget(relsXml: string, type: string, id?: string): string | null {
+  const found = noteRelationship(relsXml, type, id)
   return found ? attribute(found.open, 'Target') ?? null : null
+}
+
+function legacyDrawing(worksheetXml: string): ScopedElement | undefined {
+  if (!worksheetXml.includes('legacyDrawing')) return undefined
+  const root = worksheetRoot(worksheetXml)
+  if (!root) return undefined
+  const drawing = scopedChildren(root).find((child) =>
+    isElement(child, 'legacyDrawing', root.namespace),
+  )
+  return drawing && { ...drawing, start: root.start + root.opening.length + drawing.start }
+}
+
+function legacyDrawingId(drawing: ScopedElement | undefined): string | undefined {
+  if (!drawing) return undefined
+  for (const [prefix, namespace] of drawing.namespaces) {
+    if (prefix && (namespace === OFFICE_REL_NS || namespace === STRICT_OFFICE_REL_NS)) {
+      const id = drawing.attributes.get(`${prefix}:id`)
+      if (id !== undefined) return id
+    }
+  }
+  return undefined
 }
 
 async function nextFreePath(
   pkg: MutableNotePackage,
   template: (index: number) => string,
 ): Promise<string> {
+  const removed = new Set(pkg.removedPaths?.())
   for (let index = 1; index < 10_000; index += 1) {
     const candidate = template(index)
-    if (!(await pkg.has(candidate))) return candidate
+    if (!removed.has(candidate) && !(await pkg.has(candidate))) return candidate
   }
   throw new NoteEditError('No free part name for the comments part.')
 }
 
-function cellRef(note: SheetNote): string {
+type NoteCell = Pick<SheetNote, 'row' | 'column'>
+
+function cellRef(note: NoteCell): string {
   return `${columnName(note.column)}${note.row + 1}`
 }
 
@@ -490,8 +538,8 @@ function appendRel(relsXml: string, id: string, type: string, target: string): s
   )
 }
 
-function removeRel(relsXml: string, type: string): string {
-  const relationship = noteRelationship(relsXml, type)
+function removeRel(relsXml: string, type: string, id?: string): string {
+  const relationship = noteRelationship(relsXml, type, id)
   return relationship
     ? relsXml.slice(0, relationship.start) + relsXml.slice(relationship.end)
     : relsXml
@@ -503,15 +551,223 @@ async function removeContentTypeOverride(
   touchedEntries: Set<string>,
 ): Promise<void> {
   const contentTypes = await pkg.readText(CONTENT_TYPES_PATH)
-  const stripped = contentTypes.replace(
-    new RegExp(
-      `<Override\\b[^>]*PartName="/${partPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*/>`,
-    ),
-    '',
+  const stripped = replaceBlocks(contentTypes, xmlBlocks(contentTypes, 'Override'), (block) =>
+    attribute(block.open, 'PartName') === `/${partPath}` ? '' : rawBlock(block),
   )
   if (stripped !== contentTypes) {
     pkg.write(CONTENT_TYPES_PATH, stripped)
     touchedEntries.add(CONTENT_TYPES_PATH)
+  }
+}
+
+function shiftedNoteCell(cell: NoteCell, ops: readonly StructuralOp[]): NoteCell | null {
+  const { row, column } = cell
+  const moved = shiftCellArea(
+    { startRow: row, endRow: row, startColumn: column, endColumn: column },
+    ops,
+  )
+  if (!moved) return null
+  if (moved.startRow >= MAX_GRID_ROWS || moved.startColumn >= MAX_GRID_COLUMNS) {
+    throw new StructuralShiftError(
+      `A row or column change would move note ${cellRef(cell)} off the sheet.`,
+    )
+  }
+  return { row: moved.startRow, column: moved.startColumn }
+}
+
+function shiftedNoteRef(ref: string, ops: readonly StructuralOp[]): string | null {
+  const anchor = ref.split(':', 1)[0]!.replaceAll('$', '').toUpperCase()
+  if (!/^[A-Z]{1,3}[1-9]\d{0,6}$/.test(anchor)) return ref
+  const { startRow: row, startColumn: column } = parseRef(anchor)
+  if (row >= MAX_GRID_ROWS || column >= MAX_GRID_COLUMNS) return ref
+  const moved = shiftedNoteCell({ row, column }, ops)
+  if (!moved) return null
+  return moved.row === row && moved.column === column ? ref : cellRef(moved)
+}
+
+function shiftCommentEntries(
+  xml: string,
+  kind: 'legacy' | 'threaded',
+  ops: readonly StructuralOp[],
+) {
+  const [node] = childElements(xml)
+  if (!node) return xml
+  const root = withNamespaces(node, new Map())
+  const threaded = kind === 'threaded'
+  const parent = threaded
+    ? root.local === 'ThreadedComments' && root.namespace === THREADED_NS
+      ? root
+      : undefined
+    : root.local === 'comments'
+      ? scopedChildren(root).find((child) => isElement(child, 'commentList', root.namespace))
+      : undefined
+  if (!parent) return xml
+  const name = threaded ? 'threadedComment' : 'comment'
+  const entries = scopedChildren(parent).filter((child) => isElement(child, name, parent.namespace))
+  const updatedEntries = new Map<ScopedElement, string>()
+  const deleted = new Set<ScopedElement>()
+  const descendants = new Map<string, ScopedElement[]>()
+  for (const entry of entries) {
+    const parentId = threaded ? entry.attributes.get('parentId') : undefined
+    if (parentId !== undefined) {
+      const key = parentId.toUpperCase()
+      const replies = descendants.get(key)
+      if (replies) replies.push(entry)
+      else descendants.set(key, [entry])
+    }
+    const ref = entry.attributes.get('ref')
+    if (ref === undefined) continue
+    const moved = shiftedNoteRef(ref, ops)
+    if (moved === null) deleted.add(entry)
+    else if (moved !== ref) {
+      const open = entry.opening.replace(
+        XML_ATTRIBUTE,
+        (full, prefix: string, name: string, double?: string) => {
+          if (name !== 'ref') return full
+          const quote = double === undefined ? "'" : '"'
+          return `${prefix}${quote}${moved}${quote}`
+        },
+      )
+      updatedEntries.set(entry, open + entry.xml.slice(entry.opening.length))
+    }
+  }
+  // A reply may omit its own ref and refer to the cell through its parent.
+  for (const entry of deleted) {
+    const id = entry.attributes.get('id')
+    if (id !== undefined) {
+      for (const child of descendants.get(id.toUpperCase()) ?? []) deleted.add(child)
+    }
+  }
+  if (!updatedEntries.size && !deleted.size) return xml
+  const body = applyPatches(parent.inner, [
+    ...[...updatedEntries].flatMap(([entry, updated]) =>
+      deleted.has(entry) ? [] : [patchElement(entry, updated)],
+    ),
+    ...[...deleted].map((entry) => patchElement(entry, '')),
+  ])
+  // A part whose last annotation disappeared can be removed, unless it also
+  // holds extension data at the root or inside the comment list.
+  if (
+    body.trim() === '' &&
+    entries.length === deleted.size &&
+    (threaded ||
+      scopedChildren(root).every(
+        (child) =>
+          isElement(child, 'authors', root.namespace) ||
+          isElement(child, 'commentList', root.namespace),
+      ))
+  ) {
+    return null
+  }
+  const updated = replaceElementBody(parent, body)
+  const start = threaded ? root.start : root.start + root.opening.length + parent.start
+  return xml.slice(0, start) + updated + xml.slice(start + parent.xml.length)
+}
+
+function shiftVmlNoteShapes(xml: string, ops: readonly StructuralOp[]): string {
+  return replaceBlocks(xml, xmlBlocks(xml, 'shape'), (shape) => {
+    const client = xmlBlocks(shape.body, 'ClientData').find(
+      (block) => attribute(block.open, 'ObjectType') === 'Note',
+    )
+    if (!client) return rawBlock(shape)
+    const row = xmlBlocks(client.body, 'Row')[0]
+    const column = xmlBlocks(client.body, 'Column')[0]
+    if (!row || !column || !/^\d+$/.test(row.body.trim()) || !/^\d+$/.test(column.body.trim())) {
+      return rawBlock(shape)
+    }
+    const original = { row: Number(row.body), column: Number(column.body) }
+    if (original.row >= MAX_GRID_ROWS || original.column >= MAX_GRID_COLUMNS) return rawBlock(shape)
+    const moved = shiftedNoteCell(original, ops)
+    if (!moved) return ''
+    const rowDelta = moved.row - original.row
+    const columnDelta = moved.column - original.column
+    if (rowDelta === 0 && columnDelta === 0) return rawBlock(shape)
+    const anchor = xmlBlocks(client.body, 'Anchor')[0]
+    const blocks = [row, column, ...(anchor ? [anchor] : [])].sort((a, b) => a.start - b.start)
+    const body = replaceBlocks(client.body, blocks, (block) => {
+      if (block === row) return rowDelta ? withBody(block, String(moved.row)) : rawBlock(block)
+      if (block === column)
+        return columnDelta ? withBody(block, String(moved.column)) : rawBlock(block)
+      const values = block.body.split(',')
+      if (values.length !== 8 || values.some((value) => !/^\s*\d+\s*$/.test(value)))
+        return rawBlock(block)
+      // Move the popup with its note. A row move can split the rows the popup
+      // used to cover, so preserve its shape relative to the owning cell.
+      for (const [index, delta, max] of [
+        [0, columnDelta, MAX_GRID_COLUMNS],
+        [4, columnDelta, MAX_GRID_COLUMNS],
+        [2, rowDelta, MAX_GRID_ROWS],
+        [6, rowDelta, MAX_GRID_ROWS],
+      ] as const) {
+        if (delta === 0) continue
+        const position = Math.min(max - 1, Math.max(0, Number(values[index]) + delta))
+        values[index] = values[index]!.replace(/\d+/, String(position))
+      }
+      return withBody(block, values.join(','))
+    })
+    return withBody(
+      shape,
+      replaceBlocks(shape.body, [client], (block) => withBody(block, body)),
+    )
+  })
+}
+
+/** Shift persisted annotations before a snapshot in the new cell coordinates. */
+export async function shiftSheetAnnotations(
+  pkg: MutableNotePackage & { canPatch(path: string): Promise<boolean> },
+  worksheetPath: string,
+  worksheetXml: string,
+  relsXml: string,
+  ops: readonly StructuralOp[],
+  touchedEntries: Set<string>,
+): Promise<void> {
+  const read = async (partPath: string) => {
+    if (!(await pkg.canPatch(partPath))) {
+      throw new StructuralShiftError(
+        `${partPath} is too large to rewrite — rows/columns cannot shift here.`,
+      )
+    }
+    return pkg.readText(partPath)
+  }
+  let rels = relsXml
+  let hasAnnotationPart = false
+  for (const [type, kind] of [
+    [COMMENTS_REL_TYPE, 'legacy'],
+    [THREADED_COMMENTS_REL_TYPE, 'threaded'],
+  ] as const) {
+    const target = relTarget(rels, type)
+    if (!target) continue
+    const path = resolveRelTarget(worksheetPath, target)
+    if (!(await pkg.has(path))) continue
+    hasAnnotationPart = true
+    const xml = await read(path)
+    const shifted = shiftCommentEntries(xml, kind, ops)
+    if (shifted === xml) continue
+    if (shifted === null) {
+      pkg.remove(path)
+      rels = removeRel(rels, type)
+      await removeContentTypeOverride(pkg, path, touchedEntries)
+    } else {
+      pkg.write(path, shifted)
+    }
+    touchedEntries.add(path)
+  }
+  if (rels !== relsXml) {
+    const relsPath = relsPathFor(worksheetPath)
+    pkg.write(relsPath, rels)
+    touchedEntries.add(relsPath)
+  }
+  if (!hasAnnotationPart) return
+  const drawingId = legacyDrawingId(legacyDrawing(worksheetXml))
+  const vmlTarget = drawingId && relTarget(rels, VML_REL_TYPE, drawingId)
+  if (!vmlTarget) return
+  const vmlPath = resolveRelTarget(worksheetPath, vmlTarget)
+  if (!(await pkg.has(vmlPath))) return
+  const vml = await read(vmlPath)
+  const shifted = shiftVmlNoteShapes(vml, ops)
+  if (vml !== shifted) {
+    pkg.write(vmlPath, shifted)
+    touchedEntries.add(vmlPath)
   }
 }
 
@@ -544,13 +800,17 @@ export async function applySheetNotes(
   notes: readonly SheetNote[],
   touchedEntries: Set<string>,
 ): Promise<void> {
-  const relsPath = worksheetRelsPath(worksheetPath)
+  const relsPath = relsPathFor(worksheetPath)
   const hasRels = await pkg.has(relsPath)
   let relsXml = hasRels ? await pkg.readText(relsPath) : EMPTY_RELS
   const existingCommentsTarget = relTarget(relsXml, COMMENTS_REL_TYPE)
   const existingCommentsPath =
     existingCommentsTarget === null ? null : resolveRelTarget(worksheetPath, existingCommentsTarget)
-  const existingVmlTarget = relTarget(relsXml, VML_REL_TYPE)
+  const worksheetXml = await pkg.readText(worksheetPath)
+  const drawing = legacyDrawing(worksheetXml)
+  const drawingId = legacyDrawingId(drawing)
+  const existingVmlTarget =
+    drawingId === undefined ? null : relTarget(relsXml, VML_REL_TYPE, drawingId)
   const existingVmlPath =
     existingVmlTarget === null ? null : resolveRelTarget(worksheetPath, existingVmlTarget)
   let relsChanged = false
@@ -596,10 +856,9 @@ export async function applySheetNotes(
         pkg.write(existingVmlPath, remaining)
       } else {
         pkg.remove(existingVmlPath)
-        relsXml = removeRel(relsXml, VML_REL_TYPE)
-        const worksheetXml = await pkg.readText(worksheetPath)
-        const withoutLegacy = worksheetXml.replace(/<legacyDrawing\b[^>]*\/>/, '')
-        if (withoutLegacy !== worksheetXml) {
+        relsXml = removeRel(relsXml, VML_REL_TYPE, drawingId)
+        if (drawing) {
+          const withoutLegacy = applyPatches(worksheetXml, [patchElement(drawing, '')])
           pkg.write(worksheetPath, withoutLegacy)
           touchedEntries.add(worksheetPath)
         }
@@ -638,10 +897,25 @@ export async function applySheetNotes(
       if (end === -1) throw new NoteEditError(`${existingVmlPath} is not a VML drawing.`)
       const firstId = nextShapeId(original)
       const pictures = await notePictureFills(pkg, existingVmlPath, added, touchedEntries)
+      const root = childElements(vml)[0]
+      const bindings = root ? withNamespaces(root, new Map()).namespaces : new Map()
+      const declarations = (
+        [
+          ['v', VML_NS],
+          ['o', VML_OFFICE_NS],
+          ['x', VML_EXCEL_NS],
+        ] as const
+      )
+        .filter(([prefix, ns]) => bindings.get(prefix) !== ns)
+        .map(([prefix, ns]) => ` xmlns:${prefix}="${ns}"`)
+        .join('')
       const shapes = added
         .map((note, index) => {
           const key = noteImageKey(note)
-          return noteShape(note, index, firstId, pictures.get(key), existingIds.get(key))
+          return noteShape(note, index, firstId, pictures.get(key), existingIds.get(key)).replace(
+            '<v:shape',
+            `<v:shape${declarations}`,
+          )
         })
         .join('')
       updated = vml.slice(0, end) + shapes + vml.slice(end)
@@ -663,7 +937,6 @@ export async function applySheetNotes(
       .join('')
     pkg.add(vmlPath, `${VML_HEADER}${shapes}</xml>`)
     touchedEntries.add(vmlPath)
-    const worksheetXml = await pkg.readText(worksheetPath)
     const withLegacy = ensureLegacyDrawingElement(worksheetXml, rid)
     if (withLegacy !== worksheetXml) {
       pkg.write(worksheetPath, withLegacy)

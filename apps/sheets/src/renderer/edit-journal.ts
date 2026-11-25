@@ -7,6 +7,7 @@ import type {
   WorkbookChartEdit,
   WorkbookHyperlinkEdit,
   WorkbookRichRun,
+  WorkbookSaveRequest,
   WorkbookSheetOp,
   WorkbookStructuralOp,
   WorkbookPivotAdd,
@@ -18,10 +19,16 @@ import type {
   WorkbookVisualObject,
   WorkbookCellImageAdd,
 } from '../shared/desktop-api'
-import { columnLabel, parseRange } from '@genoffice/xlsx-gateway/domain/cell-address'
+import {
+  columnLabel,
+  formatAddress,
+  parseAddress,
+  parseRange,
+} from '@genoffice/xlsx-gateway/domain/cell-address'
 import { fillDisplayColor, resolveStyleColor } from '@genoffice/xlsx-gateway/domain/style-color'
-import { splitSheetRef } from '@genoffice/xlsx-gateway/domain/chart-visual'
+import { renameRefSheet, splitSheetRef } from '@genoffice/xlsx-gateway/domain/chart-visual'
 import { CHART_CATEGORY_WIRE_MAX, CHART_TEXT_WIRE_MAX } from '../shared/desktop-api'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import { ADDABLE_SHAPE_TYPES } from '@genoffice/xlsx-gateway/shared/shape-types'
 import { INDENT_STEP_PX } from './selection-format'
 import type { SharedFormulaResolver } from './shared-formula-journal'
@@ -129,8 +136,8 @@ export interface SheetJournal {
   readonly added: Map<string, { name: string; sourceSheetId?: string }>
   /// Removed sheet ids — original sheets and added ones alike.
   readonly removed: Set<string>
-  /// Original sheet id → new name (dropped when renamed back).
-  readonly renamed: Map<string, string>
+  /// Original sheet id → file and live names (dropped when renamed back).
+  readonly renamed: Map<string, { originalName: string | undefined; newName: string }>
   /// Sheet id → desired visibility (dropped when toggled back to original).
   readonly hidden: Map<string, boolean>
   /// Sheet id → desired tab color (#RRGGBB, null clears); dropped when set
@@ -291,6 +298,8 @@ export interface PageSetupJournalState {
   printArea?: string | null
   /// Rows repeated at the top of every page ("1:2"), or null to clear.
   printTitles?: string | null
+  /// A structural edit deleted the pending title rows. Keep saved title columns.
+  clearPrintTitleRows?: true
   /// Frozen pane counts (0/0 = unfrozen); saved as sheetView <pane>.
   frozenRows?: number
   frozenColumns?: number
@@ -384,7 +393,9 @@ export function recordPageSetup(
 ): void {
   mutationAdmission(journal).assertWritable()
   const state = journal.pageSetup.get(sheetId) ?? {}
-  journal.pageSetup.set(sheetId, { ...state, ...patch })
+  const next = { ...state, ...patch }
+  if (patch.printTitles !== undefined) delete next.clearPrintTitleRows
+  journal.pageSetup.set(sheetId, next)
 }
 
 export function toSavePageSetupStates(
@@ -483,12 +494,22 @@ export function hyperlinkEditAt(
 
 export function toSaveHyperlinkEdits(journal: EditJournal): WorkbookHyperlinkEdit[] {
   const edits: WorkbookHyperlinkEdit[] = []
+  const toFileReference = pendingReferenceSaveRewriter(journal)
   for (const [sheetId, links] of journal.hyperlinks) {
     if (isSheetRemoved(journal, sheetId)) continue
     for (const [key, target] of links) {
       const [row, column] = key.split(':').map(Number)
       if (row === undefined || column === undefined) continue
-      edits.push({ sheetId, row, column, target })
+      const destination = target?.startsWith('#') ? toFileReference(target.slice(1)) : undefined
+      edits.push({
+        sheetId,
+        row,
+        column,
+        target: destination === undefined ? target : `#${destination.ref}`,
+        ...(destination?.addedSheetId === undefined
+          ? {}
+          : { targetAddedSheetId: destination.addedSheetId }),
+      })
     }
   }
   return edits
@@ -577,6 +598,12 @@ export function recordSheetRename(
 ): void {
   mutationAdmission(journal).assertWritable()
   const added = journal.sheets.added.get(sheetId)
+  const priorRename = journal.sheets.renamed.get(sheetId)
+  const fileName = priorRename?.originalName ?? originalName
+  const previousName = added?.name ?? priorRename?.newName ?? fileName
+  if (previousName !== undefined && previousName !== name) {
+    renamePendingReferences(journal, previousName, name)
+  }
   if (added) {
     // Keep the duplicate provenance: dropping sourceSheetId here made a
     // renamed copy save as a BLANK added sheet (duplicate_sheet with a name
@@ -584,8 +611,58 @@ export function recordSheetRename(
     journal.sheets.added.set(sheetId, { ...added, name })
     return
   }
-  if (name === originalName) journal.sheets.renamed.delete(sheetId)
-  else journal.sheets.renamed.set(sheetId, name)
+  if (name === fileName) journal.sheets.renamed.delete(sheetId)
+  else journal.sheets.renamed.set(sheetId, { originalName: fileName, newName: name })
+}
+
+function renamePendingReferences(journal: EditJournal, oldName: string, newName: string): void {
+  const rename = (ref: string): string => {
+    const sheet = splitSheetRef(ref)?.sheetName
+    return sheet?.toLowerCase() === oldName.toLowerCase()
+      ? renameRefSheet(ref, sheet, newName)
+      : ref
+  }
+  for (const links of journal.hyperlinks.values()) {
+    for (const [key, target] of links) {
+      if (target?.startsWith('#')) links.set(key, `#${rename(target.slice(1))}`)
+    }
+  }
+  journal.sparklineAdds.forEach((entry, index) => {
+    journal.sparklineAdds[index] = {
+      ...entry,
+      cells: entry.cells.map((cell) => ({ ...cell, sourceRef: rename(cell.sourceRef) })),
+    }
+  })
+}
+
+/// These edits are applied to the file before the gateway rewrites sheet
+/// references. Map each live destination back to its original sheet name so
+/// the gateway can resolve it once, including when existing sheets swap names.
+/// An addition that takes an old name carries its identity through that pass.
+function pendingReferenceSaveRewriter(journal: EditJournal) {
+  const originalNames = new Map<string, string>()
+  const renamedAway = new Set<string>()
+  for (const [sheetId, { originalName, newName }] of journal.sheets.renamed) {
+    if (originalName !== undefined && !isSheetRemoved(journal, sheetId)) {
+      originalNames.set(newName.toLowerCase(), originalName)
+      renamedAway.add(originalName.toLowerCase())
+    }
+  }
+  const additions = new Map<string, string>()
+  for (const [sheetId, { name }] of journal.sheets.added) {
+    if (renamedAway.has(name.toLowerCase()) && !isSheetRemoved(journal, sheetId)) {
+      additions.set(name.toLowerCase(), sheetId)
+    }
+  }
+  return (ref: string): { ref: string; addedSheetId?: string } => {
+    if (originalNames.size === 0) return { ref }
+    const sheet = splitSheetRef(ref)?.sheetName
+    if (sheet === undefined) return { ref }
+    const addedSheetId = additions.get(sheet.toLowerCase())
+    if (addedSheetId !== undefined) return { ref, addedSheetId }
+    const originalName = originalNames.get(sheet.toLowerCase())
+    return { ref: originalName === undefined ? ref : renameRefSheet(ref, sheet, originalName) }
+  }
 }
 
 export function isSheetRemoved(journal: EditJournal, sheetId: string): boolean {
@@ -655,7 +732,7 @@ export function toSaveSheetOps(journal: EditJournal): WorkbookSheetOp[] {
   for (const sheetId of removed) {
     if (!added.has(sheetId)) ops.push({ kind: 'remove-sheet', sheetId })
   }
-  for (const [sheetId, newName] of renamed) {
+  for (const [sheetId, { newName }] of renamed) {
     if (!removed.has(sheetId)) ops.push({ kind: 'rename-sheet', sheetId, newName })
   }
   for (const [sheetId, isHidden] of hidden) {
@@ -820,19 +897,22 @@ export function removeSparklineAdd(journal: EditJournal, id: string): boolean {
   return true
 }
 
-export function toSaveSparklineAdds(journal: EditJournal): {
-  sheetId: string
-  type: 'line' | 'column' | 'stacked'
-  color?: string
-  cells: { cell: string; sourceRef: string }[]
-}[] {
+export function toSaveSparklineAdds(journal: EditJournal): WorkbookSaveRequest['sparklineAdditions'] {
+  const toFileReference = pendingReferenceSaveRewriter(journal)
   return journal.sparklineAdds
     .filter((entry) => !isSheetRemoved(journal, entry.sheetId))
     .map((entry) => ({
       sheetId: entry.sheetId,
       type: entry.type,
       ...(entry.color === undefined ? {} : { color: entry.color }),
-      cells: entry.cells.map((cell) => ({ ...cell })),
+      cells: entry.cells.map(({ cell, sourceRef }) => {
+        const source = toFileReference(sourceRef)
+        return {
+          cell,
+          sourceRef: source.ref,
+          ...(source.addedSheetId === undefined ? {} : { sourceAddedSheetId: source.addedSheetId }),
+        }
+      }),
     }))
 }
 
@@ -1508,6 +1588,118 @@ function shiftVisualAnchor(
       }
 }
 
+/// Remaps an inclusive range on the shifted axis. A row move keeps the
+/// original coordinates when it tears a range across the swapped blocks.
+function shiftRangeSpan(
+  start: number,
+  end: number,
+  shift: RowColumnShift,
+): { start: number; end: number } | null {
+  const { index, count } = shift
+  if (shift.swap) {
+    const { first, second } = shift.swap
+    const inside = (span: { start: number; end: number }): boolean =>
+      start >= span.start && end <= span.end
+    if (!inside(first) && !inside(second)) return { start, end }
+    const delta = swapPosition(start, shift.swap) - start
+    return { start: start + delta, end: end + delta }
+  }
+  if (shift.removing) {
+    if (start >= index && end < index + count) return null
+    return {
+      start: start >= index + count ? start - count : start >= index ? index : start,
+      end: end >= index + count ? end - count : end >= index ? index - 1 : end,
+    }
+  }
+  return {
+    start: start >= index ? start + count : start,
+    end: end >= index ? end + count : end,
+  }
+}
+
+function shiftGridSpan(
+  start: number,
+  end: number,
+  shift: RowColumnShift,
+): { start: number; end: number } | null {
+  const moved = shiftRangeSpan(start, end, shift)
+  const size = shift.axis === 'row' ? MAX_GRID_ROWS : MAX_GRID_COLUMNS
+  if (!moved || moved.start >= size) return null
+  return { start: moved.start, end: Math.min(moved.end, size - 1) }
+}
+
+function shiftPrintArea(ref: string, shift: RowColumnShift): string | null {
+  let area
+  try {
+    area = parseRange(ref)
+  } catch {
+    return ref
+  }
+  const rows = shift.axis === 'row'
+  const start = rows ? area.startRow : area.startColumn
+  const end = rows ? area.endRow : area.endColumn
+  const moved = shiftGridSpan(start, end, shift)
+  if (!moved) return null
+  if (moved.start === start && moved.end === end) return ref
+  const first = formatAddress(
+    rows ? moved.start : area.startRow,
+    rows ? area.startColumn : moved.start,
+  )
+  if (!ref.includes(':')) return first
+  const last = formatAddress(rows ? moved.end : area.endRow, rows ? area.endColumn : moved.end)
+  return `${first}:${last}`
+}
+
+function shiftPrintTitleRows(ref: string, shift: RowColumnShift): string | null {
+  const match = /^(\d{1,7}):(\d{1,7})$/.exec(ref)
+  if (!match) return ref
+  const start = Number(match[1]) - 1
+  const end = Number(match[2]) - 1
+  if (start < 0 || end < start) return ref
+  const moved = shiftGridSpan(start, end, shift)
+  if (!moved) return null
+  if (moved.start === start && moved.end === end) return ref
+  return `${moved.start + 1}:${moved.end + 1}`
+}
+
+function shiftPendingReference(
+  ref: string,
+  sheetName: string | undefined,
+  sameSheet: boolean,
+  shift: RowColumnShift,
+): string | null {
+  const qualified = splitSheetRef(ref)
+  if (qualified) {
+    if (qualified.sheetName.toLowerCase() !== sheetName?.toLowerCase()) return ref
+  } else if (!sameSheet) {
+    return ref
+  }
+  const separator = qualified ? ref.lastIndexOf('!') + 1 : 0
+  const range = ref.slice(separator).toUpperCase()
+  let area
+  try {
+    area = parseRange(range)
+  } catch {
+    return ref
+  }
+  if (area.endRow >= MAX_GRID_ROWS || area.endColumn >= MAX_GRID_COLUMNS) return ref
+  const rows = shift.axis === 'row'
+  const start = rows ? area.startRow : area.startColumn
+  const end = rows ? area.endRow : area.endColumn
+  const moved = shiftGridSpan(start, end, shift)
+  if (!moved) return null
+  if (moved.start === start && moved.end === end) return ref
+  const endpoints = range.split(':').map((part) => {
+    const { row, column } = parseAddress(part)
+    const position = (rows ? row : column) === start ? moved.start : moved.end
+    return (
+      `${part.trimStart().startsWith('$') ? '$' : ''}${columnLabel(rows ? column : position)}` +
+      `${/\$\d+$/.test(part.trimEnd()) ? '$' : ''}${(rows ? position : row) + 1}`
+    )
+  })
+  return ref.slice(0, separator) + endpoints.join(':')
+}
+
 /// Shifts a chart `c:f`-style reference on the edited sheet; null when the
 /// whole referenced range was removed, the input when it cannot be parsed or
 /// points at another sheet.
@@ -1520,33 +1712,15 @@ function shiftSeriesRef(ref: string, sheetName: string, shift: RowColumnShift): 
   } catch {
     return ref
   }
-  let start = shift.axis === 'row' ? area.startRow : area.startColumn
-  let end = shift.axis === 'row' ? area.endRow : area.endColumn
-  const { index, count } = shift
-  if (shift.swap) {
-    // Three-way like the save side: ranges inside one block move with it,
-    // ranges outside or spanning stay; torn ranges keep their old text (the
-    // save's own chart-reference pass decides whether that fails closed).
-    const { first, second } = shift.swap
-    const inside = (span: { start: number; end: number }): boolean =>
-      start >= span.start && end <= span.end
-    if (!inside(first) && !inside(second)) return ref
-    const delta = swapPosition(start, shift.swap) - start
-    start += delta
-    end += delta
-  } else if (shift.removing) {
-    if (start >= index && end < index + count) return null
-    start = start >= index + count ? start - count : start >= index ? index : start
-    end = end >= index + count ? end - count : end >= index ? index - 1 : end
-  } else if (end >= index) {
-    // An insert above shifts the range, an insert inside extends it.
-    if (start >= index) start += count
-    end += count
-  }
+  const start = shift.axis === 'row' ? area.startRow : area.startColumn
+  const end = shift.axis === 'row' ? area.endRow : area.endColumn
+  const span = shiftRangeSpan(start, end, shift)
+  if (!span) return null
+  if (shift.swap && span.start === start && span.end === end) return ref
   const moved =
     shift.axis === 'row'
-      ? { ...area, startRow: start, endRow: end }
-      : { ...area, startColumn: start, endColumn: end }
+      ? { ...area, startRow: span.start, endRow: span.end }
+      : { ...area, startColumn: span.start, endColumn: span.end }
   const name = sheetName.replace(/'/g, "''")
   const cell = (row: number, column: number): string => `$${columnLabel(column)}$${row + 1}`
   const head = cell(moved.startRow, moved.startColumn)
@@ -1656,9 +1830,8 @@ export function recordStructuralOp(
   // (`in` narrowing: TS doesn't compose `||` checks on multi-literal kinds.)
   if (!('index' in op)) return
   const rowColumnOp = op
-  const axis = op.kind === 'insert-cols' || op.kind === 'remove-cols' ? 'column' : 'row'
-  const removing = op.kind === 'remove-rows' || op.kind === 'remove-cols'
-  const swap = rowColumnOp.kind === 'move-rows' ? toSwapSpans(rowColumnOp) : null
+  const shift = toRowColumnShift(rowColumnOp)
+  const { axis, removing, swap } = shift
   const movePosition = (position: number): number | null => {
     const { index, count } = rowColumnOp
     if (swap) return swapPosition(position, swap)
@@ -1719,49 +1892,90 @@ export function recordStructuralOp(
     if (shiftedFills.length > 0) journal.bulkConstantFills.set(sheetId, shiftedFills)
     else journal.bulkConstantFills.delete(sheetId)
   }
-  const links = journal.hyperlinks.get(sheetId)
-  if (links && links.size > 0) {
+  for (const [ownerId, links] of journal.hyperlinks) {
+    const sameSheet = ownerId === sheetId
     const shiftedLinks = new Map<string, string | null>()
     for (const [key, target] of links) {
-      const [row, column] = key.split(':').map(Number)
-      if (row === undefined || column === undefined) continue
-      const moved = movePosition(axis === 'row' ? row : column)
-      if (moved === null) continue
-      const next = axis === 'row' ? `${moved}:${column}` : `${row}:${moved}`
-      shiftedLinks.set(next, target)
+      let next = key
+      if (sameSheet) {
+        const [row, column] = key.split(':').map(Number)
+        if (row === undefined || column === undefined) continue
+        const moved = movePosition(axis === 'row' ? row : column)
+        if (moved === null) continue
+        next = axis === 'row' ? `${moved}:${column}` : `${row}:${moved}`
+      }
+      if (target?.startsWith('#')) {
+        const destination = shiftPendingReference(target.slice(1), sheetName, sameSheet, shift)
+        shiftedLinks.set(next, destination === null ? null : `#${destination}`)
+      } else {
+        shiftedLinks.set(next, target)
+      }
     }
-    journal.hyperlinks.set(sheetId, shiftedLinks)
+    if (shiftedLinks.size > 0) journal.hyperlinks.set(ownerId, shiftedLinks)
+    else journal.hyperlinks.delete(ownerId)
   }
-  // Journaled manual page breaks are a screen-space replacement set; a break
-  // sitting on a deleted line disappears with it.
+  // Page layout overrides are applied after the file's structural pass.
+  // A break on a deleted line disappears along with that line.
   const pageSetup = journal.pageSetup.get(sheetId)
-  const breaksKey = axis === 'row' ? 'rowBreaks' : 'colBreaks'
-  const breaks = pageSetup?.[breaksKey]
-  if (pageSetup && breaks !== undefined) {
-    const moved = [
-      ...new Set(
-        breaks
-          .map(movePosition)
-          .filter((position): position is number => position !== null && position > 0),
-      ),
-    ].sort((a, b) => a - b)
-    journal.pageSetup.set(sheetId, { ...pageSetup, [breaksKey]: moved })
+  if (pageSetup) {
+    const next = { ...pageSetup }
+    if (typeof pageSetup.printArea === 'string') {
+      next.printArea = shiftPrintArea(pageSetup.printArea, shift)
+    }
+    if (axis === 'row' && typeof pageSetup.printTitles === 'string') {
+      const moved = shiftPrintTitleRows(pageSetup.printTitles, shift)
+      if (moved === null) {
+        delete next.printTitles
+        next.clearPrintTitleRows = true
+      } else {
+        next.printTitles = moved
+      }
+    }
+    const breaksKey = axis === 'row' ? 'rowBreaks' : 'colBreaks'
+    const breaks = pageSetup[breaksKey]
+    if (breaks !== undefined) {
+      next[breaksKey] = [
+        ...new Set(
+          breaks
+            .map(movePosition)
+            .filter((position): position is number => position !== null && position > 0),
+        ),
+      ].sort((a, b) => a - b)
+    }
+    journal.pageSetup.set(sheetId, next)
   }
   // Session visuals and pending chart edits follow the same shift: the save
   // appends/applies them after the file's own structural pass, so they must
   // already live in post-operation coordinates.
-  const shift = toRowColumnShift(rowColumnOp)
   journal.visualAdds.forEach((visual, at) => {
     journal.visualAdds[at] = shiftVisualForStructuralOp(visual, sheetId, sheetName, op)
   })
-  for (let at = journal.cellImageAdds.length - 1; at >= 0; at -= 1) {
-    const entry = journal.cellImageAdds[at]
-    if (!entry || entry.sheetId !== sheetId) continue
-    const moved = movePosition(axis === 'row' ? entry.row : entry.column)
-    if (moved === null) journal.cellImageAdds.splice(at, 1)
-    else if (axis === 'row') journal.cellImageAdds[at] = { ...entry, row: moved }
-    else journal.cellImageAdds[at] = { ...entry, column: moved }
+  for (let at = journal.sparklineAdds.length - 1; at >= 0; at -= 1) {
+    const entry = journal.sparklineAdds[at]
+    if (!entry) continue
+    const sameSheet = entry.sheetId === sheetId
+    const cells = entry.cells.flatMap(({ cell, sourceRef }) => {
+      const host = sameSheet ? shiftPendingReference(cell, sheetName, true, shift) : cell
+      if (host === null) return []
+      const source = shiftPendingReference(sourceRef, sheetName, sameSheet, shift)
+      return source === null ? [] : [{ cell: host, sourceRef: source }]
+    })
+    if (cells.length === 0) journal.sparklineAdds.splice(at, 1)
+    else journal.sparklineAdds[at] = { ...entry, cells }
   }
+  const moveCellEntries = <T extends { sheetId: string; row: number; column: number }>(
+    entries: T[],
+  ) => {
+    for (let at = entries.length - 1; at >= 0; at -= 1) {
+      const entry = entries[at]
+      if (!entry || entry.sheetId !== sheetId) continue
+      const moved = movePosition(axis === 'row' ? entry.row : entry.column)
+      if (moved === null) entries.splice(at, 1)
+      else entries[at] = axis === 'row' ? { ...entry, row: moved } : { ...entry, column: moved }
+    }
+  }
+  moveCellEntries(journal.cellImageAdds)
+  moveCellEntries(journal.notePictures)
   for (const [id, entry] of journal.visualEdits) {
     if (entry.sheetId !== sheetId || entry.anchor === undefined) continue
     journal.visualEdits.set(id, { ...entry, anchor: shiftVisualAnchor(entry.anchor, shift) })

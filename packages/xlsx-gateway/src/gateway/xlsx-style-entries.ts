@@ -94,12 +94,16 @@ export function styleEntrySlots(sectionInner: string, tag: string): string[] {
 
 /// The `<tag>` elements a core-only consumer reads from a section, in index
 /// order — what the sidecar reports and what ids in the workbook point at.
-export function resolvedStyleEntries(sectionInner: string, tag: string): string[] {
+export function resolvedStyleEntries(
+  sectionInner: string,
+  tag: string,
+  matchLocalName = false,
+): string[] {
   return childElements(sectionInner).flatMap((child) => {
-    if (child.name === tag) return [child.xml]
+    if ((matchLocalName ? localName(child.name) : child.name) === tag) return [child.xml]
     if (!isAlternateContent(child.name)) return []
     const branch = chosenBranch(child.inner)
-    return branch === null ? [] : resolvedStyleEntries(branch.inner, tag)
+    return branch === null ? [] : resolvedStyleEntries(branch.inner, tag, matchLocalName)
   })
 }
 

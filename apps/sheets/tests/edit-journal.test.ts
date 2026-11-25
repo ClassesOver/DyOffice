@@ -7,6 +7,9 @@ import {
   journalCellContentAt,
   isSheetRemoved,
   recordFilterChange,
+  recordHyperlinkEdit,
+  hyperlinkEditAt,
+  recordSparklineAdd,
   recordBulkConstantFill,
   removeBulkConstantFill,
   restoreJournalCells,
@@ -38,6 +41,8 @@ import {
   toSaveChartEdits,
   toSaveBulkConstantFills,
   toSaveEdits,
+  toSaveHyperlinkEdits,
+  toSaveSparklineAdds,
   toSavePivotAdds,
   toSaveTableAdds,
   toSaveSheetOps,
@@ -661,6 +666,51 @@ describe('journalEntriesInRange', () => {
 })
 
 describe('recordStructuralOp', () => {
+  it('uses live sheet names to shift pending links and sparkline sources across sheets', () => {
+    const journal = createEditJournal()
+    recordHyperlinkEdit(journal, 'sheet-1', 0, 1, '#data!$A2')
+    recordHyperlinkEdit(journal, 'sheet-1', 0, 2, 'https://example.test/#Data!A2')
+    recordHyperlinkEdit(journal, 'sheet-1', 0, 3, '#NamedRange')
+    recordSparklineAdd(journal, {
+      id: 'spark',
+      sheetId: 'sheet-1',
+      type: 'line',
+      cells: [{ cell: 'F4', sourceRef: 'Data!$A$2:$A$3' }],
+    })
+    recordSheetRename(journal, 'sheet-2', "Next's Data", 'Data')
+    recordStructuralOp(
+      journal,
+      'sheet-2',
+      { kind: 'insert-rows', index: 1, count: 1 },
+      "Next's Data",
+    )
+    expect(hyperlinkEditAt(journal, 'sheet-1', 0, 1)).toBe("#'Next''s Data'!$A3")
+    expect(journal.sparklineAdds[0]?.cells[0]?.sourceRef).toBe("'Next''s Data'!$A$3:$A$4")
+    expect(toSaveHyperlinkEdits(journal)).toEqual([
+      { sheetId: 'sheet-1', row: 0, column: 1, target: "#'Data'!$A3" },
+      { sheetId: 'sheet-1', row: 0, column: 2, target: 'https://example.test/#Data!A2' },
+      { sheetId: 'sheet-1', row: 0, column: 3, target: '#NamedRange' },
+    ])
+    expect(toSaveSparklineAdds(journal)[0]?.cells).toEqual([
+      { cell: 'F4', sourceRef: "'Data'!$A$3:$A$4" },
+    ])
+  })
+
+  it('drops newly added sparklines when the host or the whole source is deleted', () => {
+    const journal = createEditJournal()
+    recordSparklineAdd(journal, {
+      id: 'spark',
+      sheetId: 'sheet-1',
+      type: 'line',
+      cells: [
+        { cell: 'D3', sourceRef: 'Data!A2:B2' },
+        { cell: 'D5', sourceRef: 'Data!A3:B3' },
+      ],
+    })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'remove-rows', index: 2, count: 1 }, 'Data')
+    expect(toSaveSparklineAdds(journal)).toEqual([])
+  })
+
   it('shifts existing cell entries below an inserted row', () => {
     const journal = createEditJournal()
     recordSetRangeValues(journal, 'sheet-1', { 2: { 0: { v: 'above' } }, 8: { 0: { v: 'below' } } })
@@ -815,6 +865,52 @@ describe('toSaveEdits', () => {
 })
 
 describe('sheet lifecycle journal', () => {
+  it('serializes pending hyperlink destinations by their original sheet identity after a swap', () => {
+    const journal = createEditJournal()
+    recordHyperlinkEdit(journal, 'host', 0, 0, "#'o''ne'!$a$4")
+    recordSheetRename(journal, 'first', 'Holding', "O'ne")
+    recordSheetRename(journal, 'second', "O'ne", 'Two')
+    recordSheetRename(journal, 'first', 'Two', "O'ne")
+    recordHyperlinkEdit(journal, 'host', 0, 1, "#'O''NE'!B3")
+    recordHyperlinkEdit(journal, 'host', 0, 2, '#NamedRange')
+    recordHyperlinkEdit(journal, 'host', 0, 3, 'https://example.test/#Two!C2')
+
+    expect(toSaveHyperlinkEdits(journal).map(({ target }) => target)).toEqual([
+      "#'O''ne'!$a$4",
+      "#'Two'!B3",
+      '#NamedRange',
+      'https://example.test/#Two!C2',
+    ])
+    expect(hyperlinkEditAt(journal, 'host', 0, 0)).toBe("#'Two'!$a$4")
+    expect(hyperlinkEditAt(journal, 'host', 0, 1)).toBe("#'O''NE'!B3")
+  })
+
+  it('serializes pending sparkline sources by their original sheet identity after a swap', () => {
+    const journal = createEditJournal()
+    recordSparklineAdd(journal, {
+      id: 'earlier',
+      sheetId: 'host',
+      type: 'line',
+      cells: [{ cell: 'F3', sourceRef: 'First!$A$2:$A$3' }],
+    })
+    recordSheetRename(journal, 'first', 'Holding', 'First')
+    recordSheetRename(journal, 'second', 'First', 'Second')
+    recordSheetRename(journal, 'first', 'Second', 'First')
+    recordSparklineAdd(journal, {
+      id: 'later',
+      sheetId: 'host',
+      type: 'line',
+      cells: [{ cell: 'F4', sourceRef: 'first!$B$3:$B$4' }],
+    })
+
+    expect(toSaveSparklineAdds(journal).flatMap(({ cells }) => cells)).toEqual([
+      { cell: 'F3', sourceRef: "'First'!$A$2:$A$3" },
+      { cell: 'F4', sourceRef: "'Second'!$B$3:$B$4" },
+    ])
+    expect(journal.sparklineAdds[0]?.cells[0]?.sourceRef).toBe("'Second'!$A$2:$A$3")
+    expect(journal.sparklineAdds[1]?.cells[0]?.sourceRef).toBe('first!$B$3:$B$4')
+  })
+
   it('an added sheet renamed later saves as a single add with the final name', () => {
     const journal = createEditJournal()
     recordSheetInsert(journal, 'u-new', 'Sheet4')
@@ -847,11 +943,13 @@ describe('sheet lifecycle journal', () => {
   it('renaming back to the original name drops the op', () => {
     const journal = createEditJournal()
     recordSheetRename(journal, 'sheet-1', 'Renamed', 'Data')
+    recordHyperlinkEdit(journal, 'host', 0, 0, '#Renamed!A1')
     expect(toSaveSheetOps(journal)).toEqual([
       { kind: 'rename-sheet', sheetId: 'sheet-1', newName: 'Renamed' },
     ])
     recordSheetRename(journal, 'sheet-1', 'Data', 'Data')
     expect(toSaveSheetOps(journal)).toEqual([])
+    expect(toSaveHyperlinkEdits(journal)[0]?.target).toBe("#'Data'!A1")
   })
 
   it('removing an original sheet keeps its entries but excludes them from the payload', () => {
@@ -1297,6 +1395,89 @@ describe('recordStructuralOp page-break remapping', () => {
     recordStructuralOp(journal, 'sheet-1', { kind: 'remove-rows', index: 0, count: 4 })
     expect(journal.structuralOps.get('sheet-1')).toBeUndefined()
     expect(journal.pageSetup.get('sheet-1')?.rowBreaks).toEqual([6])
+  })
+})
+
+describe('recordStructuralOp print range remapping', () => {
+  it('saves pending print ranges at their post-insert coordinates', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printArea: 'B2:D3', printTitles: '2:3' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-rows', index: 0, count: 1 })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-cols', index: 0, count: 1 })
+
+    expect(toSavePageSetupStates(journal)).toEqual([
+      { sheetId: 'sheet-1', printArea: 'C3:E4', printTitles: '3:4' },
+    ])
+  })
+
+  it('expands ranges around inserted lines and shrinks them when surviving lines remain', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printArea: 'B2:D4', printTitles: '2:4' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-rows', index: 2, count: 2 })
+    expect(toSavePageSetupStates(journal)).toEqual([
+      { sheetId: 'sheet-1', printArea: 'B2:D6', printTitles: '2:6' },
+    ])
+
+    recordStructuralOp(journal, 'sheet-1', { kind: 'remove-rows', index: 0, count: 3 })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'remove-cols', index: 2, count: 2 })
+    expect(toSavePageSetupStates(journal)).toEqual([
+      { sheetId: 'sheet-1', printArea: 'B1:B3', printTitles: '1:3' },
+    ])
+  })
+
+  it('clears fully deleted pending ranges while retaining clears and omitted settings', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printArea: 'B2:D3', printTitles: '2:3' })
+    recordPageSetup(journal, 'sheet-2', { printArea: null, orientation: 'landscape' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'remove-rows', index: 1, count: 2 })
+    recordStructuralOp(journal, 'sheet-2', { kind: 'insert-rows', index: 0, count: 1 })
+    recordStructuralOp(journal, 'sheet-3', { kind: 'insert-rows', index: 0, count: 1 })
+
+    expect(toSavePageSetupStates(journal)).toEqual([
+      { sheetId: 'sheet-1', printArea: null, clearPrintTitleRows: true },
+      { sheetId: 'sheet-2', printArea: null, orientation: 'landscape' },
+    ])
+  })
+
+  it('replaces the structural title-row clear with a later explicit title edit', () => {
+    const journal = createEditJournal()
+    for (const [sheetId, printTitles] of [
+      ['sheet-1', '4:5'],
+      ['sheet-2', null],
+    ] as const) {
+      recordPageSetup(journal, sheetId, { printTitles: '2:3' })
+      recordStructuralOp(journal, sheetId, { kind: 'remove-rows', index: 1, count: 2 })
+      recordPageSetup(journal, sheetId, { printTitles })
+    }
+
+    expect(toSavePageSetupStates(journal)).toEqual([
+      { sheetId: 'sheet-1', printTitles: '4:5' },
+      { sheetId: 'sheet-2', printTitles: null },
+    ])
+  })
+
+  it('trims surviving ranges at the grid edge and clears ranges pushed beyond it', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', {
+      printArea: 'XFC1048575:XFD1048576',
+      printTitles: '1048576:1048576',
+    })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-rows', index: 0, count: 1 })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-cols', index: 0, count: 1 })
+
+    expect(toSavePageSetupStates(journal)).toEqual([
+      { sheetId: 'sheet-1', printArea: 'XFD1048576:XFD1048576', clearPrintTitleRows: true },
+    ])
+  })
+
+  it('follows intact row moves and keeps ranges that straddle moved blocks', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printArea: 'B2:D3', printTitles: '3:6' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'move-rows', index: 1, count: 2, before: 8 })
+
+    expect(toSavePageSetupStates(journal)).toEqual([
+      { sheetId: 'sheet-1', printArea: 'B7:D8', printTitles: '3:6' },
+    ])
   })
 })
 

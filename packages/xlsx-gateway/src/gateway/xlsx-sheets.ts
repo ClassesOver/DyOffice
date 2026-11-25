@@ -1,5 +1,27 @@
-import { FORMULA_REFERENCE_PATTERN, qualifierMatches } from './xlsx-structure.ts'
+import {
+  FORMULA_REFERENCE_PATTERN,
+  formulaCodeSegments,
+  qualifierMatches,
+  readDefinedNameText,
+  readWorksheetTagAttribute,
+  rewriteDefinedNames,
+  rewriteWorksheetCore,
+  rewriteWorksheetHyperlinks,
+  updateWorksheetTagAttribute,
+} from './xlsx-structure.ts'
+import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-references.ts'
+import { rewriteX14DataValidations } from './xlsx-dv.ts'
 import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { findRootChild } from './xlsx-root-tail.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
+import {
+  applyPatches,
+  elementText,
+  patchElement,
+  prefixOf,
+  withBody,
+} from './xlsx-worksheet-xml.ts'
 
 /// '>' is legal inside XML attribute values (sheet names can carry it), so
 /// element scans consume quoted runs atomically instead of using [^>]*.
@@ -100,122 +122,154 @@ export function formatSheetQualifier(name: string): string {
   return needsQuoting ? `'${name.replaceAll("'", "''")}'` : name
 }
 
-/// Rewrites references qualified with oldName to newName inside one formula.
-/// String literals ("" escaping) are left untouched.
-export function renameSheetInFormula(formula: string, oldName: string, newName: string): string {
-  return formula
-    .split('"')
-    .map((segment, index) =>
-      index % 2 === 1
-        ? segment
-        : segment.replace(
-            FORMULA_REFERENCE_PATTERN,
-            (full, lead: string, qualifier: string | undefined, token: string) => {
-              if (qualifier === undefined || !qualifierMatches(qualifier, oldName)) return full
-              return `${lead}${formatSheetQualifier(newName)}!${token}`
-            },
-          ),
-    )
-    .join('"')
+type SheetNameLookup = (name: string) => string | undefined
+type ReferenceRewrite = (reference: string) => string
+
+export interface WorksheetRenameExemptions {
+  readonly hyperlinkLocations: ReadonlyMap<string, string>
+  readonly sparklineSources: ReadonlyMap<string, string>
 }
 
-/// True when the formula contains a reference qualified with sheetName.
-export function formulaReferencesSheet(formula: string, sheetName: string): boolean {
-  let found = false
-  formula.split('"').forEach((segment, index) => {
-    if (index % 2 === 1 || found) return
-    segment.replace(
+const WORKSHEET_FORMULA =
+  /(<(f|formula[12]?)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/\2>)/g
+const HYPERLINK_LOCATION = /^('(?:[^']|'')+'|[^'!]+)!([\s\S]*)$/
+function sheetNameLookup(renames: SheetEditPlan['renames']): SheetNameLookup {
+  const names = new Map(renames.map(({ sheetName, newName }) => [sheetName.toLowerCase(), newName]))
+  return (name) => names.get(name.toLowerCase())
+}
+
+function lookupQualifier(qualifier: string, lookup: SheetNameLookup): string | undefined {
+  const name = qualifier.startsWith("'") ? qualifier.slice(1, -1).replaceAll("''", "'") : qualifier
+  return lookup(name)
+}
+
+/// Rewrite each original qualifier exactly once, even when two sheets
+/// exchange names or one sheet takes the former name of another.
+export function createSheetReferenceRenamer(renames: SheetEditPlan['renames']) {
+  const lookup = sheetNameLookup(renames)
+  const formula: ReferenceRewrite = (ref) => renameFormulaSheetNames(ref, lookup)
+  const location: ReferenceRewrite = (ref) => {
+    const match = HYPERLINK_LOCATION.exec(ref)
+    if (!match?.[1] || match[2] === undefined) return ref
+    const newName = lookupQualifier(match[1], lookup)
+    return newName === undefined ? ref : `${formatSheetQualifier(newName)}!${match[2]}`
+  }
+  return {
+    worksheet: (xml: string, preserve?: WorksheetRenameExemptions) =>
+      rewriteWorksheetReferences(xml, formula, location, preserve),
+    chart: (xml: string) => rewriteChartReferences(xml, formula),
+    definedNames: (xml: string) => rewriteDefinedNames(xml, formula),
+    pivotCache: (xml: string) => rewritePivotCacheSource(xml, lookup),
+  }
+}
+
+/// String literals are left untouched, as are external workbook qualifiers.
+function renameFormulaSheetNames(formula: string, lookup: SheetNameLookup): string {
+  let result = ''
+  for (const { code, literal } of formulaCodeSegments(formula)) {
+    result += code.replace(
       FORMULA_REFERENCE_PATTERN,
-      (full, _lead: string, qualifier: string | undefined) => {
-        if (qualifier !== undefined && qualifierMatches(qualifier, sheetName)) found = true
-        return full
+      (full, lead: string, qualifier: string | undefined, token: string) => {
+        if (qualifier === undefined || lead === ']') return full
+        const newName = lookupQualifier(qualifier, lookup)
+        return newName === undefined ? full : `${lead}${formatSheetQualifier(newName)}!${token}`
       },
     )
-  })
-  return found
+    result += literal
+  }
+  return result
 }
 
-/// Rewrites qualified references in a worksheet part: formula bodies, CF/DV
-/// rule formulas, and internal hyperlink anchors.
-export function renameSheetReferencesInWorksheet(
-  worksheetXml: string,
-  oldName: string,
-  newName: string,
-): string {
-  // Self-closing `<f .../>` (shared-formula followers) must not match, or
-  // the XML up to the next `</f>` would be swallowed as a formula body.
-  let xml = worksheetXml.replace(
-    /<f\b([^>]*[^/>])?>([\s\S]*?)<\/f>/g,
-    (_full, attributes: string | undefined, body: string) =>
-      `<f${attributes ?? ''}>${escapeXmlText(renameSheetInFormula(decodeEntities(body), oldName, newName))}</f>`,
-  )
-  xml = xml.replace(
-    /<(formula[12]?)>([\s\S]*?)<\/\1>/g,
-    (_full, tag: string, body: string) =>
-      `<${tag}>${escapeXmlText(renameSheetInFormula(decodeEntities(body), oldName, newName))}</${tag}>`,
-  )
-  return xml.replace(
-    new RegExp(`(<hyperlink\\b${TAG_ATTRIBUTES}\\blocation=")([^"]+)(")`, 'g'),
-    (full, prefix: string, location: string, suffix: string) => {
-      const renamed = renameHyperlinkLocation(decodeAttribute(location), oldName, newName)
-      if (renamed === null) return full
-      return `${prefix}${escapeXmlAttribute(renamed)}${suffix}`
-    },
-  )
+export function renameSheetInFormula(formula: string, oldName: string, newName: string): string {
+  return renameFormulaSheetNames(formula, sheetNameLookup([{ sheetName: oldName, newName }]))
 }
 
-function renameHyperlinkLocation(
-  location: string,
-  oldName: string,
-  newName: string,
-): string | null {
-  const match = /^('(?:[^']|'')+'|[^'!]+)!([\s\S]*)$/.exec(location)
-  if (!match?.[1] || match[2] === undefined) return null
-  if (!qualifierMatches(match[1], oldName)) return null
-  return `${formatSheetQualifier(newName)}!${match[2]}`
-}
-
-/// Rewrites qualified references in chart series (`<c:f>` bodies).
-export function renameSheetReferencesInChart(
-  chartXml: string,
-  oldName: string,
-  newName: string,
-): string {
-  return chartXml.replace(
-    /(<c:f>)([\s\S]*?)(<\/c:f>)/g,
-    (_full, open: string, body: string, close: string) =>
-      `${open}${escapeXmlText(renameSheetInFormula(decodeEntities(body), oldName, newName))}${close}`,
-  )
-}
-
-/// Rewrites qualified references in workbook definedName bodies.
-export function renameSheetReferencesInDefinedNames(
-  workbookXml: string,
-  oldName: string,
-  newName: string,
-): string {
-  return workbookXml.replace(
-    /(<definedName\b[^>]*>)([\s\S]*?)(<\/definedName>)/g,
-    (_full, open: string, body: string, close: string) =>
-      `${open}${escapeXmlText(renameSheetInFormula(decodeEntities(body), oldName, newName))}${close}`,
-  )
-}
-
-export function worksheetReferencesSheet(worksheetXml: string, sheetName: string): boolean {
-  for (const pattern of [
-    /<f\b(?:[^>]*[^/>])?>([\s\S]*?)<\/f>/g,
-    /<(?:formula[12]?)>([\s\S]*?)<\/(?:formula[12]?)>/g,
-  ]) {
-    for (const match of worksheetXml.matchAll(pattern)) {
-      if (formulaReferencesSheet(decodeEntities(match[1] ?? ''), sheetName)) return true
+/// True when the formula contains a local reference qualified with sheetName.
+export function formulaReferencesSheet(formula: string, sheetName: string): boolean {
+  for (const { code } of formulaCodeSegments(formula)) {
+    for (const [, lead, qualifier] of code.matchAll(FORMULA_REFERENCE_PATTERN)) {
+      if (lead !== ']' && qualifier !== undefined && qualifierMatches(qualifier, sheetName)) {
+        return true
+      }
     }
   }
   return false
 }
 
+function rewriteWorksheetReferences(
+  worksheetXml: string,
+  rewriteFormula: ReferenceRewrite,
+  rewriteLocation: ReferenceRewrite,
+  preserve?: WorksheetRenameExemptions,
+): string {
+  let xml = rewriteWorksheetCore(worksheetXml, (core) =>
+    core.replace(
+      WORKSHEET_FORMULA,
+      (full, opening: string, _tag: string, body: string, closing: string) => {
+        const formula = decodeEntities(body)
+        const rewritten = rewriteFormula(formula)
+        return rewritten === formula ? full : opening + escapeXmlText(rewritten) + closing
+      },
+    ),
+  )
+  xml = rewriteWorksheetHyperlinks(xml, (location, cell) =>
+    cell !== undefined && preserve?.hyperlinkLocations.get(cell) === location
+      ? location
+      : rewriteLocation(location),
+  )
+  xml = rewriteX14DataValidations(xml, rewriteFormula)
+  return rewriteWorksheetVisualReferences(
+    xml,
+    rewriteFormula,
+    undefined,
+    preserve?.sparklineSources,
+  )
+}
+
+export function renameSheetReferencesInWorksheet(
+  worksheetXml: string,
+  oldName: string,
+  newName: string,
+): string {
+  return createSheetReferenceRenamer([{ sheetName: oldName, newName }]).worksheet(worksheetXml)
+}
+
+export function renameSheetReferencesInChart(
+  chartXml: string,
+  oldName: string,
+  newName: string,
+): string {
+  return createSheetReferenceRenamer([{ sheetName: oldName, newName }]).chart(chartXml)
+}
+
+export function renameSheetReferencesInDefinedNames(
+  workbookXml: string,
+  oldName: string,
+  newName: string,
+): string {
+  return createSheetReferenceRenamer([{ sheetName: oldName, newName }]).definedNames(workbookXml)
+}
+
+export function worksheetReferencesSheet(worksheetXml: string, sheetName: string): boolean {
+  let found = false
+  rewriteWorksheetReferences(
+    worksheetXml,
+    (formula) => {
+      found ||= formulaReferencesSheet(formula, sheetName)
+      return formula
+    },
+    (location) => {
+      const qualifier = HYPERLINK_LOCATION.exec(location)?.[1]
+      found ||= qualifier !== undefined && qualifierMatches(qualifier, sheetName)
+      return location
+    },
+  )
+  return found
+}
+
 export function chartReferencesSheet(chartXml: string, sheetName: string): boolean {
-  for (const match of chartXml.matchAll(/<c:f>([\s\S]*?)<\/c:f>/g)) {
-    if (formulaReferencesSheet(decodeEntities(match[1] ?? ''), sheetName)) return true
+  for (const { element } of chartFormulaElements(chartXml)) {
+    if (formulaReferencesSheet(elementText(element.inner), sheetName)) return true
   }
   return false
 }
@@ -375,7 +429,8 @@ export function nextFreeRelationshipIds(relationshipsXml: string, count: number)
 /// Rebuilds workbook.xml for the plan: sheet elements renamed / added /
 /// removed and re-assembled in the final order, definedName localSheetId
 /// scopes renumbered (or dropped with their sheet), and the active tab
-/// clamped to a surviving visible sheet.
+/// follows its original sheet or moves to the first visible sheet if removed
+/// or newly hidden.
 export function applySheetPlanToWorkbookXml(
   workbookXml: string,
   plan: SheetEditPlan,
@@ -418,7 +473,8 @@ export function applySheetPlanToWorkbookXml(
   ) {
     throw new SheetEditError('The sheet order does not match the final sheet set.')
   }
-  if (plan.order.every((name) => finalElements.get(name)?.hidden)) {
+  const firstVisible = plan.order.findIndex((name) => !finalElements.get(name)?.hidden)
+  if (firstVisible === -1) {
     throw new SheetEditError('A workbook needs at least one visible sheet.')
   }
 
@@ -432,30 +488,108 @@ export function applySheetPlanToWorkbookXml(
   const oldIndexToNew = (oldIndex: number): number | null => {
     const originalName = originalNames[oldIndex]
     if (originalName === undefined || removedSet.has(originalName)) return null
-    return plan.order.indexOf(renameByOriginal.get(originalName) ?? originalName)
+    const mapped = plan.order.indexOf(renameByOriginal.get(originalName) ?? originalName)
+    return mapped < 0 ? null : mapped
   }
-  result = result.replace(
-    /<definedName\b[^>]*?\blocalSheetId="([0-9]+)"[^>]*>[\s\S]*?<\/definedName>/g,
-    (full, localId: string) => {
-      const mapped = oldIndexToNew(Number(localId))
-      if (mapped === null) return ''
-      return full.replace(/\blocalSheetId="[0-9]+"/, () => `localSheetId="${mapped}"`)
-    },
-  )
-  result = result.replace(/<definedNames>\s*<\/definedNames>/, '')
+  const definedNames = workbookSection(result, 'definedNames')
+  if (definedNames) {
+    const patches = workbookSectionEntries(definedNames.section, 'definedName').flatMap((name) => {
+      const localId = readTabIndex(name.opening, 'localSheetId')
+      if (localId === undefined) return []
+      const mapped = oldIndexToNew(localId)
+      if (mapped === localId) return []
+      const updated =
+        mapped === null
+          ? ''
+          : updateWorksheetTagAttribute(name.opening, 'localSheetId', String(mapped)) +
+            name.xml.slice(name.opening.length)
+      return [patchElement(name, updated)]
+    })
+    if (patches.length > 0) {
+      const inner = applyPatches(definedNames.section.inner, patches)
+      result =
+        result.slice(0, definedNames.start) +
+        (inner.trim() ? withBody(definedNames.section, inner) : '') +
+        result.slice(definedNames.end)
+    }
+  }
 
-  result = result.replace(
-    /(<workbookView\b[^>]*?\bactiveTab=")([0-9]+)(")/,
-    (_full, prefix: string, activeTab: string, suffix: string) => {
-      const mapped = oldIndexToNew(Number(activeTab))
-      const fallback = plan.order.findIndex((name) => !finalElements.get(name)?.hidden)
-      return `${prefix}${mapped ?? Math.max(fallback, 0)}${suffix}`
-    },
-  )
+  const activeIndex = (oldIndex: number): number => {
+    const mapped = oldIndexToNew(oldIndex)
+    if (mapped === null) return firstVisible
+    const newlyHidden =
+      !elements[oldIndex]?.hidden && finalElements.get(plan.order[mapped]!)?.hidden
+    return newlyHidden ? firstVisible : mapped
+  }
+  // The active tab defaults to the original first tab, even without a book view.
+  const implicitActiveIndex = activeIndex(0)
+  const bookViews = workbookSection(result, 'bookViews')
+  if (bookViews) {
+    const views = workbookSectionEntries(bookViews.section, 'workbookView')
+    const patches = views.flatMap((view) => {
+      const index = readTabIndex(view.opening, 'activeTab') ?? 0
+      const mapped = activeIndex(index)
+      if (index === mapped) return []
+      const opening = updateWorksheetTagAttribute(view.opening, 'activeTab', String(mapped))
+      return [patchElement(view, opening + view.xml.slice(view.opening.length))]
+    })
+    let inner = applyPatches(bookViews.section.inner, patches)
+    if (views.length === 0 && implicitActiveIndex !== 0) {
+      inner += `<${prefixOf(bookViews.section.name)}workbookView activeTab="${implicitActiveIndex}"/>`
+    }
+    if (inner !== bookViews.section.inner) {
+      result =
+        result.slice(0, bookViews.start) +
+        withBody(bookViews.section, inner) +
+        result.slice(bookViews.end)
+    }
+  } else if (implicitActiveIndex !== 0) {
+    const sheets = findRootChild(result, 'workbook', 'sheets')
+    if (sheets) {
+      const prefix = prefixOf(childElements(result)[0]?.name ?? '')
+      result =
+        result.slice(0, sheets.start) +
+        `<${prefix}bookViews><${prefix}workbookView activeTab="${implicitActiveIndex}"/></${prefix}bookViews>` +
+        result.slice(sheets.start)
+    }
+  }
 
   // Added <sheet> elements carry r:id; hosts that bind r per element only
   // would leave the new element's prefix undeclared.
   return additions.length > 0 ? ensureRelationshipNamespace(result) : result
+}
+
+function readTabIndex(
+  opening: string,
+  attribute: 'localSheetId' | 'activeTab',
+): number | undefined {
+  const raw = readWorksheetTagAttribute(opening, attribute)
+  const value = raw === undefined ? '' : decodeAttribute(raw).trim()
+  return /^\+?\d+$/.test(value) ? Number(value) : undefined
+}
+
+function workbookSection(workbookXml: string, name: string) {
+  const position = findRootChild(workbookXml, 'workbook', name)
+  if (!position) return undefined
+  const [section] = childElements(workbookXml.slice(position.start, position.end))
+  return section ? { ...position, section } : undefined
+}
+
+function workbookSectionEntries(section: { inner: string }, name: string) {
+  return childElements(section.inner).filter(
+    (entry) => entry.name.slice(prefixOf(entry.name).length) === name,
+  )
+}
+
+function* survivingDefinedNameFormulas(workbookXml: string, removedLocalIds: ReadonlySet<number>) {
+  const names = workbookSection(workbookXml, 'definedNames')
+  if (!names) return
+  for (const name of workbookSectionEntries(names.section, 'definedName')) {
+    const localId = readTabIndex(name.opening, 'localSheetId')
+    if (localId !== undefined && removedLocalIds.has(localId)) continue
+    const formula = readDefinedNameText(name.inner)
+    if (formula !== undefined) yield formula
+  }
 }
 
 /// Toggles a `<sheet>` element's state attribute. A veryHidden sheet stays
@@ -588,15 +722,8 @@ export function definedNamesUseToken(
   removedLocalIds: ReadonlySet<number>,
 ): boolean {
   const needle = token.toLowerCase()
-  for (const match of workbookXml.matchAll(/<definedName\b([^>]*)>([\s\S]*?)<\/definedName>/g)) {
-    const localId = readAttribute(`<definedName${match[1] ?? ''}/>`, 'localSheetId')
-    if (localId !== undefined && removedLocalIds.has(Number(localId))) continue
-    if (
-      decodeEntities(match[2] ?? '')
-        .toLowerCase()
-        .includes(needle)
-    )
-      return true
+  for (const formula of survivingDefinedNameFormulas(workbookXml, removedLocalIds)) {
+    if (formula.toLowerCase().includes(needle)) return true
   }
   return false
 }
@@ -606,11 +733,8 @@ export function definedNamesUseToken(
 /// case-insensitively, matching Excel.
 export function pivotCacheReadsFromSheet(cacheXml: string, sheetName: string): boolean {
   const target = sheetName.toLowerCase()
-  for (const match of cacheXml.matchAll(
-    new RegExp(`<worksheetSource\\b${TAG_ATTRIBUTES}/?>`, 'g'),
-  )) {
-    const sheet = readAttribute(match[0], 'sheet')
-    if (sheet !== undefined && decodeAttribute(sheet).toLowerCase() === target) return true
+  for (const [element] of cacheXml.matchAll(WORKSHEET_SOURCE)) {
+    if (pivotSourceSheet(element)?.toLowerCase() === target) return true
   }
   return false
 }
@@ -623,12 +747,24 @@ export function renameSheetInPivotCacheSource(
   oldName: string,
   newName: string,
 ): string {
-  const target = oldName.toLowerCase()
-  return cacheXml.replace(new RegExp(`<worksheetSource\\b${TAG_ATTRIBUTES}/?>`, 'g'), (element) => {
-    const sheet = readAttribute(element, 'sheet')
-    if (sheet === undefined || decodeAttribute(sheet).toLowerCase() !== target) return element
-    return element.replace(/\ssheet="[^"]*"/, () => ` sheet="${escapeXmlAttribute(newName)}"`)
+  return rewritePivotCacheSource(cacheXml, sheetNameLookup([{ sheetName: oldName, newName }]))
+}
+
+function rewritePivotCacheSource(cacheXml: string, lookup: SheetNameLookup): string {
+  return cacheXml.replace(WORKSHEET_SOURCE, (element) => {
+    const sheet = pivotSourceSheet(element)
+    const newName = sheet === undefined ? undefined : lookup(sheet)
+    return newName === undefined
+      ? element
+      : updateWorksheetTagAttribute(element, 'sheet', escapeXmlAttribute(newName))
   })
+}
+
+const WORKSHEET_SOURCE = new RegExp(`<worksheetSource(?=[\\s/>])${TAG_ATTRIBUTES}/?>`, 'g')
+
+function pivotSourceSheet(element: string): string | undefined {
+  const raw = readWorksheetTagAttribute(element, 'sheet')
+  return raw === undefined ? undefined : decodeAttribute(raw)
 }
 
 /// DefinedNames scoped to a removed sheet are dropped with it, so their
@@ -638,10 +774,8 @@ export function definedNamesReferenceSheet(
   sheetName: string,
   removedLocalIds: ReadonlySet<number>,
 ): boolean {
-  for (const match of workbookXml.matchAll(/<definedName\b([^>]*)>([\s\S]*?)<\/definedName>/g)) {
-    const localId = readAttribute(`<definedName${match[1] ?? ''}/>`, 'localSheetId')
-    if (localId !== undefined && removedLocalIds.has(Number(localId))) continue
-    if (formulaReferencesSheet(decodeEntities(match[2] ?? ''), sheetName)) return true
+  for (const formula of survivingDefinedNameFormulas(workbookXml, removedLocalIds)) {
+    if (formulaReferencesSheet(formula, sheetName)) return true
   }
   return false
 }
