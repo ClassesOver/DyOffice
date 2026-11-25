@@ -1109,7 +1109,7 @@
       "rationale": "Depends on the current document channel and non-revoked peers; task acknowledgements and states are not completed results."
     },
     {
-      "id": "packages/browser-host/src/source-catalog-skill.ts#sources_list",
+      "id": "packages/browser-host/src/source-catalog-skill.ts#list_connections",
       "placement": "headless",
       "web": "Session-bound published workspace source metadata API",
       "verifyIn": "T14",
