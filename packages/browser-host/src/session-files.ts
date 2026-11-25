@@ -175,7 +175,9 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         // retry cannot erase uncertainty about an earlier submitted request.
         ctx.pending=recovering?pending:null;ctx.status=recovering?'unknown':'idle';emit();throw error
       }
-      if (status && status >= 400 && status < 500 && status !== 408) {
+      // A rate limit can block a receipt lookup after the write already landed.
+      // Keep the staged request so the next attempt uses the same idempotency key.
+      if (status && status >= 400 && status < 500 && status !== 408 && status !== 429) {
         ctx.pending = null; ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'
         if (ctx.status === 'unauthorized' || (error as HostError).code === 'CONFLICT') revokeLease(fileId,ctx)
       } else ctx.status = 'unknown'
