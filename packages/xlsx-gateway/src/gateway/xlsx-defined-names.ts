@@ -49,8 +49,12 @@ function workbookNameParts(workbookXml: string) {
   return { root, children, section, entries }
 }
 
+export function workbookDefinedNameElements(workbookXml: string) {
+  return workbookNameParts(workbookXml)?.entries ?? []
+}
+
 export function readWorkbookDefinedNameKeys(workbookXml: string): Set<string> {
-  return new Set(workbookNameParts(workbookXml)?.entries.flatMap((entry) => {
+  return new Set(workbookDefinedNameElements(workbookXml).flatMap((entry) => {
     const name = entry.attributes.get('name')
     return name ? [name.toLowerCase()] : []
   }))

@@ -83,11 +83,12 @@ export async function sheetTableParts(
 ): Promise<readonly LocatedTable[]> {
   const relsPath = relsPathFor(worksheetPath)
   if (!(await pkg.has(relsPath))) return []
+  const relationships = parseRelationships(await pkg.readText(relsPath))
+    .filter((entry) => !entry.external && entry.type.endsWith('/table'))
+  if (relationships.length === 0) return []
   const root = worksheetRoot(await pkg.readText(worksheetPath))
   const references = root && worksheetTableParts(root)
   if (!references) return []
-  const relationships = parseRelationships(await pkg.readText(relsPath))
-    .filter((entry) => !entry.external && entry.type.endsWith('/table'))
   const parts: LocatedTable[] = []
   for (const { id: relId } of references.entries) {
     if (!relId) continue

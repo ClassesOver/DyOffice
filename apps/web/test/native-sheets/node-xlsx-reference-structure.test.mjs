@@ -337,6 +337,25 @@ test(
       for (const cell of sourceRange.cells) values[cell.row][cell.column] = cell.value
       const { data } = recomputePivotData(definition, values)
       assert.deepEqual(data, [[150], [50], [200]])
+
+      const named = await editPart(saved, wbPath, (xml) => xml.replace('</definedNames>',
+        '<definedName name="RegionInput">Other!$A$1:$B$3</definedName>' +
+        '<definedName name="RegionInput" localSheetId="0">\'Acceptance\'!$A$1:$B$4</definedName>' +
+        '<definedName name="DynamicInput">OFFSET(Acceptance!$A$1,0,0,4,2)</definedName></definedNames>'))
+      const readNamed = async (attributes) => {
+        const bytes = await editPart(named, after.cachePath, (xml) =>
+          xml.replace('<worksheetSource name="SalesData"/>', `<worksheetSource ${attributes}/>`))
+        return runtime.sheetsPackageReader(bytes, undefined, { path: after.path, cachePath: after.cachePath })
+      }
+      const global = await readNamed('name="regioninput"')
+      assert.equal(global.sourceSheet, 'Other')
+      assert.equal(global.sourceRef, 'A1:B3')
+      assert.deepEqual(global.unsupported, [])
+      const local = await readNamed('name="RegionInput" sheet="Acceptance"')
+      assert.equal(local.sourceSheet, 'Acceptance')
+      assert.equal(local.sourceRef, 'A1:B4')
+      assert.deepEqual(recomputePivotData(local, values).data, [[150], [50], [200]])
+      assert.ok((await readNamed('name="DynamicInput"')).unsupported.length > 0)
     })
 
     await t.test('preserves pending references to a new tab that takes an old name', async () => {
