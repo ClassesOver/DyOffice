@@ -83,7 +83,7 @@ import {
 } from './xlsx-filter.ts'
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
-import { decodeCellText, elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
+import { decodeCellText, elementText, isElement, isSpreadsheetNamespace, scopedChildren, withNamespaces, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 import { isWorkbookSheetRelationship, readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
@@ -3986,40 +3986,48 @@ async function readSharedTextEntries(
   const path = await readWorkbookPartPath(source, 'sharedStrings')
   if (!(await source.has(path))) return []
   const xml = await source.readText(path)
-  return Array.from(sharedStringItems(xml), (item) => parseCellText(item, readRunStyle))
+  return Array.from(sharedStringItems(xml), (item) => parseCellText(item.inner, readRunStyle, item))
 }
 
 export function parseSharedStringsXml(xml: string): string[] {
-  return Array.from(sharedStringItems(xml), (item) => parseCellText(item).value)
+  return Array.from(sharedStringItems(xml), (item) => parseCellText(item.inner, undefined, item).value)
 }
 
-const sharedStringPattern = /<si(?=[\s/>])[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g
-function* sharedStringItems(xml: string): Iterable<string> {
-  if (!hasLiteralMarkup(xml)) {
-    for (const [, body] of xml.matchAll(sharedStringPattern)) yield body ?? ''
-    return
+function* sharedStringItems(xml: string): Iterable<ScopedElement> {
+  const [element] = childElements(xml)
+  const sst = element && withNamespaces(element, new Map())
+  if (sst?.local !== 'sst' || !isSpreadsheetNamespace(sst.namespace)) return
+  for (const node of childElements(sst.inner)) {
+    const item = withNamespaces(node, sst.namespaces)
+    if (isElement(item, 'si', sst.namespace)) yield item
   }
-  const sst = childElements(xml).find(({ name }) => name === 'sst')
-  for (const item of childElements(sst?.inner ?? '')) if (item.name === 'si') yield item.inner
 }
 
 type CellText = { readonly value: string; readonly rich?: WorkbookRichRun[] }
 const plainTextRun = { bold: false, italic: false, underline: false, strikethrough: false }
 
-function parseCellText(xml: string, readRunStyle?: ReadRunStyle): CellText {
+function cellTextChildren(xml: string, parent?: ScopedElement) {
+  return childElements(xml).flatMap(element => {
+    const scope = parent && withNamespaces(element, parent.namespaces)
+    if (parent && scope?.namespace !== parent.namespace) return []
+    return [{ element, name: scope?.local ?? element.name, scope }]
+  })
+}
+
+function parseCellText(xml: string, readRunStyle?: ReadRunStyle, scope?: ScopedElement): CellText {
   const runs: WorkbookRichRun[] = []
   let value = ''
   let styled = false
   // Only direct text and rich runs contribute cell content. Phonetic guides do not.
-  for (const item of childElements(xml)) {
+  for (const item of cellTextChildren(xml, scope)) {
     if (item.name !== 't' && item.name !== 'r') continue
-    const children = item.name === 'r' ? childElements(item.inner) : []
-    const node = item.name === 't' ? item : children.find(({ name }) => name === 't')
+    const children = item.name === 'r' ? cellTextChildren(item.element.inner, item.scope) : []
+    const node = item.name === 't' ? item.element : children.find(({ name }) => name === 't')?.element
     const preserveSpace = node !== undefined && readWorksheetTagAttribute(node.opening, 'xml:space') === 'preserve'
     const text = decodeCellText(node?.inner ?? '', preserveSpace)
     value += text
     if (readRunStyle) {
-      const properties = children.find(({ name }) => name === 'rPr')?.xml
+      const properties = children.find(({ name }) => name === 'rPr')?.element.xml
       const style = properties === undefined ? plainTextRun : readRunStyle(properties)
       styled ||= properties !== undefined && Object.values(style).some(Boolean)
       runs.push({ text, ...style })

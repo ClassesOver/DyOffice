@@ -45,7 +45,9 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
     .replace('</Relationships>',
       relationship('sst', 'sharedStrings', 'parts/strings.xml') +
       relationship('theme', 'theme', 'parts/active%20theme.xml') + '</Relationships>'))
-  zip.file(stringsPath, `<sst xmlns="${main}"><si><t>Linked text</t></si></sst>`)
+  zip.file(stringsPath, '<s:sst xmlns:s="http://purl.oclc.org/ooxml/spreadsheetml/main">' +
+    '<s:si/><s:si><s:r><s:rPr><s:b/></s:rPr><s:t>Linked</s:t></s:r>' +
+    '<s:r><s:t xml:space="preserve"> text</s:t></s:r></s:si></s:sst>')
   zip.file('xl/sharedStrings.xml', `<sst xmlns="${main}"><si><t>Unrelated text</t></si></sst>`)
   const colorSlots = ['dk1', 'lt1', 'dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4',
     'accent5', 'accent6', 'hlink', 'folHlink']
@@ -68,7 +70,7 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
     <colors><indexedColors><rgbColor rgb="FF010203"/><rgbColor rgb="FF223344"/></indexedColors></colors>
   </styleSheet>`)
   zip.file(worksheetPath, `<worksheet xmlns="${main}" xmlns:r="${office}" xmlns:xdr="${drawing}">
-    <sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1" t="s"><v>0</v></c></row></sheetData>
+    <sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1" t="s"><v>1</v></c></row></sheetData>
     <drawing r:id="drawing"/><legacyDrawing r:id="oleVml"/><legacyDrawingHF r:id="headerVml"/>
     <oleObjects>
       <oleObject progId="Package" shapeId="1025" r:id="embed"/>
@@ -134,6 +136,7 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
   await t.test('reads linked strings and saves formatting in the linked stylesheet', async () => {
     const { cells } = await native.readRange(bytes, 'Acceptance', { ...range, startColumn: 1, endColumn: 1 })
     assert.equal(cells[0].value, 'Linked text')
+    assert.deepEqual(cells[0].rich.map(({ text, bold }) => [text, bold]), [['Linked', true], [' text', false]])
     const request = sheetsSaveRequest('sheet-1', [
       { row: 0, column: 0, writeValue: false, value: null, style: { bold: true } },
     ])
@@ -141,6 +144,7 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
     const saved = await JSZip.loadAsync(result.bytes)
     assert.equal(await saved.file('xl/styles.xml').async('string'), await zip.file('xl/styles.xml').async('string'))
     assert.notEqual(await saved.file(stylesPath).async('string'), await zip.file(stylesPath).async('string'))
+    assert.equal(await saved.file(stringsPath).async('string'), await zip.file(stringsPath).async('string'))
     assert.ok((await native.inspect(result.bytes)).styles.some((style) => style.bold))
   })
 

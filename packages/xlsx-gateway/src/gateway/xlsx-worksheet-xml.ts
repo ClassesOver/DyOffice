@@ -47,12 +47,15 @@ export function worksheetRoot(xml: string): ScopedElement | undefined {
   return root?.local === 'worksheet' ? root : undefined
 }
 
+export function isSpreadsheetNamespace(namespace: string | undefined): boolean {
+  return namespace !== undefined && WORKSHEET_NAMESPACES.has(namespace)
+}
+
 export function spreadsheetSheetRoot(xml: string): ScopedElement | undefined {
   const node = childElements(xml)[0]
   const root = node && withNamespaces(node, new Map([['', '']]))
   return (root?.local === 'worksheet' || root?.local === 'chartsheet') &&
-    root.namespace !== undefined &&
-    WORKSHEET_NAMESPACES.has(root.namespace)
+    isSpreadsheetNamespace(root.namespace)
     ? root
     : undefined
 }

@@ -1525,7 +1525,10 @@ fn workbook_uses_linked_styles_and_shared_strings() {
             "xl/styles.xml",
             r#"<styleSheet><fonts><font><name val="Orphan Font"/></font></fonts><cellXfs><xf fontId="0"/></cellXfs></styleSheet>"#,
         ),
-        ("xl/parts/strings.xml", "<sst><si/><si><t>Linked text</t></si></sst>"),
+        (
+            "xl/parts/strings.xml",
+            r#"<s:sst xmlns:s="http://purl.oclc.org/ooxml/spreadsheetml/main"><s:si/><s:si><s:r><s:rPr><s:b/></s:rPr><s:t>Linked</s:t></s:r><s:r><s:t xml:space="preserve"> text</s:t></s:r></s:si></s:sst>"#,
+        ),
         (
             "xl/sharedStrings.xml",
             "<sst><si><t>A</t></si><si><t>Orphan text</t></si></sst>",
