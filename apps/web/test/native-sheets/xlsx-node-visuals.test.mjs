@@ -154,6 +154,53 @@ test('imports the acceptance chart with a usable anchor, series cache, and edita
   assert.deepEqual(JSON.parse(JSON.stringify(visual)), native.meta.visuals[0])
 })
 
+test('duplicates a worksheet with an independently editable embedded chart', { timeout: 120_000 }, async t => {
+  const bytes = await readFile(fixture)
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-worksheet-chart-copy-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const save = async (input, request) =>
+    (await runtime.sheetsNative.savePlan(input, await runtime.sheetsWorkbookPlanner(input, request))).bytes
+  const duplicate = sheetsSaveRequest('sheet-1', [])
+  duplicate.sheetOps = [{ kind: 'duplicate-sheet', sheetId: 'worksheet-copy', sourceSheetId: 'sheet-1', name: 'Worksheet Copy' }]
+  duplicate.sheetOrder = ['sheet-1', 'worksheet-copy']
+  const copied = await save(bytes, duplicate)
+  const metadata = await runtime.sheetsNative.inspect(copied)
+  assert.deepEqual(metadata.sheets.map(({ name }) => name), ['Acceptance', 'Worksheet Copy'])
+  const [originalSheet, copiedSheet] = metadata.sheets
+  const original = metadata.visuals.find(({ sheetId }) => sheetId === originalSheet.id)
+  const copy = metadata.visuals.find(({ sheetId }) => sheetId === copiedSheet.id)
+  assert.equal(original?.chartPath, chartPath)
+  assert.equal(copy?.kind, 'chart')
+  assert.notEqual(copy.chartPath, original.chartPath)
+  assert.notEqual(copy.drawingPath, original.drawingPath)
+  assert.deepEqual(copy.anchor, original.anchor)
+  assert.deepEqual(copy.chart.series, original.chart.series)
+  const value = await runtime.sheetsNative.readRange(copied, 'Worksheet Copy',
+    { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+  assert.equal(value.cells[0].value, 'Revenue')
+  const edit = sheetsSaveRequest(copiedSheet.id, [])
+  edit.chartEdits = [{ chartPath: copy.chartPath, title: 'Worksheet copy chart' }]
+  const edited = await save(copied, edit)
+  const reopened = await runtime.sheetsNative.inspect(edited)
+  assert.equal(reopened.visuals.find(({ chartPath: path }) => path === chartPath)?.chart.title, original.chart.title)
+  assert.equal(reopened.visuals.find(({ chartPath: path }) => path === copy.chartPath)?.chart.title, 'Worksheet copy chart')
+  const remove = sheetsSaveRequest(originalSheet.id, [])
+  remove.sheetOps = [{ kind: 'remove-sheet', sheetId: copiedSheet.id }]
+  remove.sheetOrder = [originalSheet.id]
+  const removed = await save(edited, remove)
+  const [remaining] = (await runtime.sheetsNative.inspect(removed)).visuals
+  assert.equal(remaining.chartPath, chartPath)
+  assert.equal(remaining.chart.title, original.chart.title)
+  assert.equal((await JSZip.loadAsync(removed)).file(copy.chartPath), null)
+})
+
 test('loads combo series and secondary scale without losing sparse cache slots or uncached formulas', async () => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const theme = ['#FFFFFF', '#000000', '#EEEEEE', '#111111', '#4472C4', '#ED7D31']

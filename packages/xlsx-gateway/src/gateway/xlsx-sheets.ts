@@ -281,7 +281,8 @@ export function chartReferencesSheet(chartXml: string, sheetName: string): boole
 /// relationships clone verbatim (ids are part-scoped, targets are external or
 /// workbook-internal anchors). Printer settings reference a part the copy
 /// must not share, so they are dropped — the caller strips the matching
-/// r:id attributes. Anything else (drawings, tables, comments, pivots) would
+/// r:id attributes. Drawing relationships are retained for the part copier
+/// to retarget. Anything else (tables, comments, pivots) would
 /// leave the clone pointing at parts that cannot be shared: fail closed.
 export function prepareClonedSheetRels(
   relsXml: string,
@@ -290,13 +291,14 @@ export function prepareClonedSheetRels(
   const root = findRelationshipsRoot(relsXml)
   if (!root) throw new SheetEditError(`Sheet "${sourceName}" has an invalid relationships part.`)
   const printerSettings = []
-  let hasHyperlinks = false
+  let hasClonedRelationships = false
   for (const entry of childElements(root.inner)) {
     const rawType = readWorksheetTagAttribute(entry.opening, 'Type')
     const type = rawType === undefined ? '' : decodeAttribute(rawType)
+    const external = decodeAttribute(readWorksheetTagAttribute(entry.opening, 'TargetMode') ?? '') === 'External'
     if (entry.name.slice(entry.name.lastIndexOf(':') + 1) === 'Relationship') {
-      if (type.endsWith('/hyperlink')) {
-        hasHyperlinks = true
+      if (type.endsWith('/hyperlink') || (type.endsWith('/drawing') && !external)) {
+        hasClonedRelationships = true
         continue
       }
       if (type.endsWith('/printerSettings')) {
@@ -305,12 +307,11 @@ export function prepareClonedSheetRels(
       }
     }
     throw new SheetEditError(
-      `Sheet "${sourceName}" carries charts, images, tables, or comments — ` +
-        'duplicating it is not supported yet.',
+      `Sheet "${sourceName}" has a relationship that cannot be copied (${type || entry.name}).`,
     )
   }
   return {
-    relsXml: hasHyperlinks
+    relsXml: hasClonedRelationships
       ? applyPatches(relsXml, [patchElement(root, withBody(root, applyPatches(root.inner, printerSettings)))])
       : null,
     droppedPrinterSettings: printerSettings.length > 0,

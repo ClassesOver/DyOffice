@@ -936,12 +936,13 @@ export function relativeTarget(fromPart: string, toPart: string): string {
   return `${'../'.repeat(ups)}${toSegments.slice(common).join('/')}`
 }
 
-/// A chart sheet owns its drawing and editable charts. Ancillary assets such
+/// A sheet copy owns its drawing and editable charts. Ancillary assets such
 /// as image parts and chart styles can still be referenced by both copies.
-export async function cloneChartSheetParts(
+export async function cloneSheetDrawingParts(
   pkg: MutablePackage,
   sourceSheet: string,
   destinationSheet: string,
+  sheetRelationships: string,
   touchedEntries: Set<string>,
 ): Promise<void> {
   type OwnedPart = 'drawing' | 'chart'
@@ -964,10 +965,15 @@ export async function cloneChartSheetParts(
     return path
   }
 
-  async function copyRelationships(source: string, destination: string, ownedKind?: OwnedPart) {
+  async function copyRelationships(
+    source: string,
+    destination: string,
+    ownedKind?: OwnedPart,
+    relationshipXml?: string,
+  ) {
     const sourceRels = relsPathFor(source)
-    if (!(await pkg.has(sourceRels))) return
-    const xml = await pkg.readText(sourceRels)
+    const xml = relationshipXml ?? ((await pkg.has(sourceRels)) ? await pkg.readText(sourceRels) : undefined)
+    if (xml === undefined) return
     const element = findRelationshipsRoot(xml)
     if (!element) throw new VisualAddError(`${sourceRels} is not a relationships part.`)
     const root = withNamespaces(element, new Map())
@@ -994,7 +1000,7 @@ export async function cloneChartSheetParts(
     pkg.add(relsPathFor(destination), updated)
   }
 
-  await copyRelationships(sourceSheet, destinationSheet, 'drawing')
+  await copyRelationships(sourceSheet, destinationSheet, 'drawing', sheetRelationships)
 }
 
 export function resolveRelTarget(fromPart: string, target: string): string {

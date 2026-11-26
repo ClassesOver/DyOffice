@@ -37,7 +37,7 @@ import { applyCellImageAdditions } from './xlsx-cell-image-add.ts'
 import {
   appendRelationship,
   applyVisualAdditions,
-  cloneChartSheetParts,
+  cloneSheetDrawingParts,
   registerContentTypeOverride,
   type ChartAdd,
   type DrawingAnchor,
@@ -1307,20 +1307,15 @@ export async function planCellEditsToXlsx(
     }
     assertNoSheetScopedDefinedNames(await pkg.readText('xl/workbook.xml'), sourceSheetName)
     let cloneXml = sanitizeClonedWorksheetXml(await pkg.readText(sourcePath))
-    if (addition.chartSheetRelationshipType) {
-      await cloneChartSheetParts(pkg, sourcePath, addition.path, touchedEntries)
-      pkg.add(addition.path, cloneXml)
-      continue
-    }
-    const sourceRelsPath = sourcePath.replace(/^(xl\/worksheets\/)([^/]+)$/, '$1_rels/$2.rels')
+    const sourceRelsPath = relsPathFor(sourcePath)
     if (await pkg.has(sourceRelsPath)) {
-      const rels = prepareClonedSheetRels(await pkg.readText(sourceRelsPath), sourceSheetName)
+      const sourceRelsXml = await pkg.readText(sourceRelsPath)
+      const rels = addition.chartSheetRelationshipType
+        ? { relsXml: sourceRelsXml, droppedPrinterSettings: false }
+        : prepareClonedSheetRels(sourceRelsXml, sourceSheetName)
       if (rels.droppedPrinterSettings) cloneXml = stripPageSetupRelIds(cloneXml)
       if (rels.relsXml !== null) {
-        pkg.add(
-          addition.path.replace(/^(xl\/worksheets\/)([^/]+)$/, '$1_rels/$2.rels'),
-          rels.relsXml,
-        )
+        await cloneSheetDrawingParts(pkg, sourcePath, addition.path, rels.relsXml, touchedEntries)
       }
     }
     pkg.add(addition.path, cloneXml)
