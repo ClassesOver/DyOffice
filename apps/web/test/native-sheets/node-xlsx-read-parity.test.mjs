@@ -59,6 +59,24 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('replaces and removes a range hyperlink through its anchor cell', async () => {
+    const bytes = await workbook({
+      [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><v>7</v></c><c r="B1"><v>8</v></c></row></sheetData>' +
+        '<hyperlinks><hyperlink ref="$A$1:$B$1" location="Acceptance!B1"/></hyperlinks>'),
+    })
+    const saveLink = async (input, target) => {
+      const request = { ...sheetsSaveRequest('sheet-1', []), hyperlinkEdits: [{ sheetId: 'sheet-1', row: 0, column: 0, target }] }
+      return (await native.savePlan(input, await runtime.sheetsWorkbookPlanner(input, request))).bytes
+    }
+    const links = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 })).hyperlinks
+    assert.deepEqual(await links(bytes), [{ row: 0, column: 0, target: '#Acceptance!B1' }])
+    const replaced = await saveLink(bytes, '#Acceptance!A1')
+    assert.deepEqual(await links(replaced), [{ row: 0, column: 0, target: '#Acceptance!A1' }])
+    const xml = await (await JSZip.loadAsync(replaced)).file(sheetPath).async('string')
+    assert.ok(xml.includes('<hyperlink ref="$A$1:$B$1" location="Acceptance!A1"/>'))
+    assert.deepEqual(await links(await saveLink(replaced, null)), [])
+  })
+
   await t.test('disambiguates Office hyperlink relationship IDs from extension attributes', async () => {
     const namespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
     const target = 'https://example.com/expected'

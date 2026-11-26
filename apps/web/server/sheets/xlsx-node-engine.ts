@@ -13,7 +13,7 @@ import {childElements,resolvedStyleEntries} from '../../../../packages/xlsx-gate
 import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
-import {findWorksheetHyperlinkSection} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
+import {findWorksheetHyperlinkSection,hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
 import {inferWorksheetAddresses,readWorksheetTagAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
@@ -511,7 +511,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
       if(name.slice(name.lastIndexOf(':')+1)!=='hyperlink')continue
       // A hyperlink on a range is anchored at its first cell, as in the Rust reader.
       const reference=readWorksheetTagAttribute(opening,'ref')
-      const anchor=reference===undefined?undefined:decodeAttribute(reference).split(':',1)[0]?.replaceAll('$','').toUpperCase()
+      const anchor=reference===undefined?undefined:hyperlinkAnchorReference(decodeAttribute(reference))
       const cell=anchor&&parseA1(anchor)
       if(!cell)continue
       const id=readRelationshipId(opening,hyperlinkSection.opening,root)

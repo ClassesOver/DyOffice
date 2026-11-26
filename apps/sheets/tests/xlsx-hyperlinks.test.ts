@@ -18,6 +18,22 @@ const RELS =
   '</Relationships>'
 
 describe('applyHyperlinkEdits', () => {
+  it('replaces or removes a range hyperlink through its anchor without leaving a duplicate', () => {
+    const withRange = WORKSHEET.replace('<pageMargins',
+      '<hyperlinks><hyperlink ref="$a$1:$B$2" r:id="rId3"/><hyperlink ref="A1" location="Stale!A1"/>' +
+      '<hyperlink ref="C1" r:id="rId3"/></hyperlinks><pageMargins',
+    )
+    const replacement = applyHyperlinkEdits(withRange, RELS, [{ row: 0, column: 0, target: '#Data!B2' }])
+    expect(replacement.worksheetXml).toContain('<hyperlink ref="$a$1:$B$2" location="Data!B2"/>')
+    expect(replacement.worksheetXml).not.toContain('Stale!')
+    expect(replacement.relsXml).toBe(RELS)
+
+    const removal = applyHyperlinkEdits(replacement.worksheetXml, replacement.relsXml, [{ row: 0, column: 0, target: null }])
+    expect(removal.worksheetXml).not.toContain('$a$1:$B$2')
+    expect(removal.worksheetXml).toContain('<hyperlink ref="C1" r:id="rId3"/>')
+    expect(removal.relsXml).toBe(RELS)
+  })
+
   it('adds an external link, creating the hyperlinks section and the rels file', () => {
     const patch = applyHyperlinkEdits(WORKSHEET, null, [
       { row: 0, column: 0, target: 'https://example.com/a&b' },

@@ -2,7 +2,7 @@
 /// External targets live as TargetMode="External" relationships referenced by
 /// r:id; internal anchors use the `location` attribute and need no rel.
 
-import { escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { decodeAttribute, escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets.ts'
 import {
   OFFICE_RELATIONSHIPS_NAMESPACE,
   isOfficeRelationshipNamespace,
@@ -45,6 +45,10 @@ export function findWorksheetHyperlinkSection(worksheetXml: string) {
   if (!span) return undefined
   const [element] = childElements(worksheetXml.slice(span.start, span.end))
   return element ? { ...span, element } : undefined
+}
+
+export function hyperlinkAnchorReference(reference: string): string {
+  return (reference.split(':', 1)[0] ?? '').replaceAll('$', '').toUpperCase()
 }
 
 export function applyHyperlinkEdits(
@@ -105,18 +109,29 @@ export function applyHyperlinkEdits(
   for (const edit of edits) {
     const ref = toA1(edit.row, edit.column)
     const links = childElements(body).filter((link) => link.name === 'hyperlink')
-    const existing = links.find((link) => readWorksheetTagAttribute(link.opening, 'ref') === ref)
-    if (existing) {
-      body = body.slice(0, existing.start) + body.slice(existing.start + existing.xml.length)
-      const relId = readRelationshipId(existing.opening, parent, root)
-      if (relId !== undefined && !links.some((link) => link !== existing &&
-        readRelationshipId(link.opening, parent, root) === relId)) dropRel(relId)
+    const matches = new Map<(typeof links)[number], string>()
+    for (const link of links) {
+      const raw = readWorksheetTagAttribute(link.opening, 'ref')
+      if (raw === undefined) continue
+      const reference = decodeAttribute(raw)
+      if (hyperlinkAnchorReference(reference) === ref) matches.set(link, reference)
+    }
+    if (matches.size > 0) {
+      const activeIds = new Set(links.filter((link) => !matches.has(link))
+        .map((link) => readRelationshipId(link.opening, parent, root)))
+      for (const link of [...matches.keys()].reverse()) {
+        body = body.slice(0, link.start) + body.slice(link.start + link.xml.length)
+        const id = readRelationshipId(link.opening, parent, root)
+        if (id !== undefined && !activeIds.has(id)) dropRel(id)
+      }
     }
     if (edit.target === null) continue
 
+    // Earlier saves could append a single-cell link next to its original range.
+    const reference = escapeXmlAttribute([...matches.values()].find((value) => value.includes(':')) ?? ref)
     body += edit.target.startsWith('#')
-      ? `<hyperlink ref="${ref}" location="${escapeXmlAttribute(edit.target.slice(1))}"/>`
-      : `<hyperlink ref="${ref}"${relationshipBinding} r:id="${allocateRel(edit.target)}"/>`
+      ? `<hyperlink ref="${reference}" location="${escapeXmlAttribute(edit.target.slice(1))}"/>`
+      : `<hyperlink ref="${reference}"${relationshipBinding} r:id="${allocateRel(edit.target)}"/>`
   }
 
   let xml = worksheetXml
