@@ -14,6 +14,7 @@ import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { findRootChild, rootChildren } from './xlsx-root-tail.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
+import { isElement, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export type StructuralOp =
   | {
@@ -188,14 +189,14 @@ function addTagAttribute(tag: string, name: string, value: string): string {
   return `${tag.slice(0, nameEnd)} ${name}="${value}"${tag.slice(nameEnd)}`
 }
 
-export function readPositiveInteger(value: string | undefined): number | undefined {
+function readPositiveInteger(value: string | undefined): number | undefined {
   if (value === undefined || !/^[0-9]+$/.test(value)) return undefined
   const number = Number(value)
   return number > 0 && Number.isSafeInteger(number) ? number : undefined
 }
 
 // Even a cell with an unusable address advances the cursor for the next cell.
-export function worksheetCellColumn(address: string | undefined, fallback: number): number {
+function worksheetCellColumn(address: string | undefined, fallback: number): number {
   return (address === undefined ? null : parseA1(address))?.column ?? fallback
 }
 
@@ -205,6 +206,31 @@ export function parseGridCellAddress(address: string): { row: number; column: nu
   const row = Number(match[2]) - 1
   const column = lettersToColumn(match[1])
   return row < MAX_GRID_ROWS && column < MAX_GRID_COLUMNS ? { row, column } : undefined
+}
+
+export function worksheetData(xml: string): ScopedElement | undefined {
+  const root = worksheetRoot(xml)
+  return root && scopedChildren(root).find((child) => isElement(child, 'sheetData', root.namespace))
+}
+
+export function* worksheetCellPositions(sheetData: ScopedElement) {
+  let rowNumber = 0
+  for (const row of scopedChildren(sheetData)) {
+    if (!isElement(row, 'row', sheetData.namespace)) continue
+    rowNumber = readPositiveInteger(row.attributes.get('r')) ?? rowNumber + 1
+    let nextColumn = 0
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', row.namespace)) continue
+      const address = cell.attributes.get('r')
+      const position = address === undefined
+        ? { row: rowNumber - 1, column: nextColumn }
+        : parseGridCellAddress(address)
+      nextColumn = (position?.column ?? worksheetCellColumn(address, nextColumn)) + 1
+      if (position && position.row < MAX_GRID_ROWS && position.column < MAX_GRID_COLUMNS) {
+        yield { ...position, cell }
+      }
+    }
+  }
 }
 
 export function applyStructuralOps(

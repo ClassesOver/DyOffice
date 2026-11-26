@@ -27,10 +27,9 @@ import {
 import { decodeAttribute, parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
 import { encodeXlsxEscapes } from './xlsx-escapes.ts'
 import {
-  parseGridCellAddress,
-  readPositiveInteger,
   readWorksheetTagAttribute,
-  worksheetCellColumn,
+  worksheetCellPositions,
+  worksheetData,
 } from './xlsx-structure.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
@@ -44,7 +43,6 @@ import {
   sharedStringAt,
   withBody,
   withNamespaces,
-  worksheetRoot,
   type ScopedElement,
 } from './xlsx-worksheet-xml.ts'
 
@@ -441,8 +439,7 @@ async function readSourceRows(
     // fall back to empty records and let refreshOnLoad handle it at open time.
     return []
   }
-  const worksheet = worksheetRoot(worksheetXml)
-  const sheetData = worksheet && childByName(worksheet, 'sheetData')
+  const sheetData = worksheetData(worksheetXml)
   if (!sheetData) return []
   const sharedStrings = await readPivotSharedStrings(pkg)
   const styles = await readPivotNumberFormats(pkg)
@@ -460,30 +457,16 @@ async function readSourceRows(
     new Array<SourceCell>(endColumn - startColumn + 1).fill(null),
   )
 
-  let rowNumber = 0
-  for (const row of scopedChildren(sheetData)) {
-    if (!isElement(row, 'row', sheetData.namespace)) continue
-    rowNumber = readPositiveInteger(row.attributes.get('r')) ?? rowNumber + 1
-    let nextColumn = 0
-    for (const cell of scopedChildren(row)) {
-      if (!isElement(cell, 'c', row.namespace)) continue
-      const address = cell.attributes.get('r')
-      const position = address === undefined
-        ? { row: rowNumber - 1, column: nextColumn }
-        : parseGridCellAddress(address)
-      nextColumn = (position?.column ?? worksheetCellColumn(address, nextColumn)) + 1
-      if (!position) continue
-      const { row: cellRow, column } = position
-      if (column < startColumn || column > endColumn) continue
-      const outputRow = rows[cellRow - startRow - 1]
-      if (!outputRow) continue
-      const field = column - startColumn
-      const raw = extractCellValue(cell, sharedStrings)
-      const format = styles[Number(cell.attributes.get('s') ?? 0)]
-      outputRow[field] = typeof raw === 'number' && dimensions.has(field) && format && format !== 'General'
-        ? { raw, label: formatPivotNumber(raw, format, date1904) }
-        : raw
-    }
+  for (const { row, column, cell } of worksheetCellPositions(sheetData)) {
+    if (column < startColumn || column > endColumn) continue
+    const outputRow = rows[row - startRow - 1]
+    if (!outputRow) continue
+    const field = column - startColumn
+    const raw = extractCellValue(cell, sharedStrings)
+    const format = styles[Number(cell.attributes.get('s') ?? 0)]
+    outputRow[field] = typeof raw === 'number' && dimensions.has(field) && format && format !== 'General'
+      ? { raw, label: formatPivotNumber(raw, format, date1904) }
+      : raw
   }
   return rows
 }

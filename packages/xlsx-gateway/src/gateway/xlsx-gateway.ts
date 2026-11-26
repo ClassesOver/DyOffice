@@ -201,6 +201,8 @@ import {
   StructuralShiftError,
   translateSharedFormula,
   updateWorksheetTagAttribute,
+  worksheetCellPositions,
+  worksheetData,
   type TableColumnInsertion,
 } from './xlsx-structure.ts'
 import { StylesheetEditor } from './xlsx-styles.ts'
@@ -632,7 +634,7 @@ async function readWorkbookCells(
       throw error
     }
     const { cells, storedCellCount } = parseWorksheetCells(
-      inferWorksheetAddresses(worksheetXml), sharedStrings, includeFormulaCache, readRunStyle,
+      worksheetXml, sharedStrings, includeFormulaCache, readRunStyle,
     )
     sheets.push({ id, name, cells, ...(readRunStyle ? { storedCellCount } : {}) })
     sheetNamesById[id] = name
@@ -3779,12 +3781,11 @@ function existingArrayRef(cellXml: string): string | undefined {
   if (cellXml === '') return undefined
   const attributes = /<f(?=[\s/>])([^>]*)>/.exec(cellXml)?.[1]
   return attributes && readWorksheetTagAttribute(attributes, 't') === 'array'
-    ? validatedArrayRef(attributes)
+    ? validatedArrayRef(readWorksheetTagAttribute(attributes, 'ref'))
     : undefined
 }
 
-function validatedArrayRef(attributes: string): string | undefined {
-  const ref = readWorksheetTagAttribute(attributes, 'ref')
+function validatedArrayRef(ref: string | undefined): string | undefined {
   if (ref === undefined) return undefined
   // The extent must name a real range; anything else is left to the default
   // spelling rather than written out as a broken array master.
@@ -3851,41 +3852,33 @@ function parseWorksheetCells(
   let storedCellCount = 0
   const sharedMasters = new Map<string, SharedFormulaCell & { formula: string }>()
   const sharedFollowers: { address: string; id: string }[] = []
-  for (const [attributes, body] of worksheetCellMarkup(worksheetXml)) {
-    const address = /(?:^|\s)r="([^"]*)"/.exec(attributes)?.[1]
-    if (!address || !isGridCellAddress(address)) continue
-    const elements = hasLiteralMarkup(body) ? childElements(body) : undefined
+  const sheetData = worksheetData(worksheetXml)
+  if (!sheetData) return { cells, storedCellCount }
+  for (const { row, column, cell } of worksheetCellPositions(sheetData)) {
+    const address = formatAddress(row, column)
+    const elements = scopedChildren(cell).filter((element) => element.namespace === cell.namespace)
     // The inspection budget counts only cells carrying an XML value, formula or style.
-    if (readRunStyle && ((elements ? elements.some(({ name }) => name === 'v' || name === 'f' || name === 'is')
-      : /<(?:v|f|is)(?=[\s/>])/.test(body)) ||
-      readWorksheetTagAttribute(attributes, 's') !== undefined)) storedCellCount++
-    const formulaElement = elements?.find(({ name }) => name === 'f')
-    const formulaNode = elements ? undefined : /<f(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(body)
-    const formulaAttributes = formulaElement?.opening ?? formulaNode?.[1] ?? ''
-    const formulaType =
-      formulaAttributes === '' ? undefined : readWorksheetTagAttribute(formulaAttributes, 't')
+    if (readRunStyle && (cell.attributes.has('s') ||
+      elements.some(({ local }) => local === 'v' || local === 'f' || local === 'is'))) storedCellCount++
+    const formulaElement = elements.find(({ local }) => local === 'f')
+    const formulaType = formulaElement?.attributes.get('t')
+    const formulaRef = formulaElement?.attributes.get('ref')
     const isShared = formulaType === 'shared'
-    const rawFormula = formulaElement && !formulaElement.opening.endsWith('/>') ? formulaElement.inner : formulaNode?.[2]
+    const rawFormula = formulaElement && !formulaElement.opening.endsWith('/>')
+      ? formulaElement.inner
+      : undefined
     let formula = rawFormula === undefined ? undefined : decodeCellMarkup(rawFormula)
     let sharedFormulaMaster: ImportedWorkbookCell['sharedFormulaMaster']
     if (isShared) {
-      const id = readWorksheetTagAttribute(formulaAttributes, 'si')
+      const id = formulaElement?.attributes.get('si')
       if (formula === undefined || formula.trim() === '') {
         formula = undefined
         if (id !== undefined) sharedFollowers.push({ address, id })
-      } else if (
-        id !== undefined &&
-        readWorksheetTagAttribute(formulaAttributes, 'ref') !== undefined
-      ) {
-        const { startRow, startColumn } = parseRef(address)
-        sharedMasters.set(id, {
-          row: startRow,
-          column: startColumn,
-          formula,
-        })
+      } else if (id !== undefined && formulaRef !== undefined) {
+        sharedMasters.set(id, { row, column, formula })
         const si = readRunStyle ? sharedFormulaIndex(id) : undefined
         if (si !== undefined) {
-          const ref = validatedArrayRef(formulaAttributes)
+          const ref = validatedArrayRef(formulaRef)
           sharedFormulaMaster = { si, ...(ref === undefined ? {} : { range: parseRef(ref) }) }
         }
       }
@@ -3894,15 +3887,13 @@ function parseWorksheetCells(
       cells[address] = { value: null, formula: `=${formula}` }
       continue
     }
-    const type = readWorksheetTagAttribute(attributes, 't')
+    const type = cell.attributes.get('t')
     if (type === 'inlineStr') {
-      const inline = (elements ? elements.find(({ name }) => name === 'is')?.inner
-        : /<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/.exec(body)?.[1]) ?? ''
-      cells[address] = parseCellText(inline, readRunStyle)
+      const inline = elements.find(({ local }) => local === 'is')
+      cells[address] = parseCellText(inline?.inner ?? '', readRunStyle, inline)
     } else {
-      const valueElement = elements?.find(({ name }) => name === 'v')
-      const rawValue = elements ? (valueElement && !valueElement.opening.endsWith('/>') ? valueElement.inner : undefined)
-        : /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
+      const valueElement = elements.find(({ local }) => local === 'v')
+      const rawValue = valueElement && !valueElement.opening.endsWith('/>') ? valueElement.inner : undefined
       const value = rawValue === undefined ? '' : decodeCellMarkup(rawValue)
       if (
         rawValue === undefined ||
@@ -3927,7 +3918,7 @@ function parseWorksheetCells(
     }
     if (formula !== undefined) {
       const arrayRef =
-        readRunStyle && formulaType === 'array' ? validatedArrayRef(formulaAttributes) : undefined
+        readRunStyle && formulaType === 'array' ? validatedArrayRef(formulaRef) : undefined
       cells[address] = {
         ...cells[address]!,
         formula: `=${formula}`,
@@ -3969,23 +3960,6 @@ function hasLiteralMarkup(xml: string): boolean {
 
 function decodeCellMarkup(xml: string): string {
   return hasLiteralMarkup(xml) ? elementText(xml) : decodeXmlText(xml)
-}
-
-function* worksheetCellMarkup(xml: string): Iterable<[string, string]> {
-  if (!hasLiteralMarkup(xml)) {
-    for (const [, attributes, body] of xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
-      yield [attributes ?? '', body ?? '']
-    }
-    return
-  }
-  const root = childElements(xml).find(({ name }) => name === 'worksheet')
-  const data = childElements(root?.inner ?? '').find(({ name }) => name === 'sheetData')
-  for (const row of childElements(data?.inner ?? '')) {
-    if (row.name !== 'row') continue
-    for (const cell of childElements(row.inner)) {
-      if (cell.name === 'c') yield [cell.opening, cell.inner]
-    }
-  }
 }
 
 function sharedFormulaIndex(id: string): number | undefined {

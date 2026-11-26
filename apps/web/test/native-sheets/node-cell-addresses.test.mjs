@@ -98,4 +98,26 @@ test('Node XLSX preserves implicit and quoted coordinates on cell saves', async 
     [5, 1],
   ])
   assert.deepEqual(styles(after), styles(before))
+
+  await t.test('reads grid cells only from SpreadsheetML worksheet data', async () => {
+    const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    zip.file(path, `<worksheet xmlns="${spreadsheet}" xmlns:a="urn:example:extension">
+      <sheetData>
+        <row r="1">
+          <c r="A1"><v>11</v></c>
+          <c xmlns="urn:example:extension" r="B1"><v>900</v></c>
+          <c><v xmlns="urn:example:extension">999</v><a:f>1+1</a:f><v>22</v></c>
+          <c t="inlineStr"><is><t>Real</t><t xmlns="urn:example:extension">Decoy</t></is></c>
+        </row>
+      </sheetData>
+      <extLst><ext uri="urn:example:extension"><payload xmlns="urn:example:extension">
+        <c r="A1"><v>901</v></c>
+      </payload></ext></extLst>
+    </worksheet>`)
+    assert.deepEqual(cells(await read(await zip.generateAsync({ type: 'nodebuffer' }))), [
+      [0, 0, 11],
+      [0, 1, 22],
+      [0, 2, 'Real'],
+    ])
+  })
 })
