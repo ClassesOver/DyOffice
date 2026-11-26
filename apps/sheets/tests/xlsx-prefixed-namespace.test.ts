@@ -128,11 +128,13 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
   })
 
-  it('bails out when the prefix is rebound deeper in the tree', () => {
+  it('normalizes the root prefix outside a foreign rebinding', () => {
     const xml =
-      `<x:workbook xmlns:x="${MAIN_NS}"><x:sheets>` +
-      '<x:ext xmlns:x="urn:other"/></x:sheets></x:workbook>'
-    expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
+      `<x:workbook xmlns:x="${MAIN_NS}"><x:ext xmlns:x="urn:other"><x:item/>` +
+      `<x:tag xmlns:x="${MAIN_NS}"/></x:ext><x:sheets/></x:workbook>`
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<x:ext xmlns:x="urn:other"><x:item/><tag xmlns:x="${MAIN_NS}"/></x:ext><sheets/></workbook>`,
+    )
   })
 
   it('keeps the prefix binding when attributes still use it', () => {
@@ -155,7 +157,7 @@ describe('normalizeOoxmlPartPrefix', () => {
 
   it('keeps a real single-quoted prefix rebinding in its original scope', () => {
     const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><x:ext xmlns:x='urn:other'/></x:worksheet>`
-    expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
+    expect(normalizeOoxmlPartPrefix(xml)).toContain("<x:ext xmlns:x='urn:other'/></worksheet>")
   })
 
   it('rewrites the namespace declaration without changing identical text inside another attribute', () => {

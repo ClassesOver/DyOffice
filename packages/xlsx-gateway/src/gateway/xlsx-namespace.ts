@@ -81,13 +81,14 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
       if (key?.startsWith('xmlns:')) {
         const alias = key.slice('xmlns:'.length)
         const equivalent = value === uri
-        if (rootAliases.has(alias) && !equivalent) return xml
         if (match.index !== root.index) {
           const offset = match.index!
           const bindings = localAliases.get(offset) ?? []
           bindings.push([alias, equivalent])
           localAliases.set(offset, bindings)
           hasEquivalentAlias ||= equivalent
+        } else if (rootAliases.has(alias) && !equivalent) {
+          return xml
         }
       }
       if (qualified && key?.startsWith(qualified)) retainPrefix = true
