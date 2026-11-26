@@ -18,7 +18,6 @@ import {
   decodeAttribute,
   localPivotWorksheetSource,
   parseRelationships,
-  partPathForRels,
   relationshipIdsMatch,
 } from './xlsx-sheets.ts'
 import {
@@ -35,6 +34,8 @@ export class PivotExpandError extends Error {}
 export interface PivotRefreshUpdate {
   /// xl/pivotCache/pivotCacheDefinitionN.xml
   readonly cachePath: string
+  /// Identifies the pivot when several tables share its cache.
+  readonly pivotPath?: string | undefined
   /// xl/worksheets/sheetN.xml — the sheet that hosts the pivot output.
   /// May be omitted when the renderer only knows the sheet name; then
   /// planCellEditsToXlsx resolves it from sheetName before calling
@@ -87,23 +88,45 @@ function areaRefToString(area: AreaRef): string {
 
 // ─── Package helpers ─────────────────────────────────────────────────────────
 
-/// Find the pivotTable part path linked to a given pivotCacheDefinition via
-/// its own rels (pivot table → cache, so we do a reverse scan).
-async function findPivotTablePathForCache(
+async function linkedParts(pkg: MutablePackage, partPath: string, kind: string): Promise<string[]> {
+  const relsPath = relsPathFor(partPath)
+  if (!(await pkg.has(relsPath))) return []
+  return parseRelationships(await pkg.readText(relsPath))
+    .filter(({ external, type }) => !external && type.endsWith('/' + kind))
+    .map(({ target }) => resolveRelTarget(partPath, target))
+}
+
+async function findPivotTablePathForRefresh(
   pkg: MutablePackage,
-  cachePath: string,
-): Promise<string | null> {
-  const allPaths = await pkg.paths()
-  const tableRelsPattern = /^xl\/pivotTables\/_rels\/[^/]+\.rels$/
-  for (const relsPath of allPaths) {
-    if (!tableRelsPattern.test(relsPath)) continue
-    const tablePath = partPathForRels(relsPath)
-    if (parseRelationships(await pkg.readText(relsPath)).some(({ external, type, target }) =>
-      !external && type.endsWith('/pivotCacheDefinition') &&
-      resolveRelTarget(tablePath, target) === cachePath,
-    )) return tablePath
+  worksheetPath: string,
+  update: PivotRefreshUpdate,
+): Promise<string | undefined> {
+  const candidates: string[] = []
+  for (const tablePath of new Set(await linkedParts(pkg, worksheetPath, 'pivotTable'))) {
+    if (update.pivotPath !== undefined && update.pivotPath !== tablePath) continue
+    if ((await linkedParts(pkg, tablePath, 'pivotCacheDefinition')).includes(update.cachePath)) {
+      candidates.push(tablePath)
+    }
   }
-  return null
+  if (update.pivotPath !== undefined && candidates.length === 0) {
+    throw new PivotExpandError('The pivot refresh does not match the worksheet and cache relationships.')
+  }
+  if (candidates.length <= 1) return candidates[0]
+
+  // Older save requests identify the table by its unchanged output origin.
+  const { start } = parseAreaRef(update.newOutputRef)
+  const matches: string[] = []
+  for (const tablePath of candidates) {
+    const location = findPivotTableLocation(await pkg.readText(tablePath))
+    const ref = location && readWorksheetTagAttribute(location.opening, 'ref')
+    if (!ref) continue
+    const { start: origin } = parseAreaRef(decodeAttribute(ref))
+    if (origin.col === start.col && origin.row === start.row) matches.push(tablePath)
+  }
+  if (matches.length !== 1) {
+    throw new PivotExpandError('The pivot refresh matches an ambiguous output location.')
+  }
+  return matches[0]
 }
 
 // ─── Conflict detection ───────────────────────────────────────────────────────
@@ -197,7 +220,11 @@ export async function applyPivotLayoutExpansions(
   touchedEntries: Set<string>,
 ): Promise<void> {
   for (const update of updates) {
-    const pivotTablePath = await findPivotTablePathForCache(pkg, update.cachePath)
+    const { worksheetPath } = update
+    if (worksheetPath === undefined) {
+      throw new PivotExpandError('Pivot refresh needs a resolved worksheet path.')
+    }
+    const pivotTablePath = await findPivotTablePathForRefresh(pkg, worksheetPath, update)
     if (!pivotTablePath) {
       // Cache not yet linked to a table (edge case: bare cache from old save) — skip.
       continue
@@ -228,13 +255,10 @@ export async function applyPivotLayoutExpansions(
 
     const grows = newArea.end.row > oldArea.end.row || newArea.end.col > oldArea.end.col
     if (grows) {
-      if (update.worksheetPath === undefined) {
-        throw new PivotExpandError('Pivot expansion needs a resolved worksheet path.')
-      }
       // Growth — check added cells for pre-existing content. Shrinking needs
       // no check: the renderer already cleared the leftover cells and saved
       // them as ordinary cell edits.
-      const worksheetXml = await pkg.readText(update.worksheetPath)
+      const worksheetXml = await pkg.readText(worksheetPath)
       const addedAreas = subtractAreas(newArea, oldArea)
       for (const added of addedAreas) {
         if (worksheetHasContentInArea(worksheetXml, added)) {
@@ -255,6 +279,15 @@ export async function applyPivotLayoutExpansions(
       pkg.write(pivotTablePath, updatedTableXml)
       touchedEntries.add(pivotTablePath)
       continue
+    }
+    // Rebuilding the cache for one layout would change field indexes for its peers.
+    for (const sheetPath of await linkedParts(pkg, 'xl/workbook.xml', 'worksheet')) {
+      for (const peer of await linkedParts(pkg, sheetPath, 'pivotTable')) {
+        if (peer !== pivotTablePath &&
+          (await linkedParts(pkg, peer, 'pivotCacheDefinition')).includes(update.cachePath)) {
+          throw new PivotExpandError('A layout edit cannot rebuild a shared pivot cache.')
+        }
+      }
     }
     await applyPivotRelayout(pkg, update, pivotTablePath, pivotTableXml, touchedEntries)
   }

@@ -522,6 +522,7 @@ export function applyAiPivotAdd(
     recordPivotCacheRefresh(state.editJournal, fileTarget.cachePath)
     recordPivotRefreshUpdate(
       state.editJournal,
+      fileTarget.pivotPath,
       fileTarget.cachePath,
       targetSheetId,
       newOutputRef,

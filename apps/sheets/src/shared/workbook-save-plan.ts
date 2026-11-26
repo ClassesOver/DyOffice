@@ -325,6 +325,7 @@ export function mapWorkbookSaveRequest(
     // Output-area expansion from layout growth: sheetId → sheet name; the part
     // path is resolved by the gateway.
     pivotRefreshUpdates: request.pivotRefreshUpdates.map((update) => ({
+      ...(update.pivotPath === undefined ? {} : { pivotPath: update.pivotPath }),
       cachePath: update.cachePath,
       sheetName: resolveSheetName(update.sheetId),
       newOutputRef: update.newOutputRef,

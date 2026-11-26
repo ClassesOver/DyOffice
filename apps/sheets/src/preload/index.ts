@@ -2651,6 +2651,7 @@ function parseSaveRequest(input: WorkbookSaveRequest): WorkbookSaveRequest {
       (update) =>
         !isRecord(update) ||
         typeof update.cachePath !== 'string' ||
+        (update.pivotPath !== undefined && typeof update.pivotPath !== 'string') ||
         typeof update.sheetId !== 'string' ||
         update.sheetId.length === 0 ||
         typeof update.newOutputRef !== 'string' ||

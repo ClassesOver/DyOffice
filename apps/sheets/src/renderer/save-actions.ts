@@ -731,12 +731,7 @@ async function handlePreparedSave(
   // Output-area expansion after layout growth (location ref write-back); the
   // count folds into cacheRefresh.
   const pivotRefreshUpdates = [...state.editJournal.pivotRefreshUpdates].map(
-    ([cachePath, update]) => ({
-      cachePath,
-      sheetId: update.sheetId,
-      newOutputRef: update.newOutputRef,
-      ...(update.relayout === undefined ? {} : { relayout: update.relayout }),
-    }),
+    ([pivotPath, update]) => ({ pivotPath, ...update }),
   )
   const definedNamesState = collectDefinedNamesState(ctx.univerRef.current, state)
   const workbookProtectionState =

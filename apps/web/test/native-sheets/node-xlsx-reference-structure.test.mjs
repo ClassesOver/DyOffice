@@ -309,6 +309,30 @@ test(
         const occupied = await editPart(await zip.generateAsync({ type: 'nodebuffer' }), two, (xml) =>
           xml.replace('</sheetData>', "<row r='8'><c r='H8'><f>1+2</f></c></row></sheetData>"))
         await assert.rejects(() => save(occupied, [], [first, second], refresh), { statusCode: 400 })
+
+        const sharedCache = await JSZip.loadAsync(result)
+        const peerPath = 'xl/pivotTables/pivotTable2.xml'
+        sharedCache.file(peerPath, table.replace('name="Sales"', 'name="PeerSales"')
+          .replace('ref="G2:H7"', 'ref="J2:K7"'))
+        sharedCache.file('xl/pivotTables/_rels/pivotTable2.xml.rels',
+          await xmlPart(sharedCache, relsPath))
+        const hostRelsPath = 'xl/worksheets/_rels/sheet2.xml.rels'
+        const hostRels = await xmlPart(sharedCache, hostRelsPath)
+        sharedCache.file(hostRelsPath, hostRels.replace('</Relationships>',
+          `<Relationship Id="rId90" Type="${r}/pivotTable" Target="../pivotTables/pivotTable2.xml"/></Relationships>`))
+        const types = await xmlPart(sharedCache, contentTypes)
+        sharedCache.file(contentTypes, types.replace('</Types>',
+          `<Override PartName="/${peerPath}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/></Types>`))
+        const both = await save(await sharedCache.generateAsync({ type: 'nodebuffer' }), [], [first, second], {
+          pivotCacheRefreshPaths: [after.cachePath],
+          pivotRefreshUpdates: [
+            { sheetId: second, cachePath: after.cachePath, pivotPath: peerPath, newOutputRef: 'J2:K9' },
+            { sheetId: second, cachePath: after.cachePath, pivotPath: after.path, newOutputRef: 'G2:H8' },
+          ],
+        })
+        const pivots = (await inspect(both)).sheets[1].pivotTables
+        assert.equal(pivots.find((pivot) => pivot.path === after.path)?.outputRef, 'G2:H8')
+        assert.equal(pivots.find((pivot) => pivot.path === peerPath)?.outputRef, 'J2:K9')
       },
     )
 

@@ -33,6 +33,7 @@ import {
   recordSheetRename,
   recordChartEdit,
   recordPivotAdd,
+  recordPivotRefreshUpdate,
   recordStructuralOp,
   recordTableAdd,
   recordVisualAdd,
@@ -50,6 +51,20 @@ import {
   toSaveStructuralOps,
   recordCellImageAdd,
 } from '../src/renderer/edit-journal'
+
+it('journals separate pivot refreshes that share one cache', () => {
+  const journal = createEditJournal()
+  const cachePath = 'xl/pivotCache/pivotCacheDefinition1.xml'
+  const first = 'xl/pivotTables/pivotTable1.xml'
+  const second = 'xl/pivotTables/pivotTable2.xml'
+  recordPivotRefreshUpdate(journal, first, cachePath, 'sheet-1', 'F1:G5')
+  recordPivotRefreshUpdate(journal, second, cachePath, 'sheet-1', 'J1:K5')
+  recordPivotRefreshUpdate(journal, first, cachePath, 'sheet-1', 'F1:G6')
+  expect([...journal.pivotRefreshUpdates]).toEqual([
+    [first, { cachePath, sheetId: 'sheet-1', newOutputRef: 'F1:G6' }],
+    [second, { cachePath, sheetId: 'sheet-1', newOutputRef: 'J1:K5' }],
+  ])
+})
 
 describe('bulk constant-fill journal', () => {
   it('stores a whole-column fill as one save entry', () => {

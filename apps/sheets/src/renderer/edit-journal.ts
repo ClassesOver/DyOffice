@@ -246,7 +246,7 @@ export interface EditJournal {
   /// pivotCacheDefinition part paths whose pivots were recomputed this
   /// session; the save flags them refreshOnLoad so Excel rebuilds its cache.
   readonly pivotCacheRefresh: Set<string>
-  /// Pivots whose layout grew during refresh: cachePath → new output area. On
+  /// Pivots whose layout grew during refresh, keyed by the pivot table part. On
   /// save, the pivotTableDefinition's location ref is widened to the new area
   /// (multiple refreshes of the same pivot keep only the last one). When relayout
   /// (an A3 layout edit) is present, the saver regenerates from the new layout
@@ -254,6 +254,7 @@ export interface EditJournal {
   readonly pivotRefreshUpdates: Map<
     string,
     {
+      cachePath: string
       sheetId: string
       newOutputRef: string
       relayout?: WorkbookPivotAdd
@@ -373,13 +374,15 @@ export function recordPivotCacheRefresh(journal: EditJournal, cachePath: string)
 /// regenerates definition/cacheDefinition from it.
 export function recordPivotRefreshUpdate(
   journal: EditJournal,
+  pivotPath: string,
   cachePath: string,
   sheetId: string,
   newOutputRef: string,
   relayout?: WorkbookPivotAdd,
 ): void {
   mutationAdmission(journal).assertWritable()
-  journal.pivotRefreshUpdates.set(cachePath, {
+  journal.pivotRefreshUpdates.set(pivotPath, {
+    cachePath,
     sheetId,
     newOutputRef,
     ...(relayout === undefined ? {} : { relayout }),

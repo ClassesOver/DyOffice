@@ -2239,6 +2239,7 @@ export const workbookSaveRequestSchema = z
         z
           .object({
             cachePath: z.string().regex(/^xl\/[A-Za-z0-9._/-]+\.xml$/),
+            pivotPath: z.string().regex(/^xl\/[A-Za-z0-9._/-]+\.xml$/).optional(),
             sheetId: z.string().min(1),
             newOutputRef: z.string().min(3).max(64),
             relayout: workbookPivotAddSchema.optional(),

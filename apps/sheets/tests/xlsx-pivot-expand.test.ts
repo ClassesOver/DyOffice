@@ -339,6 +339,38 @@ describe('applyPivotLayoutExpansions', () => {
     expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('ref="F1:G6"')
   })
 
+  it.each(['part path', 'output origin'])('refreshes two pivots sharing a cache by %s', async (identity) => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const first = 'xl/pivotTables/pivotTable1.xml'
+    const second = 'xl/pivotTables/pivotTable2.xml'
+    const firstRels = 'xl/pivotTables/_rels/pivotTable1.xml.rels'
+    const secondRels = 'xl/pivotTables/_rels/pivotTable2.xml.rels'
+    const sheetRels = 'xl/worksheets/_rels/sheet1.xml.rels'
+    zip.file(second, (await zip.file(first)!.async('text'))
+      .replace('name="PivotData"', 'name="SecondPivot"').replace('ref="F1:G4"', 'ref="J1:K4"'))
+    zip.file(secondRels, await zip.file(firstRels)!.async('text'))
+    const rels = await zip.file(sheetRels)!.async('text')
+    const firstRelationship = rels.match(/<Relationship Id="rId1"[^>]+\/>/)![0]
+    zip.file(sheetRels, rels.replace('</Relationships>',
+      firstRelationship.replace('rId1', 'rId2').replace('pivotTable1.xml', 'pivotTable2.xml') +
+      '</Relationships>'))
+    const shared = { cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml', sheetName: 'Data' }
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const plan = await planWithRefreshUpdate(bytes, [
+      { ...shared, ...(identity === 'part path' ? { pivotPath: second } : {}), newOutputRef: 'J1:K6' },
+      { ...shared, ...(identity === 'part path' ? { pivotPath: first } : {}), newOutputRef: 'F1:G5' },
+    ])
+    expect(plan.replaced.get(first)).toContain('ref="F1:G5"')
+    expect(plan.replaced.get(second)).toContain('ref="J1:K6"')
+    if (identity === 'part path') {
+      await expect(planWithRefreshUpdate(bytes, [{ ...relayoutUpdate(), pivotPath: first }]))
+        .rejects.toThrow(/cannot rebuild a shared pivot cache/)
+      await expect(planWithRefreshUpdate(bytes, [{
+        ...shared, pivotPath: 'xl/pivotTables/unrelated.xml', newOutputRef: 'F1:G5',
+      }])).rejects.toThrow(/does not match the worksheet and cache relationships/)
+    }
+  })
+
   it('fails closed when new rows conflict with existing non-pivot content', async () => {
     // Row 5 (G5) has content in fixture — new area F1:G5 would overwrite it
     const buf = await buildPivotFixture({ extraCellAtRow: 5 })
