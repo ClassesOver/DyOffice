@@ -60,6 +60,7 @@ import {
 import {
   applyTableEdits,
   TableEditError,
+  type ConvertedTable,
   type TableEdit,
 } from './xlsx-table-edit.ts'
 import { rewriteChartReferences } from './xlsx-chart-references.ts'
@@ -99,6 +100,7 @@ import {
   chartReferencesSheet,
   createSheetReferenceRenamer,
   classifyRemovedSheetRels,
+  convertPivotTableSourceToRange,
   definedNamesReferenceSheet,
   definedNamesUseToken,
   nextFreeRelationshipIds,
@@ -156,7 +158,7 @@ import {
   type SlicerStateWrite,
   type SlicerControlWrite,
 } from './xlsx-slicer.ts'
-import { readPivotSourceSheetNames, setPivotRefreshOnLoad } from './xlsx-pivot.ts'
+import { readPivotSourceSheetNames, readTablePivotSourceRef, setPivotRefreshOnLoad } from './xlsx-pivot.ts'
 import { applyPivotLayoutExpansions, type PivotRefreshUpdate } from './xlsx-pivot-expand.ts'
 import {
   applyHyperlinkEdits,
@@ -1827,13 +1829,17 @@ export async function planCellEditsToXlsx(
   // block a new table over the same cells or with the freed name.
   if (tableEdits.length > 0) {
     const resolvedEdits: TableEdit[] = []
+    const sheets = new Map<string, string>()
     for (const { sheetName, ...edit } of tableEdits) {
-      resolvedEdits.push({
-        ...edit,
-        worksheetPath: additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName)),
-      })
+      const worksheetPath = additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName))
+      sheets.set(worksheetPath, sheetName)
+      resolvedEdits.push({ ...edit, worksheetPath })
     }
-    tableRenames = await applyTableEdits(pkg, resolvedEdits, touchedEntries, definedNamesState === null)
+    const result = await applyTableEdits(pkg, resolvedEdits, touchedEntries, definedNamesState === null)
+    tableRenames = result.renames
+    if (result.converted.length > 0) {
+      await updateConvertedPivotSources(pkg, result.converted, sheets, touchedEntries)
+    }
   }
   // New tables also run on the flushed worksheet XML: the <tableParts>
   // element and overlap checks see the final sheet content.
@@ -2144,6 +2150,43 @@ async function allocateAddedSheets(
   pkg.write(relationshipsPath, updatedRelationships)
   touchedEntries.add(relationshipsPath)
   return allocations
+}
+
+async function updateConvertedPivotSources(
+  pkg: PackageEditor,
+  converted: readonly ConvertedTable[],
+  sheetNames: ReadonlyMap<string, string>,
+  touchedEntries: Set<string>,
+): Promise<void> {
+  const tables = converted.map((table) => ({
+    sheet: sheetNames.get(table.worksheetPath),
+    names: new Set(table.names.map((name) => name.toLowerCase())),
+    xml: table.xml,
+  }))
+  for (const path of await pkg.paths()) {
+    if (!/^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path)) continue
+    if (!(await pkg.canPatch(path))) {
+      if (!(await pkg.containsText(path, 'worksheetSource'))) continue
+      throw new TableEditError(`${path} is too large to preserve a converted table's pivot source.`)
+    }
+    const xml = await pkg.readText(path)
+    const updated = convertPivotTableSourceToRange(xml, (name, sheet) => {
+      const matches = tables.filter((table) => table.names.has(name.toLowerCase()) &&
+        (sheet === undefined || table.sheet?.toLowerCase() === sheet.toLowerCase()))
+      if (matches.length === 0) return undefined
+      const table = matches[0]!
+      const ref = readTablePivotSourceRef(table.xml)
+      if (matches.length !== 1 || !table.sheet || !ref) {
+        throw new TableEditError(`The source range for the pivot using table "${name}" could not be preserved.`)
+      }
+      return { sheet: table.sheet, ref }
+    })
+    pkg.releaseSourceText(path)
+    if (updated !== xml) {
+      pkg.write(path, updated)
+      touchedEntries.add(path)
+    }
+  }
 }
 
 async function collectPivotSourceSheets(

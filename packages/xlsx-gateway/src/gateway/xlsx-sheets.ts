@@ -933,6 +933,22 @@ function rewritePivotWorksheetSource(
   return xml.slice(0, start) + opening + xml.slice(start + element.opening.length)
 }
 
+export function convertPivotTableSourceToRange(
+  xml: string,
+  resolve: (name: string, sheet: string | undefined) => { sheet: string; ref: string } | undefined,
+): string {
+  const source = localPivotWorksheetSource(xml)
+  if (!source) return xml
+  const { element, start } = source
+  const name = element.attributes.get('name')
+  const range = name && resolve(name, element.attributes.get('sheet'))
+  if (!range) return xml
+  let opening = updateWorksheetTagAttribute(element.opening, 'name', null)
+  opening = updateWorksheetTagAttribute(opening, 'sheet', escapeXmlAttribute(range.sheet))
+  opening = updateWorksheetTagAttribute(opening, 'ref', escapeXmlAttribute(range.ref))
+  return xml.slice(0, start) + opening + xml.slice(start + element.opening.length)
+}
+
 export function localPivotWorksheetSource(xml: string) {
   if (!xml.includes('worksheetSource')) return undefined
   const [element] = childElements(xml)

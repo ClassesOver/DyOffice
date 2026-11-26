@@ -52,17 +52,26 @@ const CONTENT_TYPES_PATH = '[Content_Types].xml'
 const TABLE_NAME_RULE = /^[\p{L}_\\][\p{L}\p{N}_.\\]*$/u
 const CELL_LIKE = /^(\$?[A-Za-z]{1,3}\$?[0-9]+|[rR]\d*[cC]\d*)$/
 
+export interface ConvertedTable {
+  readonly worksheetPath: string
+  readonly names: readonly string[]
+  readonly xml: string
+}
+
 export async function applyTableEdits(
   pkg: MutablePackage,
   edits: readonly TableEdit[],
   touchedEntries: Set<string>,
   checkWorkbookNames = true,
-): Promise<Map<string, string>> {
+): Promise<{ renames: Map<string, string>; converted: ConvertedTable[] }> {
+  const converted: ConvertedTable[] = []
   const renames = new Map<string, { original: string[]; name: string }>()
   for (const edit of edits) {
     const located = await locateTable(pkg, edit)
     if (edit.remove) {
       await removeTable(pkg, edit.worksheetPath, located, touchedEntries)
+      converted.push({ worksheetPath: edit.worksheetPath, xml: located.xml,
+        names: [...(renames.get(located.path)?.original ?? []), ...tablePartNames(located.xml)] })
       renames.delete(located.path)
       continue
     }
@@ -80,7 +89,7 @@ export async function applyTableEdits(
       if (alias !== name) names.set(alias.toLowerCase(), name)
     }
   }
-  return names
+  return { renames: names, converted }
 }
 
 async function locateTable(pkg: MutablePackage, edit: TableEdit): Promise<LocatedTable> {

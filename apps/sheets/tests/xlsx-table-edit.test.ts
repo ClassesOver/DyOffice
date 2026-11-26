@@ -83,6 +83,26 @@ describe('table edits', () => {
     expect(plan.replaced.has(external)).toBe(false)
   })
 
+  it('preserves a converted pivot source as a local range and keeps external sources intact', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const local = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const external = 'xl/pivotCache/pivotCacheDefinition2.xml'
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const root = `<pivotCacheDefinition xmlns:r="${office}"><cacheSource type="worksheet">`
+    const close = '</cacheSource></pivotCacheDefinition>'
+    zip.file(local, root + "<worksheetSource name='Table1' sheet='Data'/>" + close)
+    zip.file(external, root + "<worksheetSource name='Table1' r:id='rId5'/>" + close)
+    const plan = await planWith([edit({ remove: true })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get(local)).toContain('<worksheetSource ref="A1:B2" sheet="Data"/>')
+    expect(plan.replaced.has(external)).toBe(false)
+
+    const tablePath = 'xl/tables/table1.xml'
+    const table = await zip.file(tablePath)!.async('text')
+    zip.file(tablePath, table.replace('<table ', '<table headerRowCount="0" '))
+    await expect(planWith([edit({ remove: true })], [], await zip.generateAsync({ type: 'nodebuffer' })))
+      .rejects.toThrow('could not be preserved')
+  })
+
   it('edits real table elements with single-quoted attributes and preserves extension markup', async () => {
     const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
     const path = 'xl/tables/table1.xml'

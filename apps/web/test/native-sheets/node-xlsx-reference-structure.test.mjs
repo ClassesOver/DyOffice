@@ -341,6 +341,22 @@ test(
       const { data } = recomputePivotData(definition, values)
       assert.deepEqual(data, [[150], [50], [200]])
 
+      const converted = await save(saved, [], [first, second], {
+        tableEdits: [{ sheetId: first, tableName: 'SalesData', remove: true }],
+      })
+      assert.deepEqual((await inspect(converted)).sheets[0].tables, [])
+      const convertedCache = await xmlPart(await JSZip.loadAsync(converted), after.cachePath)
+      assert.match(convertedCache, /<worksheetSource[^>]*ref="A1:B4"[^>]*\/>/)
+      assert.ok(convertedCache.includes(comment))
+      const convertedDefinition = await runtime.sheetsPackageReader(converted, undefined, {
+        path: after.path, cachePath: after.cachePath,
+      })
+      assert.equal(convertedDefinition.sourceSheet, 'Acceptance')
+      const convertedRange = await native.readRange(converted, convertedDefinition.sourceSheet,
+        { startRow: 0, endRow: 3, startColumn: 0, endColumn: 1 })
+      assert.deepEqual(convertedRange.cells, sourceRange.cells)
+      assert.deepEqual(recomputePivotData(convertedDefinition, values).data, data)
+
       const named = await editPart(saved, wbPath, (xml) => xml.replace('</definedNames>',
         '<definedName name="RegionInput">Other!$A$1:$B$3</definedName>' +
         '<definedName name="RegionInput" localSheetId="0">\'Acceptance\'!$A$1:$B$4</definedName>' +

@@ -282,22 +282,30 @@ async function resolveTableSource(
       // Ownership is useful to structural edits even for a table that cannot
       // supply a valid grid of headers and data to the refresh engine.
       found = { sourceSheet: sheet.name }
-      const opening = readRootStartTag(table.xml)
-      const headers = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'headerRowCount') ?? '1'))
-      const totals = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'totalsRowCount') ?? '0'))
-      const ref = readWorksheetTagAttribute(opening, 'ref')
-      if (headers !== 1 || !Number.isSafeInteger(totals) || totals < 0 || !ref) continue
-      try {
-        const area = parseRef(decodeXmlText(ref))
-        if (area.endRow - totals > area.startRow) {
-          found = { sourceSheet: sheet.name, sourceRef: areaToRef({ ...area, endRow: area.endRow - totals }) }
-        }
-      } catch {
-        // An unreadable range still belongs to its named table's worksheet.
-      }
+      const sourceRef = readTablePivotSourceRef(table.xml)
+      if (sourceRef) found = { sourceSheet: sheet.name, sourceRef }
     }
   }
   return found
+}
+
+export function readTablePivotSourceRef(tableXml: string): string | undefined {
+  const opening = readRootStartTag(tableXml)
+  const headers = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'headerRowCount') ?? '1'))
+  const totals = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'totalsRowCount') ?? '0'))
+  const ref = readWorksheetTagAttribute(opening, 'ref')
+  if (headers !== 1 || !Number.isSafeInteger(totals) || totals < 0 || !ref) return undefined
+  try {
+    const area = parseRef(decodeXmlText(ref))
+    const endRow = area.endRow - totals
+    if (endRow > area.startRow && area.endColumn >= area.startColumn &&
+      area.startRow >= 0 && area.endRow < MAX_GRID_ROWS && area.endColumn < MAX_GRID_COLUMNS) {
+      return areaToRef({ ...area, endRow })
+    }
+  } catch {
+    // An unreadable range still belongs to its named table's worksheet.
+  }
+  return undefined
 }
 
 async function resolveDefinedNameSource(
