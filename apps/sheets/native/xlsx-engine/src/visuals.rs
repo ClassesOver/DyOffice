@@ -737,34 +737,14 @@ pub struct ThemeFonts {
     pub minor_ea: Option<String>,
 }
 
-fn read_workbook_theme(archive: &mut ZipArchive<File>) -> Result<Option<String>, SidecarError> {
-    let relationships_path = "xl/_rels/workbook.xml.rels";
-    let theme_path = if let Some(xml) = read_optional_xml(archive, relationships_path)? {
-        let document = parse_document(&xml, relationships_path)?;
-        document
-            .root_element()
-            .children()
-            .find(|node| {
-                node.has_tag_name("Relationship")
-                    && node.attribute("TargetMode") != Some("External")
-                    && node.attribute("Type").is_some_and(|kind| kind.ends_with("/theme"))
-            })
-            .and_then(|node| node.attribute("Target"))
-            .map(|target| resolve_part_target("xl/workbook.xml", target))
-            .transpose()?
-    } else {
-        None
-    };
-    read_optional_xml(archive, theme_path.as_deref().unwrap_or("xl/theme/theme1.xml"))
-}
-
 pub fn read_theme_fonts(
     archive: &mut ZipArchive<File>,
+    theme_path: &str,
 ) -> Result<Option<ThemeFonts>, SidecarError> {
-    let Some(xml) = read_workbook_theme(archive)? else {
+    let Some(xml) = read_optional_xml(archive, theme_path)? else {
         return Ok(None);
     };
-    let document = parse_document(&xml, "workbook theme")?;
+    let document = parse_document(&xml, theme_path)?;
     let Some(scheme) = document
         .descendants()
         .find(|node| node.has_tag_name("fontScheme"))

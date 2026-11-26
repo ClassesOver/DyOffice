@@ -49,10 +49,11 @@ pub(crate) struct CustomTablePalette {
 /// styles.xml `<tableStyles>` → per-style band palette.
 pub(crate) fn read_custom_table_styles(
     archive: &mut ZipArchive<File>,
+    styles_path: &str,
     dxf_styles: &[visuals::CellStyle],
 ) -> HashMap<String, CustomTablePalette> {
     let mut palettes = HashMap::new();
-    let Ok(xml) = read_zip_string(archive, "xl/styles.xml") else {
+    let Ok(xml) = read_zip_string(archive, styles_path) else {
         return palettes;
     };
     let mut reader = Reader::from_str(&xml);

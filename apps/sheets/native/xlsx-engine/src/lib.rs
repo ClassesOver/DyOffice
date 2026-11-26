@@ -281,22 +281,28 @@ impl WorkbookSessions {
             return Err(SidecarError::cancelled());
         }
         let entry_count = archive.len();
-        let mut color_context = visuals::read_theme_palette(&mut archive)?;
-        visuals::read_indexed_palette(&mut archive, &mut color_context)?;
+        let relationships = read_workbook_relationships(&mut archive)?;
+        let mut color_context = visuals::read_theme_palette(&mut archive, &relationships.theme)?;
+        visuals::read_indexed_palette(&mut archive, &relationships.styles, &mut color_context)?;
         let theme_colors = color_context.palette_hex();
-        let theme_fonts = visuals::read_theme_fonts(&mut archive)?;
-        let shared_strings = Arc::new(read_shared_strings(&mut archive, &color_context)?);
+        let theme_fonts = visuals::read_theme_fonts(&mut archive, &relationships.theme)?;
+        let shared_strings = Arc::new(read_shared_strings(
+            &mut archive,
+            &relationships.shared_strings,
+            &color_context,
+        )?);
         let (declarations, workbook_protection, active_tab, date_1904) =
             read_sheet_declarations(&mut archive)?;
-        let relationships = read_workbook_relationships(&mut archive)?;
         let (styles, dxf_styles, normal_font_name) = visuals::read_styles(
             &mut archive,
+            &relationships.styles,
             &color_context,
             theme_fonts.as_ref(),
             locale,
             short_date_format,
         )?;
-        let custom_table_styles = read_custom_table_styles(&mut archive, &dxf_styles);
+        let custom_table_styles =
+            read_custom_table_styles(&mut archive, &relationships.styles, &dxf_styles);
         let rich_value_images = richdata::read_rich_value_images(&mut archive);
         let wps_cell_images = read_wps_cell_images(&mut archive);
         let mut cell_image_count = 0usize;
@@ -315,6 +321,7 @@ impl WorkbookSessions {
                 return Err(SidecarError::cancelled());
             }
             let target = relationships
+                .targets
                 .get(&declaration.relationship_id)
                 .ok_or_else(|| {
                     SidecarError::Workbook(format!(

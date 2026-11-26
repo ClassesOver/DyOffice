@@ -1499,6 +1499,58 @@ fn normal_font_name_survives_theme_substitution() {
 /// An empty <v/> on a t="s" cell degrades to a valueless styled cell;
 /// erroring used to blank every cell of the sheet.
 #[test]
+fn workbook_uses_linked_styles_and_shared_strings() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+              <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="parts/linked%20styles.xml"/>
+              <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="/xl/parts/strings.xml"/>
+            </Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row></sheetData></worksheet>"#,
+        ),
+        (
+            "xl/parts/linked styles.xml",
+            r#"<styleSheet><fonts><font><name val="Linked Font"/><color indexed="1"/></font></fonts><cellXfs><xf numFmtId="2" fontId="0"/></cellXfs><colors><indexedColors><rgbColor rgb="FF000000"/><rgbColor rgb="FF123456"/></indexedColors></colors></styleSheet>"#,
+        ),
+        (
+            "xl/styles.xml",
+            r#"<styleSheet><fonts><font><name val="Orphan Font"/></font></fonts><cellXfs><xf fontId="0"/></cellXfs></styleSheet>"#,
+        ),
+        ("xl/parts/strings.xml", "<sst><si/><si><t>Linked text</t></si></sst>"),
+        (
+            "xl/sharedStrings.xml",
+            "<sst><si><t>A</t></si><si><t>Orphan text</t></si></sst>",
+        ),
+    ]);
+    let mut sessions = WorkbookSessions::new();
+    let metadata = sessions.open(&path).unwrap();
+    assert_eq!(metadata.styles[0].font_family.as_deref(), Some("Linked Font"));
+    assert_eq!(metadata.styles[0].font_color.as_deref(), Some("#123456"));
+    let range = CellRange {
+        start_row: 0,
+        end_row: 0,
+        start_column: 0,
+        end_column: 0,
+    };
+    let result = sessions
+        .read_range(&metadata.session_id, "sheet-1", &range)
+        .unwrap();
+    assert!(matches!(
+        result.cells[0].value.as_ref(),
+        Some(CellValue::String(text)) if text == "Linked text"
+    ));
+}
+
+#[test]
 fn empty_shared_string_value_keeps_sheet_readable() {
     let (_dir, path) = open_fixture(&[
         (

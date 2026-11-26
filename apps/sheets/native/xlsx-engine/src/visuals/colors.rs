@@ -275,12 +275,13 @@ pub fn resolve_color(
 /// by workbooks converted from .xls. Entries are ARGB ("00RRGGBB").
 pub fn read_indexed_palette(
     archive: &mut ZipArchive<File>,
+    styles_path: &str,
     colors: &mut ColorContext,
 ) -> Result<(), SidecarError> {
-    let Some(xml) = read_optional_xml(archive, "xl/styles.xml")? else {
+    let Some(xml) = read_optional_xml(archive, styles_path)? else {
         return Ok(());
     };
-    let document = parse_document(&xml, "styles.xml")?;
+    let document = parse_document(&xml, styles_path)?;
     let Some(list) = document
         .descendants()
         .find(|node| node.has_tag_name("indexedColors"))
@@ -315,11 +316,14 @@ pub fn tint_to_hex(base: (u8, u8, u8), tint: f64) -> String {
     format!("#{red:02X}{green:02X}{blue:02X}")
 }
 
-pub fn read_theme_palette(archive: &mut ZipArchive<File>) -> Result<ColorContext, SidecarError> {
-    let Some(xml) = read_workbook_theme(archive)? else {
+pub fn read_theme_palette(
+    archive: &mut ZipArchive<File>,
+    theme_path: &str,
+) -> Result<ColorContext, SidecarError> {
+    let Some(xml) = read_optional_xml(archive, theme_path)? else {
         return Ok(ColorContext::default());
     };
-    let document = parse_document(&xml, "workbook theme")?;
+    let document = parse_document(&xml, theme_path)?;
     let Some(scheme) = document
         .descendants()
         .find(|node| node.has_tag_name("clrScheme"))

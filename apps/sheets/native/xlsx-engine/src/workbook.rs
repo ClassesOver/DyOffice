@@ -78,29 +78,52 @@ pub(crate) fn read_sheet_declarations(
     Ok((sheets, protection, active_tab, date_1904))
 }
 
+pub(crate) struct WorkbookRelationships {
+    pub(crate) targets: HashMap<String, String>,
+    pub(crate) theme: String,
+    pub(crate) styles: String,
+    pub(crate) shared_strings: String,
+}
+
 pub(crate) fn read_workbook_relationships(
     archive: &mut ZipArchive<File>,
-) -> Result<HashMap<String, String>, SidecarError> {
-    let xml = read_zip_string(archive, "xl/_rels/workbook.xml.rels")?;
-    let mut reader = Reader::from_str(&xml);
-    let mut relationships = HashMap::new();
-    loop {
-        match reader.read_event()? {
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"Relationship" =>
-            {
-                if let (Some(id), Some(target)) = (
-                    attribute_value(&reader, &element, b"Id")?,
-                    attribute_value(&reader, &element, b"Target")?,
-                ) {
-                    relationships.insert(id, target);
+) -> Result<WorkbookRelationships, SidecarError> {
+    let path = "xl/_rels/workbook.xml.rels";
+    let xml = read_zip_string(archive, path)?;
+    let document = visuals::parse_document(&xml, path)?;
+    let relationships = || {
+        document.root_element().children().filter(|node| {
+            node.has_tag_name("Relationship") && node.attribute("TargetMode") != Some("External")
+        })
+    };
+    let part_path = |kind: &str, fallback: &str| {
+        relationships()
+            .find_map(|node| {
+                let (_, suffix) = node.attribute("Type")?.rsplit_once('/')?;
+                if suffix == kind {
+                    node.attribute("Target")
+                } else {
+                    None
                 }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    Ok(relationships)
+            })
+            .map_or_else(
+                || Ok(fallback.to_owned()),
+                |target| crate::archive::resolve_relationship_target("xl/workbook.xml", target),
+            )
+    };
+    Ok(WorkbookRelationships {
+        targets: relationships()
+            .filter_map(|node| {
+                Some((
+                    node.attribute("Id")?.to_owned(),
+                    node.attribute("Target")?.to_owned(),
+                ))
+            })
+            .collect(),
+        theme: part_path("theme", "xl/theme/theme1.xml")?,
+        styles: part_path("styles", "xl/styles.xml")?,
+        shared_strings: part_path("sharedStrings", "xl/sharedStrings.xml")?,
+    })
 }
 
 pub(crate) fn normalize_worksheet_path(target: &str) -> Result<String, SidecarError> {
@@ -504,9 +527,10 @@ pub(crate) fn dimensions_from_reference(reference: &str) -> Result<(usize, usize
 
 pub(crate) fn read_shared_strings(
     archive: &mut ZipArchive<File>,
+    path: &str,
     colors: &ColorContext,
 ) -> Result<Vec<SharedString>, SidecarError> {
-    let Ok(entry) = zip_entry(archive, "xl/sharedStrings.xml") else {
+    let Ok(entry) = zip_entry(archive, path) else {
         return Ok(Vec::new());
     };
     let mut reader = Reader::from_reader(BufReader::new(entry));
@@ -521,6 +545,13 @@ pub(crate) fn read_shared_strings(
     let mut in_phonetic = false;
     loop {
         match reader.read_event_into(&mut buffer)? {
+            // A self-closing item still occupies a shared-string index.
+            Event::Empty(element) if element.local_name().as_ref() == b"si" => {
+                strings.push(SharedString {
+                    text: String::new(),
+                    runs: None,
+                });
+            }
             Event::Start(element) if element.local_name().as_ref() == b"si" => {
                 current.clear();
                 runs.clear();
