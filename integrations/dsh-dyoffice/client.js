@@ -131,7 +131,7 @@ window.__ModuleLoader__.load({
       .dsh-office-tools{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:9px}
       .dsh-office-paper,.dsh-office-frame{min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:5px;background:var(--dsw-alias-bg-layer-1,Canvas)}
       .dsh-office-paper{min-height:145px;max-height:340px;overflow:auto;padding:16px 18px;line-height:1.7;font-size:14px;overflow-wrap:anywhere}.dsh-office-paper p,.dsh-office-paper h3{margin:0 0 .6em}
-      .dsh-office-frame{position:relative;height:65vh;min-height:480px;max-height:800px;overflow:hidden}
+      .dsh-office-frame{position:relative;height:65vh;height:65dvh;max-height:800px;overflow:hidden}
       .dsh-office-log{min-width:0;padding:12px 16px;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}
       .dsh-office-message{position:relative;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da);margin-inline-start:4px;padding:0 0 12px 13px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
       .dsh-office-message:last-child{padding-bottom:0;border-color:transparent}
@@ -342,7 +342,7 @@ window.__ModuleLoader__.load({
       const latestWriting = useRef(null)
       latestWriting.current = writing
       const editing = linkedEditor && !updating && value?.selectedFile === selectedFile &&
-        selectedFile === linkedEditor.fileId && value.preview?.fileId === linkedEditor.fileId && value.origin === linkedEditor.origin ? linkedEditor : null
+        value.preview?.fileId === linkedEditor.fileId && value.origin === linkedEditor.origin ? linkedEditor : null
 
       useEffect(()=>{
         const popup=embedded&&frame.current?.contentWindow
@@ -554,11 +554,9 @@ window.__ModuleLoader__.load({
       function openLinkedEditor() {
         const origin = serviceOrigin(value.origin)
         if (!origin || !uuid.test(preview.fileId)) return
-        const guest=value.canEdit===true
-        const popup = window.open(guest ? guestEditorUrl(preview.fileId) : origin + '/#/file/' + preview.fileId, '_blank')
-        if(guest&&popup)popup.opener=null
+        const popup = window.open(origin + '/#/file/' + preview.fileId, '_blank')
         setPopupBlocked(!popup)
-        if (popup&&!guest) editorWindows.set({origin, popup, fileId: preview.fileId, automatic: selectedFile === preview.fileId})
+        if (popup) editorWindows.set({origin, popup, fileId: preview.fileId, automatic: selectedFile === preview.fileId})
       }
       const receipt = created?.origin === value.origin && h('p', {role: 'status', style: textStyle},
         t('created'), '：', h('a', {href: value.canEdit && !paused ? guestEditorUrl(created.fileId) : created.href,

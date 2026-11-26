@@ -3,6 +3,7 @@ import {mkdir,mkdtemp,writeFile,rm} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import assert from 'node:assert/strict'
+import JSZip from 'jszip'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
 import {createAssistantChannelService} from '../../server/src/modules/assistant-channel/service.ts'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
@@ -36,7 +37,14 @@ test('DSH guest authorization is explicit and bound to the channel document',asy
  assert.equal((await open(memberToken,other.fileId)).statusCode,403)
  await assert.rejects(service.createMemberDocument(memberToken,f.files,{format:'docx',title:'disabled'}),{statusCode:403})
  const creator=await service.issueDshToken(f.alice.token,conversationId,60,true,true)
- const created=await service.createMemberDocument(creator.memberToken,f.files,{format:'docx',title:'created'})
+ const createWithBody=token=>f.app.inject({method:'POST',url:'/api/v1/assistant-channels/member/documents',
+  headers:{authorization:'Bearer '+token},payload:{format:'docx',title:'created',body:'活动策划\n周五下午举行。'}})
+ assert.equal((await createWithBody(memberToken)).statusCode,403)
+ const createdReply=await createWithBody(creator.memberToken)
+ assert.equal(createdReply.statusCode,200,createdReply.body)
+ const created=createdReply.json()
+ const savedDocument=await JSZip.loadAsync(await f.files.readFile(f.alice.token,created.fileId,created.baseRevision))
+ assert.match(await savedDocument.file('word/document.xml').async('string'),/活动策划.*周五下午举行。/)
  assert.equal((await open(creator.memberToken,created.fileId)).statusCode,403)
  const createdGrant=await open(creator.memberToken,created.fileId,created.previewProof)
  assert.equal(createdGrant.statusCode,200,createdGrant.body)

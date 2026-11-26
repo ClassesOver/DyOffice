@@ -101,9 +101,9 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
   api.get(base+'/member',async request=>({
    ...await service.memberSnapshot(bearer(request)),...(typeof embedOrigins==='function'?{dshEditorOrigins:await embedOrigins()}:embedOrigins?{dshEditorOrigin:embedOrigins}:{}),
   }))
-  if(files)api.post(base+'/member/documents',{bodyLimit:2048},request=>{
-   const token=bearer(request),{format,title}=body(request,['format','title'])
-   return service.createMemberDocument(token,files,{format,title})
+  if(files)api.post(base+'/member/documents',{bodyLimit:160*1024},request=>{
+   const token=bearer(request),{format,title,body:documentBody}=body(request,['format','title','body'])
+   return service.createMemberDocument(token,files,{format,title,body:documentBody})
   })
   if(files)api.post<{Params:{id:string}}>(base+'/member/documents/:id/edit-ticket',{bodyLimit:1024},request=>{
    body(request,[])

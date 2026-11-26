@@ -65,6 +65,43 @@ test('a delivered thumbnail opens in the right preview only on click',async()=>{
   assert.deepEqual(opened,['two.pdf'])
 })
 
+test('the DSH sidebar can sync the bound Word document from its editor window',async()=>{
+  const slots=new Map(),effects=[],messages=[]
+  const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',origin='https://office.example'
+  const value={origin,selectedFile:null,canEdit:true,tasks:[],href:origin+'/#/file/'+fileId,
+    preview:{fileId,name:'demo.docx',format:'docx',text:'内容'}}
+  const popup={closed:false,postMessage:(...args)=>messages.push(args)}
+  let stateIndex=0
+  const react={createElement:(component,props,...children)=>({component,props,children}),useRef:()=>({current:null}),
+    useState:initial=>[stateIndex++===0?value:initial,()=>{}],useEffect:effect=>effects.push(effect),
+    useSyncExternalStore:(_subscribe,read)=>read()}
+  runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{
+    URL,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,
+    window:{location:{href:'http://localhost:3080/',origin:'http://localhost:3080'},
+      addEventListener(){},removeEventListener(){},open:url=>{assert.equal(url,value.href);return popup},
+      __ModuleLoader__:{load({factory}){factory(()=>react).apply({
+        locale:{bind(){},register(){}},effect:effect=>effect(),on(){},sidebarRightTabs:{register(){}},
+        uiConversation:{views:{register(){}},events:{register(){}}},
+        slots:{inject:(_,effect)=>effect(),register:(spec,component)=>slots.set(spec.name,component)},
+      })}},
+    },
+  })
+  const {component,props}=slots.get('sidebar.right.pane.tab')({useTabInfo:()=>({tab:{visible:true}}),t:key=>key})
+  const findButton=node=>node?.component==='button'&&node.children.includes('syncEdit')?node:
+    node?.children?.flat().map(findButton).find(Boolean)
+  findButton(component(props)).props.onClick()
+  stateIndex=0
+  effects.length=0
+  assert.equal(findButton(component(props)),undefined)
+  const stop=effects[2]()
+  try {
+    assert.equal(messages.length,1)
+    assert.equal(messages[0][0].type,'dsh-dyoffice:draft-request')
+    assert.equal(messages[0][0].fileId,fileId)
+    assert.equal(messages[0][1],origin)
+  } finally {stop?.()}
+})
+
 for(const text of ['', 'Existing saved document'])test(`restored writing ${text?'preserves saved content':'starts automatically without a window'}`,async()=>{
   const slots=new Map(),effects=[]
   let overlay

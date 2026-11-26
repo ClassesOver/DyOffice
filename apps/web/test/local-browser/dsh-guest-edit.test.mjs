@@ -64,6 +64,12 @@ test('a signed-out browser edits and saves all four native formats with DSH tick
   if(format==='docx'){
    const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
    await expect(editor).toBeVisible({timeout:30000})
+   const zoom=()=>page.locator('.doc-zoom').first().evaluate(node=>Number(getComputedStyle(node).zoom))
+   const wideZoom=await zoom()
+   await page.setViewportSize({width:600,height:840})
+   await expect.poll(zoom).toBeLessThan(wideZoom)
+   await page.setViewportSize({width:1440,height:1100})
+   await expect.poll(zoom).toBe(wideZoom)
    await editor.click()
    await page.keyboard.press('Control+End')
    await page.keyboard.press('Enter')

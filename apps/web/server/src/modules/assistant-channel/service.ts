@@ -371,7 +371,7 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     }catch{throw fail(404)}
    })
   },
-  async createMemberDocument(token:string,files:FileService,input:{format:unknown;title:unknown}) {
+  async createMemberDocument(token:string,files:FileService,input:{format:unknown;title:unknown;body?:unknown}) {
    const sealed=unseal(token,'member')
    const authorize=async(c:PoolClient,p:BusinessPrincipal)=>{
     const ch=await channel(c,p,sealed.conversationId)

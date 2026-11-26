@@ -865,7 +865,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   )
   const [status, setStatus] = useState('')
   const [zoom, setZoomValue] = useState(100)
-  const zoomFitMode = useRef<ZoomFitMode | null>(null)
+  const zoomFitMode = useRef<ZoomFitMode | 'auto' | null>('auto')
   const setZoom = useCallback((value: number | ((current: number) => number)) => {
     zoomFitMode.current = null
     setZoomValue(value)
@@ -3595,17 +3595,20 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     [refitZoom],
   )
 
-  // The assistant and navigation panes change the available width. Only an
-  // explicitly selected fit mode follows those changes.
+  // Follow available width at the default zoom and in any explicit fit mode.
   useEffect(() => {
     const el = document.querySelector('.editor-scroll')
     if (!doc || !el) return
     const ro = new ResizeObserver(() => {
-      if (zoomFitMode.current) refitZoom(zoomFitMode.current)
+      const mode = zoomFitMode.current
+      if (mode === 'auto') {
+        const widthFit = fitZoomFor('width')
+        if (widthFit !== null) setZoomValue(Math.min(100, widthFit))
+      } else if (mode) refitZoom(mode)
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [doc, refitZoom])
+  }, [doc, fitZoomFor, refitZoom])
 
   // Read Mode opens at 1:1 — the same page size as the Page Preview — and the
   // user's zoom / fit mode is restored on exit (wheel zoom still works inside).
@@ -3614,7 +3617,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   // layout effects but before passive effects).
   const preReadZoomRef = useRef<{
     zoom: number
-    fit: ZoomFitMode | null
+    fit: ZoomFitMode | 'auto' | null
   } | null>(null)
   useLayoutEffect(() => {
     if (readMode) {

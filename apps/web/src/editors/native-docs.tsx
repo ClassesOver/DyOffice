@@ -43,7 +43,7 @@ import '../../../docs/src/renderer/fonts/fonts.css'
 import './docs.css'
 import './ai-dock-theme.css'
 
-export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false},citationMode=false) {
+export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false},citationMode=false,guest=false) {
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
   let closing=false
@@ -82,7 +82,6 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   const registerDraftEditor=(handle:DocsEditorHandle|null)=>{draftEditor=handle?{serialize:()=>handle.serialize()}:null;registerEditor(handle)}
   const unsubscribe = host.subscribe(() => changed())
   let continuationRevision:()=>string|undefined=()=>undefined
-  const guest=new URLSearchParams(location.search).get('guest')==='1'
   const assistantResult = guest?{assistant:undefined,failure:undefined}:await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision:()=>continuationRevision()},false,'docx',new Set([...DOCS_AGENT_TOOLS.map(tool=>tool.name),'read_attachment','read_knowledge_file','search_knowledge_base']))
   const assistant = assistantResult.assistant
   const opened = await host.open(fileId)

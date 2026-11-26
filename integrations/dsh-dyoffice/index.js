@@ -353,8 +353,8 @@ export function apply(ctx, config) {
       await delay(2000, undefined, {signal})
     }
   }
-  const createDocument = async (office, format, title, writing) => {
-    const document = await office.createDocument({format, title}).catch(error => {
+  const createDocument = async (office, format, title, {writing,body} = {}) => {
+    const document = await office.createDocument({format, title, ...(body === undefined ? {} : {body})}).catch(error => {
       if (error.status === 403) throw Error('创建未获授权或频道已暂停。请在 DyOffice 频道分享中允许创建新文档，再更新授权码。')
       throw error
     })
@@ -366,11 +366,12 @@ export function apply(ctx, config) {
   }
   ctx.tools?.register({
     name: 'dyoffice_document',
-    description: 'Use for natural-language requests to open the current DyOffice channel document, reopen the last document created using the current authorization (open_recent), or create a new blank Word, Excel, PowerPoint, or PDF document in DyOffice. Return the editor link as a Markdown link the user can click. This tool does not write document contents. Never ask for an authorization code in chat; the plugin prompts privately.',
+    description: 'Use for natural-language requests to open the current DyOffice channel document, reopen the most recently created document, or create a Word, Excel, PowerPoint, or PDF document. When the user asks you to write a document (such as a report, letter, or plan), write the complete content in the user’s language, then create a Word document with that text in body. Omit body for blank documents. Return the saved document as a clickable Markdown link. Never ask for an authorization code in chat; the plugin prompts privately.',
     parameters: {type:'object',additionalProperties:false,required:['action'],properties:{
       action: {type:'string', enum:['open','open_recent','create']},
-      format: {type:'string', enum:['docx','xlsx','pptx','pdf'], description:'Required for creating a blank document.'},
-      title: {type:'string', description:'Required for creating a blank document.'},
+      format: {type:'string', enum:['docx','xlsx','pptx','pdf'], description:'Required when creating a document. Writing a body is supported for Word (docx).'},
+      title: {type:'string', description:'Required when creating a document.'},
+      body: {type:'string', minLength:1, maxLength:24000, description:'Complete plain-text body to save in a new Word document, up to 24,000 UTF-8 bytes. Use newlines between paragraphs. Do not pass just the prompt or an outline.'},
     }},
     output: {
       schema: {type:'object', additionalProperties:false, required:['fileId','name','url'], properties:{
@@ -380,14 +381,17 @@ export function apply(ctx, config) {
     },
     isConcurrencySafe: () => false,
     timeoutMs: 330000,
-    async execute({action,format,title},{signal,agent}) {
+    async execute({action,format,title,body},{signal,agent}) {
       if (action !== 'open' && action !== 'open_recent' && (action !== 'create' || !['docx','xlsx','pptx','pdf'].includes(format) || typeof title !== 'string' || !title.trim())) {
         throw Error('请指定要创建的文档格式和标题。')
+      }
+      if (body !== undefined && (action !== 'create' || format !== 'docx' || typeof body !== 'string' || !body.trim() || Buffer.byteLength(body) > 24000)) {
+        throw Error('正文须为非空文字，最多 24,000 字节，并随新建 Word 文档一同提交。')
       }
       const office = await ensureOffice(signal,agent)
       if (office.paused) throw Error('DyOffice 频道已暂停。')
       if (action === 'create') {
-        const result=await createDocument(office,format,title.trim(),null)
+        const result=await createDocument(office,format,title.trim(),{body})
         return {...result,url:editLink(office,result.fileId)}
       }
       if (action === 'open_recent') {
@@ -432,9 +436,9 @@ export function apply(ctx, config) {
         if (command.title !== undefined) {
           const office = await ensureOffice(signal, agent)
           const format = command.format === 'word' ? 'docx' : command.format
-          const document = await createDocument(office,format,command.title,command.writing
+          const document = await createDocument(office,format,command.title,{writing:command.writing
             ? saved => ({id:randomUUID(),topic:command.writing,baseRevision:saved.baseRevision,selection:agent?.model?.current(),sessionId:session,...(skill&&{skill})})
-            : null)
+            : undefined})
           return {kind: 'success', text: `已创建 ${document.name}\n${document.url}`}
         }
         const result = await executeTask({instruction: command.instruction, signal, agent})

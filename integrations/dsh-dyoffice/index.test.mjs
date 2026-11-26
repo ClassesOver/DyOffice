@@ -158,17 +158,22 @@ test('Word review uses the selected DSH model only for the confirmed saved revis
   assert.deepEqual((await preview()).review,{state:'ready',text:'补充活动负责人'})
 })
 
-test('natural language returns a DSH link and only an owner navigation requests an edit ticket',async t=>{
+test('natural language saves a filled Word document and only an owner navigation requests an edit ticket',async t=>{
  const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
  const createdId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
- const ticket='x'.repeat(43),proof='d'.repeat(64),requests=[]
+ const ticket='x'.repeat(43),proof='d'.repeat(64),requests=[],documents=[]
  let linkedFile=fileId
  const directory=await mkdtemp(join(tmpdir(),'dsh-guest-'))
  t.after(()=>rm(directory,{recursive:true,force:true}))
- const server=createServer((request,response)=>{
+ const server=createServer(async(request,response)=>{
   assert.equal(request.headers.authorization,'Bearer sample-token')
   if(request.method==='GET')return response.end(JSON.stringify({conversationId:fileId,member:{membershipId:fileId},fileId:linkedFile,canEdit:true}))
-  if(request.url.endsWith('/member/documents'))return response.end(JSON.stringify({fileId:createdId,name:'demo.docx',previewProof:proof}))
+  if(request.url.endsWith('/member/documents')){
+   const chunks=[]
+   for await(const chunk of request)chunks.push(chunk)
+   documents.push(JSON.parse(Buffer.concat(chunks)))
+   return response.end(JSON.stringify({fileId:createdId,name:'demo.docx',previewProof:proof}))
+  }
   requests.push([request.url,request.headers['x-dyoffice-document-preview']])
   response.end(JSON.stringify({ticket}))
  })
@@ -184,6 +189,11 @@ test('natural language returns a DSH link and only an owner navigation requests 
  const created=await tool.execute({action:'create',format:'docx',title:'demo'},{signal:t.signal})
  assert.equal(opened.url,origin+'/web/dyoffice-preview?edit='+fileId)
  assert.equal(created.url,origin+'/web/dyoffice-preview?edit='+createdId)
+ const text='活动安排\n周五下午举行活动。'
+ const written=await tool.execute({action:'create',format:'docx',title:'demo',body:text},{signal:t.signal})
+ assert.equal(written.url,created.url)
+ assert.deepEqual(documents,[{format:'docx',title:'demo'},{format:'docx',title:'demo',body:text}])
+ await assert.rejects(tool.execute({action:'create',format:'pdf',title:'demo',body:text},{signal:t.signal}),/正文/)
  linkedFile=null
  apply(ctx,{memberFile})
  assert.equal((await tool.execute({action:'open_recent'},{signal:t.signal})).url,created.url)
