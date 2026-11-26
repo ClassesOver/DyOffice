@@ -59,6 +59,32 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('keeps literal worksheet text through bulk fills and row inserts', async t => {
+    const literal = 'Example </row><row r="97"><c r="A97"> text'
+    const comment = '<!-- <row r="99"/> -->'
+    const bytes = await workbook({
+      [sheetPath]: worksheet(`<sheetData><row r="1"><c r="A1" t="inlineStr"><is>${comment}<t><![CDATA[${literal}]]></t></is></c>
+        <c r="B1"><v>7</v></c></row><row r="2"><c r="B2"><v>8</v></c></row></sheetData>`),
+    })
+    const save = async (fields) => {
+      const request = { ...sheetsSaveRequest('sheet-1', []), ...fields }
+      const result = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+      const xml = await (await JSZip.loadAsync(result)).file(sheetPath).async('string')
+      assert.ok(xml.includes(comment))
+      const { cells } = await native.readRange(result, sheetName, { startRow: 0, endRow: 3, startColumn: 0, endColumn: 1 })
+      return cells.map(({ row, column, value }) => [row, column, value])
+    }
+    await t.test('bulk fill', async () => {
+      assert.deepEqual(await save({ bulkConstantFills: [{
+        sheetId: 'sheet-1', startRow: 0, endRow: 1, startColumn: 1, endColumn: 1, value: 42,
+      }] }), [[0, 0, literal], [0, 1, 42], [1, 1, 42]])
+    })
+    await t.test('row insert', async () => {
+      assert.deepEqual(await save({ structuralOps: [{ sheetId: 'sheet-1', kind: 'insert-rows', index: 0, count: 1 }] }),
+        [[1, 0, literal], [1, 1, 7], [2, 1, 8]])
+    })
+  })
+
   await t.test('saves defined names with CDATA and ignores declaration lookalikes in package comments', async () => {
     const workbookComment = '<!-- <sheet name="Ghost" sheetId="999" r:id="rId1"/> -->'
     const relationships = 'xl/_rels/workbook.xml.rels'

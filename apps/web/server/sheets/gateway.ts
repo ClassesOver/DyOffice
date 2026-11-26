@@ -47,7 +47,12 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
   try {
     const source = await createBufferEntrySource(bytes)
     const request = workbookSaveRequestSchema.parse(input)
-    const editedSheets = new Set([...request.edits, ...request.formulaValues].map(edit => edit.sheetId))
+    const editedSheets = new Set([
+      ...request.edits,
+      ...request.formulaValues,
+      ...(request.bulkConstantFills ?? []),
+      ...request.structuralOps,
+    ].map(edit => edit.sheetId))
     const preparedEntries = new Map<string, string>()
     const comments: string[] = []
     const prefix = `<!--dyoffice-${randomUUID()}-`
