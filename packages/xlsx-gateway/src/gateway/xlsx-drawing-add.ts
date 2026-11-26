@@ -3,8 +3,9 @@
 /// worksheet/drawing relationships, and the [Content_Types].xml overrides.
 
 import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart.ts'
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
-import { addContentTypeEntry, appendRelationshipRecord, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { ensureRelationshipNamespace, readRelationshipId, relationshipNamespaceOverride } from './xlsx-namespace.ts'
+import { addContentTypeEntry, appendRelationshipRecord, nextFreeRelationshipId, parseRelationships, relationshipIdsMatch } from './xlsx-sheets.ts'
+import { isElement, prefixOf, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
 
 export class VisualAddError extends Error {}
 
@@ -189,8 +190,13 @@ export async function applyVisualAdditions(
   additions: readonly VisualAddition[],
   touchedEntries: Set<string>,
 ): Promise<void> {
+  const drawingByWorksheet = new Map<string, { path: string }>()
   for (const addition of additions) {
-    const drawing = await ensureSheetDrawing(pkg, addition.worksheetPath, touchedEntries)
+    let drawing = drawingByWorksheet.get(addition.worksheetPath)
+    if (!drawing) {
+      drawing = await ensureSheetDrawing(pkg, addition.worksheetPath, touchedEntries)
+      drawingByWorksheet.set(addition.worksheetPath, drawing)
+    }
     if (addition.chart) {
       const chartPath = await allocatePartPath(pkg, 'xl/charts/chart', '.xml')
       pkg.add(chartPath, buildChartXml(addition.chart))
@@ -250,19 +256,34 @@ export async function applyVisualAdditions(
   }
 }
 
+/// CT_Worksheet places drawing before these optional trailing members.
+const AFTER_DRAWING_ELEMENTS = new Set([
+  'legacyDrawing', 'legacyDrawingHF', 'picture', 'oleObjects', 'controls',
+  'webPublishItems', 'tableParts', 'extLst',
+])
+
 /// Finds the sheet's drawing part, creating (and wiring) one if absent.
 export async function ensureSheetDrawing(
   pkg: MutablePackage,
   worksheetPath: string,
   touchedEntries: Set<string>,
 ): Promise<{ path: string }> {
+  const xml = await pkg.readText(worksheetPath)
+  const root = worksheetRoot(xml)
+  if (!root || root.opening.endsWith('/>')) {
+    throw new VisualAddError(`${worksheetPath} has no closing worksheet tag.`)
+  }
+  const children = scopedChildren(root)
+  const drawing = children.find((child) => isElement(child, 'drawing', root.namespace))
   const sheetRelsPath = relsPathFor(worksheetPath)
-  if (await pkg.has(sheetRelsPath)) {
-    const rels = await pkg.readText(sheetRelsPath)
-    const existing = matchRelationship(rels, DRAWING_REL_TYPE)
-    if (existing) {
-      return { path: resolveRelTarget(worksheetPath, existing.target) }
-    }
+  if (drawing) {
+    const id = readRelationshipId(drawing.opening, '', root.opening)
+    const rels = await pkg.has(sheetRelsPath) ? await pkg.readText(sheetRelsPath) : ''
+    const existing = parseRelationships(rels).find((entry) =>
+      !entry.external && entry.type === DRAWING_REL_TYPE && relationshipIdsMatch(entry.id, id),
+    )
+    if (!existing) throw new VisualAddError(`${worksheetPath} already has a drawing element but no drawing rel.`)
+    return { path: resolveRelTarget(worksheetPath, existing.target) }
   }
   const drawingPath = await allocatePartPath(pkg, 'xl/drawings/drawing', '.xml')
   pkg.add(
@@ -280,43 +301,15 @@ export async function ensureSheetDrawing(
     relativeTarget(worksheetPath, drawingPath),
   )
   touchedEntries.add(sheetRelsPath)
-  await insertWorksheetDrawingElement(pkg, worksheetPath, relId, touchedEntries)
-  return { path: drawingPath }
-}
-
-/// `<drawing>` sits near the end of CT_Worksheet — before the trailing
-/// optional members if any of them are present.
-const AFTER_DRAWING_ELEMENTS = [
-  'legacyDrawing',
-  'legacyDrawingHF',
-  'picture',
-  'oleObjects',
-  'controls',
-  'webPublishItems',
-  'tableParts',
-  'extLst',
-] as const
-
-async function insertWorksheetDrawingElement(
-  pkg: MutablePackage,
-  worksheetPath: string,
-  relId: string,
-  touchedEntries: Set<string>,
-): Promise<void> {
-  let xml = await pkg.readText(worksheetPath)
-  if (/<drawing[\s/>]/.test(xml)) {
-    throw new VisualAddError(`${worksheetPath} already has a drawing element but no drawing rel.`)
-  }
-  xml = ensureRelationshipNamespace(xml)
-  const element = `<drawing r:id="${escapeXmlAttribute(relId)}"/>`
-  let insertAt = xml.lastIndexOf('</worksheet>')
-  if (insertAt < 0) throw new VisualAddError(`${worksheetPath} has no closing worksheet tag.`)
-  for (const name of AFTER_DRAWING_ELEMENTS) {
-    const match = xml.search(new RegExp(`<${name}[\\s/>]`))
-    if (match >= 0 && match < insertAt) insertAt = match
-  }
-  pkg.write(worksheetPath, xml.slice(0, insertAt) + element + xml.slice(insertAt))
+  const anchor = children.find(({ local, namespace }) =>
+    namespace === root.namespace && AFTER_DRAWING_ELEMENTS.has(local),
+  )
+  const offset = root.start + root.opening.length + (anchor?.start ?? root.inner.length)
+  const binding = relationshipNamespaceOverride('', root.opening)
+  const element = `<${prefixOf(root.name)}drawing${binding} r:id="${escapeXmlAttribute(relId)}"/>`
+  pkg.write(worksheetPath, ensureRelationshipNamespace(xml.slice(0, offset) + element + xml.slice(offset)))
   touchedEntries.add(worksheetPath)
+  return { path: drawingPath }
 }
 
 async function hyperlinkRelationship(
@@ -940,17 +933,6 @@ export function relativeTarget(fromPart: string, toPart: string): string {
   }
   const ups = fromDir.length - common
   return `${'../'.repeat(ups)}${toSegments.slice(common).join('/')}`
-}
-
-function matchRelationship(relsXml: string, type: string): { id: string; target: string } | null {
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*\/?>(?:<\/Relationship>)?/g)) {
-    const tag = match[0]
-    if (!tag.includes(`Type="${type}"`)) continue
-    const id = /\bId=(["'])([^"']+)\1/.exec(tag)?.[2]
-    const target = /\bTarget=(["'])([^"']+)\1/.exec(tag)?.[2]
-    if (id && target) return { id, target }
-  }
-  return null
 }
 
 export function resolveRelTarget(fromPart: string, target: string): string {
