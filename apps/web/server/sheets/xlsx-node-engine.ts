@@ -3,7 +3,7 @@ import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { crc32 } from 'node:zlib'
 import JSZip from 'jszip'
-import {XMLParser} from 'fast-xml-parser'
+import {XMLParser,type X2jOptions} from 'fast-xml-parser'
 import {readWorksheetValidations} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-dv.ts'
 import {parseSheetElements,parseRelationships,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
@@ -49,11 +49,11 @@ interface ParsedCell {
 type SheetViewMetadata=Pick<WorkbookFile['sheets'][number],'tabColor'|'showGridLines'|'showFormulas'|'showRowColHeaders'|'rightToLeft'|'zoomScale'|'outlineLevelRow'|'outlineLevelCol'|'outlineSummaryBelow'|'outlineSummaryRight'>
 type SheetMetadata=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'|'autoFilter'|'autoFilterColumns'|'rows'|'merges'|'conditionalRules'|'hyperlinks'|'dataValidations'|'rowBreaks'|'colBreaks'|'pageSetup'>
   & Pick<WorkbookFile['sheets'][number],'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'|'comments'|'tables'|'sparklines'>
-  & { view: SheetViewMetadata; dimension?: Bounds }
+  & { view: SheetViewMetadata; dimension?: Bounds; rowExtent: number }
 type FilterColumn=WorkbookRangeResult['autoFilterColumns'][number]
 const EMPTY_SHEET_METADATA:SheetMetadata={sheetProtection:null,protectedRanges:[],autoFilter:null,autoFilterColumns:[],
   rows:[],merges:[],conditionalRules:[],hyperlinks:[],columnWidths:[],defaultRowHeight:null,defaultColumnWidth:null,freeze:null,
-  dataValidations:[],rowBreaks:[],colBreaks:[],pageSetup:null,comments:[],tables:[],sparklines:[],view:{tabColor:null,showGridLines:true}}
+  dataValidations:[],rowBreaks:[],colBreaks:[],pageSetup:null,comments:[],tables:[],sparklines:[],rowExtent:0,view:{tabColor:null,showGridLines:true}}
 
 interface ParsedSheet extends SheetMetadata {
   id: string
@@ -103,14 +103,11 @@ function matchFindText(query:string,matchCase:boolean,whole:boolean,wildcards:bo
 
 type ZipText=(path:string)=>Promise<string>
 type XmlElement={ [name: `@_${string}`]: string|undefined }
-const metadataXml=new XMLParser({
+const metadataXmlOptions:X2jOptions={
   ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
   cdataPropName:'#cdata',
   // The basic workbook reader already imports cell values. Keep only row headers with layout here.
   stopNodes:['worksheet.sheetData.row'],
-  updateTag:(name,_path,attrs)=>name==='row'&&attrs?.['@_ht']===undefined&&attrs?.['@_hidden']===undefined
-    &&!(attrs?.['@_s']!==undefined&&enabled(attrs['@_customFormat']))
-    &&attrs?.['@_outlineLevel']===undefined&&attrs?.['@_collapsed']===undefined?false:name,
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
@@ -132,7 +129,8 @@ const metadataXml=new XMLParser({
     'worksheet.protectedRanges.protectedRange','worksheet.autoFilter','worksheet.autoFilter.filterColumn',
     'worksheet.autoFilter.filterColumn.filters.filter','worksheet.autoFilter.filterColumn.customFilters.customFilter',
   ].includes(path),
-})
+}
+const metadataXml=new XMLParser(metadataXmlOptions)
 const attribute=(element:XmlElement|undefined,name:string)=>{
   const value=element?.[`@_${name}`]
   return value===undefined?undefined:decodeAttribute(value)
@@ -456,7 +454,19 @@ function readConditionalRules(
   return rules
 }
 function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:ReadonlyMap<string,string>):Omit<SheetMetadata,'comments'|'tables'>{
-  const worksheet=metadataXml.parse(xml).worksheet
+  let rowExtent=0
+  const worksheet=new XMLParser({
+    ...metadataXmlOptions,
+    updateTag:(name,path,attrs)=>{
+      // For stopped nodes the parser reports the parent path.
+      if(name!=='row'||path!=='worksheet.sheetData')return name
+      const row=Number(attribute(attrs,'r'))
+      if(Number.isInteger(row)&&row>=1&&row<=MAX_GRID_ROWS)rowExtent=Math.max(rowExtent,row)
+      // Plain rows contribute to the extent without needing a layout record.
+      return attrs?.['@_ht']!==undefined||attrs?.['@_hidden']!==undefined||attrs?.['@_collapsed']!==undefined
+        ||attrs?.['@_outlineLevel']!==undefined||attrs?.['@_s']!==undefined?name:false
+    },
+  }).parse(xml).worksheet
   const dimension=sheetArea(attribute(worksheet?.dimension,'ref'))
   const element=worksheet?.sheetProtection
   const parsed=element===undefined?null:parseSheetProtectionAttributes(name=>attribute(element,name))
@@ -478,11 +488,14 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   let outlineLevelRow=outlineLevel(attribute(format,'outlineLevelRow'))
   for(const col of worksheet?.cols?.col??[]){
     const first=Number(attribute(col,'min')),last=Number(attribute(col,'max'))
-    if(!Number.isInteger(first)||!Number.isInteger(last)||first<1||last<first||last>16_384)continue
-    const level=outlineLevel(attribute(col,'outlineLevel'))
+    if(!Number.isInteger(first)||!Number.isInteger(last)||first<1||last<first||last>MAX_GRID_COLUMNS)continue
+    const level=outlineLevel(attribute(col,'outlineLevel')),width=sizeAttribute(col,'width')
+    const hidden=enabled(attribute(col,'hidden')),collapsed=enabled(attribute(col,'collapsed'))
+    const styleIndex=positiveStyle(attribute(col,'style'))
+    if(width===undefined&&!hidden&&!collapsed&&!level&&styleIndex===undefined)continue
     outlineLevelCol=Math.max(outlineLevelCol,level)
-    columns.push({startColumn:first-1,endColumn:last-1,width:sizeAttribute(col,'width'),hidden:enabled(attribute(col,'hidden')),
-      styleIndex:positiveStyle(attribute(col,'style')),outlineLevel:level||undefined,collapsed:enabled(attribute(col,'collapsed'))||undefined})
+    columns.push({startColumn:first-1,endColumn:last-1,width,hidden,
+      styleIndex,outlineLevel:level||undefined,collapsed:collapsed||undefined})
   }
   const merges:SheetMetadata['merges']=[]
   for(const merge of worksheet?.mergeCells?.mergeCell??[]){
@@ -503,13 +516,14 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   const rows:SheetMetadata['rows']=[]
   for(const node of worksheet?.sheetData?.row??[]){
     const r=Number(attribute(node,'r'))
-    if(!Number.isInteger(r)||r<1||r>1_048_576)continue
-    const level=outlineLevel(attribute(node,'outlineLevel'))
+    if(!Number.isInteger(r)||r<1||r>MAX_GRID_ROWS)continue
+    const level=outlineLevel(attribute(node,'outlineLevel')),height=sizeAttribute(node,'ht')
+    const hidden=enabled(attribute(node,'hidden')),collapsed=enabled(attribute(node,'collapsed'))
+    const styleIndex=enabled(attribute(node,'customFormat'))?positiveStyle(attribute(node,'s')):undefined
+    if(height===undefined&&!hidden&&!collapsed&&!level&&styleIndex===undefined)continue
     outlineLevelRow=Math.max(outlineLevelRow,level)
-    rows.push({row:r-1,height:sizeAttribute(node,'ht'),customHeight:enabled(attribute(node,'customHeight'))||undefined,
-      hidden:enabled(attribute(node,'hidden')),
-      styleIndex:enabled(attribute(node,'customFormat'))?positiveStyle(attribute(node,'s')):undefined,
-      outlineLevel:level||undefined,collapsed:enabled(attribute(node,'collapsed'))||undefined})
+    rows.push({row:r-1,height,customHeight:(height!==undefined&&enabled(attribute(node,'customHeight')))||undefined,
+      hidden,styleIndex,outlineLevel:level||undefined,collapsed:collapsed||undefined})
   }
   const view=worksheet?.sheetViews?.sheetView?.at(-1)
   const pane=view?.pane
@@ -521,7 +535,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   const split=(name:string,max:number)=>{const n=Number(attribute(pane,name));return Number.isInteger(n)&&n>=0&&n<=max?n:0}
   const frozenRows=split('ySplit',1_048_576),frozenColumns=split('xSplit',16_384)
   const frozen=['frozen','frozenSplit'].includes(attribute(pane,'state')??'')
-  return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,columnWidths:columns,merges,conditionalRules,hyperlinks,
+  return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,rowExtent,columnWidths:columns,merges,conditionalRules,hyperlinks,
     ...(dimension?{dimension}:{}),
     dataValidations:readDataValidations(xml),
     sparklines:readSparklines(worksheet?.extLst?.ext??[],resolveColor),
@@ -1001,6 +1015,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
         if(dimension.endRow+1<MAX_GRID_ROWS)rowCount=dimension.endRow+1
         if(dimension.endColumn+1<MAX_GRID_COLUMNS)columnCount=dimension.endColumn+1
       }
+      rowCount=Math.max(rowCount,sheetMetadata.rowExtent)
       for (const [addr, cell] of Object.entries(s.cells)) {
         const pos = parseA1(addr)
         if (!pos) continue
@@ -1061,8 +1076,6 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
         rowCount=Math.max(rowCount,cell.row+1)
         columnCount=Math.max(columnCount,cell.column+1)
       }
-      for(const col of sheetMetadata.columnWidths)columnCount=Math.max(columnCount,col.endColumn+1)
-      for(const row of sheetMetadata.rows)rowCount=Math.max(rowCount,row.row+1)
       cells.sort(compareCellPosition)
       formulaCells.sort(compareCellPosition)
       return { id: s.id, name: s.name, cells, formulaCells, sharedGroups, cellImages, rowCount, columnCount,

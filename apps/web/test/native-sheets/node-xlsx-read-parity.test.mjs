@@ -224,6 +224,30 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     assert.deepEqual([baseColumnWidth, defaultColumnWidth, defaultRowHeight], [null, null, 15])
   })
 
+  await t.test('keeps grid sizing and formatting separate from populated row and column metadata', async () => {
+    const bytes = await workbook({
+      [sheetPath]: worksheet(
+        `<cols><col min="1" max="2" width="12"/><col min="3" max="3" customWidth="1"/>
+          <col min="4" max="16384" width="17" style="1"/></cols>
+        <sheetData><row r="2"><c r="B2"><v>2</v></c></row>
+          <row ht="21" customHeight="1"/><row r="4" hidden="1" customHeight="1"/>
+          <row r="5" ht="19"/><row r="30"/></sheetData>`,
+      ),
+    })
+    const [{ rowCount, columnCount, columnWidths }] = (await native.inspect(bytes)).sheets
+    assert.deepEqual([rowCount, columnCount], [30, 2])
+    assert.deepEqual(columnWidths, [
+      { startColumn: 0, endColumn: 1, width: 12, hidden: false },
+      { startColumn: 3, endColumn: 16_383, width: 17, hidden: false, styleIndex: 1 },
+    ])
+    const { rows } = await native.readRange(bytes, sheetName, { startRow: 0, endRow: 29, startColumn: 0, endColumn: 1 })
+    assert.deepEqual(rows, [
+      { row: 2, height: 21, customHeight: true, hidden: false },
+      { row: 3, hidden: true },
+      { row: 4, height: 19, hidden: false },
+    ])
+  })
+
   await t.test('does not spend the stored cell budget on bare empty cells', async () => {
     const blankRows = Array.from({ length: 50_000 }, (_, i) => {
       const row = i + 2
