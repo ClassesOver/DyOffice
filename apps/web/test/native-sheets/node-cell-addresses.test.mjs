@@ -99,24 +99,39 @@ test('Node XLSX preserves implicit and quoted coordinates on cell saves', async 
   ])
   assert.deepEqual(styles(after), styles(before))
 
-  await t.test('reads grid cells only from SpreadsheetML worksheet data', async () => {
+  await t.test('reads and edits grid cells only in SpreadsheetML worksheet data', async () => {
     const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const foreignCell = '<c xmlns="urn:example:extension" r="B1"><v>900</v></c>'
+    const foreignData = '<sheetData xmlns="urn:example:extension"><row r="2"><c><v>902</v></c></row></sheetData>'
     zip.file(path, `<worksheet xmlns="${spreadsheet}" xmlns:a="urn:example:extension">
       <sheetData>
         <row r="1">
           <c r="A1"><v>11</v></c>
-          <c xmlns="urn:example:extension" r="B1"><v>900</v></c>
+          ${foreignCell}
           <c><v xmlns="urn:example:extension">999</v><a:f>1+1</a:f><v>22</v></c>
           <c t="inlineStr"><is><t>Real</t><t xmlns="urn:example:extension">Decoy</t></is></c>
         </row>
       </sheetData>
       <extLst><ext uri="urn:example:extension"><payload xmlns="urn:example:extension">
         <c r="A1"><v>901</v></c>
+        ${foreignData}
       </payload></ext></extLst>
     </worksheet>`)
-    assert.deepEqual(cells(await read(await zip.generateAsync({ type: 'nodebuffer' }))), [
+    const original = await zip.generateAsync({ type: 'nodebuffer' })
+    assert.deepEqual(cells(await read(original)), [
       [0, 0, 11],
       [0, 1, 22],
+      [0, 2, 'Real'],
+    ])
+    const edit = sheetsSaveRequest('sheet-1', [{ row: 0, column: 1, writeValue: true, value: 33 }])
+    const result = (await native.savePlan(original, await runtime.sheetsWorkbookPlanner(original, edit))).bytes
+    const editedXml = await (await JSZip.loadAsync(result)).file(path).async('string')
+    assert.equal(XMLValidator.validate(editedXml), true)
+    assert.ok(editedXml.includes(foreignCell))
+    assert.ok(editedXml.includes(foreignData))
+    assert.deepEqual(cells(await read(result)), [
+      [0, 0, 11],
+      [0, 1, 33],
       [0, 2, 'Real'],
     ])
   })

@@ -92,6 +92,7 @@ import {
   isSpreadsheetNamespace,
   scopedChildren,
   sharedStringAt,
+  withBody,
   withNamespaces,
   worksheetRoot,
   type ScopedElement,
@@ -3370,49 +3371,34 @@ function transformWorksheetCells<T>(
     return cells.length === 0 ? '' : `<row r="${rowNumber}">${cells.join('')}</row>`
   }
 
-  const openIndex = worksheetXml.indexOf('<sheetData')
-  const emptySheetData = /<sheetData\s*\/>/.exec(worksheetXml)
-  if (emptySheetData || openIndex === -1) {
+  const sheetData = worksheetData(worksheetXml)
+  if (!sheetData) {
+    if (!insertMissing || targetRows.map(buildRow).join('') === '') return worksheetXml
+    throw new Error('Worksheet has no sheetData element.')
+  }
+  if (sheetData.opening.endsWith('/>')) {
     if (!insertMissing) return worksheetXml
     const rowsXml = targetRows.map(buildRow).join('')
     if (rowsXml === '') return worksheetXml
-    if (emptySheetData) {
-      const grown = worksheetXml.replace(
-        /<sheetData\s*\/>/,
-        () => `<sheetData>${rowsXml}</sheetData>`,
-      )
-      return patchPrefix ? patchPrefix(grown) : grown
-    }
-    throw new Error('Worksheet has no sheetData element.')
+    const prefix = worksheetXml.slice(0, sheetData.start)
+    return (patchPrefix ? patchPrefix(prefix) : prefix) + withBody(sheetData, rowsXml) +
+      worksheetXml.slice(sheetData.start + sheetData.xml.length)
   }
-  const closeIndex = worksheetXml.lastIndexOf('</sheetData>')
-  if (closeIndex === -1) throw new Error('Worksheet has no sheetData element.')
-  const bodyStart = worksheetXml.indexOf('>', openIndex) + 1
-  const body = worksheetXml.slice(bodyStart, closeIndex)
 
+  const bodyStart = sheetData.start + sheetData.opening.length
+  const body = sheetData.inner
   const documentPrefix = worksheetXml.slice(0, bodyStart)
   const parts: string[] = [patchPrefix ? patchPrefix(documentPrefix) : documentPrefix]
   let cursor = 0
   let pendingIndex = 0
-  const rowOpenPattern = /<row\b[^>]*>/g
-  let openMatch: RegExpExecArray | null
-  while ((openMatch = rowOpenPattern.exec(body)) !== null) {
-    const openTag = openMatch[0]
-    let rowEnd: number
-    if (openTag.endsWith('/>')) {
-      rowEnd = openMatch.index + openTag.length
-    } else {
-      const closePosition = body.indexOf('</row>', openMatch.index + openTag.length)
-      if (closePosition === -1) break
-      rowEnd = closePosition + '</row>'.length
-    }
-    const rowXml = body.slice(openMatch.index, rowEnd)
-    parts.push(body.slice(cursor, openMatch.index))
-    cursor = rowEnd
-    rowOpenPattern.lastIndex = rowEnd
-    const rowNumber = Number(/\br="([1-9][0-9]*)"/.exec(openTag)?.[1])
-    if (!Number.isFinite(rowNumber)) {
-      parts.push(rowXml)
+  for (const row of scopedChildren(sheetData)) {
+    if (!isElement(row, 'row', sheetData.namespace)) continue
+    parts.push(body.slice(cursor, row.start))
+    cursor = row.start + row.xml.length
+    const address = row.attributes.get('r')
+    const rowNumber = /^[1-9][0-9]*$/.test(address ?? '') ? Number(address) : NaN
+    if (!Number.isSafeInteger(rowNumber)) {
+      parts.push(row.xml)
       continue
     }
     if (insertMissing) {
@@ -3424,11 +3410,11 @@ function transformWorksheetCells<T>(
     }
     const rowItems = remainingRows.get(rowNumber)
     if (rowItems === undefined) {
-      parts.push(rowXml)
+      parts.push(row.xml)
       continue
     }
     remainingRows.delete(rowNumber)
-    parts.push(transformRowCells(rowXml, rowNumber, rowItems, applyItem, insertMissing))
+    parts.push(transformRowCells(row, rowNumber, rowItems, applyItem, insertMissing))
   }
   parts.push(body.slice(cursor))
   if (insertMissing) {
@@ -3437,7 +3423,7 @@ function transformWorksheetCells<T>(
       pendingIndex += 1
     }
   }
-  parts.push(worksheetXml.slice(closeIndex))
+  parts.push(worksheetXml.slice(bodyStart + body.length))
   return parts.join('')
 }
 
@@ -3445,16 +3431,13 @@ function transformWorksheetCells<T>(
 /// transforming matches and (with insertMissing) splicing new cells in
 /// column order.
 function transformRowCells<T>(
-  rowXml: string,
+  row: ScopedElement,
   rowNumber: number,
   rowItems: ReadonlyMap<number, T>,
   applyItem: CellItemApply<T>,
   insertMissing: boolean,
 ): string {
-  const openEnd = rowXml.indexOf('>') + 1
-  const selfClosing = rowXml.slice(0, openEnd).endsWith('/>')
-  const openTag = selfClosing ? `${rowXml.slice(0, openEnd - 2)}>` : rowXml.slice(0, openEnd)
-  const body = selfClosing ? '' : rowXml.slice(openEnd, rowXml.length - '</row>'.length)
+  const body = row.inner
   const remaining = new Map(rowItems)
   const targetColumns = [...rowItems.keys()].sort((left, right) => left - right)
   const insertColumn = (column: number): string => {
@@ -3467,26 +3450,13 @@ function transformRowCells<T>(
   const parts: string[] = []
   let cursor = 0
   let pendingIndex = 0
-  const cellOpenPattern = /<c\b[^>]*>/g
-  let openMatch: RegExpExecArray | null
-  while ((openMatch = cellOpenPattern.exec(body)) !== null) {
-    const openCell = openMatch[0]
-    let cellEnd: number
-    if (openCell.endsWith('/>')) {
-      cellEnd = openMatch.index + openCell.length
-    } else {
-      const closePosition = body.indexOf('</c>', openMatch.index + openCell.length)
-      if (closePosition === -1) break
-      cellEnd = closePosition + '</c>'.length
-    }
-    const cellXml = body.slice(openMatch.index, cellEnd)
-    parts.push(body.slice(cursor, openMatch.index))
-    cursor = cellEnd
-    cellOpenPattern.lastIndex = cellEnd
-    const letters = /\br="([A-Z]{1,3})[1-9][0-9]*"/.exec(openCell)?.[1]
-    const column = letters === undefined ? undefined : lettersToColumn(letters)
+  for (const cell of scopedChildren(row)) {
+    if (!isElement(cell, 'c', row.namespace)) continue
+    parts.push(body.slice(cursor, cell.start))
+    cursor = cell.start + cell.xml.length
+    const column = parseGridCellAddress(cell.attributes.get('r') ?? '')?.column
     if (column === undefined) {
-      parts.push(cellXml)
+      parts.push(cell.xml)
       continue
     }
     if (insertMissing) {
@@ -3498,11 +3468,11 @@ function transformRowCells<T>(
     }
     const item = remaining.get(column)
     if (item === undefined) {
-      parts.push(cellXml)
+      parts.push(cell.xml)
       continue
     }
     remaining.delete(column)
-    parts.push(applyItem(cellXml, rowNumber, column, item))
+    parts.push(applyItem(cell.xml, rowNumber, column, item))
   }
   parts.push(body.slice(cursor))
   if (insertMissing) {
@@ -3511,7 +3481,7 @@ function transformRowCells<T>(
       pendingIndex += 1
     }
   }
-  return `${openTag}${parts.join('')}</row>`
+  return withBody(row, parts.join(''))
 }
 
 function insertMissingCell(worksheetXml: string, address: string, cellXml: string): string {

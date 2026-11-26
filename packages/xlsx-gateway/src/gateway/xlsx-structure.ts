@@ -91,50 +91,40 @@ export type RowColumnOp = Extract<StructuralOp, { index: number }>
 export class StructuralShiftError extends Error {}
 
 export function inferWorksheetAddresses(worksheetXml: string): string {
-  const sheetDataOpen = /<sheetData\b[^>]*>/.exec(worksheetXml)
-  const closeIndex = worksheetXml.lastIndexOf('</sheetData>')
-  if (!sheetDataOpen || closeIndex < sheetDataOpen.index + sheetDataOpen[0].length) {
+  // Most sheets already have canonical addresses, so avoid parsing them twice on save.
+  if (!/<(?:[^\s<>/:]+:)?(?:row|c)(?=[\s/>])(?!\s+r="(?:[A-Z]{1,3})?[1-9][0-9]*")/.test(worksheetXml)) {
     return worksheetXml
   }
-
-  const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
-  const body = worksheetXml.slice(bodyStart, closeIndex)
-  // Typical worksheets already put the canonical address first on every tag.
-  if (!/<(?:row|c)(?=[\s/>])(?!\s+r="[^">&]*")/.test(body)) return worksheetXml
-  let currentRow = 0
-  let nextColumn: number | undefined
-  const tags =
-    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\/row\s*>|<(row|c)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/g
-  const normalizedBody = body.replace(tags, (tag, name: string | undefined) => {
-    if (name === undefined) {
-      if (tag.startsWith('</row')) nextColumn = undefined
-      return tag
-    }
-    const attribute = worksheetTagAttribute(tag, 'r')
-    const rawAddress = attribute?.[2] ?? attribute?.[3]
-    const explicit = rawAddress === undefined ? undefined : decodeXmlText(rawAddress)
-    let address: string
-    if (name === 'row') {
-      currentRow = readPositiveInteger(explicit) ?? currentRow + 1
-      nextColumn = tag.endsWith('/>') ? undefined : 0
-      address = explicit ?? String(currentRow)
-    } else if (nextColumn !== undefined) {
+  const sheetData = worksheetData(worksheetXml)
+  if (!sheetData) return worksheetXml
+  const parts: string[] = []
+  let cursor = 0
+  const normalizeAddress = (element: ScopedElement, offset: number, address: string) => {
+    const existing = worksheetTagAttribute(element.opening, 'r')
+    const encoded = escapeXmlAttribute(address)
+    if (existing?.[0].trimStart() === `r="${encoded}"`) return
+    parts.push(worksheetXml.slice(cursor, offset))
+    cursor = offset + element.opening.length
+    const opening = existing
+      ? element.opening.slice(0, existing.index) + element.opening.slice(existing.index + existing[0].length)
+      : element.opening
+    parts.push(addTagAttribute(opening, 'r', encoded))
+  }
+  const dataOffset = sheetData.start + sheetData.opening.length
+  for (const { row, rowNumber } of worksheetRows(sheetData)) {
+    const rowOffset = dataOffset + row.start
+    normalizeAddress(row, rowOffset, String(rowNumber))
+    const cellOffset = rowOffset + row.opening.length
+    let nextColumn = 0
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', row.namespace)) continue
+      const explicit = cell.attributes.get('r')
       const column = worksheetCellColumn(explicit, nextColumn)
       nextColumn = column + 1
-      address = explicit ?? `${columnToLetters(column)}${currentRow}`
-    } else {
-      return tag
+      normalizeAddress(cell, cellOffset + cell.start, explicit ?? `${columnToLetters(column)}${rowNumber}`)
     }
-    const encoded = escapeXmlAttribute(address)
-    if (attribute === undefined) return addTagAttribute(tag, 'r', encoded)
-    if (attribute[0].trimStart() === `r="${encoded}"`) return tag
-    const rest = tag.slice(0, attribute.index) + tag.slice(attribute.index + attribute[0].length)
-    return addTagAttribute(rest, 'r', encoded)
-  })
-
-  return normalizedBody === body
-    ? worksheetXml
-    : worksheetXml.slice(0, bodyStart) + normalizedBody + worksheetXml.slice(closeIndex)
+  }
+  return parts.length === 0 ? worksheetXml : parts.join('') + worksheetXml.slice(cursor)
 }
 
 const worksheetAttributes = /\s+([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
@@ -210,14 +200,22 @@ export function parseGridCellAddress(address: string): { row: number; column: nu
 
 export function worksheetData(xml: string): ScopedElement | undefined {
   const root = worksheetRoot(xml)
-  return root && scopedChildren(root).find((child) => isElement(child, 'sheetData', root.namespace))
+  if (!root) return undefined
+  const data = scopedChildren(root).find((child) => isElement(child, 'sheetData', root.namespace))
+  return data && { ...data, start: root.start + root.opening.length + data.start }
 }
 
-export function* worksheetCellPositions(sheetData: ScopedElement) {
+function* worksheetRows(sheetData: ScopedElement) {
   let rowNumber = 0
   for (const row of scopedChildren(sheetData)) {
     if (!isElement(row, 'row', sheetData.namespace)) continue
     rowNumber = readPositiveInteger(row.attributes.get('r')) ?? rowNumber + 1
+    yield { row, rowNumber }
+  }
+}
+
+export function* worksheetCellPositions(sheetData: ScopedElement) {
+  for (const { row, rowNumber } of worksheetRows(sheetData)) {
     let nextColumn = 0
     for (const cell of scopedChildren(row)) {
       if (!isElement(cell, 'c', row.namespace)) continue
