@@ -1964,25 +1964,39 @@ export function rewriteWorksheetHyperlinks(
   rewriteReference?: (ref: string) => string | null,
 ): string {
   if (!xml.includes('hyperlinks')) return xml
+  const section = worksheetChildren(xml).find((child) => child.local === 'hyperlinks')
+  if (!section) return xml
   const root = readRootStartTag(xml)
-  return rewriteWorksheetSections(xml, ['hyperlinks'], (section) =>
-    rewriteRangeSection(section, 'hyperlink', (opening) => {
-      if (rewriteReference) {
-        const anchor = rewriteRangeAttribute(opening, 'ref', rewriteReference)
-        if (anchor === null) return null
-        opening = anchor
+  let body = section.inner
+  for (const link of scopedChildren(section).reverse()) {
+    if (!isElement(link, 'hyperlink', section.namespace)) continue
+    const ref = link.attributes.get('ref')
+    const nextRef = ref && rewriteReference ? rewriteReference(ref) : ref
+    const location = link.attributes.get('location')
+    const external = readRelationshipId(link.opening, section.opening, root) !== undefined
+    const nextLocation = nextRef !== null && location !== undefined && !external
+      ? rewriteLocation(location, nextRef)
+      : location
+    let replacement = link.xml
+    if (nextRef === null || nextLocation === null) {
+      replacement = ''
+    } else {
+      let opening = link.opening
+      if (nextRef !== undefined && nextRef !== ref) {
+        opening = updateWorksheetTagAttribute(opening, 'ref', escapeXmlAttribute(nextRef))
       }
-      const raw = readWorksheetTagAttribute(opening, 'location')
-      if (raw === undefined || readRelationshipId(opening, section.opening, root) !== undefined)
-        return opening
-      const location = decodeEntities(raw)
-      const moved = rewriteLocation(location, readWorksheetTagAttribute(opening, 'ref'))
-      if (moved === null) return null
-      return moved === location
-        ? opening
-        : updateWorksheetTagAttribute(opening, 'location', escapeXmlAttribute(moved))
-    }),
-  )
+      if (nextLocation !== undefined && nextLocation !== location) {
+        opening = updateWorksheetTagAttribute(opening, 'location', escapeXmlAttribute(nextLocation))
+      }
+      replacement = opening + link.xml.slice(link.opening.length)
+    }
+    if (replacement !== link.xml) {
+      body = body.slice(0, link.start) + replacement + body.slice(link.start + link.xml.length)
+    }
+  }
+  if (body === section.inner) return xml
+  const replacement = body.trim() ? withBody(section, body) : ''
+  return applyPatches(xml, [patchElement(section, replacement)])
 }
 
 function rewriteRangeAttribute(

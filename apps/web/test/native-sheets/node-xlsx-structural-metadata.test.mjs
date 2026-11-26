@@ -112,6 +112,35 @@ test(
       },
     )
     await t.test(
+      'edits and shifts only SpreadsheetML hyperlinks',
+      async () => {
+        const namespace = 'xmlns="urn:example:links"'
+        const foreignSection = `<hyperlinks ${namespace}><hyperlink ref="D2" location="Foreign!A1"/></hyperlinks>`
+        const foreignLink = `<hyperlink ${namespace} ref="F2" location="Acceptance!A1"/>`
+        const input = await book((xml) => beforeDrawing(xml, foreignSection +
+          `<hyperlinks>${foreignLink}<hyperlink ref='$D$2:$E$2' location="Acceptance!B2"/></hyperlinks>`))
+        const links = async (bytes) => (await read(bytes)).hyperlinks
+        assert.deepEqual(await links(input), [{ row: 1, column: 3, target: '#Acceptance!B2' }])
+        const edited = await save(input, {
+          hyperlinkEdits: [{ sheetId: 'sheet-1', row: 1, column: 3, target: '#Acceptance!C2' }],
+        })
+        assert.deepEqual(await links(edited), [{ row: 1, column: 3, target: '#Acceptance!C2' }])
+        const moved = await save(edited, { structuralOps: insert })
+        assert.deepEqual(await links(moved), [{ row: 2, column: 4, target: '#Acceptance!D3' }])
+        const cleared = await save(moved, {
+          hyperlinkEdits: [{ sheetId: 'sheet-1', row: 2, column: 4, target: null }],
+        })
+        assert.deepEqual(await links(cleared), [])
+        for (const bytes of [edited, moved, cleared]) {
+          const xml = await (await JSZip.loadAsync(bytes)).file(sheet).async('string')
+          assert.ok(xml.includes(foreignSection))
+          assert.ok(xml.includes(foreignLink))
+        }
+        const editedXml = await (await JSZip.loadAsync(edited)).file(sheet).async('string')
+        assert.ok(editedXml.includes('<hyperlink ref="$D$2:$E$2" location="Acceptance!C2"/>'))
+      },
+    )
+    await t.test(
       'moves an aliased x14 validation target and renames the list formula',
       async () => {
         const originalRule =

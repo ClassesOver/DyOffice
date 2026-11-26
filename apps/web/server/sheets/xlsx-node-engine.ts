@@ -13,9 +13,9 @@ import {childElements,resolvedStyleEntries} from '../../../../packages/xlsx-gate
 import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
-import {findWorksheetHyperlinkSection,hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
+import {hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
 import {elementText as worksheetElementText,isElement,lastWorksheetView,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
-import {inferWorksheetAddresses,readDefinedNameText,readWorksheetTagAttribute,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
+import {inferWorksheetAddresses,readDefinedNameText,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
 import {readCustomTableStyles,readWorksheetTables,type TableDxf} from './xlsx-node-tables'
@@ -496,19 +496,19 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     if(area)merges.push(area)
   }
   const hyperlinks:SheetMetadata['hyperlinks']=[]
-  const hyperlinkSection=xml.includes('hyperlink')?findWorksheetHyperlinkSection(xml)?.element:undefined
+  const hyperlinkSection=children.find(child=>child.local==='hyperlinks')
   if(hyperlinkSection){
     const root=readRootStartTag(xml)
-    for(const {name,opening} of childElements(hyperlinkSection.inner)){
-      if(name.slice(name.lastIndexOf(':')+1)!=='hyperlink')continue
+    for(const link of scopedChildren(hyperlinkSection)){
+      if(!isElement(link,'hyperlink',hyperlinkSection.namespace))continue
       // A hyperlink on a range is anchored at its first cell, as in the Rust reader.
-      const reference=readWorksheetTagAttribute(opening,'ref')
-      const anchor=reference===undefined?undefined:hyperlinkAnchorReference(decodeAttribute(reference))
+      const reference=link.attributes.get('ref')
+      const anchor=reference===undefined?undefined:hyperlinkAnchorReference(reference)
       const cell=anchor&&parseA1(anchor)
       if(!cell)continue
-      const id=readRelationshipId(opening,hyperlinkSection.opening,root)
-      const location=readWorksheetTagAttribute(opening,'location')
-      const target=id!==undefined?linkTargets.get(decodeAttribute(id)):location!==undefined?'#'+decodeAttribute(location):undefined
+      const id=readRelationshipId(link.opening,hyperlinkSection.opening,root)
+      const location=link.attributes.get('location')
+      const target=id!==undefined?linkTargets.get(decodeAttribute(id)):location!==undefined?'#'+location:undefined
       if(target!==undefined)hyperlinks.push({...cell,target})
     }
   }

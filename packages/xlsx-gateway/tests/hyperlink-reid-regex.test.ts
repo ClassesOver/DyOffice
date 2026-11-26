@@ -48,4 +48,14 @@ describe('xlsx-hyperlink relationship reclaim', () => {
     expect(patch.relsXml).not.toContain('https://old.example')
     expect(patch.relsXml).toContain('https://new.example')
   })
+
+  it('retains a removed grid hyperlink relationship that an extension still references', () => {
+    const extension = '<extLst><ext uri="urn:example:links"><payload r:id=".*"/></ext></extLst>'
+    const xml = sheetWith('.*').replace('</worksheet>', extension + '</worksheet>')
+    const patch = applyHyperlinkEdits(xml, RELS, [{ row: 0, column: 0, target: null }])
+    expect(patch.worksheetXml).toContain(extension)
+    expect(patch.worksheetXml).not.toContain('<hyperlinks>')
+    expect(patch.relsXml).toBe(RELS)
+    expect(patch.relsChanged).toBe(false)
+  })
 })

@@ -88,13 +88,19 @@ export function countRootNamespaceElements(xml: string, localName: string): numb
 
 export function hasXmlAttributeValue(xml: string, encodedValue: string): boolean {
   const value = decodeXmlText(encodedValue)
+  for (const candidate of xmlAttributeValues(xml)) {
+    if (candidate === value) return true
+  }
+  return false
+}
+
+export function* xmlAttributeValues(xml: string): Iterable<string> {
   for (const [tag, closing, name] of xml.matchAll(MARKUP)) {
     if (!name || closing) continue
     for (const [, , double, single] of tag.matchAll(ATTRIBUTES)) {
-      if (decodeXmlText(double ?? single ?? '') === value) return true
+      yield decodeXmlText(double ?? single ?? '')
     }
   }
-  return false
 }
 
 function isOfficeRelationshipNamespace(uri: string | undefined): boolean {
