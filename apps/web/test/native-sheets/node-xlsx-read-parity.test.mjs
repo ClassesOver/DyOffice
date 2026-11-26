@@ -197,6 +197,23 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     assert.deepEqual(await values(await saveValue(bytes, 0, 42)), [42])
   })
 
+  await t.test('keeps a hyperlink that shares a relationship through another prefix', async () => {
+    const target = 'https://example.com/shared'
+    const namespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const bytes = await workbook({
+      [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><v>7</v></c><c r="B1"><v>8</v></c></row></sheetData>' +
+        `<hyperlinks xmlns:r="${namespace}" xmlns:link="${namespace}">` +
+        '<hyperlink ref="A1" r:id="rId3"/><hyperlink ref=\'B1\' link:id=\'rId3\'/></hyperlinks>'),
+      'xl/worksheets/_rels/sheet1.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        `<Relationship Id="rId3" Type="${namespace}/hyperlink" Target="${target}" TargetMode="External"/></Relationships>`,
+    })
+    const links = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 })).hyperlinks
+    assert.deepEqual(await links(bytes), [{ row: 0, column: 0, target }, { row: 0, column: 1, target }])
+    const request = { ...sheetsSaveRequest('sheet-1', []), hyperlinkEdits: [{ sheetId: 'sheet-1', row: 0, column: 0, target: null }] }
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    assert.deepEqual(await links(saved), [{ row: 0, column: 1, target }])
+  })
+
   await t.test('keeps literal worksheet text through bulk fills and row inserts', async t => {
     const literal = 'Example </row><row r="97"><c r="A97"> text'
     const comment = '<!-- <row r="99"/> -->'

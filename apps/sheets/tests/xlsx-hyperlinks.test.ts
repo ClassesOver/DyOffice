@@ -93,6 +93,21 @@ describe('applyHyperlinkEdits', () => {
     expect(patch.relsXml).toContain('rId3')
   })
 
+  it('retains a shared relationship referenced by a different namespace alias', () => {
+    const remaining = "<hyperlink ref='B1' link:id = 'rId3'/>"
+    const withLinks = WORKSHEET.replace('<pageMargins',
+      '<hyperlinks xmlns:link="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      `<hyperlink ref="A1" r:id="rId3"/>${remaining}</hyperlinks><pageMargins`,
+    )
+    const patch = applyHyperlinkEdits(withLinks, RELS, [{ row: 0, column: 0, target: null }])
+    expect(patch.worksheetXml).toContain(remaining)
+    expect(patch.relsXml).toBe(RELS)
+    expect(patch.relsChanged).toBe(false)
+    const last = applyHyperlinkEdits(patch.worksheetXml, patch.relsXml, [{ row: 0, column: 1, target: null }])
+    expect(last.worksheetXml).not.toContain('<hyperlinks')
+    expect(last.relsXml).not.toContain('rId3')
+  })
+
   it('reclaims and allocates ids in a rels part that uses single quotes', () => {
     // rId1 is taken by a drawing and rId3 by the link being replaced; both are
     // spelled with single quotes, which the id scan used to miss entirely.

@@ -3,6 +3,10 @@
 /// r:id; internal anchors use the `location` attribute and need no rel.
 
 import { escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
+import { findRootChild } from './xlsx-root-tail.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { readWorksheetTagAttribute } from './xlsx-structure.ts'
 
 export { ensureRelationshipNamespace } from './xlsx-namespace.ts'
 
@@ -37,19 +41,15 @@ export function applyHyperlinkEdits(
   relsXml: string | null,
   edits: readonly HyperlinkEdit[],
 ): HyperlinkPatch {
-  let xml = worksheetXml
   let rels = relsXml
   let relsChanged = false
+  const root = readRootStartTag(worksheetXml)
+  const section = findRootChild(worksheetXml, 'worksheet', 'hyperlinks')
+  const element = section ? childElements(worksheetXml.slice(section.start, section.end))[0] : undefined
+  let body = element?.inner ?? ''
 
-  const relIdsInUse = (): Set<string> => {
-    const used = new Set<string>()
-    for (const element of xml.matchAll(/<hyperlink\b[^>]*?\br:id="([^"]+)"/g)) {
-      if (element[1]) used.add(element[1])
-    }
-    return used
-  }
-  const dropUnusedRel = (relId: string): void => {
-    if (rels === null || relIdsInUse().has(relId)) return
+  const dropRel = (relId: string): void => {
+    if (rels === null) return
     // Quote-agnostic like the id scan in xlsx-sheets.ts: a single-quoted
     // r:id is document-controlled; unescaped it could match every relationship.
     const next = rels.replace(
@@ -88,32 +88,36 @@ export function applyHyperlinkEdits(
 
   for (const edit of edits) {
     const ref = toA1(edit.row, edit.column)
-    const existingPattern = new RegExp(`<hyperlink\\b[^>]*?\\bref="${ref}"[^>]*/>`)
-    const existing = existingPattern.exec(xml)?.[0]
-    const existingRelId =
-      existing === undefined ? undefined : /\br:id="([^"]+)"/.exec(existing)?.[1]
-    if (existing !== undefined) {
-      xml = xml.replace(existingPattern, '')
+    const links = childElements(body).filter((link) => link.name === 'hyperlink')
+    const existing = links.find((link) => readWorksheetTagAttribute(link.opening, 'ref') === ref)
+    if (existing) {
+      body = body.slice(0, existing.start) + body.slice(existing.start + existing.xml.length)
+      const parent = element?.opening ?? ''
+      const relId = readRelationshipId(existing.opening, parent, root)
+      if (relId !== undefined && !links.some((link) => link !== existing &&
+        readRelationshipId(link.opening, parent, root) === relId)) dropRel(relId)
     }
-    if (existingRelId !== undefined) dropUnusedRel(existingRelId)
     if (edit.target === null) continue
 
-    const element = edit.target.startsWith('#')
+    body += edit.target.startsWith('#')
       ? `<hyperlink ref="${ref}" location="${escapeXmlAttribute(edit.target.slice(1))}"/>`
       : `<hyperlink ref="${ref}" r:id="${allocateRel(edit.target)}"/>`
-    xml = insertHyperlinkElement(xml, element)
   }
 
-  // An emptied section must go — Excel repairs `<hyperlinks/>` with no children.
-  xml = xml.replace(/<hyperlinks>\s*<\/hyperlinks>/, '')
+  let xml = worksheetXml
+  if (section && element) {
+    const replacement = body.trim() === '' ? '' : element.opening.endsWith('/>')
+      ? `${element.opening.slice(0, -2)}>${body}</${element.name}>`
+      : element.opening + body + element.xml.slice(element.opening.length + element.inner.length)
+    xml = worksheetXml.slice(0, section.start) + replacement + worksheetXml.slice(section.end)
+  } else if (body !== '') {
+    xml = insertHyperlinkSection(worksheetXml, body)
+  }
   return { worksheetXml: xml, relsXml: rels, relsChanged }
 }
 
-function insertHyperlinkElement(xml: string, element: string): string {
-  if (xml.includes('</hyperlinks>')) {
-    return xml.replace('</hyperlinks>', () => `${element}</hyperlinks>`)
-  }
-  const section = `<hyperlinks>${element}</hyperlinks>`
+function insertHyperlinkSection(xml: string, body: string): string {
+  const section = `<hyperlinks>${body}</hyperlinks>`
   // Schema order: hyperlinks follows dataValidations / conditionalFormatting /
   // mergeCells / sheetData and precedes print-related elements and drawings.
   const anchor =
