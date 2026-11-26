@@ -168,11 +168,15 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   const save = async (input, request) =>
     (await runtime.sheetsNative.savePlan(input, await runtime.sheetsWorkbookPlanner(input, request))).bytes
   const duplicate = sheetsSaveRequest('sheet-1', [])
-  duplicate.sheetOps = [{ kind: 'duplicate-sheet', sheetId: 'worksheet-copy', sourceSheetId: 'sheet-1', name: 'Worksheet Copy' }]
+  duplicate.sheetOps = [
+    { kind: 'duplicate-sheet', sheetId: 'worksheet-copy', sourceSheetId: 'sheet-1', name: 'Worksheet Copy' },
+    { kind: 'rename-sheet', sheetId: 'sheet-1', newName: 'Original Data' },
+  ]
   duplicate.sheetOrder = ['sheet-1', 'worksheet-copy']
+  duplicate.structuralOps = [{ kind: 'insert-rows', sheetId: 'worksheet-copy', index: 0, count: 1 }]
   const copied = await save(bytes, duplicate)
   const metadata = await runtime.sheetsNative.inspect(copied)
-  assert.deepEqual(metadata.sheets.map(({ name }) => name), ['Acceptance', 'Worksheet Copy'])
+  assert.deepEqual(metadata.sheets.map(({ name }) => name), ['Original Data', 'Worksheet Copy'])
   const [originalSheet, copiedSheet] = metadata.sheets
   const original = metadata.visuals.find(({ sheetId }) => sheetId === originalSheet.id)
   const copy = metadata.visuals.find(({ sheetId }) => sheetId === copiedSheet.id)
@@ -180,10 +184,14 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   assert.equal(copy?.kind, 'chart')
   assert.notEqual(copy.chartPath, original.chartPath)
   assert.notEqual(copy.drawingPath, original.drawingPath)
-  assert.deepEqual(copy.anchor, original.anchor)
-  assert.deepEqual(copy.chart.series, original.chart.series)
+  assert.deepEqual(copy.anchor, {
+    ...original.anchor, fromRow: original.anchor.fromRow + 1, toRow: original.anchor.toRow + 1,
+  })
+  assert.equal(original.chart.series[0].valuesRef, "'Original Data'!$A$2:$A$3")
+  assert.equal(copy.chart.series[0].valuesRef, "'Worksheet Copy'!$A$3:$A$4")
+  assert.deepEqual(copy.chart.series[0].values, original.chart.series[0].values)
   const value = await runtime.sheetsNative.readRange(copied, 'Worksheet Copy',
-    { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    { startRow: 1, endRow: 1, startColumn: 0, endColumn: 0 })
   assert.equal(value.cells[0].value, 'Revenue')
   const edit = sheetsSaveRequest(copiedSheet.id, [])
   edit.chartEdits = [{ chartPath: copy.chartPath, title: 'Worksheet copy chart' }]
@@ -199,6 +207,17 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   assert.equal(remaining.chartPath, chartPath)
   assert.equal(remaining.chart.title, original.chart.title)
   assert.equal((await JSZip.loadAsync(removed)).file(copy.chartPath), null)
+
+  const withoutGlobalName = await JSZip.loadAsync(bytes)
+  const workbookXml = await textOf(withoutGlobalName)('xl/workbook.xml')
+  withoutGlobalName.file('xl/workbook.xml', workbookXml.replace(/<definedNames>[\s\S]*?<\/definedNames>/, ''))
+  const replace = sheetsSaveRequest('sheet-1', [])
+  replace.sheetOps = [duplicate.sheetOps[0], { kind: 'remove-sheet', sheetId: 'sheet-1' }]
+  replace.sheetOrder = ['worksheet-copy']
+  const replaced = await save(await withoutGlobalName.generateAsync({ type: 'nodebuffer' }), replace)
+  const replacement = await runtime.sheetsNative.inspect(replaced)
+  assert.deepEqual(replacement.sheets.map(({ name }) => name), ['Worksheet Copy'])
+  assert.equal(replacement.visuals[0].chart.series[0].valuesRef, "'Worksheet Copy'!$A$2:$A$3")
 })
 
 test('loads combo series and secondary scale without losing sparse cache slots or uncached formulas', async () => {

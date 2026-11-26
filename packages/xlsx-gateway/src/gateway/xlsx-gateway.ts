@@ -1292,6 +1292,7 @@ export async function planCellEditsToXlsx(
     }
     return ref
   }
+  const copiedChartReferences = new Map<string, SheetEditPlan['renames'][number]>()
   for (const [index, addition] of additions.entries()) {
     const sourceSheetName = sheetPlan?.additions[index]?.sourceSheetName
     if (sourceSheetName === undefined) {
@@ -1315,7 +1316,12 @@ export async function planCellEditsToXlsx(
         : prepareClonedSheetRels(sourceRelsXml, sourceSheetName)
       if (rels.droppedPrinterSettings) cloneXml = stripPageSetupRelIds(cloneXml)
       if (rels.relsXml !== null) {
-        await cloneSheetDrawingParts(pkg, sourcePath, addition.path, rels.relsXml, touchedEntries)
+        const chartPaths = await cloneSheetDrawingParts(pkg, sourcePath, addition.path, rels.relsXml, touchedEntries)
+        if (!addition.chartSheetRelationshipType) {
+          for (const path of chartPaths) {
+            copiedChartReferences.set(path, { sheetName: sourceSheetName, newName: addition.name })
+          }
+        }
       }
     }
     pkg.add(addition.path, cloneXml)
@@ -1469,8 +1475,12 @@ export async function planCellEditsToXlsx(
         trackedName !== undefined
           ? (worksheetXmls.get(trackedName) ?? '')
           : await pkg.readText(path)
+      // A copied chart still spells its local references with the source
+      // name until the sheet plan resolves every qualifier in one pass.
+      const copy = copiedChartReferences.get(path)
+      if (copy?.sheetName === sheetName && copy.newName !== sheetName) continue
       const shifted = isChart
-        ? shiftChartReferences(xml, sheetName, ops)
+        ? shiftChartReferences(xml, copy?.newName === sheetName ? copy.sheetName : sheetName, ops)
         : shiftCrossSheetFormulas(xml, sheetName, ops)
       if (shifted === xml) continue
       if (trackedName !== undefined) {
@@ -1963,6 +1973,7 @@ export async function planCellEditsToXlsx(
       workbookXml,
       touchedEntries,
       preservedReferences,
+      copiedChartReferences,
     )
   }
 
@@ -2240,6 +2251,7 @@ async function applySheetPlanToPackage(
   workbookXml: string,
   touchedEntries: Set<string>,
   preservedReferences: ReadonlyMap<string, WorksheetRenameExemptions>,
+  copiedChartReferences: ReadonlyMap<string, SheetEditPlan['renames'][number]>,
 ): Promise<string> {
   const elements = parseSheetElements(workbookXml)
   const originalNames = elements.map((element) => element.name)
@@ -2375,6 +2387,7 @@ async function applySheetPlanToPackage(
       // Charts dying with a removed sheet chart that sheet's own data; only
       // surviving charts can hold a genuinely dangling reference.
       if (removedOwnedParts.has(chartPath)) continue
+      if (copiedChartReferences.get(chartPath)?.sheetName === removal) continue
       if (chartReferencesSheet(await pkg.readText(chartPath), removal)) {
         throw new SheetEditError(
           `A chart reads its data from "${removal}" — deleting it is not allowed.`,
@@ -2429,8 +2442,8 @@ async function applySheetPlanToPackage(
   for (const part of removedOwnedParts) pkg.remove(part)
 
   // Resolve every reference against its original sheet name, once per part.
-  if (plan.renames.length > 0) {
-    const renamer = createSheetReferenceRenamer(plan.renames)
+  const renamer = plan.renames.length > 0 ? createSheetReferenceRenamer(plan.renames) : undefined
+  if (renamer) {
     for (const path of survivingWorksheetPaths) {
       if (!(await pkg.canPatch(path))) {
         for (const { sheetName } of plan.renames) {
@@ -2450,15 +2463,6 @@ async function applySheetPlanToPackage(
         touchedEntries.add(path)
       }
     }
-    for (const chartPath of chartPaths) {
-      if (removedOwnedParts.has(chartPath)) continue
-      const xml = await pkg.readText(chartPath)
-      const renamed = renamer.chart(xml)
-      if (renamed !== xml) {
-        pkg.write(chartPath, renamed)
-        touchedEntries.add(chartPath)
-      }
-    }
     for (const cachePath of pivotCacheDefinitionPaths) {
       const xml = await pkg.readText(cachePath)
       const renamed = renamer.pivotCache(xml)
@@ -2468,6 +2472,18 @@ async function applySheetPlanToPackage(
       }
     }
     workbookXml = renamer.definedNames(workbookXml)
+  }
+  for (const chartPath of chartPaths) {
+    if (removedOwnedParts.has(chartPath)) continue
+    const copy = copiedChartReferences.get(chartPath)
+    const chartRenamer = copy ? createSheetReferenceRenamer([...plan.renames, copy]) : renamer
+    if (!chartRenamer) continue
+    const xml = await pkg.readText(chartPath)
+    const renamed = chartRenamer.chart(xml)
+    if (renamed !== xml) {
+      pkg.write(chartPath, renamed)
+      touchedEntries.add(chartPath)
+    }
   }
 
   const relationshipsPath = 'xl/_rels/workbook.xml.rels'

@@ -944,13 +944,14 @@ export async function cloneSheetDrawingParts(
   destinationSheet: string,
   sheetRelationships: string,
   touchedEntries: Set<string>,
-): Promise<void> {
+): Promise<string[]> {
   type OwnedPart = 'drawing' | 'chart'
   const parts = {
     drawing: { prefix: 'xl/drawings/drawing', contentType: DRAWING_CONTENT_TYPE },
     chart: { prefix: 'xl/charts/chart', contentType: CHART_CONTENT_TYPE },
   }
   const copies = new Map<string, string>()
+  const chartPaths: string[] = []
   const directory = (path: string) => path.slice(0, path.lastIndexOf('/'))
 
   async function copyPart(source: string, kind: OwnedPart): Promise<string> {
@@ -960,6 +961,7 @@ export async function cloneSheetDrawingParts(
     const path = await allocatePartPath(pkg, prefix, '.xml')
     pkg.add(path, await pkg.readText(source))
     copies.set(source, path)
+    if (kind === 'chart') chartPaths.push(path)
     await registerContentTypeOverride(pkg, path, contentType, touchedEntries)
     await copyRelationships(source, path, kind === 'drawing' ? 'chart' : undefined)
     return path
@@ -1001,6 +1003,7 @@ export async function cloneSheetDrawingParts(
   }
 
   await copyRelationships(sourceSheet, destinationSheet, 'drawing', sheetRelationships)
+  return chartPaths
 }
 
 export function resolveRelTarget(fromPart: string, target: string): string {
