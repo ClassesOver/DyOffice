@@ -172,6 +172,23 @@ function axisFields(definition: PivotDefinition): Set<number> {
   return fields
 }
 
+function hiddenMemberKeys(
+  definition: PivotDefinition,
+  fields: Iterable<number>,
+): Map<number, Set<string>> {
+  const hiddenKeys = new Map<number, Set<string>>()
+  for (const field of fields) {
+    const hidden = new Set<string>()
+    for (const item of definition.fieldItems[field] ?? []) {
+      if (!item.hidden || item.x === null) continue
+      const shared = definition.fields[field]?.sharedItems[item.x]
+      if (shared !== undefined) hidden.add(groupKey(shared))
+    }
+    if (hidden.size > 0) hiddenKeys.set(field, hidden)
+  }
+  return hiddenKeys
+}
+
 /// sourceValues: the worksheetSource range INCLUDING its header row.
 export function recomputePivotData(
   definition: PivotDefinition,
@@ -198,16 +215,7 @@ export function recomputePivotData(
   }
 
   // Hidden items filter out their rows everywhere (including totals).
-  const hiddenKeys = new Map<number, Set<string>>()
-  for (const field of axisFieldSet) {
-    const hidden = new Set<string>()
-    for (const item of definition.fieldItems[field] ?? []) {
-      if (!item.hidden || item.x === null) continue
-      const shared = definition.fields[field]?.sharedItems[item.x]
-      if (shared !== undefined) hidden.add(groupKey(shared))
-    }
-    if (hidden.size > 0) hiddenKeys.set(field, hidden)
-  }
+  const hiddenKeys = hiddenMemberKeys(definition, axisFieldSet)
   const pagePredicates: AxisPredicate[] = []
   for (const page of definition.pageFields) {
     if (page.item === null) continue
@@ -692,9 +700,8 @@ export function applyPivotSlicer(
 
 /// Recompute member visibility for each filtered field per definition.filters:
 /// label filters match member labels directly; value filters first aggregate
-/// each candidate member (scoped to report filters plus all label filters,
-/// without stacking other value filters, avoiding order dependence), then
-/// keep members by top/greater-than/between. Returns the updated fieldItems
+/// each candidate member over the rows visible under the current selections,
+/// then keep members by top/greater-than/between. Returns the updated fieldItems
 /// and the set of fields whose hidden bits changed; returns as-is if no filters.
 function reapplyPivotFilters(
   definition: PivotDefinition,
@@ -708,20 +715,28 @@ function reapplyPivotFilters(
     return { fieldItems: definition.fieldItems, changedFields }
   }
 
+  const filteredFields = new Set(definition.filters.map(({ field }) => field))
+  const valueFields = new Set(definition.filters.flatMap((filter) =>
+    filter.kind === 'value' ? [filter.field] : [],
+  ))
+  const hiddenKeys = hiddenMemberKeys(definition,
+    [...axisFields(definition)].filter((field) => !filteredFields.has(field)),
+  )
+
   const itemsOf = (field: number): readonly PivotFieldItem[] => definition.fieldItems[field] ?? []
   const memberLabel = (field: number, item: PivotFieldItem): string => {
     const shared = item.x === null ? undefined : definition.fields[field]?.sharedItems[item.x]
     return shared === null || shared === undefined ? '' : String(shared)
   }
-  // Candidate member sets (in fieldItems order), lazily initialized per field
-  // to all real items.
+  // Label-only visibility is stable for existing members. Value-filtered
+  // fields must reconsider previously hidden members as aggregates change.
   const allowedByField = new Map<number, Set<number>>()
   const ensureAllowed = (field: number): Set<number> => {
     let allowed = allowedByField.get(field)
     if (!allowed) {
       allowed = new Set<number>()
       itemsOf(field).forEach((item, member) => {
-        if (item.x !== null) allowed!.add(member)
+        if (item.x !== null && (!item.hidden || valueFields.has(field))) allowed!.add(member)
       })
       allowedByField.set(field, allowed)
     }
@@ -769,6 +784,9 @@ function reapplyPivotFilters(
     return keys
   }
   const rowPassesBase = (row: readonly SourceCell[]): boolean => {
+    for (const [field, hidden] of hiddenKeys) {
+      if (hidden.has(sourceKey(definition, field, row[field]))) return false
+    }
     for (const page of pagePredicates) {
       if (sourceKey(definition, page.field, row[page.field]) !== page.key) return false
     }

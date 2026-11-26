@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import JSZip from 'jszip'
-import { recomputePivotData } from '../../../../packages/xlsx-gateway/src/domain/pivot-engine.ts'
+import { growPivotDefinition, recomputePivotData } from '../../../../packages/xlsx-gateway/src/domain/pivot-engine.ts'
 
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
@@ -429,6 +429,18 @@ test(
           rowItems: ['East', 'West'], values: [{ fieldIndex: 1, agg: 'sum' }] }],
       })
       const before = (await inspect(withPivot)).sheets[1].pivotTables[0]
+      const hiddenMember = await editPart(withPivot, before.path, (xml) => xml
+        .replace('<item x="0"/>', '<item x="0" h="1"/>')
+        .replace('<rowItems count="3"><i><x/></i>', '<rowItems count="2">')
+        .replace('</pivotTableDefinition>',
+          '<filters><filter fld="0" type="captionContains" stringValue1="t"/></filters></pivotTableDefinition>'))
+      const filteredPivot = await runtime.sheetsPackageReader(hiddenMember, undefined, {
+        path: before.path, cachePath: before.cachePath,
+      })
+      const dataRows = grid.slice(0, 4)
+      const refreshedLayout = growPivotDefinition(filteredPivot, dataRows)
+      assert.equal(refreshedLayout.grown, false)
+      assert.deepEqual(recomputePivotData(refreshedLayout.definition, dataRows).data, [[50], [50]])
       const comment = '<!-- <worksheetSource name="SourceData"/> -->'
       const source = await editPart(withPivot, before.cachePath, (xml) => xml.replace(
         /<worksheetSource\b[^>]*\/>/, `${comment}<worksheetSource name='SourceData'/>`,

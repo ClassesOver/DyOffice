@@ -108,6 +108,24 @@ describe('parsePivotDefinition', () => {
   })
 })
 
+it('ranks a value filter using only rows visible on other axes', () => {
+  const pivot = PIVOT_XML
+    .replace('<pivotField axis="axisCol" showAll="0"><items count="3"><item x="0"/>',
+      '<pivotField axis="axisCol" showAll="0"><items count="3"><item x="0" h="1"/>')
+    .replace('</pivotTableDefinition>', '<filters><filter fld="0" iMeasureFld="0" type="count">' +
+      '<autoFilter ref="A1"><filterColumn colId="0"><top10 val="1"/></filterColumn></autoFilter>' +
+      '</filter></filters></pivotTableDefinition>')
+  const definition = parsePivotDefinition(pivot, CACHE_XML)
+  const source = [
+    ['Region', 'Product', 'Sales'],
+    ['East', 'A', 100], ['East', 'B', 1],
+    ['West', 'A', 1], ['West', 'B', 20],
+  ]
+  const grown = growPivotDefinition(definition, source).definition
+  expect(grown.fieldItems[0]?.map((item) => item.hidden)).toEqual([true, false])
+  expect(grown.fieldItems[1]?.map((item) => item.hidden)).toEqual([true, false])
+})
+
 describe('setPivotRefreshOnLoad', () => {
   it('adds the attribute and replaces an existing value', () => {
     expect(

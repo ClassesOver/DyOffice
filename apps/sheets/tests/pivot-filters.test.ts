@@ -160,6 +160,18 @@ describe('pivot filters recompute', () => {
     expect(result.data).toEqual([[50], [50]])
   })
 
+  it('keeps a manually hidden member hidden when it matches the label filter', () => {
+    const definition = parsePivotDefinition(
+      pivotXmlWithFilters('<filters><filter fld="0" type="captionContains" stringValue1="t"/></filters>')
+        .replace('<item x="0"/>', '<item x="0" h="1"/>')
+        .replace('<rowItems count="4"><i><x/></i>', '<rowItems count="3">'),
+      FILTER_CACHE_XML,
+    )
+    const growth = growPivotDefinition(definition, FILTER_SOURCE)
+    expect(growth.grown).toBe(false)
+    expect(recomputePivotData(growth.definition, FILTER_SOURCE).data).toEqual([[30], [10], [40]])
+  })
+
   it('applies a top-N value filter on refresh: aggregate first, then cut', () => {
     const definition = parsePivotDefinition(
       pivotXmlWithFilters(
