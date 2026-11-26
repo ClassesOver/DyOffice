@@ -482,6 +482,41 @@ describe('sheet remove save', () => {
 })
 
 describe('sheet duplicate save', () => {
+  it('rejects a scoped name with a single-quoted, encoded sheet index', async () => {
+    const zip = await JSZip.loadAsync(await buildSheetsFixture())
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    zip.file(workbookPath, workbook.replace('</definedNames>',
+      "<definedName name='LocalData' localSheetId='&#43;0'>Data!$A$1</definedName></definedNames>"))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(applyCellEditsToXlsx(bytes, [], [], [], {
+      renames: [], additions: [{ name: 'Data Copy', sourceSheetName: 'Data' }], removals: [],
+      order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
+    })).rejects.toThrow('sheet-scoped defined names')
+  })
+
+  it('copies a selected sheet without inheriting its selection or changing comments', async () => {
+    const zip = await JSZip.loadAsync(await buildSheetsFixture())
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    const nameComment = '<!-- <definedName name="Ghost" localSheetId="0">Data!$A$1</definedName> -->'
+    zip.file(workbookPath, workbook.replace('</definedNames>', nameComment + '</definedNames>'))
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(sheetPath)!.async('text')
+    const viewComment = '<!-- <sheetView tabSelected="1"/> -->'
+    const view = "<sheetView workbookViewId='0' tabSelected='1' zoomScale='125'/>"
+    zip.file(sheetPath, sheet.replace('<sheetData>', `<sheetViews>${viewComment}${view}</sheetViews><sheetData>`))
+    const mutation = await applyCellEditsToXlsx(await zip.generateAsync({ type: 'nodebuffer' }), [], [], [], {
+      renames: [], additions: [{ name: 'Data Copy', sourceSheetName: 'Data' }], removals: [],
+      order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
+    })
+    expect(await entryText(mutation.buffer, 'xl/worksheets/sheet4.xml')).toContain(
+      `<sheetViews>${viewComment}<sheetView workbookViewId='0' zoomScale='125'/></sheetViews>`,
+    )
+    expect(await entryText(mutation.buffer, sheetPath)).toContain(view)
+    expect(await entryText(mutation.buffer, workbookPath)).toContain(nameComment)
+  })
+
   it('seeds the new part from the source and applies edits on top', async () => {
     const mutation = await applyCellEditsToXlsx(
       await buildSheetsFixture(),

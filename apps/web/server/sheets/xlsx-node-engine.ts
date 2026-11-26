@@ -5,7 +5,7 @@ import { crc32 } from 'node:zlib'
 import JSZip from 'jszip'
 import {XMLParser,type X2jOptions} from 'fast-xml-parser'
 import {readWorksheetValidations} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-dv.ts'
-import {parseSheetElements,parseRelationships,relationshipIdsMatch,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
+import {parseSheetElements,parseRelationships,parseWorkbookTabIndex,relationshipIdsMatch,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
 import {parseRange} from '../../../../packages/xlsx-gateway/src/domain/cell-address.ts'
@@ -148,10 +148,6 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
   const elements=(nodes:OrderedXml[],tag:string)=>nodes.flatMap(node=>
     Array.isArray(node[tag])?[{attrs:node[':@'],children:node[tag] as OrderedXml[]}]:[])
   const children=(nodes:OrderedXml[],tag:string)=>elements(nodes,tag)[0]?.children??[]
-  const nonnegativeIndex=(raw:string|undefined)=>{
-    const index=Number(raw)
-    return raw!==undefined&&/^\d+$/.test(raw)&&Number.isSafeInteger(index)?index:undefined
-  }
   const workbook=children(workbookMetadataXml.parse(xml),'workbook')
   const declarations=elements(children(workbook,'sheets'),'sheet').map(({attrs})=>({
     name:attribute(attrs,'name'),
@@ -166,7 +162,7 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
   let savedTab=0
   for(const {attrs} of elements(children(workbook,'bookViews'),'workbookView')){
     const activeTab=attribute(attrs,'activeTab')
-    if(activeTab!==undefined)savedTab=nonnegativeIndex(activeTab)??0
+    if(activeTab!==undefined)savedTab=parseWorkbookTabIndex(activeTab)??0
   }
   const definedNames:WorkbookFile['definedNames']=[]
   const scopedSheets=new Set<number>()
@@ -174,7 +170,7 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
   for(const {attrs,children:body} of elements(children(workbook,'definedNames'),'definedName')){
     const name=attribute(attrs,'name')
     if(!name)continue
-    const local=nonnegativeIndex(attribute(attrs,'localSheetId'))
+    const local=parseWorkbookTabIndex(attribute(attrs,'localSheetId'))
     const sheetIndex=local===undefined?undefined:readableIndex(local)
     if(local!==undefined&&sheetIndex===undefined)continue
     if(sheetIndex!==undefined)scopedSheets.add(sheetIndex)

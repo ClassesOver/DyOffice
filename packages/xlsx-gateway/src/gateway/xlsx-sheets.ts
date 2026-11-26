@@ -23,6 +23,7 @@ import {
   prefixOf,
   scopedChildren,
   withBody,
+  withNamespaces,
   worksheetRoot,
 } from './xlsx-worksheet-xml.ts'
 
@@ -335,10 +336,21 @@ export function stripPageSetupRelIds(worksheetXml: string): string {
 
 /// A clone must not claim the selected-tab state of its source.
 export function sanitizeClonedWorksheetXml(worksheetXml: string): string {
-  return worksheetXml.replace(
-    /(<sheetView\b[^>]*?)\s+tabSelected="[^"]*"/g,
-    (_full, prefix: string) => prefix,
-  )
+  const root = worksheetRoot(worksheetXml)
+  const children = root
+    ? scopedChildren(root)
+    : childElements(worksheetXml).map((child) => withNamespaces(child, new Map()))
+  const views = children.find((child) => isElement(child, 'sheetViews', root?.namespace ?? ''))
+  if (!views) return worksheetXml
+  const patches = scopedChildren(views).flatMap((view) => {
+    if (!isElement(view, 'sheetView', views.namespace) || !view.attributes.has('tabSelected')) return []
+    const opening = updateWorksheetTagAttribute(view.opening, 'tabSelected', null)
+    return [patchElement(view, opening + view.xml.slice(view.opening.length))]
+  })
+  if (patches.length === 0) return worksheetXml
+  const offset = (root ? root.start + root.opening.length : 0) + views.start
+  const replacement = withBody(views, applyPatches(views.inner, patches))
+  return worksheetXml.slice(0, offset) + replacement + worksheetXml.slice(offset + views.xml.length)
 }
 
 /// Excel clones sheet-scoped defined names when copying a sheet; this save
@@ -347,7 +359,10 @@ export function sanitizeClonedWorksheetXml(worksheetXml: string): string {
 export function assertNoSheetScopedDefinedNames(workbookXml: string, sourceName: string): void {
   const index = parseSheetElements(workbookXml).findIndex((sheet) => sheet.name === sourceName)
   if (index < 0) throw new SheetEditError(`Sheet "${sourceName}" was not found in the workbook.`)
-  if (new RegExp(`<definedName\\b[^>]*?\\blocalSheetId="${index}"`).test(workbookXml)) {
+  const names = workbookSection(workbookXml, 'definedNames')
+  if (names && workbookSectionEntries(names.section, 'definedName').some((entry) =>
+    readTabIndex(entry.opening, 'localSheetId') === index,
+  )) {
     throw new SheetEditError(
       `Sheet "${sourceName}" has sheet-scoped defined names — duplicating it is ` +
         'not supported yet.',
@@ -622,8 +637,13 @@ function readTabIndex(
   attribute: 'localSheetId' | 'activeTab',
 ): number | undefined {
   const raw = readWorksheetTagAttribute(opening, attribute)
-  const value = raw === undefined ? '' : decodeAttribute(raw).trim()
-  return /^\+?\d+$/.test(value) ? Number(value) : undefined
+  return parseWorkbookTabIndex(raw === undefined ? undefined : decodeAttribute(raw))
+}
+
+export function parseWorkbookTabIndex(raw: string | undefined): number | undefined {
+  const value = raw?.trim() ?? ''
+  const index = Number(value)
+  return /^\+?\d+$/.test(value) && Number.isSafeInteger(index) ? index : undefined
 }
 
 function workbookSection(workbookXml: string, name: string) {

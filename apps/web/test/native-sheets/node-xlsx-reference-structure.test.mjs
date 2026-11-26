@@ -128,6 +128,15 @@ test(
       assert.ok(xml.includes('<sheets xmlns="' + main + '">' + comment))
       assert.ok(xml.includes('</sheets >'))
     })
+    await t.test('reports a signed worksheet scope before duplicating a tab', async () => {
+      const bytes = await fixture({ changeWorkbook: xml => xml.replace('</definedNames>',
+        "<definedName name='LocalValue' localSheetId='&#43;0'>Acceptance!$A$1</definedName></definedNames>") })
+      const metadata = await inspect(bytes)
+      assert.equal(metadata.sheets[0].hasScopedDefinedNames, true)
+      assert.deepEqual(metadata.definedNames.find(({ name }) => name === 'LocalValue'),
+        { name: 'LocalValue', formula: 'Acceptance!$A$1', sheetIndex: 0 })
+    })
+
     await t.test('shifts hyperlink ranges and internal destinations while preserving external locations', async () => {
       const target = 'https://example.com/workbook.xlsx'
       const links = `<hyperlinks xmlns:link="${r}" xmlns:r="urn:example:extension">` +
