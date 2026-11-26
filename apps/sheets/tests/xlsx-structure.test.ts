@@ -820,6 +820,58 @@ describe('structural save integration', () => {
     expect(chart).toContain('<c:f>Data!$A$1:$A$11</c:f>')
   })
 
+  it('shifts referenced drawing anchors and table ranges through scoped relationship aliases', async () => {
+    const zip = await JSZip.loadAsync(await buildAnchoredFixture())
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const sheet = await zip.file(sheetPath)!.async('text')
+    zip.file(sheetPath, sheet.replace('<drawing r:id="rIdD"/>',
+      `<!-- <drawing r:id="orphan"/> --><drawing xmlns:d="${relationshipNs}" d:id='rId&#68;'/>`)
+      .replace('<tableParts count="1"><tablePart r:id="rIdT"/>',
+        `<tableParts count="1" xmlns:t="${relationshipNs}"><tablePart t:id='rId&#84;'/>`))
+    const rels = await zip.file(relsPath)!.async('text')
+    zip.file(relsPath, rels.replace('<Relationship Id="rIdD"',
+      `<Relationship Id="orphan" Type="${relationshipNs}/drawing" Target="../drawings/drawing2.xml"/>` +
+      '<Relationship Id="rIdD"').replaceAll('"', "'"))
+    const orphanPath = 'xl/drawings/drawing2.xml'
+    zip.file(orphanPath, DRAWING_XML)
+
+    const mutation = await applyCellEditsToXlsx(
+      await zip.generateAsync({ type: 'nodebuffer' }),
+      [],
+      [{ sheetName: SHEET, ops: [{ kind: 'insert-rows', index: 1, count: 1 }] }],
+    )
+    const saved = await JSZip.loadAsync(mutation.buffer)
+    expect(await saved.file('xl/drawings/drawing1.xml')?.async('text')).toContain('<xdr:row>6</xdr:row><xdr:rowOff>50</xdr:rowOff>')
+    expect(await saved.file('xl/tables/table1.xml')?.async('text')).toContain('ref="A1:B4"')
+    expect(await saved.file(orphanPath)?.async('text')).toBe(DRAWING_XML)
+    expect(await saved.file(sheetPath)?.async('text')).toContain('<!-- <drawing r:id="orphan"/> -->')
+  })
+
+  it('shifts the OLE fallback anchor through an aliased legacy drawing relationship', async () => {
+    const zip = await JSZip.loadAsync(await buildStructureFixture())
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    zip.file('xl/worksheets/sheet1.xml', OLE_SHEET_XML
+      .replace('<worksheet ', `<worksheet xmlns:r="${relationshipNs}" `)
+      .replace('<legacyDrawing r:id="rId2"/>', `<legacyDrawing xmlns:vml="${relationshipNs}" vml:id="rId2"/>`))
+    zip.file('xl/worksheets/_rels/sheet1.xml.rels',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      `<Relationship Id="rId2" Type="${relationshipNs}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` +
+      '</Relationships>')
+    const vmlPath = 'xl/drawings/vmlDrawing1.vml'
+    zip.file(vmlPath, OLE_VML_XML)
+
+    const mutation = await applyCellEditsToXlsx(
+      await zip.generateAsync({ type: 'nodebuffer' }),
+      [],
+      [{ sheetName: SHEET, ops: [{ kind: 'insert-rows', index: 6, count: 2 }] }],
+    )
+    const saved = await JSZip.loadAsync(mutation.buffer)
+    expect(await saved.file(vmlPath)?.async('text')).toContain('<x:Anchor>1, 10, 5, 50, 3, 20, 10, 60</x:Anchor>')
+    expect(await saved.file(vmlPath)?.async('text')).toContain('<x:Anchor>4, 15, 6, 2, 6, 15, 9, 2</x:Anchor>')
+  })
+
   it('a row deletion compresses covered drawings, leaves the table above alone, and clamps chart refs', async () => {
     const mutation = await applyCellEditsToXlsx(
       await buildAnchoredFixture(),

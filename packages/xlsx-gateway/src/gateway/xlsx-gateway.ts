@@ -75,9 +75,9 @@ import {
   hasUneditableAutoFilter,
   FilterEditError,
 } from './xlsx-filter.ts'
-import { normalizeOoxmlPartPrefix } from './xlsx-namespace.ts'
+import { normalizeOoxmlPartPrefix, readRelationshipId } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
-import { elementText } from './xlsx-worksheet-xml.ts'
+import { elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
   SheetAllocation,
@@ -2540,16 +2540,27 @@ async function shiftAnchoredSheetParts(
 ): Promise<void> {
   if (!ops.some(isShiftingOp)) return
   const parts: Array<{ relId: string; kind: 'drawing' | 'table' | 'vml' }> = []
-  const drawingRelId = /<drawing\b[^>]*\br:id="([^"]+)"/.exec(worksheetXml)?.[1]
-  if (drawingRelId !== undefined) parts.push({ relId: drawingRelId, kind: 'drawing' })
-  for (const match of worksheetXml.matchAll(/<tablePart\b[^>]*\br:id="([^"]+)"/g)) {
-    if (match[1] !== undefined) parts.push({ relId: match[1], kind: 'table' })
-  }
-  // The legacy VML part may also hold the OLE objects' fallback anchors.
-  // Note shapes are handled separately by shiftSheetAnnotations.
-  const legacyRelId = /<legacyDrawing\b[^>]*\br:id="([^"]+)"/.exec(worksheetXml)?.[1]
-  if (legacyRelId !== undefined && worksheetXml.includes('<oleObjects')) {
-    parts.push({ relId: legacyRelId, kind: 'vml' })
+  const root = worksheetRoot(worksheetXml)
+  if (root) {
+    const children = scopedChildren(root)
+    const drawing = children.find((child) => isElement(child, 'drawing', root.namespace))
+    const drawingRelId = drawing && readRelationshipId(drawing.opening, '', root.opening)
+    if (drawingRelId !== undefined) parts.push({ relId: drawingRelId, kind: 'drawing' })
+    const tables = children.find((child) => isElement(child, 'tableParts', root.namespace))
+    if (tables) {
+      for (const child of scopedChildren(tables)) {
+        if (!isElement(child, 'tablePart', root.namespace)) continue
+        const relId = readRelationshipId(child.opening, tables.opening, root.opening)
+        if (relId !== undefined) parts.push({ relId, kind: 'table' })
+      }
+    }
+    // The legacy VML part may also hold the OLE objects' fallback anchors.
+    // Note shapes are handled separately by shiftSheetAnnotations.
+    if (children.some((child) => isElement(child, 'oleObjects', root.namespace))) {
+      const legacy = children.find((child) => isElement(child, 'legacyDrawing', root.namespace))
+      const relId = legacy && readRelationshipId(legacy.opening, '', root.opening)
+      if (relId !== undefined) parts.push({ relId, kind: 'vml' })
+    }
   }
   const shiftsCoordinates = ops.some((op) => 'index' in op)
   if (parts.length === 0 && !shiftsCoordinates) return
@@ -2562,32 +2573,21 @@ async function shiftAnchoredSheetParts(
     )
   }
   const relsXml = await pkg.readText(relsPath)
+  const relationships = parseRelationships(relsXml)
   const partKinds = new Map<string, 'drawing' | 'table' | 'vml' | 'pivot'>()
   for (const { relId, kind } of parts) {
-    // Two-step lookup: attribute order varies by producer (openpyxl puts
-    // Target before Id), so never assume Id precedes Target.
-    const relationshipXml = new RegExp(
-      `<Relationship\\b[^>]*\\bId="${escapeRegExp(relId)}"[^>]*/?>`,
-    ).exec(relsXml)?.[0]
-    const target =
-      relationshipXml === undefined ? undefined : /\bTarget="([^"]+)"/.exec(relationshipXml)?.[1]
-    if (target === undefined) {
+    const relationship = relationships.find((entry) => !entry.external && relationshipIdsMatch(entry.id, relId))
+    if (!relationship) {
       throw new StructuralShiftError(
         `${worksheetPath} references ${kind} ${relId} but its relationship is missing — ` +
           'rows/columns cannot shift here.',
       )
     }
-    partKinds.set(resolveRelTarget(worksheetPath, target), kind)
+    partKinds.set(resolveRelTarget(worksheetPath, relationship.target), kind)
   }
   if (shiftsCoordinates) {
     // Pivot definitions are owned by the worksheet through its relationships.
     // There is no pivot marker in the worksheet XML to discover them from.
-    const relationships = parseRelationships(
-      normalizeOoxmlPartPrefix(relsXml).replace(
-        /<Relationship\b([^>]*?)>\s*<\/Relationship>/g,
-        '<Relationship$1/>',
-      ),
-    )
     for (const rel of relationships) {
       if (!rel.external && rel.type.endsWith('/pivotTable')) {
         partKinds.set(resolveRelTarget(worksheetPath, rel.target), 'pivot')
