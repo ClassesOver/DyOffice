@@ -1,3 +1,4 @@
+import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -33,8 +34,9 @@ function pivotAddition(overrides: Partial<SheetPivotAddition> = {}): SheetPivotA
 async function planWith(
   pivots: SheetPivotAddition[],
   structuralOps: Parameters<typeof planCellEditsToXlsx>[2] = [],
+  bytes?: Buffer,
 ) {
-  const source = await createBufferEntrySource(await buildEditFixture())
+  const source = await createBufferEntrySource(bytes ?? await buildEditFixture())
   return planCellEditsToXlsx(
     source,
     [],
@@ -171,6 +173,34 @@ describe('pivot additions', () => {
     const workbook = plan.replaced.get('xl/workbook.xml')
     expect(workbook).toContain('cacheId="1"')
     expect(workbook).toContain('cacheId="2"')
+  })
+
+  it('adds a cache to the real workbook list without reusing an encoded cache ID', async () => {
+    const first = await planWith([pivotAddition()])
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    for (const [path, xml] of [...first.added, ...first.replaced]) zip.file(path, xml)
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    const comment = '<!-- <pivotCaches><pivotCache cacheId="900"/></pivotCaches> -->'
+    zip.file(workbookPath, workbook.replace('<pivotCaches>', `${comment}<pivotCaches>`)
+      .replace('cacheId="1"', "cacheId='&#49;'"))
+    const plan = await planWith([pivotAddition({
+      name: 'Pivot2',
+      location: { startRow: 0, startColumn: 9, endRow: 4, endColumn: 10 },
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.added.get('xl/pivotTables/pivotTable2.xml')).toContain('cacheId="2"')
+    expect(plan.replaced.get(workbookPath)).toContain(comment)
+    expect(plan.replaced.get(workbookPath)).toMatch(/<pivotCaches><pivotCache cacheId='&#49;'[^>]*\/><pivotCache cacheId="2"[^>]*\/><\/pivotCaches>/)
+  })
+
+  it('inserts the first cache list before workbook recovery metadata', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/workbook.xml'
+    const workbook = await zip.file(path)!.async('text')
+    const comment = '<!-- <extLst/> -->'
+    zip.file(path, workbook.replace('</workbook>', `${comment}<fileRecoveryPr/></workbook>`))
+    const plan = await planWith([pivotAddition()], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get(path)).toMatch(/<!-- <extLst\/> --><pivotCaches>[^]*<\/pivotCaches><fileRecoveryPr\/>/)
   })
 
   it('rejects duplicate names, bad field indexes, and mismatched widths', async () => {

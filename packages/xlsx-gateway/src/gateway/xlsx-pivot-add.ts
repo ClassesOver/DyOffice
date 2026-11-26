@@ -1,4 +1,4 @@
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { ensureRelationshipNamespace, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { columnLabel } from '../domain/cell-address.ts'
 import { shortDateNumFmtId } from '../shared/short-date.ts'
 import { isValidPivotFilter, type PivotFilterDef } from '../domain/pivot-filters.ts'
@@ -22,6 +22,8 @@ import {
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
 import { parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { isElement, prefixOf, scopedChildren, withBody, withNamespaces } from './xlsx-worksheet-xml.ts'
 
 /// Persists pivots created in the editor as native OOXML parts: a cache
 /// definition with real sharedItems + records derived from the source range,
@@ -657,30 +659,51 @@ async function collectExistingPivotNames(pkg: MutablePackage): Promise<Set<strin
   return names
 }
 
+function workbookCacheElements(xml: string) {
+  const [node] = childElements(xml)
+  if (!node) throw new PivotAddError('xl/workbook.xml is malformed.')
+  const root = withNamespaces(node, new Map())
+  if (root.local !== 'workbook' || root.opening.endsWith('/>')) {
+    throw new PivotAddError('xl/workbook.xml is malformed.')
+  }
+  const children = scopedChildren(root)
+  const caches = children.find((child) => isElement(child, 'pivotCaches', root.namespace))
+  return { root, children, caches }
+}
+
 function maxCacheId(workbookXml: string): number {
+  const { caches } = workbookCacheElements(workbookXml)
   let max = 0
-  for (const match of workbookXml.matchAll(/<pivotCache\b[^>]*\bcacheId="(\d+)"/g)) {
-    max = Math.max(max, Number(match[1]))
+  if (caches) {
+    for (const cache of scopedChildren(caches)) {
+      if (!isElement(cache, 'pivotCache', caches.namespace)) continue
+      const id = cache.attributes.get('cacheId') ?? ''
+      if (/^\d+$/.test(id)) max = Math.max(max, Number(id))
+    }
   }
   return max
 }
 
-/// Adds a <pivotCache> entry; workbook.xml schema order puts pivotCaches
-/// after calcPr, before extLst.
+/// Adds an entry to the workbook's cache list in spreadsheet schema order.
 function addWorkbookPivotCache(workbookXml: string, cacheId: number, relId: string): string {
   workbookXml = ensureRelationshipNamespace(workbookXml)
-  const entry = `<pivotCache cacheId="${cacheId}" r:id="${relId}"/>`
-  if (workbookXml.includes('</pivotCaches>')) {
-    return workbookXml.replace('</pivotCaches>', `${entry}</pivotCaches>`)
+  const { root, children, caches } = workbookCacheElements(workbookXml)
+  const prefix = prefixOf((caches ?? root).name)
+  const binding = relationshipNamespaceOverride(caches?.opening ?? '', root.opening)
+  const entry = `<${prefix}pivotCache cacheId="${cacheId}" r:id="${relId}"${binding}/>`
+  const bodyOffset = root.start + root.opening.length
+  if (caches) {
+    const offset = bodyOffset + caches.start
+    return workbookXml.slice(0, offset) + withBody(caches, caches.inner + entry) +
+      workbookXml.slice(offset + caches.xml.length)
   }
-  const element = `<pivotCaches>${entry}</pivotCaches>`
-  const extLstAt = workbookXml.search(/<extLst\b/)
-  if (extLstAt >= 0) {
-    return workbookXml.slice(0, extLstAt) + element + workbookXml.slice(extLstAt)
-  }
-  const closeAt = workbookXml.lastIndexOf('</workbook>')
-  if (closeAt < 0) throw new PivotAddError('xl/workbook.xml is malformed.')
-  return workbookXml.slice(0, closeAt) + element + workbookXml.slice(closeAt)
+  const afterCaches = new Set(['smartTagPr', 'smartTagTypes', 'webPublishing', 'fileRecoveryPr', 'webPublishObjects', 'extLst'])
+  const following = children.find(({ local, namespace }) =>
+    namespace === root.namespace && afterCaches.has(local),
+  )
+  const offset = bodyOffset + (following?.start ?? root.inner.length)
+  const element = `<${prefix}pivotCaches>${entry}</${prefix}pivotCaches>`
+  return workbookXml.slice(0, offset) + element + workbookXml.slice(offset)
 }
 
 /// Exported for pivot layout edits (A3): the cacheDefinition is regenerated

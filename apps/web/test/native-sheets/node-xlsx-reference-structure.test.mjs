@@ -333,6 +333,25 @@ test(
         const pivots = (await inspect(both)).sheets[1].pivotTables
         assert.equal(pivots.find((pivot) => pivot.path === after.path)?.outputRef, 'G2:H8')
         assert.equal(pivots.find((pivot) => pivot.path === peerPath)?.outputRef, 'J2:K9')
+
+        const decoy = '<!-- <pivotCaches><pivotCache cacheId="900"/></pivotCaches> -->'
+        const existing = await editPart(withPivot, wbPath, (xml) =>
+          xml.replace('<pivotCaches>', `${decoy}<pivotCaches>`).replace('cacheId="1"', "cacheId='&#49;'"))
+        const withSecond = await save(existing, [], [first, second], {
+          pivotAdditions: [{
+            sheetId: second, sourceSheetId: first,
+            sourceArea: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 1 },
+            location: { startRow: 0, startColumn: 9, endRow: 5, endColumn: 10 },
+            name: 'SecondSales', fieldNames: ['Region', 'Amount'], rowFieldIndices: [0],
+            rowItems: ['East', 'West'], values: [{ fieldIndex: 1, agg: 'sum' }],
+          }],
+        })
+        const registered = await inspect(withSecond)
+        assert.deepEqual(registered.sheets[1].pivotTables.map((pivot) => pivot.outputRef).sort(),
+          ['F1:G6', 'J1:K6'])
+        const workbook = await xmlPart(await JSZip.loadAsync(withSecond), wbPath)
+        assert.ok(workbook.includes(decoy))
+        assert.match(workbook, /<pivotCaches><pivotCache cacheId='&#49;'[^>]*\/><pivotCache cacheId="2"[^>]*\/><\/pivotCaches>/)
       },
     )
 
