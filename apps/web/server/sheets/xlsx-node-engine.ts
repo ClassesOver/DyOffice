@@ -5,7 +5,7 @@ import { crc32 } from 'node:zlib'
 import JSZip from 'jszip'
 import {XMLParser,type X2jOptions} from 'fast-xml-parser'
 import {readWorksheetValidations} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-dv.ts'
-import {parseSheetElements,parseRelationships,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
+import {parseSheetElements,parseRelationships,relationshipIdsMatch,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
 import {parseRange} from '../../../../packages/xlsx-gateway/src/domain/cell-address.ts'
@@ -630,7 +630,7 @@ async function readPivotMetadata(text:ZipText){
   const workbookRels=parseRelationships(await text(relsPathFor(workbookPath)))
   const result=new Map<string,Pick<WorkbookFile['sheets'][number],'pivotTables'|'pivotRanges'>>()
   for(const sheet of parseSheetElements(await text(workbookPath))){
-    const rel=workbookRels.find(rel=>rel.id===sheet.relationshipId&&!rel.external&&rel.type.endsWith('/worksheet'))
+    const rel=workbookRels.find(rel=>relationshipIdsMatch(rel.id,sheet.relationshipId)&&!rel.external&&rel.type.endsWith('/worksheet'))
     if(!rel)continue
     const sheetPath=resolveRelTarget(workbookPath,rel.target)
     const pivotTables:WorkbookFile['sheets'][number]['pivotTables']=[]
@@ -853,7 +853,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
     styleIndexes:Map<string,number>; imageCells:ReturnType<typeof readSheetCellImages>; headerFooterMedia:Map<string,string>
   }>()
   for (const [sheetIndex,sheet] of parseSheetElements(await text(workbookPath)).entries()) {
-    const rel = workbookRels.find(item => item.id === sheet.relationshipId && !item.external && item.type.endsWith('/worksheet'))
+    const rel = workbookRels.find(item => relationshipIdsMatch(item.id, sheet.relationshipId) && !item.external && item.type.endsWith('/worksheet'))
     if (!rel) continue
     const path = resolveRelTarget(workbookPath, rel.target)
     const xml = inferWorksheetAddresses(normalizeOoxmlPartPrefix(await text(path)))

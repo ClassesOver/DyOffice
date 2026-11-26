@@ -639,11 +639,20 @@ export function addWorksheetRelationship(
   return relationshipsXml.replace('</Relationships>', () => `${relationship}</Relationships>`)
 }
 
+export function relationshipIdsMatch(id: string | undefined, reference: string | undefined): boolean {
+  return id !== undefined && reference !== undefined && decodeAttribute(id) === decodeAttribute(reference)
+}
+
 export function removeRelationshipById(relationshipsXml: string, relationshipId: string): string {
-  return relationshipsXml.replace(
-    new RegExp(`<Relationship\\b[^>]*\\bId="${escapeRegExp(relationshipId)}"[^>]*/>\\s*`),
-    '',
+  const root = childElements(relationshipsXml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+  if (!root) return relationshipsXml
+  const entry = childElements(root.inner).find(({ name, opening }) =>
+    name.slice(name.lastIndexOf(':') + 1) === 'Relationship' &&
+    relationshipIdsMatch(readWorksheetTagAttribute(opening, 'Id'), relationshipId),
   )
+  if (!entry) return relationshipsXml
+  const start = root.start + root.opening.length + entry.start
+  return relationshipsXml.slice(0, start) + relationshipsXml.slice(start + entry.xml.length)
 }
 
 /// Relationship types whose targets never block a sheet removal: hyperlink

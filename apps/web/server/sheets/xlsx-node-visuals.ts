@@ -859,7 +859,8 @@ export async function readWorkbookVisuals(
   let oleOrdinal = 0
   for (const declaration of parseSheetElements(await read(workbook))) {
     const sheetId = byName.get(declaration.name)
-    const sheetPath = internalTarget(workbookRels, workbook, declaration.relationshipId, 'worksheet')
+    const relationshipId = declaration.relationshipId === undefined ? undefined : decodeAttribute(declaration.relationshipId)
+    const sheetPath = internalTarget(workbookRels, workbook, relationshipId, 'worksheet')
     if (!sheetId || !sheetPath) continue
     const sheetXml = await read(sheetPath)
     if (!sheetXml.includes('drawing') && !sheetXml.includes('oleObjects')) continue

@@ -103,6 +103,7 @@ import {
   partPathForRels,
   pivotCacheReadsFromSheet,
   prepareClonedSheetRels,
+  relationshipIdsMatch,
   removePartOverride,
   removeRelationshipById,
   tableDisplayName,
@@ -2736,7 +2737,7 @@ async function resolveWorksheetPath(
     throw new Error(`Sheet "${sheetName}" was not found in workbook.xml.`)
 
   const relationshipsXml = await reader.readText('xl/_rels/workbook.xml.rels')
-  const relationship = parseRelationships(relationshipsXml).find(({ id }) => id === relationshipId)
+  const relationship = parseRelationships(relationshipsXml).find(({ id }) => relationshipIdsMatch(id, relationshipId))
   if (!relationship?.target) throw new Error(`Relationship ${relationshipId} was not found.`)
   const target = relationship.target.replace(/^\/?xl\//, '')
   return resolveRelTarget('xl/workbook.xml', target)

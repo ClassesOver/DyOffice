@@ -21,7 +21,7 @@ import {
   relsPathFor,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
-import { parseSheetElements } from './xlsx-sheets.ts'
+import { parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
 
 /// Persists pivots created in the editor as native OOXML parts: a cache
 /// definition with real sharedItems + records derived from the source range,
@@ -337,14 +337,9 @@ async function resolveSourcePath(pkg: MutablePackage, sheetName: string): Promis
     throw new PivotAddError(`Source sheet "${sheetName}" not found in workbook.xml.`)
 
   const relXml = await pkg.readText('xl/_rels/workbook.xml.rels')
-  // Two-step lookup: attribute order varies by producer (openpyxl puts Target before Id)
-  const relationshipXml = new RegExp(
-    `<Relationship\\b[^>]*\\bId=["']${relationshipId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*/?>`,
-  ).exec(relXml)?.[0]
-  const relTarget =
-    relationshipXml === undefined
-      ? undefined
-      : /\bTarget=(["'])([^"']+)\1/.exec(relationshipXml)?.[2]
+  const relTarget = parseRelationships(relXml).find(
+    (entry) => !entry.external && entry.type.endsWith('/worksheet') && relationshipIdsMatch(entry.id, relationshipId),
+  )?.target
   if (!relTarget) throw new PivotAddError(`Relationship ${relationshipId} not found.`)
   const target = relTarget.replace(/^\/?xl\//, '')
   return `xl/${target.replace(/^\.\//, '')}`

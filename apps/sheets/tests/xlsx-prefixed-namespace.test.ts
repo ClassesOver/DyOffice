@@ -13,7 +13,7 @@ import {
   ensureRelationshipNamespace,
   normalizeOoxmlPartPrefix,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-namespace'
-import { maxRelationshipId, parseSheetElements } from '@genoffice/xlsx-gateway/gateway/xlsx-sheets'
+import { maxRelationshipId, parseSheetElements, removeRelationshipById } from '@genoffice/xlsx-gateway/gateway/xlsx-sheets'
 
 const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -195,6 +195,13 @@ describe('normalizeOoxmlPartPrefix', () => {
 })
 
 describe('non-numeric relationship ids', () => {
+  it('removes an encoded relationship by its ID without touching lookalikes', () => {
+    const drawing = '<Relationship xmlns:ext="urn:example" ext:Id="rId1" Id="rId2" Type="drawing" Target="drawing.xml"/>'
+    const comment = '<!-- <Relationship Id="rId1"/> -->'
+    const rels = '<Relationships>' + comment + drawing +
+      "<Relationship Id = 'rId&#49;' Type='worksheet' Target='sheet.xml'></Relationship></Relationships>"
+    expect(removeRelationshipById(rels, 'rId1')).toBe('<Relationships>' + comment + drawing + '</Relationships>')
+  })
   it('maxRelationshipId ignores them so new ids start fresh without colliding', () => {
     expect(maxRelationshipId(workbookRels)).toBe(0)
     expect(workbookRels).not.toContain('Id="rId1"')

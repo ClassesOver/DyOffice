@@ -59,6 +59,22 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('opens and saves worksheet relationships with equivalent encoded IDs', async () => {
+    const relsPath = 'xl/_rels/workbook.xml.rels'
+    for (const parts of [
+      { [workbookPath]: (xml) => xml.replace('r:id="rId1"', 'r:id="rId&#49;"') },
+      { [relsPath]: (xml) => xml.replace('Id="rId1"', 'Id="rId&#x31;"') },
+    ]) {
+      const bytes = await workbook(parts)
+      const values = async (input) => (await native.readRange(input, sheetName, {
+        startRow: 0, endRow: 0, startColumn: 0, endColumn: 0,
+      })).cells.map(({ value }) => value)
+      assert.deepEqual(await values(bytes), ['Revenue'])
+      assert.deepEqual(await values(await saveValue(bytes, 0, 42)), [42])
+      assert.ok((await native.inspect(bytes, undefined, true)).visuals.some((visual) => visual.chart))
+    }
+  })
+
   await t.test('allocates unique hyperlink relationship IDs when existing IDs use XML character references', async () => {
     const namespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
     const oldTarget = 'https://example.com/original'

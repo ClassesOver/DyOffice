@@ -8,7 +8,7 @@ import { parsePivotDefinition } from '../../../../packages/xlsx-gateway/src/gate
 import { workbookPivotDefinitionSchema, workbookSaveRequestSchema } from '../../../sheets/src/shared/desktop-api'
 import { mapWorkbookSaveRequest } from '../../../sheets/src/shared/workbook-save-plan'
 import { createBufferEntrySource, type EntrySource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway'
-import { parseSheetElements, readAttribute, parseRelationships } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
+import { parseSheetElements, readAttribute, parseRelationships, relationshipIdsMatch } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
 import { resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add'
 import { planWorkbookMutation } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-package-io'
 import {readWorkbookExternalLinks} from './external-links.ts'
@@ -95,7 +95,7 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       if (!element.sheetId || !element.relationshipId) throw new Error('Missing sheet identity')
       const id = `sheet-${element.sheetId}`, name = element.name
       if (id.length > 512 || !name.length || name.length > 255 || ids.has(id) || names.has(name)) throw new Error('Ambiguous sheets')
-      const rels = relationships.filter(rel => rel.id === element.relationshipId)
+      const rels = relationships.filter(rel => relationshipIdsMatch(rel.id, element.relationshipId))
       const rel = rels[0]
       if (rels.length !== 1 || !rel || rel.external || !rel.type.endsWith('/worksheet')) throw new Error('Invalid worksheet relationship')
       const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
