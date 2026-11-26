@@ -16,7 +16,7 @@ import {inferWorksheetAddresses} from '../../../../packages/xlsx-gateway/src/gat
 import {pivotBandMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
 import {readCustomTableStyles,readWorksheetTables,type TableDxf} from './xlsx-node-tables'
-import {readHeaderFooterPictures,readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
+import {mixHexColors,readHeaderFooterPictures,readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
 import {cellImageKey,readCellImageSources,readSheetCellImages,readWorkbookImage} from './xlsx-node-cell-images'
 import {applyTint} from '../../../sheets/src/renderer/table-styles'
 import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult,WorkbookSharedFormulaGroup} from '../../../sheets/src/shared/desktop-api.ts'
@@ -666,15 +666,6 @@ function readThemeFonts(xml: string): WorkbookFile['themeFonts'] {
   const minor = attribute(scheme?.minorFont?.latin, 'typeface')
   const minorEa = attribute(scheme?.minorFont?.ea, 'typeface')
   return major && minor ? { major, minor, ...(minorEa ? { minorEa } : {}) } : undefined
-}
-
-function mixHexColors(first: string, last: string): string {
-  const channels = [1, 3, 5].map(offset => {
-    const a = Number.parseInt(first.slice(offset, offset + 2), 16)
-    const b = Number.parseInt(last.slice(offset, offset + 2), 16)
-    return Math.floor((a + b) / 2).toString(16).padStart(2, '0')
-  })
-  return `#${channels.join('').toUpperCase()}`
 }
 
 async function readWorkbookStyles(text: ZipText) {

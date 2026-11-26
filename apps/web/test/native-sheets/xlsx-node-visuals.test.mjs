@@ -263,6 +263,38 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
   }
 })
 
+test('uses GenOffice paint colors for gradient and pattern fills in XLSX drawings', async () => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const art = (body) => `<a:gradFill><a:gsLst>${body}</a:gsLst><a:lin ang="0"/></a:gradFill>`
+  const stop = (position, paint) => `<a:gs pos="${position}">${paint}</a:gs>`
+  const rgb = (value) => `<a:srgbClr val="${value}"/>`
+  const gradient = art(stop('100000', rgb('0000FF')) + stop('0', rgb('FF0000')) +
+    stop('50000', rgb('FFFFFF')) + stop('missing', rgb('FFFFFF')))
+  const pattern = `<a:pattFill prst="pct50"><a:fgClr>${rgb('FF0000')}</a:fgClr>
+    <a:bgClr>${rgb('00FF00')}</a:bgClr></a:pattFill>`
+  const shape = (id, fill, line) => `<xdr:oneCellAnchor><xdr:from><xdr:col>${id - 81}</xdr:col>
+    <xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="900000" cy="450000"/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="${id}" name="Paint ${id}"/>
+      <xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"/>${fill}<a:ln>${line}</a:ln></xdr:spPr></xdr:sp>
+    <xdr:clientData/></xdr:oneCellAnchor>`
+  await appendDrawing(zip, shape(81, gradient, art(stop('50000', rgb('8899AA')))) +
+    shape(82, pattern, '<a:noFill/>') + shape(83, '<a:noFill/>', gradient))
+  const chart = await textOf(zip)(chartPath)
+  zip.file(chartPath, (chart.includes('xmlns:a=') ? chart : chart.replace('<c:chartSpace ', `<c:chartSpace xmlns:a="${mainNs}" `))
+    .replace('</c:plotArea>', `<c:spPr>${gradient}</c:spPr></c:plotArea>`)
+    .replace('</c:chartSpace>', `<c:spPr>${pattern}</c:spPr></c:chartSpace>`))
+
+  const [visual, shaded, patterned, outline] = await readWorkbookVisuals(textOf(zip), sourceSheet)
+  assert.equal(shaded.fillColor, '#7F007F')
+  assert.equal(shaded.lineColor, '#8899AA')
+  assert.equal(patterned.fillColor, '#7F7F00')
+  assert.equal(patterned.lineColor, 'none')
+  assert.equal(outline.fillColor, 'none')
+  assert.equal(outline.lineColor, '#7F007F')
+  assert.equal(visual.chart.chartAreaFill, '#7F7F00')
+  assert.equal(visual.chart.plotAreaFill, '#7F007F')
+})
+
 test('opens a native XLSX text box and edits its paint at the original drawing index', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   await appendDrawing(zip, `<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="10000" cy="10000"/><xdr:sp/></xdr:absoluteAnchor>

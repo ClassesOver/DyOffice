@@ -94,7 +94,37 @@ function drawingColor(node: XmlElement | undefined, theme: readonly string[]): s
     : shade !== undefined ? applyTint(base, Math.max(-1, Math.min(0, shade / 100_000 - 1))) : base
 }
 
-const color = (scope: XmlElement | undefined, theme: readonly string[]) => drawingColor(child(scope, 'solidFill'), theme)
+export function mixHexColors(first: string, last: string): string {
+  const channels = [1, 3, 5].map(offset => {
+    const a = Number.parseInt(first.slice(offset, offset + 2), 16)
+    const b = Number.parseInt(last.slice(offset, offset + 2), 16)
+    return Math.floor((a + b) / 2).toString(16).padStart(2, '0')
+  })
+  return `#${channels.join('').toUpperCase()}`
+}
+
+function color(scope: XmlElement | undefined, theme: readonly string[]): string | undefined {
+  const solid = child(scope, 'solidFill')
+  if (solid) return drawingColor(solid, theme)
+  const gradient = child(scope, 'gradFill')
+  const stops = children(child(gradient, 'gsLst')).flatMap(stop => {
+    if (stop.tag !== 'gs') return []
+    const position = finite(attribute(stop, 'pos'))
+    const rgb = drawingColor(stop, theme)
+    return position !== undefined && rgb ? [{ position, rgb }] : []
+  }).sort((a, b) => a.position - b.position)
+  const first = stops[0], last = stops.at(-1)
+  return first && last ? mixHexColors(first.rgb, last.rgb) : undefined
+}
+
+function areaColor(scope: XmlElement | undefined, theme: readonly string[]): string | undefined {
+  if (child(scope, 'noFill')) return undefined
+  const pattern = child(scope, 'pattFill')
+  if (!pattern) return color(scope, theme)
+  const foreground = drawingColor(child(pattern, 'fgClr'), theme)
+  const background = drawingColor(child(pattern, 'bgClr'), theme)
+  return foreground && background ? mixHexColors(foreground, background) : foreground ?? background
+}
 
 const cacheLimit = 4096
 type CachePoints = { values: (string | undefined)[]; sourceIndexes?: number[] }
@@ -358,7 +388,7 @@ function readChart(xml: string, theme: readonly string[], lookup: SourceNumberFo
     xAxis, yAxis, secondaryYAxis, scatterStyle: val(scatter, 'scatterStyle'), lineMarkers: flag(child(line, 'marker')),
     dispBlanksAs: member(val(chart, 'dispBlanksAs'), ['gap', 'zero', 'span'] as const),
     titleStyle: textStyle(title, theme), dataLabelStyle: textStyle(activeLabels, theme),
-    chartAreaFill: color(child(space, 'spPr'), theme), plotAreaFill: color(child(plotArea, 'spPr'), theme),
+    chartAreaFill: areaColor(child(space, 'spPr'), theme), plotAreaFill: areaColor(child(plotArea, 'spPr'), theme),
   }
 }
 
@@ -497,7 +527,7 @@ function readShape(
   const blip = child(child(properties, 'blipFill'), 'blip')
   const fillMediaPath = previewPath(references.relationships, references.part, attribute(blip, 'embed'), references.hasPart)
   const fillColor = child(properties, 'noFill') ? 'none'
-    : color(properties, theme) ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
+    : areaColor(properties, theme) ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
   return {
     ...base,
     kind: 'shape',
