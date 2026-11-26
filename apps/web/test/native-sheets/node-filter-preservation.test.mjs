@@ -68,6 +68,8 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
       columnNames: ['Revenue', 'Formula', 'Date'], bandedRows: true,
     }]
     await assert.rejects(() => save(bytes, request), { statusCode: 400 })
+    request.definedNamesState = { names: [{ name: 'Revenue', formula: 'Acceptance!$A$2:$A$3' }], preserveNames: [] }
+    await assert.rejects(() => save(bytes, request), { statusCode: 400 })
     request.tableAdditions[0].name = 'CommentOnly'
     const saved = await save(bytes, request)
     assert.equal((await native.inspect(saved)).sheets[0].tables[0].name, 'CommentOnly')
@@ -76,6 +78,39 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
     await assert.rejects(() => save(saved, rename), { statusCode: 400 })
     const workbook = await (await JSZip.loadAsync(saved)).file(workbookPath).async('string')
     assert.ok(workbook.includes(comment) && workbook.includes(hidden))
+  })
+
+  await t.test('validates the table and defined names in the final save batch', async (t) => {
+    const table = (name) => ({ sheetId: 'sheet-1', area: span, name,
+      columnNames: ['Revenue', 'Formula', 'Date'], bandedRows: true })
+    const takeName = (name) => ({ names: [{ name, formula: 'Acceptance!$A$1' }], preserveNames: [] })
+    await t.test('rejects a newly defined name colliding with an added table', async () => {
+      const request = sheetsSaveRequest('sheet-1', [])
+      request.tableAdditions = [table('BatchName')]
+      request.definedNamesState = takeName('batchname')
+      await assert.rejects(() => save(source, request), { statusCode: 400 })
+    })
+    await t.test('lets a table take a name freed by the snapshot in the same save', async () => {
+      const zip = await JSZip.loadAsync(source)
+      const path = 'xl/workbook.xml'
+      zip.file(path, (await zip.file(path).async('string')).replace('</definedNames>',
+        '<definedName name="FreedName">Acceptance!$A$1</definedName></definedNames>'))
+      const request = sheetsSaveRequest('sheet-1', [])
+      request.tableAdditions = [table('FreedName')]
+      request.definedNamesState = takeName('Revenue')
+      const saved = await save(await zip.generateAsync({ type: 'nodebuffer' }), request)
+      const metadata = await native.inspect(saved)
+      assert.equal(metadata.sheets[0].tables[0].name, 'FreedName')
+      assert.deepEqual(metadata.definedNames.map(({ name }) => name), ['Revenue'])
+
+      const conflict = sheetsSaveRequest('sheet-1', [])
+      conflict.definedNamesState = takeName('FREEDNAME')
+      await assert.rejects(() => save(saved, conflict), { statusCode: 400 })
+      conflict.tableEdits = [{ sheetId: 'sheet-1', tableName: 'FreedName', remove: true }]
+      const converted = await native.inspect(await save(saved, conflict))
+      assert.deepEqual(converted.sheets[0].tables, [])
+      assert.deepEqual(converted.definedNames.map(({ name }) => name), ['FREEDNAME'])
+    })
   })
 
   await t.test(

@@ -1,6 +1,6 @@
 import { columnLabel } from '../domain/cell-address.ts'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
-import { isValidDefinedName } from './xlsx-defined-names.ts'
+import { isValidDefinedName, readWorkbookDefinedNameKeys } from './xlsx-defined-names.ts'
 import {
   allocatePartPath,
   appendRelationship,
@@ -18,8 +18,7 @@ import {
 } from './xlsx-namespace.ts'
 import { decodeAttribute, parseRelationships, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
 import { readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
-import { childElements } from './xlsx-style-entries.ts'
-import { isElement, prefixOf, scopedChildren, withNamespaces, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import { isElement, prefixOf, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 /// Persists tables (ListObjects) created in the editor as brand-new OOXML
 /// parts: xl/tables/tableN.xml, the worksheet's <tableParts> element, the
@@ -110,6 +109,7 @@ export async function applyTableAdditions(
   pkg: MutablePackage,
   additions: readonly TableAddition[],
   touchedEntries: Set<string>,
+  checkWorkbookNames = true,
 ): Promise<void> {
   if (additions.length === 0) return
   const reserved = await collectExistingTableNames(pkg)
@@ -121,7 +121,7 @@ export async function applyTableAdditions(
       throw new TableAddError(`Table name "${addition.name}" is already taken in this workbook.`)
     }
     reserved.add(lowerName)
-    await assertNameNotDefined(pkg, addition.name)
+    if (checkWorkbookNames) await assertNameNotDefined(pkg, addition.name)
     await assertNoTableOverlap(pkg, addition)
     assertNoSheetConflicts(addition, await pkg.readText(addition.worksheetPath))
 
@@ -211,17 +211,8 @@ export async function tablePartPaths(pkg: MutablePackage): Promise<string[]> {
 
 /// Table names share Excel's defined-name namespace.
 export async function assertNameNotDefined(pkg: MutablePackage, name: string): Promise<void> {
-  const [element] = childElements(await pkg.readText('xl/workbook.xml'))
-  const root = element && withNamespaces(element, new Map())
-  if (root?.local !== 'workbook') return
-  const section = scopedChildren(root).find((entry) => isElement(entry, 'definedNames', root.namespace))
-  if (!section) return
-  const lowerName = name.toLowerCase()
-  const collision = scopedChildren(section).some((entry) =>
-    isElement(entry, 'definedName', root.namespace) &&
-    entry.attributes.get('name')?.toLowerCase() === lowerName,
-  )
-  if (collision) {
+  const names = readWorkbookDefinedNameKeys(await pkg.readText('xl/workbook.xml'))
+  if (names.has(name.toLowerCase())) {
     throw new TableAddError(`Table name "${name}" collides with a defined name in the workbook.`)
   }
 }

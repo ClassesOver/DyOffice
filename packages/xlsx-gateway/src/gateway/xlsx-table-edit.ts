@@ -56,6 +56,7 @@ export async function applyTableEdits(
   pkg: MutablePackage,
   edits: readonly TableEdit[],
   touchedEntries: Set<string>,
+  checkWorkbookNames = true,
 ): Promise<void> {
   if (edits.length === 0) return
   for (const edit of edits) {
@@ -64,7 +65,7 @@ export async function applyTableEdits(
       await removeTable(pkg, edit.worksheetPath, located, touchedEntries)
       continue
     }
-    const rewritten = await rewriteTable(pkg, edit, located)
+    const rewritten = await rewriteTable(pkg, edit, located, checkWorkbookNames)
     pkg.write(located.path, rewritten)
     touchedEntries.add(located.path)
   }
@@ -133,6 +134,7 @@ async function rewriteTable(
   pkg: MutablePackage,
   edit: TableEdit,
   table: LocatedTable,
+  checkWorkbookNames: boolean,
 ): Promise<string> {
   const [element] = childElements(table.xml)
   const root = element && withNamespaces(element, new Map())
@@ -142,7 +144,7 @@ async function rewriteTable(
 
   let opening = root.opening
   if (edit.name !== undefined) {
-    await assertRenameAllowed(pkg, edit, table)
+    await assertRenameAllowed(pkg, edit, table, checkWorkbookNames)
     const name = escapeAttribute(edit.name)
     opening = updateWorksheetTagAttribute(opening, 'name', name)
     opening = updateWorksheetTagAttribute(opening, 'displayName', name)
@@ -222,6 +224,7 @@ async function assertRenameAllowed(
   pkg: MutablePackage,
   edit: TableEdit,
   table: LocatedTable,
+  checkWorkbookNames: boolean,
 ): Promise<void> {
   const name = edit.name ?? ''
   if (
@@ -238,7 +241,7 @@ async function assertRenameAllowed(
   if (reserved.has(name.toLowerCase())) {
     throw new TableEditError(`Table name "${name}" is already taken in this workbook.`)
   }
-  await assertNameNotDefined(pkg, name)
+  if (checkWorkbookNames) await assertNameNotDefined(pkg, name)
 }
 
 async function assertAreaFree(

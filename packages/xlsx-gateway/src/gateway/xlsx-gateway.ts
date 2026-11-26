@@ -50,6 +50,7 @@ import {
   applyTableAdditions,
   areasOverlap,
   areaToRef,
+  collectExistingTableNames,
   parseRef,
   sheetTableParts,
   type LocatedTable,
@@ -119,6 +120,7 @@ import { applyCfRules, type CfWireRule } from './xlsx-cf.ts'
 import {
   applyDefinedNamesState,
   DefinedNameError,
+  readWorkbookDefinedNameKeys,
   type DefinedNamesState,
 } from './xlsx-defined-names.ts'
 import { applyDvRules, type DvCellArea, type DvWireRule } from './xlsx-dv.ts'
@@ -1826,7 +1828,7 @@ export async function planCellEditsToXlsx(
         worksheetPath: additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName)),
       })
     }
-    await applyTableEdits(pkg, resolvedEdits, touchedEntries)
+    await applyTableEdits(pkg, resolvedEdits, touchedEntries, definedNamesState === null)
   }
   // New tables also run on the flushed worksheet XML: the <tableParts>
   // element and overlap checks see the final sheet content.
@@ -1845,7 +1847,7 @@ export async function planCellEditsToXlsx(
         options: addition.options,
       })
     }
-    await applyTableAdditions(pkg, resolvedTables, touchedEntries)
+    await applyTableAdditions(pkg, resolvedTables, touchedEntries, definedNamesState === null)
   }
 
   // Filter snapshots run after structural replay, cell edits, and the table
@@ -1939,7 +1941,24 @@ export async function planCellEditsToXlsx(
   }
 
   if (definedNamesState !== null) {
+    const previousNames = readWorkbookDefinedNameKeys(workbookXml)
     workbookXml = applyDefinedNamesState(workbookXml, definedNamesState)
+    // Table edits run before the name snapshot. Validate changed names against
+    // both final parts so removing either owner can free a name in one save.
+    const changedTables = new Set([
+      ...tableAdditions.map(({ name }) => name.toLowerCase()),
+      ...tableEdits.flatMap(({ name, remove }) => name !== undefined && !remove ? [name.toLowerCase()] : []),
+    ])
+    const candidates = [...readWorkbookDefinedNameKeys(workbookXml)].filter(
+      (name) => !previousNames.has(name) || changedTables.has(name),
+    )
+    if (candidates.length > 0) {
+      const tableNames = await collectExistingTableNames(pkg)
+      const conflict = candidates.find((name) => tableNames.has(name))
+      if (conflict !== undefined) {
+        throw new DefinedNameError(`The name "${conflict}" conflicts with a table in the workbook.`)
+      }
+    }
   }
 
   if (workbookProtectionState !== null) {
