@@ -59,6 +59,30 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('declares the relationship namespace for new worksheets when r is bound to an extension', async () => {
+    const rels = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    for (const scope of ['workbook', 'sheets']) {
+      const bytes = await workbook({
+        [workbookPath]: (xml) => xml.replace('r:id="rId1"', 'link:id="rId1" r:tag="preserve"')
+          .replace('<workbook ', '<workbook xmlns:link="' + rels + '" ')
+          .replace(scope === 'workbook' ? 'xmlns:r="' + rels + '"' : '<sheets>',
+            scope === 'workbook' ? 'xmlns:r="urn:example:extension"' : '<sheets xmlns:r="urn:example:extension">'),
+      })
+      const newSheetId = 'local-tab'
+      const request = {
+        ...sheetsSaveRequest(newSheetId, [{ row: 0, column: 0, value: 42, writeValue: true }]),
+        sheetOps: [{ kind: 'add-sheet', sheetId: newSheetId, name: 'Added' }],
+        sheetOrder: ['sheet-1', newSheetId],
+      }
+      const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+      const xml = await (await JSZip.loadAsync(saved)).file(workbookPath).async('string')
+      assert.ok(xml.includes('xmlns:r="urn:example:extension"'))
+      assert.ok(xml.includes('r:tag="preserve"'))
+      assert.match(xml, /<sheet\b[^>]*name="Added"[^>]*xmlns:r="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships"/)
+      assert.deepEqual((await native.inspect(saved)).sheets.map(({ name }) => name), ['Acceptance', 'Added'])
+    }
+  })
+
   await t.test('registers newly created styles and spill metadata after XML comments', async () => {
     const relsPath = 'xl/_rels/workbook.xml.rels'
     const typesPath = '[Content_Types].xml'

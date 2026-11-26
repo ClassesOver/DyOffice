@@ -5,9 +5,9 @@
 import { appendRelationshipRecord, decodeAttribute, findRelationshipsRoot, nextFreeRelationshipId } from './xlsx-sheets.ts'
 import {
   OFFICE_RELATIONSHIPS_NAMESPACE,
-  isOfficeRelationshipNamespace,
   readRelationshipId,
   readRootStartTag,
+  relationshipNamespaceOverride,
 } from './xlsx-namespace.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
 import { childElements } from './xlsx-style-entries.ts'
@@ -62,10 +62,7 @@ export function applyHyperlinkEdits(
   const section = findWorksheetHyperlinkSection(worksheetXml)
   const element = section?.element
   const parent = element?.opening ?? ''
-  const inheritedNamespace = readWorksheetTagAttribute(parent, 'xmlns:r') ?? readWorksheetTagAttribute(root, 'xmlns:r')
-  const relationshipBinding = inheritedNamespace !== undefined && !isOfficeRelationshipNamespace(inheritedNamespace)
-    ? ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"`
-    : ''
+  const relationshipBinding = relationshipNamespaceOverride(parent, root)
   let body = element?.inner ?? ''
 
   const dropRel = (relId: string): void => {

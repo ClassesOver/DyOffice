@@ -11,7 +11,7 @@ import {
 } from './xlsx-structure.ts'
 import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-references.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
-import { ensureRelationshipNamespace, readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
+import { ensureRelationshipNamespace, readRelationshipId, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
@@ -473,6 +473,7 @@ export function applySheetPlanToWorkbookXml(
   const sheetList = workbookSection(workbookXml, 'sheets')
   if (!sheetList) throw new SheetEditError('The workbook has no sheet list.')
   const sheetPrefix = prefixOf(sheetList.section.name)
+  const relationshipBinding = relationshipNamespaceOverride(sheetList.section.opening, readRootStartTag(workbookXml))
   const elements = parseSheetElements(workbookXml)
   const originalNames = elements.map((element) => element.name)
   const renameByOriginal = new Map(plan.renames.map((rename) => [rename.sheetName, rename.newName]))
@@ -489,7 +490,7 @@ export function applySheetPlanToWorkbookXml(
   }
   for (const addition of additions) {
     finalElements.set(addition.name, {
-      xml: `<${sheetPrefix}sheet name="${escapeXmlAttribute(addition.name)}" sheetId="${addition.sheetId}" r:id="${addition.relationshipId}"/>`,
+      xml: `<${sheetPrefix}sheet name="${escapeXmlAttribute(addition.name)}" sheetId="${addition.sheetId}"${relationshipBinding} r:id="${addition.relationshipId}"/>`,
       hidden: false,
     })
   }

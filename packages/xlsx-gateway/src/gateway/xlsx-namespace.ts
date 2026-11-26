@@ -34,8 +34,18 @@ export function readRootStartTag(xml: string): string {
   return rootOpeningTag(xml)?.[0] ?? ''
 }
 
-export function isOfficeRelationshipNamespace(uri: string | undefined): boolean {
+function isOfficeRelationshipNamespace(uri: string | undefined): boolean {
   return uri === OFFICE_RELATIONSHIPS_NAMESPACE || uri === STRICT_OFFICE_RELATIONSHIPS_NAMESPACE
+}
+
+export function relationshipNamespaceOverride(parent: string, root: string): string {
+  for (const opening of [parent, root]) {
+    for (const [, name, double, single] of opening.matchAll(ATTRIBUTES)) {
+      if (name !== 'xmlns:r') continue
+      return isOfficeRelationshipNamespace(double ?? single) ? '' : ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"`
+    }
+  }
+  return ''
 }
 
 export function readRelationshipId(opening: string, parent: string, root: string): string | undefined {
