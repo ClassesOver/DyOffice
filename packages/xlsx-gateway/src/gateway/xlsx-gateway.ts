@@ -80,7 +80,7 @@ import {
   hasUneditableAutoFilter,
   FilterEditError,
 } from './xlsx-filter.ts'
-import { normalizeOoxmlPartPrefix, readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
+import { normalizeOoxmlPartPrefix, readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { decodeCellText, elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
 import { readWorkbookPartPath } from './xlsx-workbook-parts.ts'
@@ -1333,7 +1333,6 @@ export async function planCellEditsToXlsx(
     ...cfStates.map((state) => state.sheetName),
     ...dvStates.map((state) => state.sheetName),
     ...sheetProtections.map((state) => state.sheetName),
-    ...tabColorStates.map((state) => state.sheetName),
     ...pageSetupStates.map((state) => state.sheetName),
     ...protectedRangeStates.map((state) => state.sheetName),
   ])
@@ -1344,6 +1343,9 @@ export async function planCellEditsToXlsx(
       additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName))
     worksheetPaths.set(sheetName, worksheetPath)
     const worksheetXml = await pkg.readText(worksheetPath)
+    if (readRootOpening(worksheetXml)?.name.split(':').at(-1) === 'chartsheet') {
+      throw new Error(`Cell and grid edits are unavailable on chart sheet "${sheetName}".`)
+    }
     // Every later anchor lookup would report a bare "no sheetData"; name the
     // part and what was read so an empty or truncated extraction is visible.
     if (!worksheetXml.includes('<sheetData')) {
@@ -1700,12 +1702,6 @@ export async function planCellEditsToXlsx(
     worksheetXmls.set(state.sheetName, applySheetProtection(worksheetXml, state))
   }
 
-  for (const state of tabColorStates) {
-    const worksheetXml = worksheetXmls.get(state.sheetName)
-    if (worksheetXml === undefined) continue
-    worksheetXmls.set(state.sheetName, applyTabColor(worksheetXml, state.color))
-  }
-
   // Allow-edit ranges are declarative snapshots, like filters.
   for (const state of protectedRangeStates) {
     const worksheetXml = worksheetXmls.get(state.sheetName)
@@ -1734,6 +1730,17 @@ export async function planCellEditsToXlsx(
       pkg.write(worksheetPath, worksheetXml)
     }
     touchedEntries.add(worksheetPath)
+  }
+
+  // Tab colors also apply to chart sheets, which have no sheetData.
+  for (const { sheetName, color } of tabColorStates) {
+    const path = additionPaths.get(sheetName) ?? await resolveWorksheetPath(pkg, sheetName)
+    const xml = await pkg.readText(path)
+    const updated = applyTabColor(xml, color)
+    if (updated !== xml) {
+      pkg.write(path, updated)
+      touchedEntries.add(path)
+    }
   }
   if (stylesheet?.changed) {
     pkg.write(stylesPath, stylesheet.serialize())

@@ -14,7 +14,7 @@ import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {findWorksheetHyperlinkSection,hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
-import {isElement,scopedChildren,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import {isElement,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import {inferWorksheetAddresses,readDefinedNameText,readWorksheetTagAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
@@ -829,10 +829,20 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
     styleIndexes:Map<string,number>; imageCells:ReturnType<typeof readSheetCellImages>; headerFooterMedia:Map<string,string>
   }>()
   for (const [sheetIndex,sheet] of parseSheetElements(await text(workbookPath)).entries()) {
-    const rel = workbookRels.find(item => relationshipIdsMatch(item.id, sheet.relationshipId) && !item.external && item.type.endsWith('/worksheet'))
+    const rel = workbookRels.find(item => relationshipIdsMatch(item.id, sheet.relationshipId) && !item.external && /\/(worksheet|chartsheet)$/.test(item.type))
     if (!rel) continue
     const path = resolveRelTarget(workbookPath, rel.target)
-    const xml = inferWorksheetAddresses(normalizeOoxmlPartPrefix(await text(path)))
+    const sheetXml = normalizeOoxmlPartPrefix(await text(path))
+    if (rel.type.endsWith('/chartsheet')) {
+      const root = spreadsheetSheetRoot(sheetXml)
+      const properties = root && scopedChildren(root).find(node => isElement(node,'sheetPr',root.namespace))
+      const tab = properties && scopedChildren(properties).find(node => isElement(node,'tabColor',properties.namespace))
+      const color = tab && Object.fromEntries([...tab.attributes].map(([name,value]) => [`@_${name}`,value]))
+      sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,styleIndexes:new Map(),imageCells:undefined,
+        headerFooterMedia:new Map(),view:{...EMPTY_SHEET_METADATA.view,tabColor:resolveColor(color).rgb??null}})
+      continue
+    }
+    const xml = inferWorksheetAddresses(sheetXml)
     const linkTargets=new Map<string,string>()
     if(xml.includes('hyperlink')){
       const linkRelationships=metadataXml.parse(await text(relsPathFor(path))).Relationships?.Relationship??[]

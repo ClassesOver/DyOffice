@@ -43,9 +43,14 @@ export function withNamespaces(element: ChildElement, inherited: Attributes): Sc
 }
 
 export function worksheetRoot(xml: string): ScopedElement | undefined {
+  const root = spreadsheetSheetRoot(xml)
+  return root?.local === 'worksheet' ? root : undefined
+}
+
+export function spreadsheetSheetRoot(xml: string): ScopedElement | undefined {
   const node = childElements(xml)[0]
   const root = node && withNamespaces(node, new Map([['', '']]))
-  return root?.local === 'worksheet' &&
+  return (root?.local === 'worksheet' || root?.local === 'chartsheet') &&
     root.namespace !== undefined &&
     WORKSHEET_NAMESPACES.has(root.namespace)
     ? root

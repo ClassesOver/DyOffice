@@ -34,6 +34,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   const workbookRels = 'xl/_rels/workbook.xml.rels'
   const chartSheet = 'xl/chartsheets/sheet1.xml'
   const chartSheetRels = 'xl/chartsheets/_rels/sheet1.xml.rels'
+  const extension = '<extLst><ext uri="urn:example"><sheetPr xmlns="urn:example"><tabColor rgb="FF999999"/></sheetPr><sheetData xmlns="urn:example"/></ext></extLst>'
   zip.file(workbook, (await text(workbook))
     .replace('<workbookView/>', '<workbookView activeTab="1"/>')
     .replace('</sheets>', '<sheet name="Chart" sheetId="9" r:id="rId9"/></sheets>'))
@@ -42,7 +43,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   zip.file('[Content_Types].xml', (await text('[Content_Types].xml')).replace('</Types>',
     `<Override PartName="/${chartSheet}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>`))
   zip.file(chartSheet, `<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    xmlns:r="${relationships.slice(0, -1)}"><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/></chartsheet>`)
+    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/>${extension}</chartsheet>`)
   zip.file(chartSheetRels, await text('xl/worksheets/_rels/sheet1.xml.rels'))
   const worksheet = 'xl/worksheets/sheet1.xml'
   zip.file(worksheet, (await text(worksheet)).replace(/<drawing\b[^>]*\/>/, ''))
@@ -61,27 +62,46 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
   }, { enabled: true })
   t.after(() => runtime.close())
-  const inspect = async (input) => {
+  const inspect = async (input, tabColor) => {
     const metadata = await runtime.sheetsNative.inspect(input)
     assert.deepEqual(metadata.sheets.map(({ name }) => name), ['Acceptance', 'Chart'])
     assert.equal(metadata.sheets[metadata.activeTab].id, 'sheet-9')
+    assert.equal(metadata.sheets[metadata.activeTab].tabColor, tabColor)
     const visual = metadata.visuals.find(({ sheetId }) => sheetId === 'sheet-9')
     assert.equal(visual?.kind, 'chart')
     assert.equal(visual.chartPath, chartPath)
     assert.equal(visual.anchor.toColumnOffset, 9304587)
     return visual.chart
   }
-  const original = await inspect(bytes)
+  const original = await inspect(bytes, '#112233')
   const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 7, value: 42, writeValue: true }])
   request.chartEdits = [{ chartPath, title: 'Chart sheet revenue' }]
-  const plan = await runtime.sheetsWorkbookPlanner(bytes, request)
-  const saved = (await runtime.sheetsNative.savePlan(bytes, plan)).bytes
-  const chart = await inspect(saved)
+  request.sheetOps = [
+    { kind: 'set-sheet-tab-color', sheetId: 'sheet-9', color: '#654321' },
+    { kind: 'set-sheet-tab-color', sheetId: 'sheet-1', color: '#123456' },
+  ]
+  const save = async (input, edit) =>
+    (await runtime.sheetsNative.savePlan(input, await runtime.sheetsWorkbookPlanner(input, edit))).bytes
+  const saved = await save(bytes, request)
+  const chart = await inspect(saved, '#654321')
+  assert.equal((await runtime.sheetsNative.inspect(saved)).sheets[0].tabColor, '#123456')
   assert.equal(chart.title, 'Chart sheet revenue')
   assert.deepEqual(chart.series, original.series)
   const range = await runtime.sheetsNative.readRange(saved, 'Acceptance',
     { startRow: 0, endRow: 0, startColumn: 7, endColumn: 7 })
   assert.equal(range.cells[0].value, 42)
+  const clear = sheetsSaveRequest('sheet-9', [])
+  clear.sheetOps = [{ kind: 'set-sheet-tab-color', sheetId: 'sheet-9', color: null }]
+  const cleared = await save(saved, clear)
+  assert.equal((await inspect(cleared, null)).title, 'Chart sheet revenue')
+  const xml = await textOf(await JSZip.loadAsync(cleared))(chartSheet)
+  assert.ok(xml.includes(extension))
+  assert.ok(!xml.replace(extension, '').includes('<sheetData'))
+  const recolor = sheetsSaveRequest('sheet-9', [])
+  recolor.sheetOps = [{ kind: 'set-sheet-tab-color', sheetId: 'sheet-9', color: '#ABCDEF' }]
+  assert.equal((await inspect(await save(cleared, recolor), '#ABCDEF')).title, 'Chart sheet revenue')
+  const cellEdit = sheetsSaveRequest('sheet-9', [{ row: 0, column: 0, value: 'invalid', writeValue: true }])
+  await assert.rejects(save(cleared, cellEdit), /Invalid workbook input/)
 })
 
 test('imports the acceptance chart with a usable anchor, series cache, and editable source reference', async () => {
