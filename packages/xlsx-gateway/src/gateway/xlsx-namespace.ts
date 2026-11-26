@@ -13,7 +13,7 @@ const NORMALIZABLE_NAMESPACES = new Set([
 ])
 
 const SPREADSHEETML_NAMESPACE = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-const OFFICE_RELATIONSHIPS_NAMESPACE =
+export const OFFICE_RELATIONSHIPS_NAMESPACE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const STRICT_OFFICE_RELATIONSHIPS_NAMESPACE = 'http://purl.oclc.org/ooxml/officeDocument/relationships'
 
@@ -34,6 +34,10 @@ export function readRootStartTag(xml: string): string {
   return rootOpeningTag(xml)?.[0] ?? ''
 }
 
+export function isOfficeRelationshipNamespace(uri: string | undefined): boolean {
+  return uri === OFFICE_RELATIONSHIPS_NAMESPACE || uri === STRICT_OFFICE_RELATIONSHIPS_NAMESPACE
+}
+
 export function readRelationshipId(opening: string, parent: string, root: string): string | undefined {
   const bindings = new Map<string, string>()
   for (const tag of [root, parent, opening]) {
@@ -49,7 +53,7 @@ export function readRelationshipId(opening: string, parent: string, root: string
     const alias = name.slice(0, -':id'.length)
     const uri = bindings.get(alias)
     const value = double ?? single
-    if (uri === OFFICE_RELATIONSHIPS_NAMESPACE || uri === STRICT_OFFICE_RELATIONSHIPS_NAMESPACE) {
+    if (isOfficeRelationshipNamespace(uri)) {
       if (id !== undefined) return undefined
       id = value
     } else if (uri === undefined && (unbound === undefined || alias === 'r')) {

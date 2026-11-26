@@ -214,6 +214,31 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     assert.deepEqual(await links(saved), [{ row: 0, column: 1, target }])
   })
 
+  await t.test('binds new external hyperlinks when the root r prefix belongs to an extension', async () => {
+    const relationships = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const target = 'https://example.com/new-link'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const bytes = await workbook({
+      [sheetPath]: `<worksheet xmlns="${spreadsheet}" xmlns:r="urn:example:extension">` +
+        '<sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData>' +
+        '<extLst><ext uri="urn:example:extension"><r:payload/></ext></extLst></worksheet>',
+    })
+    const saveLink = async (input, value) => {
+      const request = { ...sheetsSaveRequest('sheet-1', []), hyperlinkEdits: [{ sheetId: 'sheet-1', row: 0, column: 0, target: value }] }
+      return (await native.savePlan(input, await runtime.sheetsWorkbookPlanner(input, request))).bytes
+    }
+    const saved = await saveLink(bytes, target)
+    const xml = await (await JSZip.loadAsync(saved)).file(sheetPath).async('string')
+    assert.ok(xml.includes('xmlns:r="urn:example:extension"'))
+    assert.ok(xml.includes('<r:payload/>'))
+    assert.ok(xml.includes(`<hyperlink ref="A1" xmlns:r="${relationships}" r:id=`))
+    const { hyperlinks } = await native.readRange(saved, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    assert.deepEqual(hyperlinks, [{ row: 0, column: 0, target }])
+    const removed = await saveLink(saved, null)
+    const rels = await (await JSZip.loadAsync(removed)).file(relsPath).async('string')
+    assert.ok(!rels.includes(target))
+  })
+
   await t.test('keeps literal worksheet text through bulk fills and row inserts', async t => {
     const literal = 'Example </row><row r="97"><c r="A97"> text'
     const comment = '<!-- <row r="99"/> -->'

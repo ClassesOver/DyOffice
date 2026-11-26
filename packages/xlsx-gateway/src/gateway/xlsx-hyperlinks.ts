@@ -3,7 +3,12 @@
 /// r:id; internal anchors use the `location` attribute and need no rel.
 
 import { escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets.ts'
-import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
+import {
+  OFFICE_RELATIONSHIPS_NAMESPACE,
+  isOfficeRelationshipNamespace,
+  readRelationshipId,
+  readRootStartTag,
+} from './xlsx-namespace.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { readWorksheetTagAttribute } from './xlsx-structure.ts'
@@ -29,8 +34,7 @@ export interface HyperlinkPatch {
   readonly relsChanged: boolean
 }
 
-const HYPERLINK_REL_TYPE =
-  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+const HYPERLINK_REL_TYPE = `${OFFICE_RELATIONSHIPS_NAMESPACE}/hyperlink`
 const EMPTY_RELS =
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
@@ -46,6 +50,11 @@ export function applyHyperlinkEdits(
   const root = readRootStartTag(worksheetXml)
   const section = findRootChild(worksheetXml, 'worksheet', 'hyperlinks')
   const element = section ? childElements(worksheetXml.slice(section.start, section.end))[0] : undefined
+  const parent = element?.opening ?? ''
+  const inheritedNamespace = readWorksheetTagAttribute(parent, 'xmlns:r') ?? readWorksheetTagAttribute(root, 'xmlns:r')
+  const relationshipBinding = inheritedNamespace !== undefined && !isOfficeRelationshipNamespace(inheritedNamespace)
+    ? ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"`
+    : ''
   let body = element?.inner ?? ''
 
   const dropRel = (relId: string): void => {
@@ -92,7 +101,6 @@ export function applyHyperlinkEdits(
     const existing = links.find((link) => readWorksheetTagAttribute(link.opening, 'ref') === ref)
     if (existing) {
       body = body.slice(0, existing.start) + body.slice(existing.start + existing.xml.length)
-      const parent = element?.opening ?? ''
       const relId = readRelationshipId(existing.opening, parent, root)
       if (relId !== undefined && !links.some((link) => link !== existing &&
         readRelationshipId(link.opening, parent, root) === relId)) dropRel(relId)
@@ -101,7 +109,7 @@ export function applyHyperlinkEdits(
 
     body += edit.target.startsWith('#')
       ? `<hyperlink ref="${ref}" location="${escapeXmlAttribute(edit.target.slice(1))}"/>`
-      : `<hyperlink ref="${ref}" r:id="${allocateRel(edit.target)}"/>`
+      : `<hyperlink ref="${ref}"${relationshipBinding} r:id="${allocateRel(edit.target)}"/>`
   }
 
   let xml = worksheetXml

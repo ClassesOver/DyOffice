@@ -108,6 +108,20 @@ describe('applyHyperlinkEdits', () => {
     expect(last.relsXml).not.toContain('rId3')
   })
 
+  it('binds new external links locally when the inherited r prefix belongs to an extension', () => {
+    const relationships = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const foreign = 'xmlns:r="urn:extension"'
+    const rootBinding = WORKSHEET.replace(`xmlns:r="${relationships}"`, foreign)
+    const sectionBinding = WORKSHEET.replace('<pageMargins', `<hyperlinks ${foreign}/><pageMargins`)
+    for (const xml of [rootBinding, sectionBinding]) {
+      const patch = applyHyperlinkEdits(xml, null, [{ row: 0, column: 0, target: 'https://new.example' }])
+      expect(patch.worksheetXml).toContain(foreign)
+      expect(patch.worksheetXml).toContain(`<hyperlink ref="A1" xmlns:r="${relationships}" r:id="rId1"/>`)
+      const removed = applyHyperlinkEdits(patch.worksheetXml, patch.relsXml, [{ row: 0, column: 0, target: null }])
+      expect(removed.relsXml).not.toContain('https://new.example')
+    }
+  })
+
   it('reclaims and allocates ids in a rels part that uses single quotes', () => {
     // rId1 is taken by a drawing and rId3 by the link being replaced; both are
     // spelled with single quotes, which the id scan used to miss entirely.
