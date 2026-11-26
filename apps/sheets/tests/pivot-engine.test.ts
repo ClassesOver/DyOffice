@@ -152,6 +152,29 @@ describe('recomputePivotData', () => {
     ])
   })
 
+  it('preserves member indexes when subtotal items precede explicit data items', () => {
+    const pivot = PIVOT_XML
+      .replace('<item x="0"/><item x="1"/><item t="default"/>',
+        '<item t="default"/><item t="data" x="0"/><item t="data" x="1"/>')
+      .replace('<rowItems count="3"><i><x/></i><i><x v="1"/></i>',
+        '<rowItems count="3"><i><x v="1"/></i><i><x v="2"/></i>')
+    const definition = parsePivotDefinition(pivot, CACHE_XML)
+    expect(definition.fieldItems[0]?.map(({ x }) => x)).toEqual([null, 0, 1])
+    expect(recomputePivotData(definition, SOURCE).data).toEqual([
+      [15, 20, 35],
+      [30, 41, 71],
+      [45, 61, 106],
+    ])
+  })
+
+  it('recognizes the word-form hidden flag on explicit data items', () => {
+    const pivot = PIVOT_XML.replace('<item x="0"/>', '<item x="0" t="data" h="true"/>')
+    const definition = parsePivotDefinition(pivot, CACHE_XML)
+    expect(definition.fieldItems[0]?.map(({ x, hidden }) => [x, hidden]))
+      .toEqual([[0, true], [1, false]])
+    expect(recomputePivotData(definition, SOURCE).data.at(-1)).toEqual([30, 41, 71])
+  })
+
   it('fails closed when the source grows a new category', () => {
     const definition = parsePivotDefinition(PIVOT_XML, CACHE_XML)
     expect(() => recomputePivotData(definition, [...SOURCE, ['North', 'A', 9]])).toThrow(

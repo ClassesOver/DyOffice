@@ -163,6 +163,22 @@ function parseSharedItems(cacheField: ScopedElement): PivotSharedItem[] {
   return items
 }
 
+function readFieldItems(field: ScopedElement): PivotFieldItem[] {
+  const source = elements(firstElement(field, 'items'), 'item')
+  let lastData = -1
+  const items = source.map((item, index) => {
+    const type = attr(item, 't')
+    if (type !== null && type !== 'data') return { x: null, hidden: false }
+    lastData = index
+    const shared = attr(item, 'x')
+    const hidden = attr(item, 'h')
+    return { x: shared === null ? null : Number(shared), hidden: hidden === '1' || hidden === 'true' }
+  })
+  // Row, column and report-filter selections address positions in the XML
+  // list. Non-data items before the last member must leave a slot.
+  return items.slice(0, lastData + 1)
+}
+
 function parseLayoutLines(containerXml: ScopedElement | null, axisFieldCount: number): PivotLayoutLine[] {
   if (!containerXml) {
     // No axis fields: the implicit single line covers everything.
@@ -498,16 +514,7 @@ export function parsePivotDefinition(
 
   const pivotFieldsBlock = firstElement(table, 'pivotFields')
   const pivotFields = elements(pivotFieldsBlock, 'pivotField')
-  const fieldItems: PivotFieldItem[][] = pivotFields.map((fieldXml) => {
-    const itemsBlock = firstElement(fieldXml, 'items')
-    if (!itemsBlock) return []
-    return elements(itemsBlock, 'item')
-      .filter((item) => attr(item, 't') === null)
-      .map((item) => ({
-        x: attr(item, 'x') === null ? null : Number(attr(item, 'x')),
-        hidden: attr(item, 'h') === '1',
-      }))
-  })
+  const fieldItems = pivotFields.map(readFieldItems)
 
   const readAxis = (tag: string): number[] => {
     const block = firstElement(table, tag)
@@ -561,7 +568,7 @@ export function parsePivotDefinition(
             item === null ||
             !Number.isInteger(item) ||
             item < 0 ||
-            fieldItems[parsedField!]?.[item] === undefined
+            fieldItems[parsedField!]?.[item]?.x == null
           ) {
             unsupported.push(
               `the base item of data field "${dataFieldName}" does not support recompute`,

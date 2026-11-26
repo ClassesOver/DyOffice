@@ -431,13 +431,17 @@ test(
       })
       const before = (await inspect(withPivot)).sheets[1].pivotTables[0]
       const hiddenMember = await editPart(withPivot, before.path, (xml) => xml
-        .replace('<item x="0"/>', '<item x="0" h="1"/>')
-        .replace('<rowItems count="3"><i><x/></i>', '<rowItems count="2">')
+        .replace('<item x="0"/><item x="1"/><item t="default"/>',
+          '<item x="0" t="data" h="true"/><item t="default"/><item x="1" t="data"/>')
+        .replace('<rowItems count="3"><i><x/></i><i><x v="1"/></i>',
+          '<rowItems count="2"><i><x v="2"/></i>')
         .replace('</pivotTableDefinition>',
           '<filters><filter fld="0" type="captionContains" stringValue1="t"/></filters></pivotTableDefinition>'))
       const filteredPivot = await runtime.sheetsPackageReader(hiddenMember, undefined, {
         path: before.path, cachePath: before.cachePath,
       })
+      assert.deepEqual(filteredPivot.fieldItems[0].map(({ x, hidden }) => [x, hidden]),
+        [[0, true], [null, false], [1, false]])
       const dataRows = grid.slice(0, 4)
       const refreshedLayout = growPivotDefinition(filteredPivot, dataRows)
       assert.equal(refreshedLayout.grown, false)
