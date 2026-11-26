@@ -60,13 +60,12 @@ pub(crate) fn read_sheet_declarations(
         let relationship_id = sheet
             .attribute((OFFICE_RELATIONSHIPS, "id"))
             .or_else(|| sheet.attribute((STRICT_OFFICE_RELATIONSHIPS, "id")))
-            .or_else(|| sheet.attribute("id"))
-            .ok_or_else(|| SidecarError::Workbook("Sheet has no relationship id.".into()))?;
+            .or_else(|| sheet.attribute("id"));
         let state = sheet.attribute("state");
         sheets.push(SheetDeclaration {
             name: name.to_owned(),
             sheet_id: sheet_id.to_owned(),
-            relationship_id: relationship_id.to_owned(),
+            relationship_id: relationship_id.map(str::to_owned),
             hidden: matches!(state, Some("hidden" | "veryHidden")),
             very_hidden: state == Some("veryHidden"),
         });

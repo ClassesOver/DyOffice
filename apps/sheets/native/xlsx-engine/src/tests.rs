@@ -1595,6 +1595,71 @@ fn empty_shared_string_value_keeps_sheet_readable() {
 }
 
 #[test]
+fn workbook_skips_missing_worksheet_links_and_remaps_sheet_metadata() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                <bookViews><workbookView activeTab="4"/></bookViews>
+                <sheets>
+                    <sheet name="NoLink" sheetId="10"/>
+                    <sheet name="NoRelationship" sheetId="11" r:id="rId11"/>
+                    <sheet name="First" sheetId="1" r:id="rId1"/>
+                    <sheet name="NoPart" sheetId="12" r:id="rId12"/>
+                    <sheet name="Last" sheetId="2" r:id="rId2"/>
+                </sheets>
+                <definedNames>
+                    <definedName name="Missing" localSheetId="3">NoPart!$A$1</definedName>
+                    <definedName name="Scoped" localSheetId="4">Last!$A$1</definedName>
+                    <definedName name="_xlnm.Print_Area" localSheetId="4">Last!$A$1:$B$2</definedName>
+                    <definedName name="Global">First!$A$1</definedName>
+                </definedNames>
+            </workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships>
+                <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+                <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
+                <Relationship Id="rId12" Target="worksheets/missing.xml"/>
+            </Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            "<worksheet><sheetData/></worksheet>",
+        ),
+        (
+            "xl/worksheets/sheet2.xml",
+            "<worksheet><sheetData/></worksheet>",
+        ),
+    ]);
+    let metadata = WorkbookSessions::new().open(&path).unwrap();
+    assert_eq!(
+        metadata
+            .sheets
+            .iter()
+            .map(|sheet| sheet.id.as_str())
+            .collect::<Vec<_>>(),
+        ["sheet-1", "sheet-2"]
+    );
+    assert_eq!(metadata.active_tab, 1);
+    assert!(!metadata.sheets[0].has_scoped_defined_names);
+    assert!(metadata.sheets[1].has_scoped_defined_names);
+    assert_eq!(
+        metadata.sheets[1].print_area.as_deref(),
+        Some("Last!$A$1:$B$2")
+    );
+    assert_eq!(
+        metadata
+            .defined_names
+            .iter()
+            .map(|name| (name.name.as_str(), name.sheet_index))
+            .collect::<Vec<_>>(),
+        [("Scoped", Some(1)), ("Global", None)]
+    );
+}
+
+#[test]
 fn workbook_reads_only_declared_names_and_valid_sheet_scopes() {
     let (_dir, path) = open_fixture(&[
         (

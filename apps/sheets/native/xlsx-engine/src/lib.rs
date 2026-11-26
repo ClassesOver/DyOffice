@@ -300,7 +300,7 @@ impl WorkbookSessions {
             (declarations, names)
         };
         let (declarations, workbook_protection, active_tab, date_1904) = sheet_declarations;
-        let (defined_names, print_names, scoped_sheets) = workbook_names;
+        let (mut defined_names, mut print_names, scoped_sheets) = workbook_names;
         let (styles, dxf_styles, normal_font_name) = visuals::read_styles(
             &mut archive,
             &relationships.styles,
@@ -319,26 +319,30 @@ impl WorkbookSessions {
         let mut runtimes = Vec::with_capacity(declarations.len());
         let mut visual_sources = Vec::with_capacity(declarations.len());
         let mut sheet_names = Vec::with_capacity(declarations.len());
+        // Workbook metadata uses declaration indexes, even when a worksheet part is missing.
+        let mut readable_indexes = vec![None; declarations.len()];
         let mut stored_cell_budget = STORED_CELL_COUNT_BUDGET;
 
-        for declaration in declarations {
+        for (declared_index, declaration) in declarations.into_iter().enumerate() {
             // One poll per worksheet rather than between reads: a
             // many-sheet workbook spends most of its open in this loop, and
             // a poll per statement would cost more than it saves.
             if cancelled.load(Ordering::Acquire) {
                 return Err(SidecarError::cancelled());
             }
-            let target = relationships
-                .targets
-                .get(&declaration.relationship_id)
-                .ok_or_else(|| {
-                    SidecarError::Workbook(format!(
-                        "Missing worksheet relationship {}.",
-                        declaration.relationship_id
-                    ))
-                })?;
+            let Some(target) = declaration
+                .relationship_id
+                .as_ref()
+                .and_then(|id| relationships.targets.get(id))
+            else {
+                continue;
+            };
             let worksheet_path = normalize_worksheet_path(target)?;
-            let source_xml_bytes = zip_entry(&mut archive, &worksheet_path)?.size();
+            let source_xml_bytes = match zip_entry(&mut archive, &worksheet_path) {
+                Ok(entry) => entry.size(),
+                Err(zip::result::ZipError::FileNotFound) => continue,
+                Err(error) => return Err(error.into()),
+            };
             let dimensions = read_sheet_dimensions(
                 &mut archive,
                 &worksheet_path,
@@ -432,6 +436,8 @@ impl WorkbookSessions {
                 row_count = row_count.max(table.range.end_row + 1);
                 column_count = column_count.max(table.range.end_column + 1);
             }
+            readable_indexes[declared_index] = Some(sheets.len());
+            let print = print_names.remove(&declared_index).unwrap_or_default();
             sheet_names.push((declaration.name.clone(), worksheet_path.clone()));
             sheets.push(SheetMetadata {
                 id: id.clone(),
@@ -466,9 +472,9 @@ impl WorkbookSessions {
                 pivot_ranges,
                 pivot_tables,
                 sparklines,
-                print_area: None,
-                print_titles: None,
-                has_scoped_defined_names: false,
+                print_area: print.area,
+                print_titles: print.titles,
+                has_scoped_defined_names: scoped_sheets.contains(&declared_index),
                 cell_images,
             });
             visual_sources.push(SheetVisualSource {
@@ -500,13 +506,15 @@ impl WorkbookSessions {
             &color_context,
             &mut source_formats,
         )?;
-        for (sheet_index, sheet) in sheets.iter_mut().enumerate() {
-            if let Some(names) = print_names.get(&sheet_index) {
-                sheet.print_area = names.area.clone();
-                sheet.print_titles = names.titles.clone();
+        let readable_index = |index: usize| readable_indexes.get(index).copied().flatten();
+        let active_tab = readable_index(active_tab).unwrap_or(0);
+        defined_names.retain_mut(|name| {
+            if let Some(index) = name.sheet_index {
+                name.sheet_index = readable_index(index);
+                return name.sheet_index.is_some();
             }
-            sheet.has_scoped_defined_names = scoped_sheets.contains(&sheet_index);
-        }
+            true
+        });
 
         // Last boundary before the open touches the filesystem; past here the
         // only way to stop it is create_cache_directory's own poll.
@@ -1043,7 +1051,7 @@ struct SheetIndex {
 struct SheetDeclaration {
     name: String,
     sheet_id: String,
-    relationship_id: String,
+    relationship_id: Option<String>,
     hidden: bool,
     very_hidden: bool,
 }
