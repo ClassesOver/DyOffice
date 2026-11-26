@@ -291,8 +291,16 @@ impl WorkbookSessions {
             &relationships.shared_strings,
             &color_context,
         )?);
-        let (declarations, workbook_protection, active_tab, date_1904) =
-            read_sheet_declarations(&mut archive)?;
+        let (sheet_declarations, workbook_names) = {
+            let xml = read_zip_string(&mut archive, WORKBOOK_PATH)?;
+            let document = visuals::parse_document(&xml, WORKBOOK_PATH)?;
+            let workbook = document.root_element();
+            let declarations = read_sheet_declarations(workbook)?;
+            let names = read_defined_names(workbook, declarations.0.len());
+            (declarations, names)
+        };
+        let (declarations, workbook_protection, active_tab, date_1904) = sheet_declarations;
+        let (defined_names, print_names, scoped_sheets) = workbook_names;
         let (styles, dxf_styles, normal_font_name) = visuals::read_styles(
             &mut archive,
             &relationships.styles,
@@ -492,7 +500,6 @@ impl WorkbookSessions {
             &color_context,
             &mut source_formats,
         )?;
-        let (defined_names, print_names, scoped_sheets) = read_defined_names(&mut archive)?;
         for (sheet_index, sheet) in sheets.iter_mut().enumerate() {
             if let Some(names) = print_names.get(&sheet_index) {
                 sheet.print_area = names.area.clone();

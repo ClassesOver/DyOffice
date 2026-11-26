@@ -59,6 +59,27 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('ignores foreign workbook metadata when reading defined names and print areas', async () => {
+    const bytes = await workbook({
+      [workbookPath]: `<s:workbook xmlns:s="${spreadsheet}"
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        xmlns:ext="urn:example:extension">
+        <ext:workbookPr date1904="0"/><s:workbookPr date1904="1"/>
+        <s:sheets><s:sheet name="Acceptance" sheetId="1" r:id="rId1"/></s:sheets>
+        <s:definedNames>
+          <s:definedName name="Visible">"&#x6D4B;<![CDATA[&amp;]]>"</s:definedName>
+          <s:definedName name="_xlnm.Print_Area" localSheetId="0">Acceptance!$A$1:$B$2</s:definedName>
+          <ext:definedName name="_xlnm.Print_Area" localSheetId="0">Acceptance!$Z$99</ext:definedName>
+          <ext:definedName name="Foreign" localSheetId="0">Acceptance!$A$1</ext:definedName>
+        </s:definedNames>
+      </s:workbook>`,
+    })
+    const inspected = await native.inspect(bytes)
+    assert.equal(inspected.sheets[0].printArea, 'Acceptance!$A$1:$B$2')
+    assert.deepEqual(inspected.definedNames, [{ name: 'Visible', formula: '"测&amp;"' }])
+    assert.equal(inspected.date1904, true)
+  })
+
   await t.test('declares the relationship namespace for new worksheets when r is bound to an extension', async () => {
     const rels = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
     for (const scope of ['workbook', 'sheets']) {

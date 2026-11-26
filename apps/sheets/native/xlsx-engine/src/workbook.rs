@@ -3,13 +3,25 @@
 //! defined names.
 
 use super::*;
+use roxmltree::Node;
+
+pub(crate) const WORKBOOK_PATH: &str = "xl/workbook.xml";
 
 const OFFICE_RELATIONSHIPS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const STRICT_OFFICE_RELATIONSHIPS: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
 
+fn workbook_children<'a, 'input>(
+    parent: Node<'a, 'input>,
+    name: &'static str,
+) -> impl Iterator<Item = Node<'a, 'input>> {
+    parent.children().filter(move |node| {
+        node.has_tag_name(name) && node.tag_name().namespace() == parent.tag_name().namespace()
+    })
+}
+
 pub(crate) fn read_sheet_declarations(
-    archive: &mut ZipArchive<File>,
+    workbook: Node<'_, '_>,
 ) -> Result<
     (
         Vec<SheetDeclaration>,
@@ -19,19 +31,7 @@ pub(crate) fn read_sheet_declarations(
     ),
     SidecarError,
 > {
-    let path = "xl/workbook.xml";
-    let xml = read_zip_string(archive, path)?;
-    let document = visuals::parse_document(&xml, path)?;
-    let workbook = document.root_element();
-    let in_workbook_namespace = |node: &roxmltree::Node<'_, '_>| {
-        node.is_element() && node.tag_name().namespace() == workbook.tag_name().namespace()
-    };
-    let child = |name| {
-        workbook
-            .children()
-            .filter(in_workbook_namespace)
-            .find(|node| node.has_tag_name(name))
-    };
+    let child = |name| workbook_children(workbook, name).next();
     let enabled = |value| matches!(value, Some("1" | "true"));
     let date_1904 = enabled(child("workbookPr").and_then(|node| node.attribute("date1904")));
     let protection = child("workbookProtection").map(|node| WorkbookProtectionInfo {
@@ -41,9 +41,7 @@ pub(crate) fn read_sheet_declarations(
     });
     let active_tab = child("bookViews")
         .into_iter()
-        .flat_map(|node| node.children())
-        .filter(in_workbook_namespace)
-        .filter(|node| node.has_tag_name("workbookView"))
+        .flat_map(|node| workbook_children(node, "workbookView"))
         .filter_map(|node| node.attribute("activeTab"))
         .last()
         .and_then(|value| value.trim().parse().ok())
@@ -51,9 +49,7 @@ pub(crate) fn read_sheet_declarations(
     let mut sheets = Vec::new();
     for sheet in child("sheets")
         .into_iter()
-        .flat_map(|node| node.children())
-        .filter(in_workbook_namespace)
-        .filter(|node| node.has_tag_name("sheet"))
+        .flat_map(|node| workbook_children(node, "sheet"))
     {
         let name = sheet
             .attribute("name")
@@ -686,97 +682,64 @@ pub(crate) struct SheetPrintNames {
 }
 
 pub(crate) fn read_defined_names(
-    archive: &mut ZipArchive<File>,
-) -> Result<
-    (
-        Vec<DefinedName>,
-        HashMap<usize, SheetPrintNames>,
-        HashSet<usize>,
-    ),
-    SidecarError,
-> {
-    let xml = read_zip_string(archive, "xl/workbook.xml")?;
-    let mut reader = Reader::from_str(&xml);
+    workbook: Node<'_, '_>,
+    sheet_count: usize,
+) -> (
+    Vec<DefinedName>,
+    HashMap<usize, SheetPrintNames>,
+    HashSet<usize>,
+) {
     let mut names = Vec::new();
     let mut print_names: HashMap<usize, SheetPrintNames> = HashMap::new();
-    // Sheets with ANY localSheetId-scoped definedName, including hidden and
-    // _xlnm.* built-ins the editor never models — the save's duplicate guard
-    // matches the raw attribute, so the host's early gate must too.
-    let mut scoped_sheets: HashSet<usize> = HashSet::new();
-    struct Pending {
-        name: String,
-        hidden: bool,
-        sheet_index: Option<usize>,
-        formula: String,
-    }
-    let mut current: Option<Pending> = None;
-    loop {
-        match reader.read_event()? {
-            Event::Start(element) if element.local_name().as_ref() == b"definedName" => {
-                let name = attribute_value(&reader, &element, b"name")?.unwrap_or_default();
-                let hidden = attribute_value(&reader, &element, b"hidden")?
-                    .is_some_and(|value| value == "1" || value == "true");
-                let sheet_index = attribute_value(&reader, &element, b"localSheetId")?
-                    .and_then(|value| value.parse::<usize>().ok());
-                current = (!name.is_empty()).then_some(Pending {
-                    name,
-                    hidden,
-                    sheet_index,
-                    formula: String::new(),
-                });
+    let mut scoped_sheets = HashSet::new();
+    for defined in workbook_children(workbook, "definedNames")
+        .take(1)
+        .flat_map(|section| workbook_children(section, "definedName"))
+    {
+        let Some(name) = defined.attribute("name").filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let sheet_index = defined
+            .attribute("localSheetId")
+            .and_then(|index| index.trim().parse::<usize>().ok());
+        if let Some(index) = sheet_index {
+            if index >= sheet_count {
+                continue;
             }
-            Event::Text(text) => {
-                if let Some(defined) = &mut current {
-                    defined.formula.push_str(&decode_text(&text)?);
-                }
-            }
-            Event::CData(text) => {
-                if let Some(defined) = &mut current {
-                    defined.formula.push_str(&decode_cdata(&text)?);
-                }
-            }
-            Event::GeneralRef(reference) => {
-                if let Some(defined) = &mut current {
-                    defined.formula.push_str(&general_ref_text(&reference)?);
-                }
-            }
-            Event::End(element) if element.local_name().as_ref() == b"definedName" => {
-                if let Some(defined) = current.take() {
-                    if let Some(sheet_index) = defined.sheet_index {
-                        scoped_sheets.insert(sheet_index);
+            // Hidden and built-in names also affect duplication.
+            scoped_sheets.insert(index);
+        }
+        if defined.children().any(|node| node.is_element()) {
+            continue;
+        }
+        let formula: String = defined
+            .children()
+            .filter(|node| node.is_text())
+            .filter_map(|node| node.text())
+            .collect();
+        if formula.is_empty() {
+            continue;
+        }
+        if name.starts_with("_xlnm") {
+            // Print names feed PDF export. Other built-ins stay file-only.
+            if let Some(index) = sheet_index.filter(|_| formula.len() <= 2_000) {
+                match name {
+                    "_xlnm.Print_Area" => {
+                        print_names.entry(index).or_default().area = Some(formula)
                     }
-                    if defined.formula.is_empty() {
-                        continue;
+                    "_xlnm.Print_Titles" => {
+                        print_names.entry(index).or_default().titles = Some(formula);
                     }
-                    if defined.name.starts_with("_xlnm") {
-                        // Print names feed the PDF export; other _xlnm.*
-                        // built-ins stay file-only. Oversized refs exceed the
-                        // wire cap and are dropped.
-                        if defined.formula.len() > 2_000 {
-                            continue;
-                        }
-                        if let Some(sheet_index) = defined.sheet_index {
-                            let entry = print_names.entry(sheet_index).or_default();
-                            if defined.name == "_xlnm.Print_Area" {
-                                entry.area = Some(defined.formula);
-                            } else if defined.name == "_xlnm.Print_Titles" {
-                                entry.titles = Some(defined.formula);
-                            }
-                        }
-                    // Hidden names stay file-only (the save preserves them
-                    // verbatim; the editor never models them).
-                    } else if !defined.hidden {
-                        names.push(DefinedName {
-                            name: defined.name,
-                            formula: strip_future_function_markers(&defined.formula),
-                            sheet_index: defined.sheet_index,
-                        });
-                    }
+                    _ => {}
                 }
             }
-            Event::Eof => break,
-            _ => {}
+        } else if !matches!(defined.attribute("hidden"), Some("1" | "true")) {
+            names.push(DefinedName {
+                name: name.to_owned(),
+                formula: strip_future_function_markers(&formula),
+                sheet_index,
+            });
         }
     }
-    Ok((names, print_names, scoped_sheets))
+    (names, print_names, scoped_sheets)
 }

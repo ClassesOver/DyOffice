@@ -14,7 +14,8 @@ import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {findWorksheetHyperlinkSection,hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
-import {inferWorksheetAddresses,readWorksheetTagAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
+import {isElement,scopedChildren,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import {inferWorksheetAddresses,readDefinedNameText,readWorksheetTagAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
 import {readCustomTableStyles,readWorksheetTables,type TableDxf} from './xlsx-node-tables'
@@ -141,19 +142,16 @@ const attribute=(element:XmlElement|undefined,name:string)=>{
 const enabled=(value:string|undefined)=>value==='1'||value==='true'
 const disabled=(value:string|undefined)=>value==='0'||value==='false'
 
-type OrderedXml = {':@'?:XmlElement;'#text'?:string;'#cdata'?:OrderedXml[];[name:string]:unknown}
-const workbookMetadataXml=new XMLParser({
-  ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
-  preserveOrder:true,cdataPropName:'#cdata',
-})
 function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]){
-  const elements=(nodes:OrderedXml[],tag:string)=>nodes.flatMap(node=>
-    Array.isArray(node[tag])?[{attrs:node[':@'],children:node[tag] as OrderedXml[]}]:[])
-  const children=(nodes:OrderedXml[],tag:string)=>elements(nodes,tag)[0]?.children??[]
-  const workbook=children(workbookMetadataXml.parse(xml),'workbook')
-  const declarations=elements(children(workbook,'sheets'),'sheet').map(({attrs})=>({
-    name:attribute(attrs,'name'),
-    state:attribute(attrs,'state'),
+  const root=childElements(xml)[0]
+  const workbook=root&&withNamespaces(root,new Map())
+  const elements=(parent:ScopedElement|undefined,name:string)=>
+    parent?scopedChildren(parent).filter(node=>isElement(node,name,parent.namespace)):[]
+  const sections=workbook?.local==='workbook'?scopedChildren(workbook):[]
+  const section=(name:string)=>sections.find(node=>isElement(node,name,workbook?.namespace))
+  const declarations=elements(section('sheets'),'sheet').map(({attributes})=>({
+    name:attributes.get('name'),
+    state:attributes.get('state'),
   }))
   const visibility=new Map(declarations.flatMap(({name,state})=>name===undefined?[]:[[name,state]] as const))
   const readableIndexes=new Map(readableSheets.map(({name},index)=>[name,index]))
@@ -162,21 +160,21 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
     return name===undefined?undefined:readableIndexes.get(name)
   }
   let savedTab=0
-  for(const {attrs} of elements(children(workbook,'bookViews'),'workbookView')){
-    const activeTab=attribute(attrs,'activeTab')
+  for(const {attributes} of elements(section('bookViews'),'workbookView')){
+    const activeTab=attributes.get('activeTab')
     if(activeTab!==undefined)savedTab=parseWorkbookTabIndex(activeTab)??0
   }
   const definedNames:WorkbookFile['definedNames']=[]
   const scopedSheets=new Set<number>()
   const printNames=new Map<number,Pick<WorkbookFile['sheets'][number],'printArea'|'printTitles'>>()
-  for(const {attrs,children:body} of elements(children(workbook,'definedNames'),'definedName')){
-    const name=attribute(attrs,'name')
+  for(const {attributes,inner} of elements(section('definedNames'),'definedName')){
+    const name=attributes.get('name')
     if(!name)continue
-    const local=parseWorkbookTabIndex(attribute(attrs,'localSheetId'))
+    const local=parseWorkbookTabIndex(attributes.get('localSheetId'))
     const sheetIndex=local===undefined?undefined:readableIndex(local)
     if(local!==undefined&&sheetIndex===undefined)continue
     if(sheetIndex!==undefined)scopedSheets.add(sheetIndex)
-    const formula=body.map(node=>node['#cdata']?.[0]?.['#text']??decodeAttribute(node['#text']??'')).join('')
+    const formula=readDefinedNameText(inner)
     if(!formula)continue
     if(name==='_xlnm.Print_Area'||name==='_xlnm.Print_Titles'){
       if(sheetIndex!==undefined&&formula.length<=2_000){
@@ -187,14 +185,14 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
       }
       continue
     }
-    if(!name.startsWith('_xlnm')&&!enabled(attribute(attrs,'hidden'))){
+    if(!name.startsWith('_xlnm')&&!enabled(attributes.get('hidden'))){
       definedNames.push({name,formula:withoutFutureFunctionMarkers(formula),...(sheetIndex===undefined?{}:{sheetIndex})})
     }
   }
-  const protection=elements(workbook,'workbookProtection')[0]
-  const workbookProtection=protection&&{lockStructure:enabled(attribute(protection.attrs,'lockStructure')),
-    hasPassword:attribute(protection.attrs,'workbookPassword')!==undefined||attribute(protection.attrs,'workbookHashValue')!==undefined}
-  const date1904=enabled(attribute(elements(workbook,'workbookPr')[0]?.attrs,'date1904'))
+  const protection=section('workbookProtection')?.attributes
+  const workbookProtection=protection&&{lockStructure:enabled(protection.get('lockStructure')),
+    hasPassword:protection.has('workbookPassword')||protection.has('workbookHashValue')}
+  const date1904=enabled(section('workbookPr')?.attributes.get('date1904'))
   return {activeTab:readableIndex(savedTab)??0,visibility,definedNames,scopedSheets,printNames,workbookProtection,date1904}
 }
 

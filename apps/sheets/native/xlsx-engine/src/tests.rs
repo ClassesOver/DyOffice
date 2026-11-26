@@ -1595,6 +1595,44 @@ fn empty_shared_string_value_keeps_sheet_readable() {
 }
 
 #[test]
+fn workbook_reads_only_declared_names_and_valid_sheet_scopes() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<s:workbook xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                xmlns:ext="urn:example:extension">
+                <s:sheets><s:sheet name="Data" sheetId="1" r:id="rId1"/><s:sheet name="Other" sheetId="2" r:id="rId2"/></s:sheets>
+                <s:definedNames>
+                    <s:definedName name="Visible">"&#x6D4B;<![CDATA[&amp;]]>"</s:definedName>
+                    <s:definedName name="_xlnm.Print_Area" localSheetId="0">Data!$A$1:$B$2</s:definedName>
+                    <s:definedName name="Hidden" localSheetId="0" hidden="1"/>
+                    <s:definedName name="MissingSheet" localSheetId="5">Other!$B$2</s:definedName>
+                    <ext:definedName name="Foreign" localSheetId="1">Other!$A$1</ext:definedName>
+                </s:definedNames>
+                <s:extLst><s:ext uri="urn:example:extension"><ext:definedNames>
+                    <s:definedName name="_xlnm.Print_Area" localSheetId="0">Data!$Z$99</s:definedName>
+                    <s:definedName name="Nested" localSheetId="1">Other!$C$3</s:definedName>
+                </ext:definedNames></s:ext></s:extLst>
+            </s:workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>"#,
+        ),
+        ("xl/worksheets/sheet1.xml", "<worksheet><sheetData/></worksheet>"),
+        ("xl/worksheets/sheet2.xml", "<worksheet><sheetData/></worksheet>"),
+    ]);
+    let metadata = WorkbookSessions::new().open(&path).unwrap();
+    assert_eq!(metadata.sheets[0].print_area.as_deref(), Some("Data!$A$1:$B$2"));
+    assert!(metadata.sheets[0].has_scoped_defined_names);
+    assert!(!metadata.sheets[1].has_scoped_defined_names);
+    assert_eq!(metadata.defined_names.len(), 1);
+    assert_eq!(metadata.defined_names[0].name, "Visible");
+    assert_eq!(metadata.defined_names[0].formula, r#""测&amp;""#);
+}
+
+#[test]
 fn reads_saved_print_settings_and_print_names() {
     let (_dir, path) = open_fixture(&[
         (
