@@ -18,6 +18,18 @@ const RELS =
   '</Relationships>'
 
 describe('applyHyperlinkEdits', () => {
+  it('edits the actual relationship records and preserves comments and foreign Id attributes', () => {
+    const comment = '<!-- </Relationships> -->'
+    const drawing = '<Relationship xmlns:ext="urn:extension" ext:Id="rId3" Id="rId1" Type="drawing" Target="../drawings/drawing1.xml"/>'
+    const rels = RELS.replace('<Relationship Id="rId3"', () => comment + drawing + '<Relationship Id = "rId3"')
+      .replace('TargetMode="External"/>', 'TargetMode="External"></Relationship>')
+    const xml = WORKSHEET.replace('<pageMargins', '<hyperlinks><hyperlink ref="A1" r:id="rId3"/></hyperlinks><pageMargins')
+    const patch = applyHyperlinkEdits(xml, rels, [{ row: 0, column: 0, target: 'https://new.example' }])
+    expect(patch.relsXml).toContain(comment + drawing)
+    expect(patch.relsXml).not.toContain('https://old.example')
+    expect(patch.relsXml).toMatch(/<Relationship Id="rId2" [^>]+Target="https:\/\/new\.example"[^>]+\/><\/Relationships>$/)
+  })
+
   it('replaces or removes a range hyperlink through its anchor without leaving a duplicate', () => {
     const withRange = WORKSHEET.replace('<pageMargins',
       '<hyperlinks><hyperlink ref="$a$1:$B$2" r:id="rId3"/><hyperlink ref="A1" location="Stale!A1"/>' +

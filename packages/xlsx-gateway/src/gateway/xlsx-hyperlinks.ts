@@ -2,7 +2,7 @@
 /// External targets live as TargetMode="External" relationships referenced by
 /// r:id; internal anchors use the `location` attribute and need no rel.
 
-import { decodeAttribute, escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { decodeAttribute, nextFreeRelationshipId } from './xlsx-sheets.ts'
 import {
   OFFICE_RELATIONSHIPS_NAMESPACE,
   isOfficeRelationshipNamespace,
@@ -40,6 +40,10 @@ const EMPTY_RELS =
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   '</Relationships>'
 
+function findRelationshipsRoot(xml: string) {
+  return childElements(xml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+}
+
 export function findWorksheetHyperlinkSection(worksheetXml: string) {
   const span = findRootChild(worksheetXml, 'worksheet', 'hyperlinks')
   if (!span) return undefined
@@ -70,37 +74,36 @@ export function applyHyperlinkEdits(
 
   const dropRel = (relId: string): void => {
     if (rels === null) return
-    // Quote-agnostic like the id scan in xlsx-sheets.ts: a single-quoted
-    // r:id is document-controlled; unescaped it could match every relationship.
-    const next = rels.replace(
-      new RegExp(`<Relationship\\b[^>]*\\bId=["']${escapeRegExp(relId)}["'][^>]*/>`),
-      '',
-    )
-    if (next !== rels) {
-      rels = next
-      relsChanged = true
-    }
+    const root = findRelationshipsRoot(rels)
+    if (!root) return
+    const name = root.name.slice(0, -1)
+    const entry = childElements(root.inner).find((child) => {
+      if (child.name !== name || !readWorksheetTagAttribute(child.opening, 'Type')?.endsWith('/hyperlink')) return false
+      const id = readWorksheetTagAttribute(child.opening, 'Id')
+      return id !== undefined && decodeAttribute(id) === decodeAttribute(relId)
+    })
+    if (!entry) return
+    const start = root.start + root.opening.length + entry.start
+    rels = rels.slice(0, start) + rels.slice(start + entry.xml.length)
+    relsChanged = true
   }
   const allocateRel = (target: string): string => {
     if (rels === null) {
       rels = EMPTY_RELS
       relsChanged = true
     }
+    const root = findRelationshipsRoot(rels)
+    if (!root) throw new HyperlinkEditError('Worksheet has no relationships root element.')
     const relId = nextFreeRelationshipId(rels)
     const element =
-      `<Relationship Id="${relId}" Type="${HYPERLINK_REL_TYPE}" ` +
+      `<${root.name.slice(0, -1)} Id="${relId}" Type="${HYPERLINK_REL_TYPE}" ` +
       `Target="${escapeXmlAttribute(target)}" TargetMode="External"/>`
-    const close = rels.replace('</Relationships>', () => `${element}</Relationships>`)
-    if (close !== rels) {
-      rels = close
+    const endOfOpening = root.start + root.opening.length
+    if (root.opening.endsWith('/>')) {
+      rels = rels.slice(0, endOfOpening - 2) + `>${element}</${root.name}>` + rels.slice(endOfOpening)
     } else {
-      const emptyRoot = /<Relationships\b([^>]*)\/>/.exec(rels)
-      if (emptyRoot) {
-        rels = rels.replace(
-          emptyRoot[0],
-          `<Relationships${emptyRoot[1]}>${element}</Relationships>`,
-        )
-      }
+      const close = endOfOpening + root.inner.length
+      rels = rels.slice(0, close) + element + rels.slice(close)
     }
     relsChanged = true
     return relId

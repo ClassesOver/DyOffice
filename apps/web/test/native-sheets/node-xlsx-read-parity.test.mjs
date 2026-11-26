@@ -59,6 +59,27 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('replaces an expanded hyperlink relationship without deleting a drawing relationship', async () => {
+    const namespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const drawingMarker = 'xmlns:ext="urn:example:extension" ext:Id="rId3" Id="rId1"'
+    const comment = '<!-- </Relationships> -->'
+    const target = 'https://example.com/updated'
+    const bytes = await workbook({
+      [sheetPath]: (xml) => xml.replace('<drawing', () => '<hyperlinks><hyperlink ref="A1" r:id="rId3"/></hyperlinks><drawing'),
+      [relsPath]: (xml) => xml.replace('Id="rId1"', () => drawingMarker).replace('</Relationships>', () =>
+        comment + `<Relationship Id = "rId3" Type="${namespace}/hyperlink" Target="https://example.com/old" TargetMode="External"></Relationship></Relationships>`),
+    })
+    const request = { ...sheetsSaveRequest('sheet-1', []), hyperlinkEdits: [{ sheetId: 'sheet-1', row: 0, column: 0, target }] }
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    const rels = await (await JSZip.loadAsync(saved)).file(relsPath).async('string')
+    assert.ok(rels.includes(drawingMarker))
+    assert.ok(rels.includes(comment))
+    assert.ok(!rels.includes('https://example.com/old'))
+    const { hyperlinks } = await native.readRange(saved, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    assert.deepEqual(hyperlinks, [{ row: 0, column: 0, target }])
+  })
+
   await t.test('replaces and removes a range hyperlink through its anchor cell', async () => {
     const bytes = await workbook({
       [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><v>7</v></c><c r="B1"><v>8</v></c></row></sheetData>' +
