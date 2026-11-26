@@ -183,6 +183,22 @@ test(
         })
       },
     )
+    await t.test('keeps the visible opening sheet when a hidden active tab is stale', async () => {
+      const source = await fixture({ changeWorkbook: (xml) =>
+        xml.replace('<sheet name="Acceptance"', '<sheet name="Acceptance" state="veryHidden"') })
+      const before = await inspect(source)
+      assert.equal(before.openingViewport.sheetId, second)
+
+      const added = 'local-dashboard'
+      const saved = await save(source, [{ kind: 'add-sheet', sheetId: added, name: 'Dashboard' }],
+        [added, first, second])
+      const after = await inspect(saved)
+      assert.deepEqual(after.sheets.map(({ name, hidden }) => [name, hidden]),
+        [['Dashboard', false], ['Acceptance', true], ['Other', false]])
+      assert.equal(after.sheets[after.activeTab]?.name, 'Other')
+      assert.equal(after.openingViewport.sheetId, after.sheets[after.activeTab].id)
+      assert.equal(after.openingViewport.result.cells[0].value, 100)
+    })
     await t.test('protects sheets referenced by surviving objects from deletion', async (t) => {
       const clearGlobal = (xml) => xml.replace(/<definedNames>[\s\S]*?<\/definedNames>/, '')
       const hyperlink = '<hyperlinks><hyperlink ref="B1" location="Acceptance!A2"/></hyperlinks>'

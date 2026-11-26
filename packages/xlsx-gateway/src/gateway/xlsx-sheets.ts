@@ -587,14 +587,16 @@ export function applySheetPlanToWorkbookXml(
     }
   }
 
+  // Both editors open the first visible sheet when the saved active tab is
+  // stale. Resolve that fallback in the old order before remapping it.
+  const firstOriginallyVisible = elements.findIndex((element) => !element.hidden)
   const activeIndex = (oldIndex: number): number => {
-    const mapped = oldIndexToNew(oldIndex)
+    const original = elements[oldIndex]?.hidden === false ? oldIndex : firstOriginallyVisible
+    const mapped = oldIndexToNew(original)
     if (mapped === null) return firstVisible
-    const newlyHidden =
-      !elements[oldIndex]?.hidden && finalElements.get(plan.order[mapped]!)?.hidden
-    return newlyHidden ? firstVisible : mapped
+    return finalElements.get(plan.order[mapped]!)?.hidden ? firstVisible : mapped
   }
-  // The active tab defaults to the original first tab, even without a book view.
+  // A missing workbook view has the same implicit active index as an empty one.
   const implicitActiveIndex = activeIndex(0)
   const bookViews = workbookSection(result, 'bookViews')
   if (bookViews) {
