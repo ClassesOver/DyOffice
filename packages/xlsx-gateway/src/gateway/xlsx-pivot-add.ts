@@ -739,7 +739,7 @@ export function buildCacheDefinitionXml(
   const cacheFieldCount = addition.fieldNames.length + calcValueSpecsOf(addition).length
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-    `<pivotCacheDefinition xmlns="${MAIN_NS}" xmlns:r="${REL_NS}" r:id="${recordsRelId}" ` +
+    `<pivotCacheDefinition xmlns="${MAIN_NS}" xmlns:r="${REL_NS}" r:id="${escapeAttribute(recordsRelId)}" ` +
     `refreshedBy="genoffice" createdVersion="8" refreshedVersion="8" ` +
     `minRefreshableVersion="3" recordCount="${recordCount}">` +
     '<cacheSource type="worksheet">' +

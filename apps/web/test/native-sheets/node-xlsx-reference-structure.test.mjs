@@ -341,6 +341,29 @@ test(
       const { data } = recomputePivotData(definition, values)
       assert.deepEqual(data, [[150], [50], [200]])
 
+      const relayoutSource = await editPart(saved, after.cachePath, (xml) => xml.replace(
+        'r:id="rId1"',
+        'xmlns:link="http://schemas.openxmlformats.org/officeDocument/2006/relationships" link:id=\'rId&#49;\'',
+      ))
+      const relaid = await save(relayoutSource, [], [first, second], {
+        pivotCacheRefreshPaths: [after.cachePath],
+        pivotRefreshUpdates: [{
+          sheetId: second, cachePath: after.cachePath, newOutputRef: after.outputRef,
+          relayout: { sheetId: second, sourceSheetId: first, sourceArea: { ...area, endRow: 3 },
+            location: { startRow: 0, startColumn: 5, endRow: 3, endColumn: 6 },
+            name: 'LayoutEdit', fieldNames: ['Region', 'Amount'], rowFieldIndices: [0],
+            rowItems: ['West', 'East'], values: [{ fieldIndex: 1, agg: 'sum' }] },
+        }],
+      })
+      const relaidZip = await JSZip.loadAsync(relaid)
+      assert.match(await xmlPart(relaidZip, after.cachePath), /r:id="rId1"/)
+      assert.match(await xmlPart(relaidZip, 'xl/pivotCache/pivotCacheRecords1.xml'), /count="0"/)
+      const relaidDefinition = await runtime.sheetsPackageReader(relaid, undefined, {
+        path: after.path, cachePath: after.cachePath,
+      })
+      assert.equal(relaidDefinition.sourceRef, 'A1:B4')
+      assert.deepEqual(relaidDefinition.unsupported, [])
+
       const converted = await save(saved, [], [first, second], {
         tableEdits: [{ sheetId: first, tableName: 'SalesData', remove: true }],
       })

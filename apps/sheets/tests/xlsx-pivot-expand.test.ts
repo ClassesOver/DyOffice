@@ -459,6 +459,41 @@ describe('pivot layout edits (relayout)', () => {
     expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('name="PivotData"')
   })
 
+  it.each([false, true])('clears only the linked records with aliased XML: %s', async (aliased) => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const cachePath = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const relsPath = 'xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels'
+    const recordsPath = 'xl/pivotCache/pivotCacheRecords1.xml'
+    const orphan = 'xl/pivotCache/pivotCacheRecords2.xml'
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const relationships = await zip.file(relsPath)!.async('text')
+    const stale = `<Relationship Id="old" Type="${office}/pivotCacheRecords" Target="pivotCacheRecords2.xml"/>`
+    zip.file(orphan, await zip.file(recordsPath)!.async('text'))
+    const withStaleRelationship = relationships.replace(
+      '<Relationship Id="rId1"', stale + '<Relationship Id="rId1"',
+    )
+    zip.file(relsPath, aliased ? withStaleRelationship.replaceAll('"', "'") : withStaleRelationship)
+    if (aliased) {
+      const cache = await zip.file(cachePath)!.async('text')
+      zip.file(cachePath, cache.replace('<pivotCacheDefinition ', '<!-- <unknown/> --><pivotCacheDefinition ')
+        .replace('r:id="rId1"', `xmlns:link="${office}" link:id='rId&#49;'`))
+    }
+
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [relayoutUpdate()])
+    expect(plan.replaced.get(cachePath)).toContain('r:id="rId1"')
+    expect(plan.replaced.get(recordsPath)).toContain('count="0"')
+    expect(plan.replaced.has(orphan)).toBe(false)
+    expect(plan.replaced.has(relsPath)).toBe(false)
+  })
+
+  it('rejects layout edits when the linked records part is missing', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    zip.remove('xl/pivotCache/pivotCacheRecords1.xml')
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(planWithRefreshUpdate(bytes, [relayoutUpdate()]))
+      .rejects.toThrow('The pivot cache records relationship points to a missing part.')
+  })
+
   it('preserves a table-backed source when rebuilding the pivot layout', async () => {
     const zip = await JSZip.loadAsync(await buildPivotFixture())
     const path = 'xl/pivotCache/pivotCacheDefinition1.xml'
