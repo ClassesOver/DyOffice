@@ -610,8 +610,7 @@ async function readWorkbookCells(
   const sharedStrings = await readSharedTextEntries(zip, readRunStyle)
   const sheets: ImportedWorksheet[] = []
   const sheetNamesById: Record<string, string> = {}
-  for (const { name, xml } of parseSheetElements(workbookXml)) {
-    const sheetNumber = readXmlAttribute(xml, 'sheetId')
+  for (const { name, sheetId: sheetNumber } of parseSheetElements(workbookXml)) {
     if (!name || !sheetNumber) continue
     const id = `sheet-${sheetNumber}`
     let worksheetXml: string

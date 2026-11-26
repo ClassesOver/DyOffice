@@ -59,6 +59,28 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('opens and saves both empty-tag and expanded worksheet declarations with single quotes', async () => {
+    const declarations = [
+      "<sheet name='Acceptance' sheetId=\"1\" r:id='rId1'/>",
+      "<sheet name = 'Accept\"ance' sheetId = '1' r:id = 'rId1'> \n </sheet>",
+    ]
+    for (const [index, declaration] of declarations.entries()) {
+      const name = index ? 'Accept"ance' : 'Acceptance'
+      const bytes = await workbook({ [workbookPath]: (xml) => xml.replace(/<sheet\b[^>]*\/>/, declaration) })
+      const identity = [{ id: 'sheet-1', name }]
+      const sheets = async (input) => (await native.inspect(input)).sheets.map(({ id, name }) => ({ id, name }))
+      assert.deepEqual(await sheets(bytes), identity)
+      const saved = await saveValue(bytes, 0, 'edited')
+      assert.deepEqual(await sheets(saved), identity)
+      const { cells } = await native.readRange(saved, name, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+      assert.equal(cells[0].value, 'edited')
+    }
+    const duplicate = await workbook({
+      [workbookPath]: (xml) => xml.replace(/<sheet\b[^>]*\/>/, "<sheet name='Acceptance' sheetId='1' sheetId='2' r:id='rId1'/>"),
+    })
+    await assert.rejects(() => saveValue(duplicate, 0, 'edited'), /Invalid workbook input/)
+  })
+
   await t.test('keeps literal worksheet text through bulk fills and row inserts', async t => {
     const literal = 'Example </row><row r="97"><c r="A97"> text'
     const comment = '<!-- <row r="99"/> -->'

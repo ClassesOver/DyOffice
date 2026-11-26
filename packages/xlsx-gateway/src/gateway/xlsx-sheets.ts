@@ -350,6 +350,7 @@ export function buildWorksheetPartXml(): string {
 export interface SheetElement {
   readonly xml: string
   readonly name: string
+  readonly sheetId: string | undefined
   readonly hidden: boolean
   readonly veryHidden: boolean
   readonly relationshipId: string | undefined
@@ -364,10 +365,12 @@ export function parseSheetElements(workbookXml: string): SheetElement[] {
     if (tag.slice(tag.lastIndexOf(':') + 1) !== 'sheet') continue
     const name = readWorksheetTagAttribute(opening, 'name')
     if (name === undefined) continue
+    const id = readWorksheetTagAttribute(opening, 'sheetId')
     const state = readWorksheetTagAttribute(opening, 'state')
     elements.push({
       xml,
       name: decodeAttribute(name),
+      sheetId: id === undefined ? undefined : decodeAttribute(id),
       hidden: state === 'hidden' || state === 'veryHidden',
       veryHidden: state === 'veryHidden',
       // The relationships namespace is conventionally bound to "r", but any
