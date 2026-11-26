@@ -135,5 +135,40 @@ test(
         assert.match(autoFilterXml, /<sortCondition ref=(["'])E3:E5\1\/>/)
       },
     )
+    await t.test('reads, edits and shifts only SpreadsheetML merges', async () => {
+      const foreign = 'xmlns="urn:example:merges"'
+      const extension = `<mergeCells ${foreign} count="1"><mergeCell ref="F2:G2"/></mergeCells>`
+      const foreignMerge = `<mergeCell ${foreign} ref="G2:H2"/>`
+      const comment = '<!-- <mergeCell ref="A1:B1"/> -->'
+      const realMerge = "<mergeCell ref='&#66;2:C2'></mergeCell>"
+      const inputZip = await JSZip.loadAsync(original)
+      const inputXml = await inputZip.file(path).async('string')
+      inputZip.file(path, inputXml.replace('<drawing ', extension +
+        `<mergeCells count="1">${foreignMerge}${comment}${realMerge}</mergeCells><drawing `))
+      const input = await inputZip.generateAsync({ type: 'nodebuffer' })
+      const area = (row, startColumn, endColumn) => ({ startRow: row, endRow: row, startColumn, endColumn })
+      const originalArea = area(1, 1, 2)
+      const addedArea = area(2, 3, 4)
+      const shiftedArea = area(3, 3, 4)
+      const readMerges = async (bytes) => (await read(bytes, 'Acceptance')).merges
+      const save = async (bytes, ...structuralOps) => {
+        const request = { ...sheetsSaveRequest('sheet-1', []), structuralOps: structuralOps.map((op) => ({ sheetId: 'sheet-1', ...op })) }
+        return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+      }
+      assert.deepEqual(await readMerges(input), [originalArea])
+      const added = await save(input, { kind: 'merge-cells', range: addedArea })
+      assert.deepEqual(await readMerges(added), [originalArea, addedArea])
+      const shifted = await save(added, { kind: 'insert-rows', index: 0, count: 1 })
+      assert.deepEqual(await readMerges(shifted), [area(2, 1, 2), shiftedArea])
+      const removed = await save(added, { kind: 'unmerge-cells', range: originalArea })
+      assert.deepEqual(await readMerges(removed), [addedArea])
+      const cleared = await save(removed, { kind: 'unmerge-cells', range: addedArea })
+      assert.deepEqual(await readMerges(cleared), [])
+      for (const [bytes, count] of [[added, 2], [shifted, 2], [removed, 1], [cleared, 0]]) {
+        const xml = await (await JSZip.loadAsync(bytes)).file(path).async('string')
+        assert.match(xml, new RegExp(`<mergeCells count="${count}">`))
+        for (const preserved of [extension, foreignMerge, comment]) assert.ok(xml.includes(preserved), preserved)
+      }
+    })
   },
 )

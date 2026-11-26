@@ -116,7 +116,7 @@ const metadataXmlOptions:X2jOptions={
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
-    'worksheet.mergeCells.mergeCell','worksheet.conditionalFormatting',
+    'worksheet.conditionalFormatting',
     'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
     'worksheet.conditionalFormatting.cfRule.colorScale.color',
     'worksheet.conditionalFormatting.cfRule.formula','worksheet.conditionalFormatting.cfRule.dataBar.cfvo',
@@ -489,8 +489,10 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
       styleIndex,outlineLevel:level||undefined,collapsed:collapsed||undefined})
   }
   const merges:SheetMetadata['merges']=[]
-  for(const merge of worksheet?.mergeCells?.mergeCell??[]){
-    const area=sheetArea(attribute(merge,'ref'))
+  const mergeSection=children.find(child=>child.local==='mergeCells')
+  for(const merge of mergeSection ? scopedChildren(mergeSection) : []){
+    if(!isElement(merge,'mergeCell',mergeSection?.namespace))continue
+    const area=sheetArea(merge.attributes.get('ref'))
     if(area)merges.push(area)
   }
   const hyperlinks:SheetMetadata['hyperlinks']=[]

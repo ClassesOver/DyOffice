@@ -292,8 +292,9 @@ export function applyStructuralOps(
     xml = rewriteWorksheetCore(xml, (core) => {
       if (axis === 'column') return transformColumnOperation(core, sheetName, shift)
       const rows = transformSheetRows(core, shift)
-      return transformRangedFeatures(transformFormulas(rows, sheetName, shift, axis), shift, axis)
+      return transformWorksheetAutoFilters(transformFormulas(rows, sheetName, shift, axis), shift, axis)
     })
+    xml = shiftWorksheetMerges(xml, shift, axis)
     const moveSqref = (sqref: string) => shiftSqref(sqref, moveReference)
     xml = rewriteX14DataValidations(xml, moveFormula, moveSqref)
     xml = rewriteWorksheetVisualReferences(xml, moveFormula, moveSqref)
@@ -437,31 +438,89 @@ function toRef(range: CellArea): string {
 }
 
 function applyMergeOp(xml: string, op: Extract<StructuralOp, { range: CellArea }>): string {
+  const children = worksheetChildren(xml)
+  const section = children.find((child) => child.local === 'mergeCells')
   const ref = toRef(op.range)
   if (op.kind === 'unmerge-cells') {
-    const without = xml.replace(new RegExp(`<mergeCell\\b[^>]*\\bref="${ref}"[^>]*/>`), '')
-    return refreshMergeCount(without)
+    return section ? rewriteMergeSection(xml, section, (oldRef) =>
+      comparableMergeRef(oldRef) === ref ? null : oldRef) : xml
   }
-  const element = `<mergeCell ref="${ref}"/>`
-  if (xml.includes('</mergeCells>')) {
-    return refreshMergeCount(xml.replace('</mergeCells>', () => `${element}</mergeCells>`))
+  if (section) return rewriteMergeSection(xml, section, (oldRef) => oldRef, ref)
+
+  const data = children.find((child) => child.local === 'sheetData')
+  if (!data) {
+    throw new StructuralShiftError('Worksheet has no sheetData element.')
   }
-  // Schema order places mergeCells after autoFilter (when present), which in
-  // turn follows sheetData.
-  const section = `<mergeCells count="1">${element}</mergeCells>`
-  const autoFilter = /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/.exec(xml)
-  if (autoFilter) {
-    const insertAt = autoFilter.index + autoFilter[0].length
-    return xml.slice(0, insertAt) + section + xml.slice(insertAt)
+  // Insert after the last applicable predecessor in SpreadsheetML schema order.
+  const preceding = ['sheetData', 'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios',
+    'autoFilter', 'sortState', 'dataConsolidate', 'customSheetViews']
+  const anchor = children.reverse().find((child) => preceding.includes(child.local)) ?? data
+  const at = anchor.start + anchor.xml.length
+  const qualifier = prefixOf(readRootOpening(xml)?.name ?? '')
+  const newSection = `<${qualifier}mergeCells count="1"><${qualifier}mergeCell ref="${ref}"/></${qualifier}mergeCells>`
+  return xml.slice(0, at) + newSection + xml.slice(at)
+}
+
+function comparableMergeRef(ref: string): string {
+  return ref.replaceAll('$', '').toUpperCase()
+}
+
+function rewriteMergeSection(
+  xml: string,
+  section: ScopedElement,
+  move: (ref: string) => string | null,
+  addition?: string,
+): string {
+  const parts: string[] = []
+  let cursor = 0
+  let count = 0
+  let alreadyPresent = false
+  for (const child of scopedChildren(section)) {
+    if (!isElement(child, 'mergeCell', section.namespace)) continue
+    const ref = child.attributes.get('ref')
+    if (ref === undefined) {
+      count += 1
+      continue
+    }
+    const moved = move(ref)
+    if (moved !== null) count += 1
+    alreadyPresent ||= addition !== undefined && comparableMergeRef(ref) === addition
+    if (moved === ref) continue
+    const replacement = moved === null
+      ? ''
+      : updateWorksheetTagAttribute(child.opening, 'ref', escapeXmlAttribute(moved)) +
+        child.xml.slice(child.opening.length)
+    parts.push(section.inner.slice(cursor, child.start), replacement)
+    cursor = child.start + child.xml.length
   }
-  if (xml.includes('</sheetData>')) {
-    return xml.replace('</sheetData>', () => `</sheetData>${section}`)
+
+  const append = addition !== undefined && !alreadyPresent
+  if (parts.length === 0 && !append) return xml
+  let body = parts.join('') + section.inner.slice(cursor)
+  if (append) {
+    const qualifier = prefixOf(section.name)
+    body += `<${qualifier}mergeCell ref="${addition}"/>`
+    count += 1
   }
-  const emptySheetData = /<sheetData\s*\/>/
-  if (emptySheetData.test(xml)) {
-    return xml.replace(emptySheetData, (match) => `${match}${section}`)
+  const hasOtherAttributes = [...section.attributes.keys()].some((name) => name !== 'count')
+  if (count === 0 && body.trim() === '' && !hasOtherAttributes) {
+    return applyPatches(xml, [patchElement(section, '')])
   }
-  throw new StructuralShiftError('Worksheet has no sheetData element.')
+  const opening = updateWorksheetTagAttribute(section.opening, 'count', String(count))
+  const replacement = opening.endsWith('/>')
+    ? opening.slice(0, -2) + '>' + body + `</${section.name}>`
+    : opening + body + section.xml.slice(section.opening.length + section.inner.length)
+  return applyPatches(xml, [patchElement(section, replacement)])
+}
+
+function shiftWorksheetMerges(xml: string, shift: Shift, axis: Axis): string {
+  if (!xml.includes('mergeCells')) return xml
+  const section = worksheetChildren(xml).find((child) => child.local === 'mergeCells')
+  return section ? rewriteMergeSection(xml, section, (ref) => {
+    const comparable = comparableMergeRef(ref)
+    const moved = moveRefRange(comparable, shift, axis)
+    return moved === comparable ? ref : moved
+  }) : xml
 }
 
 function formatSize(size: number): string {
@@ -656,17 +715,6 @@ function applyColAttributeOp(
   const sheetData = children.find((child) => child.local === 'sheetData')
   if (!sheetData) throw new StructuralShiftError('Worksheet has no sheetData element.')
   return xml.slice(0, sheetData.start) + `<${qualifier}cols>${body}</${qualifier}cols>` + xml.slice(sheetData.start)
-}
-
-function refreshMergeCount(xml: string): string {
-  return xml.replace(/<mergeCells\b[^>]*>([\s\S]*?)<\/mergeCells>/, (full, inner: string) => {
-    const count = (inner.match(/<mergeCell\b/g) ?? []).length
-    if (count === 0) return ''
-    return full.replace(
-      /(<mergeCells\b[^>]*\bcount=")[0-9]+(")/,
-      (_m, prefix: string, suffix: string) => `${prefix}${count}${suffix}`,
-    )
-  })
 }
 
 /// Rewrites references to the edited sheet inside another sheet's formulas
@@ -1667,7 +1715,7 @@ function transformColumnOperation(xml: string, sheetName: string, shift: Shift):
   if (!sheetDataOpen || closeIndex < sheetDataOpen.index) {
     let fallback = transformSheetColumns(xml, shift)
     fallback = transformFormulas(fallback, sheetName, shift, 'column')
-    fallback = transformRangedFeatures(fallback, shift, 'column')
+    fallback = transformWorksheetAutoFilters(fallback, shift, 'column')
     return transformColDefinitions(fallback, shift)
   }
   const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
@@ -1676,10 +1724,10 @@ function transformColumnOperation(xml: string, sheetName: string, shift: Shift):
   const originalSuffix = xml.slice(closeIndex)
 
   let prefix = transformFormulas(originalPrefix, sheetName, shift, 'column')
-  prefix = transformRangedFeatures(prefix, shift, 'column')
+  prefix = transformWorksheetAutoFilters(prefix, shift, 'column')
   prefix = transformColDefinitions(prefix, shift)
   let suffix = transformFormulas(originalSuffix, sheetName, shift, 'column')
-  suffix = transformRangedFeatures(suffix, shift, 'column')
+  suffix = transformWorksheetAutoFilters(suffix, shift, 'column')
 
   // Cursor walk with a per-row early exit: a row whose rightmost cell sits
   // left of the shift and that holds no formulas cannot change, so it stays
@@ -1848,29 +1896,11 @@ function transformFormulas(xml: string, sheetName: string, shift: Shift, axis: A
   return result
 }
 
-/// Shifts merges and range-scoped feature elements. Elements whose every
-/// range is deleted are removed outright.
-function transformRangedFeatures(xml: string, shift: Shift, axis: Axis): string {
-  let result = xml.replace(/<mergeCell\b[^>]*\bref="([^"]+)"[^>]*\/>/g, (full, ref: string) => {
-    const moved = moveRefRange(ref, shift, axis)
-    return moved === null ? '' : full.replace(/ref="[^"]+"/, () => `ref="${moved}"`)
-  })
-  result = result.replace(
-    /<mergeCells\b[^>]*>([\s\S]*?)<\/mergeCells>|<mergeCells\b[^>]*\/>/g,
-    (full, inner: string | undefined) => {
-      const count = ((inner ?? '').match(/<mergeCell\b/g) ?? []).length
-      if (count === 0) return ''
-      return full.replace(
-        /(<mergeCells\b[^>]*\bcount=")[0-9]+(")/,
-        (_m, prefix: string, suffix: string) => `${prefix}${count}${suffix}`,
-      )
-    },
-  )
-  result = result.replace(
+function transformWorksheetAutoFilters(xml: string, shift: Shift, axis: Axis): string {
+  return xml.replace(
     /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/g,
     (element) => shiftAutoFilterCriteria(element, shift, axis),
   )
-  return result
 }
 
 /// The worksheet extension list has its own formula dialects, including x14 DV.
