@@ -1566,7 +1566,7 @@ fn workbook_uses_linked_styles_and_shared_strings() {
 }
 
 #[test]
-fn empty_typed_values_keep_sheet_readable() {
+fn empty_and_nonstandard_cached_values_keep_sheet_readable() {
     let (_dir, path) = open_fixture(&[
         (
             "xl/workbook.xml",
@@ -1586,7 +1586,9 @@ fn empty_typed_values_keep_sheet_readable() {
                 <c r="D1" t="b"><v/></c><c r="E1" t="b"><v> </v></c><c r="F1" t="b"><v>0</v></c>
                 <c r="G1" t="b"><v>true</v></c><c r="H1" t="e"><v/></c>
                 <c r="I1" t="e"><v>_x0023_REF!</v></c><c r="J1" t="str"><v/></c>
-                <c r="K1" t="str"><v></v></c></row></sheetData></worksheet>"#,
+                <c r="K1" t="str"><v></v></c><c r="L1"><v>1e999</v></c>
+                <c r="M1"><v>NaN</v></c><c r="N1" t="n"><v>0x10</v></c>
+                <c r="O1"><v>_x0031_</v></c><c r="P1"><v>-1.25e2</v></c></row></sheetData></worksheet>"#,
         ),
     ]);
     let mut sessions = WorkbookSessions::new();
@@ -1596,7 +1598,7 @@ fn empty_typed_values_keep_sheet_readable() {
         start_row: 0,
         end_row: 0,
         start_column: 0,
-        end_column: 10,
+        end_column: 15,
     };
     let result = loop {
         let result = sessions
@@ -1608,7 +1610,7 @@ fn empty_typed_values_keep_sheet_readable() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     let columns: Vec<_> = result.cells.iter().map(|cell| cell.column).collect();
-    assert_eq!(columns, [0, 5, 6, 8, 10]);
+    assert_eq!(columns, [0, 5, 6, 8, 10, 11, 12, 13, 14, 15]);
     assert!(
         matches!(&result.cells[0].value, Some(CellValue::String(text)) if text == "Partner ID")
     );
@@ -1616,6 +1618,10 @@ fn empty_typed_values_keep_sheet_readable() {
     assert!(matches!(result.cells[2].value, Some(CellValue::Boolean(true))));
     assert!(matches!(&result.cells[3].value, Some(CellValue::String(text)) if text == "#REF!"));
     assert!(matches!(&result.cells[4].value, Some(CellValue::String(text)) if text.is_empty()));
+    for (cell, expected) in result.cells[5..9].iter().zip(["1e999", "NaN", "0x10", "1"]) {
+        assert!(matches!(&cell.value, Some(CellValue::String(text)) if text == expected));
+    }
+    assert!(matches!(result.cells[9].value, Some(CellValue::Number(-125.0))));
 }
 
 #[test]

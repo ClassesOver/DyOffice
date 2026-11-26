@@ -53,6 +53,7 @@ async function datedWorkbook(): Promise<Buffer> {
     '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
       '<row r="1"><c r="A1" t="inlineStr"><is><t>Joined</t></is></c><c r="B1" t="inlineStr"><is><t>Custom</t></is></c><c r="C1" t="inlineStr"><is><t>Amount</t></is></c><c r="D1" t="inlineStr"><is><t>At</t></is></c></row>' +
       '<row r="2"><c r="A2" s="1" t="n"><v>45930</v></c><c r="B2" s="2"><v>45930.5</v></c><c r="C2" s="3"><v>45930</v></c><c r="D2" s="4"><v>0.5</v></c></row>' +
+      '<row r="3"><c r="A3" s="1"><v>0x10</v></c><c r="B3" s="1"><v></v></c><c r="C3" s="1"><v>1e999</v></c><c r="D3" s="4"><v>.5e0</v></c></row>' +
       '</sheetData></worksheet>',
   )
   return zip.generateAsync({ type: 'nodebuffer' })
@@ -62,6 +63,7 @@ describe('readSheetRows', () => {
   it('reads a date-styled number as a date and leaves other numbers alone', async () => {
     const rows = await readSheetRows(await datedWorkbook())
     expect(rows[1]).toEqual(['2025-09-30', '2025-09-30 12:00:00', '45930', '12:00:00'])
+    expect(rows[2]).toEqual(['0x10', '', '1e999', '12:00:00'])
   })
 
   it('reads the first sheet as rows of text', async () => {

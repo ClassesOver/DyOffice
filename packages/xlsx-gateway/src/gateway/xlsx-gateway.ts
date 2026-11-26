@@ -754,8 +754,8 @@ function cellText(
   // cell reads as a date, not as the serial the file holds
   const text = decodeCellText(rawValue)
   if (asDate && (type === undefined || type === 'n')) {
-    const serial = Number(text)
-    if (Number.isFinite(serial)) return serialDateText(serial, date1904)
+    const serial = finiteDecimalCellValue(decodeCellMarkup(rawValue))
+    if (serial !== null) return serialDateText(serial, date1904)
   }
   return text
 }
@@ -3909,9 +3909,8 @@ function parseWorksheetCells(
       } else if (type === 'e') {
         cells[address] = { value: decodeCellText(rawValue) }
       } else {
-        const numericValue = Number(value)
         cells[address] = {
-          value: Number.isFinite(numericValue) ? numericValue : value,
+          value: finiteDecimalCellValue(value) ?? decodeCellText(rawValue),
         }
       }
     }
@@ -3959,6 +3958,14 @@ function booleanCellValue(value: string): boolean | null {
     default:
       return null
   }
+}
+
+function finiteDecimalCellValue(value: string): number | null {
+  const text = value.trim()
+  // Number() also accepts JavaScript-only spellings such as 0x10 and 0b10.
+  if (!/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(text)) return null
+  const number = Number(text)
+  return Number.isFinite(number) ? number : null
 }
 
 function booleanCellText(value: string): string {

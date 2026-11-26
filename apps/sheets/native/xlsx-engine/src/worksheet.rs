@@ -1492,8 +1492,8 @@ impl CellBuilder {
             // reads those as numbers); degrade to text instead of failing
             // the sheet.
             _ => match self.raw_value.trim().parse::<f64>() {
-                Ok(number) => Some(CellValue::Number(number)),
-                Err(_) => {
+                Ok(number) if number.is_finite() => Some(CellValue::Number(number)),
+                _ => {
                     let mut raw_value = self.raw_value;
                     normalize_cell_text(&mut raw_value);
                     Some(CellValue::String(raw_value))
