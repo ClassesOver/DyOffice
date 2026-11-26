@@ -1,7 +1,7 @@
 /// OpenXML SDK-family producers bind the spreadsheetml namespace to a prefix
 /// (<x:workbook><x:sheets>...), invisible to the text-based patch pipeline's
-/// unprefixed element patterns. Parts are normalized at read time instead:
-/// the prefix is stripped and re-declared as the default namespace. Only
+/// unprefixed element patterns. Parts are normalized at read time by making
+/// equivalent names use the default namespace. Only
 /// parts the planner rewrites reach the file, so untouched entries keep
 /// their bytes; anything ambiguous returns the input unchanged (the save
 /// then fails exactly as it did before this pass existed).
@@ -44,55 +44,68 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
   const rootName = root?.[2]
   if (!root || !rootName) return xml
   const colon = rootName.indexOf(':')
-  if (colon <= 0) return xml
-  const prefix = rootName.slice(0, colon)
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix)) return xml
-
-  const qualified = `${prefix}:`
-  const namespace = `xmlns:${prefix}`
+  if (colon === 0 || !root[0].includes('xmlns:')) return xml
+  const prefix = colon < 0 ? '' : rootName.slice(0, colon)
+  const qualified = prefix ? `${prefix}:` : ''
+  const namespace = prefix ? `xmlns:${prefix}` : 'xmlns'
   const rootAttrs = [...root[0].matchAll(ATTRIBUTES)]
   const declarations = rootAttrs.filter(([, name]) => name === namespace)
   const declaration = declarations[0]
   const uri = declaration?.[2] ?? declaration?.[3]
   if (!declaration || declarations.length !== 1 || uri === undefined || !NORMALIZABLE_NAMESPACES.has(uri)) return xml
 
+  const aliases = new Set<string>()
+  for (const [, key, double, single] of rootAttrs) {
+    if (key?.startsWith('xmlns:') && (double ?? single) === uri) aliases.add(key.slice('xmlns:'.length))
+  }
+  if (aliases.size === 0) return xml
+
+  const defaults = new Set<number>()
   let retainPrefix = false
-  let addRelationshipBinding = uri === SPREADSHEETML_NAMESPACE && !rootAttrs.some(([, name]) => name === 'xmlns:r')
-  for (const [tag, closing, name] of xml.matchAll(MARKUP)) {
+  let addRelationshipBinding = prefix !== '' && uri === SPREADSHEETML_NAMESPACE && !rootAttrs.some(([, name]) => name === 'xmlns:r')
+  for (const match of xml.matchAll(MARKUP)) {
+    const [tag, closing, name] = match
     if (!name || closing) continue
     const attributes = tag.slice(name.length + 1)
-    if (!attributes.includes('xmlns') && !attributes.includes(qualified)
+    if (!attributes.includes('xmlns') && !(qualified && attributes.includes(qualified))
       && !attributes.includes('Requires') && !attributes.includes('Ignorable')
       && !attributes.includes('MustUnderstand')) continue
     for (const [, key, double, single] of attributes.matchAll(ATTRIBUTES)) {
       const value = double ?? single
-      // A default binding or a conflicting rebinding can change the meaning of de-prefixed elements.
-      if (key === 'xmlns' || (key === namespace && value !== uri)) return xml
-      if (key?.startsWith(qualified)) retainPrefix = true
-      if (key && /(?:^|:)(?:Requires|Ignorable|MustUnderstand|ProcessContent|PreserveElements|PreserveAttributes)$/.test(key)
+      if (key === 'xmlns') {
+        if (value !== uri || defaults.has(match.index!)) return xml
+        defaults.add(match.index!)
+      }
+      if (key?.startsWith('xmlns:') && aliases.has(key.slice('xmlns:'.length)) && value !== uri) return xml
+      if (qualified && key?.startsWith(qualified)) retainPrefix = true
+      if (qualified && key && /(?:^|:)(?:Requires|Ignorable|MustUnderstand|ProcessContent|PreserveElements|PreserveAttributes)$/.test(key)
         && value?.trim().split(/\s+/).some(token => token === prefix || token.startsWith(qualified))) retainPrefix = true
       if (key === 'xmlns:r' && value !== OFFICE_RELATIONSHIPS_NAMESPACE) addRelationshipBinding = false
     }
   }
 
-  const bindings = ` xmlns="${uri}"`
-    + (retainPrefix ? declaration[0] : '')
-    + (addRelationshipBinding ? ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"` : '')
+  const relationshipBinding = addRelationshipBinding ? ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"` : ''
+  const bindings = ` xmlns="${uri}"` + (retainPrefix ? declaration[0] : '') + relationshipBinding
   const declarationOffset = declaration.index! - rootName.length - 1
-  const defaultScopes: boolean[] = []
+  const defaultScopes: Array<{ original: boolean; normalized: boolean }> = []
   return xml.replace(MARKUP, (tag, closing: string, name: string | undefined, offset: number) => {
     if (!name) return tag
-    const stripPrefix = name.startsWith(qualified)
-    const normalizedName = stripPrefix ? name.slice(qualified.length) : name
+    const separator = name.indexOf(':')
+    const stripPrefix = separator > 0 && aliases.has(name.slice(0, separator))
+    const normalizedName = stripPrefix ? name.slice(separator + 1) : name
     const tail = tag.slice(1 + closing.length + name.length)
     if (closing) {
       defaultScopes.pop()
       return `</${normalizedName}${tail}`
     }
-    const inherited = defaultScopes.at(-1) ?? false
-    const usesDefault = stripPrefix || (name.includes(':') && inherited)
-    if (!tag.endsWith('/>')) defaultScopes.push(usesDefault)
+    const parent = defaultScopes.at(-1)
+    const declaresDefault = defaults.has(offset)
+    const original = declaresDefault || parent?.original === true
+    const inherited = declaresDefault || parent?.normalized === true
+    const usesDefault = stripPrefix || (separator > 0 ? inherited : original)
+    if (!tag.endsWith('/>')) defaultScopes.push({ original, normalized: usesDefault })
     if (offset === root.index) {
+      if (declaresDefault) return `<${normalizedName}${relationshipBinding}${tail}`
       return `<${normalizedName}${tail.slice(0, declarationOffset)}${bindings}${tail.slice(declarationOffset + declaration[0].length)}`
     }
     // Bare extension elements had no namespace before the root gained a default binding.

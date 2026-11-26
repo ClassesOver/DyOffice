@@ -82,6 +82,22 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     assert.ok(xml.includes(comment))
   })
 
+  await t.test('saves workbooks with default and prefixed elements in the same namespace', async () => {
+    const bytes = await workbook({
+      [workbookPath]: `<x:workbook xmlns="${spreadsheet}" xmlns:x="${spreadsheet}"
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        <sheets><x:sheet name="Acceptance" sheetId="1" r:id="rId1"/></sheets>
+      </x:workbook>`,
+      [sheetPath]: `<worksheet xmlns="${spreadsheet}" xmlns:x="${spreadsheet}">
+        <x:sheetData><row r="1"><x:c r="A1"><v>7</v></x:c></row></x:sheetData>
+      </worksheet>`,
+    })
+    const values = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }))
+      .cells.map(({ value }) => value)
+    assert.deepEqual(await values(bytes), [7])
+    assert.deepEqual(await values(await saveValue(bytes, 0, 42)), [42])
+  })
+
   await t.test('opens and saves both empty-tag and expanded worksheet declarations with single quotes', async () => {
     const declarations = [
       "<sheet name='Acceptance' sheetId=\"1\" r:id='rId1'/>",

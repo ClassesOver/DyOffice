@@ -86,6 +86,27 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
   })
 
+  it('uses the existing equivalent default namespace for prefixed elements', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}" xmlns="${MAIN_NS}"><x:sheetData><row/></x:sheetData></x:worksheet>`
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toContain('<sheetData><row/></sheetData></worksheet>')
+    expect(normalized.match(/\bxmlns=/g)).toHaveLength(1)
+  })
+
+  it('normalizes aliases of the default namespace and preserves foreign prefixes', () => {
+    const xml = `<worksheet xmlns="${MAIN_NS}" xmlns:sheet-data="${MAIN_NS}" xmlns:ext="urn:ext">` +
+      '<sheet-data:sheetData><row><sheet-data:c ext:flag="1"/></row></sheet-data:sheetData><ext:c/></worksheet>'
+    expect(normalizeOoxmlPartPrefix(xml)).toContain('<sheetData><row><c ext:flag="1"/></row></sheetData><ext:c/></worksheet>')
+  })
+
+  it('preserves the scope of a nested equivalent default namespace', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><custom>` +
+      `<x:sheetData xmlns="${MAIN_NS}"><row/></x:sheetData><other/></custom></x:worksheet>`
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<custom xmlns=""><sheetData xmlns="${MAIN_NS}"><row/></sheetData><other/></custom>`,
+    )
+  })
+
   it('leaves parts of other namespaces alone', () => {
     const chart =
       '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
