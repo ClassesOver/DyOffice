@@ -36,6 +36,12 @@ export function readRootStartTag(xml: string): string {
   return rootOpeningTag(xml)?.[0] ?? ''
 }
 
+export function readRootOpening(xml: string): { name: string; opening: string; start: number } | undefined {
+  const root = rootOpeningTag(xml)
+  const name = root?.[2]
+  return name && root ? { name, opening: root[0], start: root.index } : undefined
+}
+
 export function hasXmlAttributeValue(xml: string, encodedValue: string): boolean {
   const value = decodeXmlText(encodedValue)
   for (const [tag, closing, name] of xml.matchAll(MARKUP)) {

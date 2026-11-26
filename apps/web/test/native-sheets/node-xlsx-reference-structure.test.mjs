@@ -357,6 +357,20 @@ test(
       assert.deepEqual(convertedRange.cells, sourceRange.cells)
       assert.deepEqual(recomputePivotData(convertedDefinition, values).data, data)
 
+      const fakeRoot = '<!-- <pivotCacheDefinition refreshOnLoad="0"/> -->'
+      const pendingRefresh = await editPart(converted, after.cachePath, (xml) => xml
+        .replace('<pivotCacheDefinition ', `${fakeRoot}<p:pivotCacheDefinition xmlns:p="${main}" refreshOnLoad='0' `)
+        .replace('</pivotCacheDefinition>', '</p:pivotCacheDefinition>'))
+      const refreshed = await save(pendingRefresh, [], [first, second], { pivotCacheRefreshPaths: [after.cachePath] })
+      const refreshedCache = await xmlPart(await JSZip.loadAsync(refreshed), after.cachePath)
+      assert.ok(refreshedCache.includes(fakeRoot))
+      assert.match(refreshedCache.slice(refreshedCache.indexOf(fakeRoot) + fakeRoot.length),
+        /^<(?:p:)?pivotCacheDefinition\b[^>]*\brefreshOnLoad="1"/)
+      const refreshedDefinition = await runtime.sheetsPackageReader(refreshed, undefined, {
+        path: after.path, cachePath: after.cachePath,
+      })
+      assert.equal(refreshedDefinition.sourceRef, 'A1:B4')
+
       const named = await editPart(saved, wbPath, (xml) => xml.replace('</definedNames>',
         '<definedName name="RegionInput">Other!$A$1:$B$3</definedName>' +
         '<definedName name="RegionInput" localSheetId="0">\'Acceptance\'!$A$1:$B$4</definedName>' +

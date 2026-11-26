@@ -12,7 +12,7 @@ import {
   planCellEditsToXlsx,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import type { PivotRefreshUpdate } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
-import { parsePivotDefinition } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
+import { parsePivotDefinition, setPivotRefreshOnLoad } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
 import { recomputePivotData } from '@genoffice/xlsx-gateway/domain/pivot-engine'
 
 // ─── Minimal workbook fixture with one pivot table ───────────────────────────
@@ -256,6 +256,17 @@ function relayoutUpdate(): PivotRefreshUpdate {
 }
 
 describe('applyPivotLayoutExpansions', () => {
+  it('sets refreshOnLoad on the actual cache root without touching comments or extension attributes', () => {
+    const comment = '<!-- <pivotCacheDefinition refreshOnLoad="0"/> -->'
+    const prefix = '<p:pivotCacheDefinition xmlns:p="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+    const suffix = ' xmlns:e="urn:example" e:refreshOnLoad="0" e:label=\'x > y\'/>'
+    const xml = `${comment}${prefix}refreshOnLoad='false'${suffix}`
+    const expected = `${comment}${prefix}refreshOnLoad="1"${suffix}`
+    expect(setPivotRefreshOnLoad(xml)).toBe(expected)
+    expect(setPivotRefreshOnLoad(expected)).toBe(expected)
+    expect(() => setPivotRefreshOnLoad(`${comment}<other/>`)).toThrow('no root element')
+  })
+
   it('no-op when newOutputRef matches current location ref', async () => {
     const buf = await buildPivotFixture()
     const update: PivotRefreshUpdate = {

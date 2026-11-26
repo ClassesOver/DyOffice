@@ -20,9 +20,9 @@ import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { workbookDefinedNameElements } from './xlsx-defined-names.ts'
 import { resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
-import { readRootStartTag } from './xlsx-namespace.ts'
+import { readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { localPivotWorksheetSource, parseRelationships, parseSheetElements, parseWorkbookTabIndex, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
-import { readDefinedNameText, readWorksheetTagAttribute } from './xlsx-structure.ts'
+import { readDefinedNameText, readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
 import { areaToRef, parseRef, sheetTableParts } from './xlsx-table-add.ts'
 
 export class PivotParseError extends Error {}
@@ -190,15 +190,15 @@ function parseLayoutLines(containerXml: string | null, axisFieldCount: number): 
 /// Marks a pivotCacheDefinition so Excel rebuilds the cache on open — the
 /// recomputed output cells and the stale cacheRecords then re-converge.
 export function setPivotRefreshOnLoad(cacheDefinitionXml: string): string {
-  const root = /<pivotCacheDefinition\b[^>]*>/.exec(cacheDefinitionXml)
-  if (!root) throw new PivotParseError('pivotCacheDefinition part has no root element.')
-  const updated = root[0].includes(' refreshOnLoad="')
-    ? root[0].replace(/ refreshOnLoad="[^"]*"/, ' refreshOnLoad="1"')
-    : root[0].replace('<pivotCacheDefinition', '<pivotCacheDefinition refreshOnLoad="1"')
+  const root = readRootOpening(cacheDefinitionXml)
+  if (!root || root.name.slice(root.name.lastIndexOf(':') + 1) !== 'pivotCacheDefinition') {
+    throw new PivotParseError('pivotCacheDefinition part has no root element.')
+  }
+  const updated = updateWorksheetTagAttribute(root.opening, 'refreshOnLoad', '1')
   return (
-    cacheDefinitionXml.slice(0, root.index) +
+    cacheDefinitionXml.slice(0, root.start) +
     updated +
-    cacheDefinitionXml.slice(root.index + root[0].length)
+    cacheDefinitionXml.slice(root.start + root.opening.length)
   )
 }
 
