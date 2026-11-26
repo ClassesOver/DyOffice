@@ -90,6 +90,40 @@ const FILTER_SOURCE = [
 ]
 
 describe('pivot filters recompute', () => {
+  it.each([
+    ['count', '<top10 top="false" val="2"/>'],
+    ['count', '<top10 percent="true" val="2"/>'],
+    ['valueGreaterThan', '<customFilters><customFilter operator="greaterThanOrEqual" val="30"/></customFilters>'],
+    ['valueBetween', '<customFilters and="false"><customFilter operator="greaterThanOrEqual" val="10"/>' +
+      '<customFilter operator="lessThanOrEqual" val="30"/></customFilters>'],
+  ])('keeps unsupported %s variants out of refresh', (type, conditions) => {
+    const definition = parsePivotDefinition(
+      pivotXmlWithFilters(
+        `<filters><filter fld="0" type="${type}" iMeasureFld="0"><autoFilter ref="A1">` +
+        `<filterColumn colId="0">${conditions}</filterColumn></autoFilter></filter></filters>`,
+      ),
+      FILTER_CACHE_XML,
+    )
+    expect(definition.filters).toEqual([])
+    expect(definition.unsupported).toHaveLength(1)
+  })
+
+  it('reads an inclusive between filter in either condition order', () => {
+    const definition = parsePivotDefinition(
+      pivotXmlWithFilters(
+        '<filters><filter fld="0" type="valueBetween" iMeasureFld="0"><autoFilter ref="A1">' +
+        '<filterColumn colId="0"><customFilters and="true"><customFilter operator="lessThanOrEqual" val="30"/>' +
+        '<customFilter operator="greaterThanOrEqual" val="10"/></customFilters>' +
+        '</filterColumn></autoFilter></filter></filters>',
+      ),
+      FILTER_CACHE_XML,
+    )
+    expect(definition.unsupported).toEqual([])
+    expect(definition.filters).toEqual([{ kind: 'value', field: 0, dataField: 0, op: 'between', from: 10, to: 30 }])
+    expect(recomputePivotData(growPivotDefinition(definition, FILTER_SOURCE).definition, FILTER_SOURCE).data)
+      .toEqual([[30], [10], [40]])
+  })
+
   it('parses supported label and value filter types', () => {
     const definition = parsePivotDefinition(
       pivotXmlWithFilters(

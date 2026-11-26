@@ -987,12 +987,13 @@ function buildFiltersXml(addition: PivotAddition): string {
             : 'captionBeginsWith'
       // The autoFilter match value expresses contains/begins-with via wildcards
       // (same notation Excel uses).
+      const literal = filter.value.replace(/[?*~]/g, '~$&')
       const wildcard =
         filter.op === 'equal'
-          ? filter.value
+          ? literal
           : filter.op === 'contains'
-            ? `*${filter.value}*`
-            : `${filter.value}*`
+            ? `*${literal}*`
+            : `${literal}*`
       return (
         `<filter fld="${filter.field}" type="${type}" evalOrder="-1" id="${id}" ` +
         `stringValue1="${escapeAttribute(filter.value)}">` +

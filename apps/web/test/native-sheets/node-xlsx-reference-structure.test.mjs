@@ -369,11 +369,19 @@ test(
             location: { startRow: 0, startColumn: 9, endRow: 5, endColumn: 10 },
             name: 'SecondSales', fieldNames: ['Region', 'Amount'], rowFieldIndices: [0],
             rowItems: ['East', 'West'], values: [{ fieldIndex: 1, agg: 'sum' }],
+            filters: [{ kind: 'label', field: 0, op: 'contains', value: 'Part?*~' }],
           }],
         })
         const registered = await inspect(withSecond)
         assert.deepEqual(registered.sheets[1].pivotTables.map((pivot) => pivot.outputRef).sort(),
           ['F1:G6', 'J1:K6'])
+        const secondPivot = registered.sheets[1].pivotTables.find((pivot) => pivot.outputRef === 'J1:K6')
+        const secondTable = await xmlPart(await JSZip.loadAsync(withSecond), secondPivot.path)
+        assert.match(secondTable, /<customFilter val="\*Part~\?~\*~~\*"\/>/)
+        const secondDefinition = await runtime.sheetsPackageReader(withSecond, undefined, {
+          path: secondPivot.path, cachePath: secondPivot.cachePath,
+        })
+        assert.deepEqual(secondDefinition.filters, [{ kind: 'label', field: 0, op: 'contains', value: 'Part?*~' }])
         const workbook = await xmlPart(await JSZip.loadAsync(withSecond), wbPath)
         assert.ok(workbook.includes(decoy))
         assert.match(workbook, /<pivotCaches><pivotCache cacheId='&#49;'[^>]*\/><pivotCache cacheId="2"[^>]*\/><\/pivotCaches>/)
@@ -389,6 +397,15 @@ test(
         assert.equal(reopened.dataFields[0].field, 1)
         assert.equal(reopened.dataFields[0].subtotal, 'count')
         assert.deepEqual(reopened.unsupported, [])
+        const percentFilter = await editPart(imported, changed.path, (xml) =>
+          xml.replace('</pivotTableDefinition>', '<filters><filter fld="0" iMeasureFld="0" type="count">' +
+            '<autoFilter ref="A1"><filterColumn colId="0"><top10 percent="true" val="10"/>' +
+            '</filterColumn></autoFilter></filter></filters></pivotTableDefinition>'))
+        const percentDefinition = await runtime.sheetsPackageReader(percentFilter, undefined, {
+          path: changed.path, cachePath: changed.cachePath,
+        })
+        assert.deepEqual(percentDefinition.filters, [])
+        assert.match(percentDefinition.unsupported.join(), /does not support recompute/)
       },
     )
 

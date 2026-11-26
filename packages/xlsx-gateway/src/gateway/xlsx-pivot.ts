@@ -3,7 +3,7 @@
 /// consumes. Anything outside the supported envelope lands in `unsupported`
 /// (with a reason) instead of producing a silently wrong refresh.
 
-import type { PivotFilterDef } from '../domain/pivot-filters.ts'
+import type { PivotFilterDef, PivotValueFilter } from '../domain/pivot-filters.ts'
 import { parsePivotFormula } from '../domain/pivot-formula.ts'
 import { isValidGrouping, type PivotFieldGrouping } from '../domain/pivot-grouping.ts'
 import {
@@ -347,6 +347,56 @@ async function resolveDefinedNameSource(
   return { sourceSheet: sheet.name, sourceRef: areaToRef(area) }
 }
 
+function numericFilterValue(element: ScopedElement | null): number {
+  const value = element?.attributes.get('val')?.trim()
+  return value ? Number(value) : Number.NaN
+}
+
+function readValueFilter(
+  filter: ScopedElement,
+  type: string,
+  field: number,
+  dataField: number,
+): PivotValueFilter | undefined {
+  const columns = elements(firstElement(filter, 'autoFilter'), 'filterColumn')
+  const [column] = columns
+  if (columns.length !== 1 || !column) return undefined
+  if (type === 'count') {
+    const top10 = firstElement(column, 'top10')
+    const count = numericFilterValue(top10)
+    const top = top10?.attributes.get('top') ?? 'true'
+    const percent = top10?.attributes.get('percent') ?? 'false'
+    if (Number.isInteger(count) && count >= 1 &&
+      (top === 'true' || top === '1') && (percent === 'false' || percent === '0')) {
+      return { kind: 'value', field, dataField, op: 'top', count }
+    }
+    return undefined
+  }
+
+  const custom = firstElement(column, 'customFilters')
+  const conditions = elements(custom, 'customFilter')
+  const [condition] = conditions
+  if (type === 'valueGreaterThan' && conditions.length === 1 &&
+    condition?.attributes.get('operator') === 'greaterThan') {
+    const from = numericFilterValue(condition)
+    if (Number.isFinite(from)) return { kind: 'value', field, dataField, op: 'greaterThan', from }
+  }
+  const conjunction = custom?.attributes.get('and')
+  if (type === 'valueBetween' && conditions.length === 2 &&
+    (conjunction === 'true' || conjunction === '1')) {
+    const from = numericFilterValue(conditions.find((entry) =>
+      attr(entry, 'operator') === 'greaterThanOrEqual',
+    ) ?? null)
+    const to = numericFilterValue(conditions.find((entry) =>
+      attr(entry, 'operator') === 'lessThanOrEqual',
+    ) ?? null)
+    if (Number.isFinite(from) && Number.isFinite(to)) {
+      return { kind: 'value', field, dataField, op: 'between', from, to }
+    }
+  }
+  return undefined
+}
+
 export function parsePivotDefinition(
   pivotTableXml: string,
   cacheDefinitionXml: string,
@@ -581,10 +631,6 @@ export function parsePivotDefinition(
     const type = attr(filterXml, 'type') ?? ''
     const field = Number(attr(filterXml, 'fld') ?? '0')
     const dataField = Number(attr(filterXml, 'iMeasureFld') ?? '0')
-    const filterColumn = firstElement(firstElement(filterXml, 'autoFilter'), 'filterColumn')
-    const customValues = elements(firstElement(filterColumn, 'customFilters'), 'customFilter').map((custom) =>
-      Number(attr(custom, 'val') ?? 'NaN'),
-    )
     const labelOp = LABEL_FILTER_OPS[type]
     if (labelOp !== undefined) {
       filters.push({
@@ -593,37 +639,13 @@ export function parsePivotDefinition(
         op: labelOp,
         value: attr(filterXml, 'stringValue1') ?? '',
       })
-    } else if (type === 'count') {
-      const top10 = firstElement(filterColumn, 'top10')
-      const count = Number(top10 === null ? 'NaN' : (attr(top10, 'val') ?? 'NaN'))
-      // top="0" means bottom N, which is unsupported.
-      if (!Number.isFinite(count) || count < 1 || (top10 !== null && attr(top10, 'top') === '0')) {
-        unsupported.push(
-          `value/label filter (pivotFilters) type "${type}" does not support recompute`,
-        )
-        continue
-      }
-      filters.push({ kind: 'value', field, dataField, op: 'top', count })
-    } else if (type === 'valueGreaterThan' && Number.isFinite(customValues[0])) {
-      filters.push({ kind: 'value', field, dataField, op: 'greaterThan', from: customValues[0]! })
-    } else if (
-      type === 'valueBetween' &&
-      Number.isFinite(customValues[0]) &&
-      Number.isFinite(customValues[1])
-    ) {
-      filters.push({
-        kind: 'value',
-        field,
-        dataField,
-        op: 'between',
-        from: Math.min(customValues[0]!, customValues[1]!),
-        to: Math.max(customValues[0]!, customValues[1]!),
-      })
-    } else {
-      unsupported.push(
-        `value/label filter (pivotFilters) type "${type}" does not support recompute`,
-      )
+      continue
     }
+    const valueFilter = readValueFilter(filterXml, type, field, dataField)
+    if (valueFilter) filters.push(valueFilter)
+    else unsupported.push(
+      `value/label filter (pivotFilters) type "${type}" does not support recompute`,
+    )
   }
 
   return {

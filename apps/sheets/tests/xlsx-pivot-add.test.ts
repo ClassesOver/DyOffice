@@ -590,6 +590,20 @@ describe('multi-level column pivots', () => {
     expect(recomputePivotData(definition, source).data).toEqual([[10], [10]])
   })
 
+  it.each([
+    ['equal', 'Part~?~*~~'],
+    ['contains', '*Part~?~*~~*'],
+    ['beginsWith', 'Part~?~*~~*'],
+  ] as const)('escapes literal wildcard characters in a %s label filter', async (op, criteria) => {
+    const filter = { kind: 'label', field: 0, op, value: 'Part?*~' } as const
+    const plan = await planWith([pivotAddition({ filters: [filter] })])
+    const table = plan.added.get('xl/pivotTables/pivotTable1.xml')!
+    expect(table).toContain('stringValue1="Part?*~"')
+    expect(table).toContain(`<customFilter val="${criteria}"/>`)
+    const cache = plan.added.get('xl/pivotCache/pivotCacheDefinition1.xml')!
+    expect(parsePivotDefinition(table, cache).filters).toEqual([filter])
+  })
+
   it('writes a top-N value filter with iMeasureFld and top10', async () => {
     const plan = await planWith([
       pivotAddition({
