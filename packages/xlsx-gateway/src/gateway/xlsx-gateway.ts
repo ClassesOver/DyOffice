@@ -21,7 +21,7 @@ import type {
   WorkbookVisualEdit,
 } from '../shared/edit-schemas.ts'
 import { spillsDynamicArray, withFutureFunctionMarkers } from './future-functions.ts'
-import { decodeXlsxEscapes, decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
+import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
 import { MINIMAL_STYLESHEET_XML } from './xlsx-default-styles.ts'
 import {
   applyWorkbookLinkBreak,
@@ -82,7 +82,7 @@ import {
 } from './xlsx-filter.ts'
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
-import { elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
+import { decodeCellText, elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
   SheetAllocation,
@@ -3980,15 +3980,6 @@ function escapeXmlText(input: string): string {
 
 function escapeCellText(input: string): string {
   return escapeXmlText(encodeXlsxEscapes(input))
-}
-
-/// Mirrors the sidecar: raw CRLF folds first so `_x000D_` + LF (Excel's CR LF)
-/// ends up as one line break.
-function decodeCellText(input: string, preserveSpace = true): string {
-  let text = decodeCellMarkup(input).replace(/\r\n?/g, '\n')
-  // The XML whitespace policy applies before escaped spreadsheet characters.
-  if (!preserveSpace) text = text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')
-  return decodeXlsxEscapes(text).replace(/\r\n?/g, '\n')
 }
 
 function escapeXmlAttribute(input: string): string {

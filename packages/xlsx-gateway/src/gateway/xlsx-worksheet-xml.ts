@@ -1,4 +1,4 @@
-import { decodeXmlText } from './xlsx-escapes.ts'
+import { decodeXlsxEscapes, decodeXmlText } from './xlsx-escapes.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 
 export const X14_CF_EXT_URI = '{78C0D931-6437-407D-A8EE-F0AAD7539E65}'
@@ -95,6 +95,15 @@ export function elementText(inner: string): string {
           : decodeXmlText(text),
     )
     .join('')
+}
+
+/// Mirrors the sidecar: raw CRLF folds first so `_x000D_` + LF (Excel's CR LF)
+/// ends up as one line break.
+export function decodeCellText(input: string, preserveSpace = true): string {
+  let text = elementText(input).replace(/\r\n?/g, '\n')
+  // The XML whitespace policy applies before escaped spreadsheet characters.
+  if (!preserveSpace) text = text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')
+  return decodeXlsxEscapes(text).replace(/\r\n?/g, '\n')
 }
 
 export function extensionUri(extension: ScopedElement): string | undefined {

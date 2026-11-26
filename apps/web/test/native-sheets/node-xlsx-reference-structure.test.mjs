@@ -455,6 +455,8 @@ test(
         const row = index + 1
         const cells = line.map((value, column) => {
           const cell = `${'ABC'[column]}${row}`
+          if (cell === 'A2') return "<c r='A2' t='inlineStr'><is><r><t>0</t></r><r><t>01</t></r></is></c>"
+          if (cell === 'B2') return "<c r='B2'><v><![CDATA[-10]]></v></c>"
           if (typeof value === 'boolean') return `<c r="${cell}" t="b"><v>${Number(value)}</v></c>`
           return typeof value === 'number'
             ? `<c r="${cell}"><v>${value}</v></c>`
@@ -463,7 +465,8 @@ test(
         return `<row r="${row}">${cells}</row>`
       }).join('')
       const rankedSource = await editPart(base, one, (xml) =>
-        xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData>${rankedRows}</sheetData>`))
+        xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/,
+          `<sheetData><!-- <c r="B2"><v>999</v></c> -->${rankedRows}</sheetData>`))
       const ranked = buildPivotLayout(rankedGrid, {
         rowFields: 'Region', pageFields: [{ field: 'Page', item: 'true' }],
         values: [{ field: 'Amount', agg: 'sum' }],
@@ -478,8 +481,9 @@ test(
         }],
       })
       const savedRank = (await inspect(rankedWorkbook)).sheets[1].pivotTables[0]
-      assert.match(await xmlPart(await JSZip.loadAsync(rankedWorkbook), 'xl/pivotCache/pivotCacheRecords1.xml'),
-        /<r><x v="1"\/><n v="100"\/><x v="1"\/><\/r>/)
+      const rankedRecords = await xmlPart(await JSZip.loadAsync(rankedWorkbook), 'xl/pivotCache/pivotCacheRecords1.xml')
+      assert.match(rankedRecords, /<r><x v="0"\/><n v="-10"\/><x v="0"\/><\/r>/)
+      assert.match(rankedRecords, /<r><x v="1"\/><n v="100"\/><x v="1"\/><\/r>/)
       const restoredRank = await runtime.sheetsPackageReader(rankedWorkbook, undefined, {
         path: savedRank.path, cachePath: savedRank.cachePath,
       })

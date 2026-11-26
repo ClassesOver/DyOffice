@@ -58,6 +58,27 @@ async function planWith(
 }
 
 describe('pivot additions', () => {
+  it('reads cache data from real source cells and preserves rich-text members', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      '<row r="1"><c r="A1" t="inlineStr"><is><t>Region</t></is></c></row>' +
+      '<!-- <row r="2"><c r="B2"><v>999</v></c></row> -->' +
+      "<row r='2'><c r='A2' t='inlineStr'><is><r><t>E&#97;</t></r><r><t>st</t></r>" +
+      '<rPh sb="0" eb="1"><t>phantom</t></rPh></is></c><c><v>&#49;0</v></c></row>' +
+      '<row><c r="A3" t="s"><v>1</v></c><c r="B3"><v><![CDATA[20]]></v></c></row></sheetData>'))
+    zip.file('xl/sharedStrings.xml',
+      '<sst><si/><!-- <si><t>phantom</t></si> --><si><r><t>We</t></r><r><t>st</t></r></si></sst>')
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 },
+      fieldNames: ['Region', 'Amount'], rowItems: ['East', 'West'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    const records = plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')!
+    expect(records).toContain('<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r>')
+  })
+
   it('writes and refreshes Boolean dimension members without creating duplicate labels', async () => {
     const zip = await JSZip.loadAsync(await buildEditFixture())
     const path = 'xl/worksheets/sheet1.xml'

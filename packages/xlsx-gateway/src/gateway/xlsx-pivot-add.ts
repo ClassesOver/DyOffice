@@ -1,5 +1,5 @@
 import { ensureRelationshipNamespace, relationshipNamespaceOverride } from './xlsx-namespace.ts'
-import { columnLabel } from '../domain/cell-address.ts'
+import { columnIndex, columnLabel } from '../domain/cell-address.ts'
 import { shortDateNumFmtId } from '../shared/short-date.ts'
 import { isValidPivotFilter, type PivotFilterDef } from '../domain/pivot-filters.ts'
 import { formatPivotFormula, parsePivotFormula } from '../domain/pivot-formula.ts'
@@ -19,11 +19,22 @@ import {
   registerContentTypeOverride,
   relativeTarget,
   relsPathFor,
+  resolveRelTarget,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
 import { parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
 import { childElements } from './xlsx-style-entries.ts'
-import { isElement, prefixOf, scopedChildren, withBody, withNamespaces } from './xlsx-worksheet-xml.ts'
+import {
+  decodeCellText,
+  elementText,
+  isElement,
+  prefixOf,
+  scopedChildren,
+  withBody,
+  withNamespaces,
+  worksheetRoot,
+  type ScopedElement,
+} from './xlsx-worksheet-xml.ts'
 
 /// Persists pivots created in the editor as native OOXML parts: a cache
 /// definition with real sharedItems + records derived from the source range,
@@ -329,24 +340,25 @@ export async function registerWorkbookPivotCache(
 /// Strings are the decoded text; numbers are JS numbers; null = blank.
 type SourceValue = string | number | boolean | null
 
-/// Read the shared-string table from the package (returns [] when absent).
-async function readPivotSharedStrings(pkg: MutablePackage): Promise<readonly string[]> {
-  if (!(await pkg.has('xl/sharedStrings.xml'))) return []
-  const xml = await pkg.readText('xl/sharedStrings.xml')
-  return [...xml.matchAll(/<si(?:\s[^>]*)?>([\s\S]*?)<\/si>/g)].map((m) =>
-    [...(m[1] ?? '').matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
-      .map((tm) => decodePivotXmlEntities(tm[1] ?? ''))
-      .join(''),
-  )
+function childByName(element: ScopedElement, name: string): ScopedElement | undefined {
+  return scopedChildren(element).find((child) => isElement(child, name, element.namespace))
 }
 
-function decodePivotXmlEntities(s: string): string {
-  return s
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&')
+function pivotCellText(element: ScopedElement): string {
+  return scopedChildren(element).map((child) => {
+    if (child.namespace !== element.namespace) return ''
+    const text = child.local === 't' ? child : child.local === 'r' ? childByName(child, 't') : undefined
+    return text ? decodeCellText(text.inner, text.attributes.get('xml:space') === 'preserve') : ''
+  }).join('')
+}
+
+async function readPivotSharedStrings(pkg: MutablePackage): Promise<readonly string[]> {
+  if (!(await pkg.has('xl/sharedStrings.xml'))) return []
+  const [element] = childElements(await pkg.readText('xl/sharedStrings.xml'))
+  if (!element) return []
+  const root = withNamespaces(element, new Map())
+  return scopedChildren(root).filter((child) => isElement(child, 'si', root.namespace))
+    .map(pivotCellText)
 }
 
 /// Resolve the worksheet path for a source sheet name. Attribute order and
@@ -365,8 +377,7 @@ async function resolveSourcePath(pkg: MutablePackage, sheetName: string): Promis
     (entry) => !entry.external && entry.type.endsWith('/worksheet') && relationshipIdsMatch(entry.id, relationshipId),
   )?.target
   if (!relTarget) throw new PivotAddError(`Relationship ${relationshipId} not found.`)
-  const target = relTarget.replace(/^\/?xl\//, '')
-  return `xl/${target.replace(/^\.\//, '')}`
+  return resolveRelTarget('xl/workbook.xml', relTarget)
 }
 
 /// Extract data rows (skipping the header row) from the source area.
@@ -384,51 +395,56 @@ async function readSourceRows(
     // fall back to empty records and let refreshOnLoad handle it at open time.
     return []
   }
+  const worksheet = worksheetRoot(worksheetXml)
+  const sheetData = worksheet && childByName(worksheet, 'sheetData')
+  if (!sheetData) return []
   const sharedStrings = await readPivotSharedStrings(pkg)
-
   const { startRow, startColumn, endRow, endColumn } = addition.sourceArea
-  // Row 0-indexed in PivotArea; row 0 is the header → data starts at row 1
-  const rows: SourceValue[][] = []
-  for (let r = startRow + 1; r <= endRow; r++) {
-    const row: SourceValue[] = []
-    for (let c = startColumn; c <= endColumn; c++) {
-      const address = `${columnLabel(c)}${r + 1}`
-      row.push(extractCellValue(worksheetXml, address, sharedStrings))
+  const rows = Array.from({ length: endRow - startRow }, () =>
+    new Array<SourceValue>(endColumn - startColumn + 1).fill(null),
+  )
+
+  let rowIndex = -1
+  for (const row of scopedChildren(sheetData)) {
+    if (!isElement(row, 'row', sheetData.namespace)) continue
+    const rowNumber = row.attributes.get('r')
+    rowIndex = rowNumber === undefined ? rowIndex + 1 : Number(rowNumber) - 1
+    let column = -1
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', row.namespace)) continue
+      const address = cell.attributes.get('r')
+      let cellRow = rowIndex
+      if (address === undefined) {
+        column += 1
+      } else {
+        const position = /^([A-Z]+)([1-9][0-9]*)$/.exec(address)
+        if (!position) continue
+        column = columnIndex(position[1]!)
+        cellRow = Number(position[2]) - 1
+      }
+      if (column < startColumn || column > endColumn) continue
+      const outputRow = rows[cellRow - startRow - 1]
+      if (outputRow) outputRow[column - startColumn] = extractCellValue(cell, sharedStrings)
     }
-    rows.push(row)
   }
   return rows
 }
 
-/// Extract the value from a single cell in worksheet XML.
-function extractCellValue(
-  worksheetXml: string,
-  address: string,
-  sharedStrings: readonly string[],
-): SourceValue {
-  const cellPattern = new RegExp(
-    `<c\\b([^>]*)\\br="${address.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"([^>]*?)(?:/>|>([\\s\\S]*?)</c>)`,
-  )
-  const match = cellPattern.exec(worksheetXml)
-  if (!match) return null
-
-  const attributes = `${match[1] ?? ''}${match[2] ?? ''}`
-  const body = match[3] ?? ''
-  const type = /\bt="([^"]+)"/.exec(attributes)?.[1]
-
+function extractCellValue(cell: ScopedElement, sharedStrings: readonly string[]): SourceValue {
+  const type = cell.attributes.get('t')
   if (type === 'inlineStr') {
-    return decodePivotXmlEntities(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/.exec(body)?.[1] ?? '')
+    const inline = childByName(cell, 'is')
+    return inline ? pivotCellText(inline) : ''
   }
-  const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
-  if (rawValue === undefined) return null
-  if (type === 's') {
-    const idx = Number(rawValue)
-    return sharedStrings[idx] ?? null
-  }
-  if (type === 'str') return decodePivotXmlEntities(rawValue)
-  if (type === 'b') return rawValue === '1' || rawValue === 'true'
-  const n = Number(rawValue)
-  return Number.isFinite(n) ? n : decodePivotXmlEntities(rawValue)
+  const value = childByName(cell, 'v')
+  if (!value) return null
+  if (type === 'str') return decodeCellText(value.inner)
+  const raw = elementText(value.inner).trim()
+  if (raw === '') return null
+  if (type === 's') return sharedStrings[Number(raw)] ?? null
+  if (type === 'b') return raw === '1' || raw === 'true'
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : raw
 }
 
 // ─── Cache records XML builder ───────────────────────────────────────────────
