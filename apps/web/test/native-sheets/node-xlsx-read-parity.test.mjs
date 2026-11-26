@@ -59,6 +59,29 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('saves defined names with CDATA and ignores declaration lookalikes in package comments', async () => {
+    const workbookComment = '<!-- <sheet name="Ghost" sheetId="999" r:id="rId1"/> -->'
+    const relationships = 'xl/_rels/workbook.xml.rels'
+    const relationshipComment = '<!-- <Relationship Id="rId1" Target="worksheets/missing.xml" ' +
+      'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/> -->'
+    const formula = 'IF(Acceptance!A1<2,"A&B","<sheet/>")'
+    const bytes = await workbook({
+      [workbookPath]: (xml) => xml.replace('<sheets>', '<sheets>' + workbookComment).replace('</definedNames>',
+        `<definedName name="Literal"><![CDATA[${formula}]]></definedName></definedNames>`),
+      [relationships]: (xml) => xml.replace('<Relationship Id=', relationshipComment + '<Relationship Id='),
+    })
+    const saved = await saveValue(bytes, 0, 'edited')
+    for (const input of [bytes, saved]) {
+      const inspected = await native.inspect(input)
+      assert.deepEqual(inspected.sheets.map(({ name }) => name), ['Acceptance'])
+      assert.deepEqual(inspected.definedNames.find(({ name }) => name === 'Literal'), { name: 'Literal', formula })
+    }
+    assert.equal((await native.readRange(saved, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })).cells[0].value, 'edited')
+    const zip = await JSZip.loadAsync(saved)
+    assert.ok((await zip.file(workbookPath).async('string')).includes(workbookComment))
+    assert.ok((await zip.file(relationships).async('string')).includes(relationshipComment))
+  })
+
   await t.test('reads literal CDATA in cell text and preserves it through an adjacent edit', async () => {
     const bytes = await workbook({
       [sheetPath]: worksheet(`<sheetData><row r="1">

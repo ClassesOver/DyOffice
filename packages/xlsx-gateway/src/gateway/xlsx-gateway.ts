@@ -610,18 +610,13 @@ async function readWorkbookCells(
   const sharedStrings = await readSharedTextEntries(zip, readRunStyle)
   const sheets: ImportedWorksheet[] = []
   const sheetNamesById: Record<string, string> = {}
-  const sheetPattern = /<sheet\b((?:"[^"]*"|'[^']*'|[^>"'])*?)\/?>/g
-  let match: RegExpExecArray | null
-  while ((match = sheetPattern.exec(workbookXml)) !== null) {
-    const attributes = match[1] ?? ''
-    const name = readXmlAttribute(attributes, 'name')
-    const sheetNumber = readXmlAttribute(attributes, 'sheetId')
+  for (const { name, xml } of parseSheetElements(workbookXml)) {
+    const sheetNumber = readXmlAttribute(xml, 'sheetId')
     if (!name || !sheetNumber) continue
-    const decodedName = decodeXmlText(name)
     const id = `sheet-${sheetNumber}`
     let worksheetXml: string
     try {
-      worksheetXml = await zip.readText(await resolveWorksheetPath(zip, decodedName))
+      worksheetXml = await zip.readText(await resolveWorksheetPath(zip, name))
     } catch (error) {
       // a dangling relationship or missing part drops only this sheet;
       // malformed/escaping targets are security rejections and still abort
@@ -631,8 +626,8 @@ async function readWorkbookCells(
     const { cells, storedCellCount } = parseWorksheetCells(
       inferWorksheetAddresses(worksheetXml), sharedStrings, includeFormulaCache, readRunStyle,
     )
-    sheets.push({ id, name: decodedName, cells, ...(readRunStyle ? { storedCellCount } : {}) })
-    sheetNamesById[id] = decodedName
+    sheets.push({ id, name, cells, ...(readRunStyle ? { storedCellCount } : {}) })
+    sheetNamesById[id] = name
   }
   if (sheets.length === 0) throw new Error('Workbook contains no readable worksheets.')
   return {
@@ -2742,15 +2737,9 @@ async function resolveWorksheetPath(
     throw new Error(`Sheet "${sheetName}" was not found in workbook.xml.`)
 
   const relationshipsXml = await reader.readText('xl/_rels/workbook.xml.rels')
-  // Two-step lookup: attribute order varies by producer (openpyxl puts
-  // Target before Id), so never assume Id precedes Target.
-  const relationshipXml = new RegExp(
-    `<Relationship\\b[^>]*\\bId="${escapeRegExp(relationshipId)}"[^>]*/?>`,
-  ).exec(relationshipsXml)?.[0]
-  const targetMatch =
-    relationshipXml === undefined ? undefined : /\bTarget="([^"]+)"/.exec(relationshipXml)?.[1]
-  if (!targetMatch) throw new Error(`Relationship ${relationshipId} was not found.`)
-  const target = decodeXmlText(targetMatch).replace(/^\/?xl\//, '')
+  const relationship = parseRelationships(relationshipsXml).find(({ id }) => id === relationshipId)
+  if (!relationship?.target) throw new Error(`Relationship ${relationshipId} was not found.`)
+  const target = relationship.target.replace(/^\/?xl\//, '')
   return resolveRelTarget('xl/workbook.xml', target)
 }
 

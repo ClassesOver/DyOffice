@@ -357,13 +357,14 @@ export interface SheetElement {
 
 export function parseSheetElements(workbookXml: string): SheetElement[] {
   const elements: SheetElement[] = []
-  for (const match of workbookXml.matchAll(
-    new RegExp(`<sheet\\b${TAG_ATTRIBUTES}(?:/>|>[\\s\\S]*?</sheet>)`, 'g'),
-  )) {
-    const xml = match[0]
-    const name = readAttribute(xml, 'name')
+  const span = findRootChild(workbookXml, 'workbook', 'sheets')
+  if (!span) return elements
+  const [sheets] = childElements(workbookXml.slice(span.start, span.end))
+  for (const { name: tag, xml, opening } of childElements(sheets?.inner ?? '')) {
+    if (tag.slice(tag.lastIndexOf(':') + 1) !== 'sheet') continue
+    const name = readWorksheetTagAttribute(opening, 'name')
     if (name === undefined) continue
-    const state = readAttribute(xml, 'state')
+    const state = readWorksheetTagAttribute(opening, 'state')
     elements.push({
       xml,
       name: decodeAttribute(name),
@@ -372,7 +373,7 @@ export function parseSheetElements(workbookXml: string): SheetElement[] {
       // The relationships namespace is conventionally bound to "r", but any
       // prefix is legal — fall back to whatever prefix the producer chose.
       relationshipId:
-        readAttribute(xml, 'r:id') ?? /(?:^|\s)[A-Za-z_][\w.-]*:id="([^"]*)"/.exec(xml)?.[1],
+        readWorksheetTagAttribute(opening, 'r:id') ?? /(?:^|\s)[A-Za-z_][\w.-]*:id="([^"]*)"/.exec(opening)?.[1],
     })
   }
   return elements
@@ -660,16 +661,17 @@ export interface ParsedRelationship {
 
 export function parseRelationships(relsXml: string): ParsedRelationship[] {
   const entries: ParsedRelationship[] = []
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*?\/>/g)) {
-    const element = match[0]
-    const type = readAttribute(element, 'Type')
-    const target = readAttribute(element, 'Target')
+  const root = childElements(relsXml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+  for (const { name, opening } of childElements(root?.inner ?? '')) {
+    if (name.slice(name.lastIndexOf(':') + 1) !== 'Relationship') continue
+    const type = readWorksheetTagAttribute(opening, 'Type')
+    const target = readWorksheetTagAttribute(opening, 'Target')
     if (type === undefined || target === undefined) continue
     entries.push({
-      id: readAttribute(element, 'Id'),
+      id: readWorksheetTagAttribute(opening, 'Id'),
       type: decodeAttribute(type),
       target: decodeAttribute(target),
-      external: readAttribute(element, 'TargetMode') === 'External',
+      external: readWorksheetTagAttribute(opening, 'TargetMode') === 'External',
     })
   }
   return entries
