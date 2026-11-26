@@ -175,6 +175,14 @@ describe('recomputePivotData', () => {
     expect(recomputePivotData(definition, SOURCE).data.at(-1)).toEqual([30, 41, 71])
   })
 
+  it('keeps typed Boolean members distinct from identical text in imported caches', () => {
+    const cache = CACHE_XML.replace('<s v="East"/><s v="West"/>', '<b v="1"/><s v="true"/>')
+    const source = [['Region', 'Product', 'Sales'], [true, 'A', 10], ['true', 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
+  })
+
   it('fails closed when the source grows a new category', () => {
     const definition = parsePivotDefinition(PIVOT_XML, CACHE_XML)
     expect(() => recomputePivotData(definition, [...SOURCE, ['North', 'A', 9]])).toThrow(

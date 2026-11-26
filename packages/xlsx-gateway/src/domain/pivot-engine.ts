@@ -43,9 +43,26 @@ interface AxisPredicate {
 /// Grouping key of a source cell on a dimension field: grouped fields
 /// (date/numeric ranges) are first bucketed into labels, then keyed with pivot
 /// semantics — the cache's sharedItems are the group labels, so both sides agree.
-function sourceKey(definition: PivotDefinition, field: number, value: SourceCell): string {
-  const grouping = definition.fields[field]?.grouping
-  return groupKey(grouping ? groupLabel(grouping, value) : value)
+function pivotSourceKey(definition: PivotDefinition): (field: number, value: SourceCell) => string {
+  const textBooleansByField = new Map<number, Set<boolean>>()
+  return (field, value) => {
+    const cache = definition.fields[field]
+    if (cache?.grouping) return groupKey(groupLabel(cache.grouping, value))
+    if (typeof value !== 'boolean') return groupKey(value)
+    let textBooleans = textBooleansByField.get(field)
+    if (!textBooleans) {
+      const shared = cache?.sharedItems ?? []
+      textBooleans = new Set([true, false].filter((candidate) =>
+        !shared.includes(candidate) && shared.some((item) =>
+          typeof item === 'string' && groupKey(item) === groupKey(String(candidate)),
+        ),
+      ))
+      textBooleansByField.set(field, textBooleans)
+    }
+    // Our generated caches store dimension labels as text. Prefer typed
+    // Boolean members when an imported cache distinguishes them from text.
+    return groupKey(textBooleans.has(value) ? String(value) : value)
+  }
 }
 
 /// Fixed members of a layout line as source-value predicates. The data-field
@@ -199,6 +216,7 @@ export function recomputePivotData(
   sourceValues: readonly (readonly SourceCell[])[],
 ): PivotRecomputeResult {
   assertSourceMatchesCache(definition, sourceValues)
+  const sourceKey = pivotSourceKey(definition)
   const rows = sourceValues.slice(1)
 
   // Layout drift: a new distinct value in an axis/page column cannot be
@@ -209,7 +227,7 @@ export function recomputePivotData(
   for (const field of axisFieldSet) {
     const known = new Set(definition.fields[field]?.sharedItems.map(groupKey) ?? [])
     for (const row of rows) {
-      if (!known.has(sourceKey(definition, field, row[field]))) {
+      if (!known.has(sourceKey(field, row[field]))) {
         throw new PivotRefreshError(
           `The source data column "${definition.fields[field]?.name}" contains a new item not in the cache ` +
             `("${String(row[field])}") — refresh the layout in Excel before it can be recomputed.`,
@@ -236,10 +254,10 @@ export function recomputePivotData(
 
   const visibleRows = rows.filter((row) => {
     for (const [field, hidden] of hiddenKeys) {
-      if (hidden.has(sourceKey(definition, field, row[field]))) return false
+      if (hidden.has(sourceKey(field, row[field]))) return false
     }
     for (const page of pagePredicates) {
-      if (sourceKey(definition, page.field, row[page.field]) !== page.key) return false
+      if (sourceKey(page.field, row[page.field]) !== page.key) return false
     }
     return true
   })
@@ -249,7 +267,7 @@ export function recomputePivotData(
       .filter((row) =>
         predicates.every(
           (predicate) =>
-            sourceKey(definition, predicate.field, row[predicate.field]) === predicate.key,
+            sourceKey(predicate.field, row[predicate.field]) === predicate.key,
         ),
       )
       .map((row) => row[field])
@@ -572,6 +590,7 @@ export function growPivotDefinition(
   sourceValues: readonly (readonly SourceCell[])[],
 ): PivotGrowth {
   assertSourceMatchesCache(definition, sourceValues)
+  const sourceKey = pivotSourceKey(definition)
   const rows = sourceValues.slice(1)
 
   // For each axis/filter field: collect members missing from the cache (in
@@ -583,10 +602,10 @@ export function growPivotDefinition(
     const known = new Set(definition.fields[field]?.sharedItems.map(groupKey) ?? [])
     const additions: PivotSharedItem[] = []
     for (const row of rows) {
-      const value = grouping ? groupLabel(grouping, row[field]) : row[field]
-      const key = groupKey(value)
+      const key = sourceKey(field, row[field])
       if (known.has(key)) continue
       known.add(key)
+      const value = grouping ? groupLabel(grouping, row[field]) : row[field]
       // Blank cells are represented in the cache as <m/> (null).
       additions.push(value === undefined || value === '' ? null : value)
     }
@@ -719,6 +738,7 @@ function reapplyPivotFilters(
     return { fieldItems: definition.fieldItems, changedFields }
   }
 
+  const sourceKey = pivotSourceKey(definition)
   const filteredFields = new Set(definition.filters.map(({ field }) => field))
   const valueFields = new Set(definition.filters.flatMap((filter) =>
     filter.kind === 'value' ? [filter.field] : [],
@@ -789,13 +809,13 @@ function reapplyPivotFilters(
   }
   const rowPassesBase = (row: readonly SourceCell[]): boolean => {
     for (const [field, hidden] of hiddenKeys) {
-      if (hidden.has(sourceKey(definition, field, row[field]))) return false
+      if (hidden.has(sourceKey(field, row[field]))) return false
     }
     for (const page of pagePredicates) {
-      if (sourceKey(definition, page.field, row[page.field]) !== page.key) return false
+      if (sourceKey(page.field, row[page.field]) !== page.key) return false
     }
     for (const [field, allowed] of allowedByField) {
-      const member = ensureMemberKeys(field).get(sourceKey(definition, field, row[field]))
+      const member = ensureMemberKeys(field).get(sourceKey(field, row[field]))
       if (member === undefined || !allowed.has(member)) return false
     }
     return true
@@ -812,7 +832,7 @@ function reapplyPivotFilters(
     const rowsByMember = new Map<number, (readonly SourceCell[])[]>()
     for (const row of rows) {
       if (!rowPassesBase(row)) continue
-      const member = keys.get(sourceKey(definition, filter.field, row[filter.field]))
+      const member = keys.get(sourceKey(filter.field, row[filter.field]))
       if (member === undefined) continue
       const bucket = rowsByMember.get(member)
       if (bucket) bucket.push(row)
@@ -960,8 +980,9 @@ function rebuildAxisLines(
     // (same result as a refresh).
     if (resolvable) addCombo(keys)
   }
+  const sourceKey = pivotSourceKey(definition)
   for (const row of rows) {
-    addCombo(realLevels.map(({ field }) => sourceKey(definition, field, row[field])))
+    addCombo(realLevels.map(({ field }) => sourceKey(field, row[field])))
   }
 
   const subtotalDepths = new Set(

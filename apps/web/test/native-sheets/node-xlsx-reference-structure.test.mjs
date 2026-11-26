@@ -448,13 +448,14 @@ test(
       assert.deepEqual(recomputePivotData(refreshedLayout.definition, dataRows).data, [[50], [50]])
 
       const rankedGrid = [
-        ['Region', 'Amount', 'Page'], ['East', -10, 'A'],
-        ['West', 100, 'B'], ['North', 'unavailable', 'A'],
+        ['Region', 'Amount', 'Page'], ['East', -10, true],
+        ['West', 100, false], ['North', 'unavailable', true],
       ]
       const rankedRows = rankedGrid.map((line, index) => {
         const row = index + 1
         const cells = line.map((value, column) => {
           const cell = `${'ABC'[column]}${row}`
+          if (typeof value === 'boolean') return `<c r="${cell}" t="b"><v>${Number(value)}</v></c>`
           return typeof value === 'number'
             ? `<c r="${cell}"><v>${value}</v></c>`
             : `<c r="${cell}" t="inlineStr"><is><t>${value}</t></is></c>`
@@ -464,7 +465,7 @@ test(
       const rankedSource = await editPart(base, one, (xml) =>
         xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData>${rankedRows}</sheetData>`))
       const ranked = buildPivotLayout(rankedGrid, {
-        rowFields: 'Region', pageFields: [{ field: 'Page', item: 'A' }],
+        rowFields: 'Region', pageFields: [{ field: 'Page', item: 'true' }],
         values: [{ field: 'Amount', agg: 'sum' }],
         filters: [{ kind: 'value', field: 'Region', valueIndex: 0, op: 'top', count: 1 }],
       })
@@ -477,6 +478,8 @@ test(
         }],
       })
       const savedRank = (await inspect(rankedWorkbook)).sheets[1].pivotTables[0]
+      assert.match(await xmlPart(await JSZip.loadAsync(rankedWorkbook), 'xl/pivotCache/pivotCacheRecords1.xml'),
+        /<r><x v="1"\/><n v="100"\/><x v="1"\/><\/r>/)
       const restoredRank = await runtime.sheetsPackageReader(rankedWorkbook, undefined, {
         path: savedRank.path, cachePath: savedRank.cachePath,
       })

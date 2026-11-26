@@ -327,7 +327,7 @@ export async function registerWorkbookPivotCache(
 
 /// One raw source row: element per cacheField, in fieldNames order.
 /// Strings are the decoded text; numbers are JS numbers; null = blank.
-type SourceValue = string | number | null
+type SourceValue = string | number | boolean | null
 
 /// Read the shared-string table from the package (returns [] when absent).
 async function readPivotSharedStrings(pkg: MutablePackage): Promise<readonly string[]> {
@@ -426,7 +426,7 @@ function extractCellValue(
     return sharedStrings[idx] ?? null
   }
   if (type === 'str') return decodePivotXmlEntities(rawValue)
-  if (type === 'b') return rawValue === '1' ? 1 : 0
+  if (type === 'b') return rawValue === '1' || rawValue === 'true'
   const n = Number(rawValue)
   return Number.isFinite(n) ? n : decodePivotXmlEntities(rawValue)
 }
@@ -437,6 +437,7 @@ function extractCellValue(
 /// Each <r> element has one child per cacheField:
 ///   - dimension fields (rowFieldIndices, columnFieldIndex): <x v="N"/> (sharedItems index)
 ///   - numeric value fields: <n v="V"/>
+///   - Boolean values outside dimension fields: <b v="0"/> or <b v="1"/>
 ///   - blank cells: <m/>
 ///   - string-type value fields (unusual): <s v="TEXT"/>
 function buildCacheRecordsXml(
@@ -501,6 +502,7 @@ function buildCacheRecordsXml(
           return `<x v="${idx}"/>`
         }
         if (value === null || value === '') return '<m/>'
+        if (typeof value === 'boolean') return `<b v="${value ? '1' : '0'}"/>`
         if (typeof value === 'number') return `<n v="${value}"/>`
         const n = Number(value)
         if (Number.isFinite(n)) return `<n v="${n}"/>`

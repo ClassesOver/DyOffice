@@ -58,6 +58,30 @@ async function planWith(
 }
 
 describe('pivot additions', () => {
+  it('writes and refreshes Boolean dimension members without creating duplicate labels', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      '<row r="1"><c r="A1" t="inlineStr"><is><t>Flag</t></is></c><c r="B1" t="inlineStr"><is><t>Amount</t></is></c></row>' +
+      '<row r="2"><c r="A2" t="b"><v>1</v></c><c r="B2"><v>10</v></c></row>' +
+      '<row r="3"><c r="A3" t="b"><v>false</v></c><c r="B3"><v>20</v></c></row></sheetData>'))
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 },
+      fieldNames: ['Flag', 'Amount'], rowItems: ['true', 'false'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    const definition = parsePivotDefinition(
+      plan.added.get('xl/pivotTables/pivotTable1.xml')!,
+      plan.added.get('xl/pivotCache/pivotCacheDefinition1.xml')!,
+    )
+    const source = [['Flag', 'Amount'], [true, 10], [false, 20]]
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10], [20], [30]])
+    const records = plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')!
+    expect(records).toContain('<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r>')
+  })
+
   it('writes the cache pair, the definition, and every linkage', async () => {
     const plan = await planWith([pivotAddition()])
 
