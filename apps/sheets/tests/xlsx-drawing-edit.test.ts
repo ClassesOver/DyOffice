@@ -579,6 +579,50 @@ describe('applyVisualEdits', () => {
     expect(entries.get('[Content_Types].xml')).not.toContain('drawing1.xml')
   })
 
+  it('removes the real drawing hookup and retains comments and other prefixed relationships', async () => {
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const comment = '<!-- <drawing r:id="rId5"/> -->'
+    const worksheet = `<worksheet><sheetData/>${comment}</worksheet>`
+    const drawing = `<drawing xmlns:d="${relationshipNs}" d:id='rId&#53;'></drawing>`
+    const other = `<p:Relationship Id="rId6" Type="${relationshipNs}/hyperlink" Target="https://example.org/" TargetMode="External"/>`
+    const rels = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">'
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const entries = new Map([
+      [PATH, '<xdr:wsDr><xdr:oneCellAnchor><xdr:sp/></xdr:oneCellAnchor></xdr:wsDr>'],
+      [sheetPath, worksheet.replace('</worksheet>', drawing + '</worksheet>')],
+      [relsPath, rels + `<p:Relationship Id="rId5" Type="${relationshipNs}/drawing" Target="../drawings/drawing1.xml"/>` + other + '</p:Relationships>'],
+      ['[Content_Types].xml', CONTENT_TYPES],
+    ])
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+
+    expect(entries.get(sheetPath)).toBe(worksheet)
+    expect(entries.get(relsPath)).toBe(rels + other + '</p:Relationships>')
+    expect(entries.has(PATH)).toBe(false)
+  })
+
+  it('keeps a drawing that is also referenced from real extension markup', async () => {
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const worksheet = `<worksheet xmlns:r="${relationshipNs}"><sheetData/><drawing r:id="rId5"/>` +
+      "<extLst><ext uri='urn:example'><extra xmlns='urn:example' r:id='rId&#53;'/></ext></extLst></worksheet>"
+    const rels = `<Relationships><Relationship Id="rId5" Type="${relationshipNs}/drawing" Target="../drawings/drawing1.xml"/></Relationships>`
+    const entries = new Map([
+      [PATH, '<xdr:wsDr><xdr:oneCellAnchor><xdr:sp/></xdr:oneCellAnchor></xdr:wsDr>'],
+      [sheetPath, worksheet],
+      [relsPath, rels],
+      ['[Content_Types].xml', CONTENT_TYPES],
+    ])
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+
+    expect(entries.get(sheetPath)).toBe(worksheet)
+    expect(entries.get(relsPath)).toBe(rels)
+    expect(entries.get(PATH)).toBe('<xdr:wsDr></xdr:wsDr>')
+  })
+
   it('preserves an empty drawing hookup that still has an unsupported relationship', async () => {
     const entries = new Map([
       [

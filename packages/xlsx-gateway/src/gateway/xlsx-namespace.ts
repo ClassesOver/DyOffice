@@ -6,6 +6,8 @@
 /// their bytes; anything ambiguous returns the input unchanged (the save
 /// then fails exactly as it did before this pass existed).
 
+import { decodeXmlText } from './xlsx-escapes.ts'
+
 const NORMALIZABLE_NAMESPACES = new Set([
   'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
   'http://schemas.openxmlformats.org/package/2006/relationships',
@@ -32,6 +34,17 @@ function rootOpeningTag(xml: string) {
 
 export function readRootStartTag(xml: string): string {
   return rootOpeningTag(xml)?.[0] ?? ''
+}
+
+export function hasXmlAttributeValue(xml: string, encodedValue: string): boolean {
+  const value = decodeXmlText(encodedValue)
+  for (const [tag, closing, name] of xml.matchAll(MARKUP)) {
+    if (!name || closing) continue
+    for (const [, , double, single] of tag.matchAll(ATTRIBUTES)) {
+      if (decodeXmlText(double ?? single ?? '') === value) return true
+    }
+  }
+  return false
 }
 
 function isOfficeRelationshipNamespace(uri: string | undefined): boolean {

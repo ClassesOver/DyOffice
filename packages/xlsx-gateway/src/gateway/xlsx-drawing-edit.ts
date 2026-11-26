@@ -12,13 +12,17 @@ import {
   solidFillXml,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
+import { hasXmlAttributeValue, readRelationshipId } from './xlsx-namespace.ts'
 import {
+  findRelationshipsRoot,
   parseRelationships,
   partPathForRels,
+  relationshipIdsMatch,
   removePartOverride,
   removeRelationshipById,
   type ParsedRelationship,
 } from './xlsx-sheets.ts'
+import { isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
 
 export class VisualEditError extends Error {}
 
@@ -27,7 +31,6 @@ export class VisualEditError extends Error {}
 // counts anchors by local name, so the index pairing must see those too.
 const ANCHOR_PATTERN =
   /<([A-Za-z_][\w.-]*:)?(twoCellAnchor|oneCellAnchor|absoluteAnchor)\b[\s\S]*?<\/\1\2>/g
-const ATTRIBUTE_PATTERN = /\s[\w:.-]+="([^"]*)"/g
 const CHART_OWNED_RELATIONSHIP_TYPES =
   /\/(?:chartStyle|chartColorStyle|package|oleObject|theme|themeOverride|chartUserShapes|image|externalLink)$/
 const CHART_OWNED_PATHS =
@@ -135,7 +138,7 @@ export async function applyVisualEdits(
         touchedEntries,
       )
     }
-    const orphaned = droppedHyperlinkRelIds.filter((id) => !xmlHasAttributeValue(next, id))
+    const orphaned = droppedHyperlinkRelIds.filter((id) => !hasXmlAttributeValue(next, id))
     if (orphaned.length > 0 && (await pkg.has(relsPath))) {
       let relsXml = await pkg.readText(relsPath)
       for (const id of orphaned) relsXml = removeRelationshipById(relsXml, id)
@@ -177,8 +180,8 @@ async function cleanupRemovedAnchorRelationships(
   for (const [relId, kind] of kindsById) {
     // A second anchor can intentionally reuse the same relationship. Removing
     // one anchor must not break the survivor.
-    if (xmlHasAttributeValue(remainingDrawingXml, relId)) continue
-    const relationship = parseRelationships(relsXml).find((entry) => entry.id === relId)
+    if (hasXmlAttributeValue(remainingDrawingXml, relId)) continue
+    const relationship = parseRelationships(relsXml).find((entry) => relationshipIdsMatch(entry.id, relId))
     if (!relationship) {
       throw new VisualEditError(`The deleted ${kind} has no drawing relationship.`)
     }
@@ -311,7 +314,7 @@ async function cleanupEmptyDrawingHookup(
   const drawingRelsPath = relsPathFor(drawingPath)
   if (
     (await pkg.has(drawingRelsPath)) &&
-    /<Relationship\b/.test(await pkg.readText(drawingRelsPath))
+    findRelationshipsRoot(await pkg.readText(drawingRelsPath))?.inner.trim() !== ''
   ) {
     return
   }
@@ -343,14 +346,17 @@ async function cleanupEmptyDrawingHookup(
     return
   }
   const worksheetXml = await pkg.readText(owner)
-  const hookups = [...worksheetXml.matchAll(/<(?:[\w.-]+:)?drawing\b[^>]*\/>/g)].filter((match) =>
-    xmlHasAttributeValue(match[0], relationship.id as string),
+  const root = worksheetRoot(worksheetXml)
+  if (!root) return
+  const hookups = scopedChildren(root).filter((child) =>
+    isElement(child, 'drawing', root.namespace) &&
+    relationshipIdsMatch(relationship.id, readRelationshipId(child.opening, '', root.opening)),
   )
-  if (hookups.length !== 1 || hookups[0]?.index === undefined) return
   const hookup = hookups[0]
-  const withoutHookup =
-    worksheetXml.slice(0, hookup.index) + worksheetXml.slice(hookup.index + hookup[0].length)
-  if (xmlHasAttributeValue(withoutHookup, relationship.id)) return
+  if (hookups.length !== 1 || !hookup || hookup.inner.trim() !== '') return
+  const offset = root.start + root.opening.length + hookup.start
+  const withoutHookup = worksheetXml.slice(0, offset) + worksheetXml.slice(offset + hookup.xml.length)
+  if (hasXmlAttributeValue(withoutHookup, relationship.id)) return
   const worksheetRels = await pkg.readText(relsPath)
   const withoutRelationship = removeRelationshipById(worksheetRels, relationship.id)
   if (withoutRelationship === worksheetRels) return
@@ -360,7 +366,7 @@ async function cleanupEmptyDrawingHookup(
 
   pkg.write(owner, withoutHookup)
   touchedEntries.add(owner)
-  if (/<Relationship\b/.test(withoutRelationship)) {
+  if (findRelationshipsRoot(withoutRelationship)?.inner.trim() !== '') {
     pkg.write(relsPath, withoutRelationship)
     touchedEntries.add(relsPath)
   } else {
@@ -381,13 +387,6 @@ function insideAlternateContent(xml: string, position: number): boolean {
   const opens = prefix.match(/<mc:AlternateContent\b/g)?.length ?? 0
   const closes = prefix.match(/<\/mc:AlternateContent>/g)?.length ?? 0
   return opens > closes
-}
-
-function xmlHasAttributeValue(xml: string, value: string): boolean {
-  for (const match of xml.matchAll(ATTRIBUTE_PATTERN)) {
-    if (match[1] === value) return true
-  }
-  return false
 }
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
