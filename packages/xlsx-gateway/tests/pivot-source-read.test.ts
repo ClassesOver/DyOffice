@@ -58,14 +58,15 @@ function addition(): PivotAddition {
   }
 }
 
-async function cacheRecords(): Promise<string> {
+async function cacheRecords(worksheet = WORKSHEET, endRow = 1): Promise<string> {
   const pkg = inMemoryPackage({
     '[Content_Types].xml': CONTENT_TYPES,
     'xl/workbook.xml': WORKBOOK,
     'xl/_rels/workbook.xml.rels': WORKBOOK_RELS,
-    'xl/worksheets/sheet1.xml': WORKSHEET,
+    'xl/worksheets/sheet1.xml': worksheet,
   })
-  await applyPivotAdditions(pkg, [addition()], WORKBOOK, new Set())
+  const pivot = addition()
+  await applyPivotAdditions(pkg, [{ ...pivot, sourceArea: { ...pivot.sourceArea, endRow } }], WORKBOOK, new Set())
   return pkg.readText('xl/pivotCache/pivotCacheRecords1.xml')
 }
 
@@ -74,5 +75,20 @@ describe('pivot source cell reads', () => {
     const records = await cacheRecords()
     expect(records).toContain('count="1"')
     expect(records).toContain('<r><x v="0"/><m/><n v="9"/></r>')
+  })
+
+  it('preserves the grid value types in saved pivot cache records', async () => {
+    const worksheet = WORKSHEET.replace('</sheetData>', [
+      '<row r="3"><c r="B3" t="b"><v>unknown</v></c><c r="C3"><v>0x10</v></c></row>',
+      '<row r="4"><c r="B4" t="b"><v> false </v></c><c r="C4"><v> +.5e1 </v></c></row>',
+      '<row r="5"><c r="B5"><v> _x0041_ </v></c><c r="C5" t="e"><v>#DIV/0!</v></c></row>',
+      '<row r="6"><c r="B6" t="str"><v> 42 </v></c><c r="C6" t="str"><v>_x0001_</v></c></row>',
+      '</sheetData>',
+    ].join(''))
+    const records = await cacheRecords(worksheet, 5)
+    expect(records).toContain('<r><m/><m/><s v="0x10"/></r>')
+    expect(records).toContain('<r><m/><b v="0"/><n v="5"/></r>')
+    expect(records).toContain('<r><m/><s v=" A "/><s v="#DIV/0!"/></r>')
+    expect(records).toContain('<r><m/><n v="42"/><s v="_x0001_"/></r>')
   })
 })

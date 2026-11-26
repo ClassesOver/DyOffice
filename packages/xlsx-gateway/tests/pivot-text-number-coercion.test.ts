@@ -24,25 +24,23 @@ function totalFor(
 
 describe('pivot layout number coercion', () => {
   it('bakes text-formatted numbers the way the refresh engine aggregates them', () => {
-    // pivot-engine coerces with Number(String(value).trim()), so a refresh
-    // totals 150 here. The baked grid dropped both cells instead and left the
-    // value blank, so opening the file disagreed with refreshing it.
     expect(totalFor(TEXT_NUMBER_GRID)).toBe(150)
   })
 
   it('coerces a mix of stored numbers and text, ignoring unparseable cells', () => {
-    // Same filter as pivot-engine: a raw value counts when it is not
-    // null/'' and the coerced number is finite.
-    expect(
-      totalFor([
-        ['Region', 'Amount'],
-        ['East', 100],
-        ['East', ' 50 '],
-        ['East', 'n/a'],
-        ['East', ''],
-        ['East', null],
-      ]),
-    ).toBe(150)
+    const grid = [
+      ['Region', 'Amount'],
+      ['East', 100],
+      ['East', ' 50 '],
+      ['East', 'n/a'],
+      ['East', '0x10'],
+      ['East', '0b10'],
+      ['East', '   '],
+      ['East', ''],
+      ['East', null],
+    ]
+    expect(totalFor(grid)).toBe(150)
+    expect(totalFor(grid, 'min')).toBe(50)
   })
 
   it('keeps the numeric aggregates on text-formatted numbers', () => {

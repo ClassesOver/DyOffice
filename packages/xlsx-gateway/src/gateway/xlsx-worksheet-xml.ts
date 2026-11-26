@@ -105,6 +105,19 @@ export function elementText(inner: string): string {
     .join('')
 }
 
+export function booleanCellValue(value: string): boolean | null {
+  switch (value.trim()) {
+    case '1':
+    case 'true':
+      return true
+    case '0':
+    case 'false':
+      return false
+    default:
+      return null
+  }
+}
+
 export function sharedStringAt<T>(entries: readonly T[], indexText: string): T | undefined {
   const index = indexText.trim()
   return /^\+?\d+$/.test(index) ? entries[Number(index)] : undefined

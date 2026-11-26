@@ -5,6 +5,7 @@ import type {
   PivotLayoutLine,
   PivotSharedItem,
 } from '../gateway/xlsx-pivot.ts'
+import { finiteDecimalCellValue } from '../shared/decimal-cell-value.ts'
 import { allowedByValueFilter, matchesLabelFilter } from './pivot-filters.ts'
 import { evaluatePivotFormula, parsePivotFormula, type PivotFormulaAst } from './pivot-formula.ts'
 import { groupLabel } from './pivot-grouping.ts'
@@ -120,12 +121,7 @@ function aggregate(
   if (subtotal === 'count') {
     return values.filter((value) => value !== null && value !== undefined && value !== '').length
   }
-  const numbers = values
-    .map((value) => (typeof value === 'number' ? value : Number(String(value ?? '').trim())))
-    .filter((value, index) => {
-      const raw = values[index]
-      return raw !== null && raw !== undefined && raw !== '' && Number.isFinite(value)
-    })
+  const numbers = values.map(finiteDecimalCellValue).filter((value) => value !== null)
   switch (subtotal) {
     case 'countNums':
       return numbers.length

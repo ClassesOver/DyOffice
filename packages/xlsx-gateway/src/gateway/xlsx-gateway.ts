@@ -20,6 +20,7 @@ import type {
   WorkbookStyleEdit,
   WorkbookVisualEdit,
 } from '../shared/edit-schemas.ts'
+import { finiteDecimalCellValue } from '../shared/decimal-cell-value.ts'
 import { spillsDynamicArray, withFutureFunctionMarkers } from './future-functions.ts'
 import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
 import { MINIMAL_STYLESHEET_XML } from './xlsx-default-styles.ts'
@@ -83,7 +84,18 @@ import {
 } from './xlsx-filter.ts'
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
-import { decodeCellText, elementText, isElement, isSpreadsheetNamespace, scopedChildren, sharedStringAt, withNamespaces, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import {
+  booleanCellValue,
+  decodeCellText,
+  elementText,
+  isElement,
+  isSpreadsheetNamespace,
+  scopedChildren,
+  sharedStringAt,
+  withNamespaces,
+  worksheetRoot,
+  type ScopedElement,
+} from './xlsx-worksheet-xml.ts'
 import { isWorkbookSheetRelationship, readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
@@ -3943,27 +3955,6 @@ function parseWorksheetCells(
     }
   }
   return { cells, storedCellCount }
-}
-
-function booleanCellValue(value: string): boolean | null {
-  switch (value.trim()) {
-    case '1':
-    case 'true':
-      return true
-    case '0':
-    case 'false':
-      return false
-    default:
-      return null
-  }
-}
-
-function finiteDecimalCellValue(value: string): number | null {
-  const text = value.trim()
-  // Number() also accepts JavaScript-only spellings such as 0x10 and 0b10.
-  if (!/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(text)) return null
-  const number = Number(text)
-  return Number.isFinite(number) ? number : null
 }
 
 function booleanCellText(value: string): string {

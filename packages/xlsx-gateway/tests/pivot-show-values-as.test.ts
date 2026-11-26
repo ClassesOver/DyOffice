@@ -815,6 +815,26 @@ describe('recompute engine (parsed XML)', () => {
     '</cacheFields>' +
     '</pivotCacheDefinition>'
 
+  it('refreshes numeric aggregates using decimal text and ignoring other spellings', () => {
+    const { data } = recomputePivotData(
+      parsePivotDefinition(PIVOT_XML('normal'), CACHE_XML),
+      [
+        ['Region', 'Product', 'Amount'],
+        ['East', 'A', ' 10 '],
+        ['East', 'A', '0x10'],
+        ['East', 'B', 20],
+        ['West', 'A', '   '],
+        ['West', 'B', 40],
+        ['West', 'B', '1e0'],
+      ],
+    )
+    expect(data).toEqual([
+      [10, 20, 30],
+      [0, 41, 41],
+      [10, 61, 71],
+    ])
+  })
+
   it('difference from a row-axis base item blanks its own rows', () => {
     const { data } = recomputePivotData(
       parsePivotDefinition(PIVOT_XML('difference', 0, 0), CACHE_XML),

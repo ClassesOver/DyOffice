@@ -2,6 +2,7 @@ import * as numfmt from 'numfmt'
 import { ensureRelationshipNamespace, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { columnIndex, columnLabel } from '../domain/cell-address.ts'
 import { BUILTIN_NUMBER_FORMATS } from '../shared/builtin-number-formats.ts'
+import { finiteDecimalCellValue } from '../shared/decimal-cell-value.ts'
 import { shortDateNumFmtId } from '../shared/short-date.ts'
 import { isValidPivotFilter, type PivotFilterDef } from '../domain/pivot-filters.ts'
 import { formatPivotFormula, parsePivotFormula } from '../domain/pivot-formula.ts'
@@ -24,10 +25,12 @@ import {
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
 import { decodeAttribute, parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
+import { encodeXlsxEscapes } from './xlsx-escapes.ts'
 import { readWorksheetTagAttribute } from './xlsx-structure.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import {
+  booleanCellValue,
   decodeCellText,
   elementText,
   isElement,
@@ -491,14 +494,14 @@ function extractCellValue(cell: ScopedElement, sharedStrings: readonly string[])
     return inline ? pivotCellText(inline) : ''
   }
   const value = childByName(cell, 'v')
-  if (!value) return null
+  if (!value || value.opening.endsWith('/>')) return null
   if (type === 'str') return decodeCellText(value.inner)
-  const raw = elementText(value.inner).trim()
-  if (raw === '') return null
+  const raw = elementText(value.inner)
+  if (raw.trim() === '') return null
   if (type === 's') return sharedStringAt(sharedStrings, raw) ?? null
-  if (type === 'b') return raw === '1' || raw === 'true'
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : raw
+  if (type === 'b') return booleanCellValue(raw)
+  if (type === 'e') return decodeCellText(value.inner)
+  return finiteDecimalCellValue(raw) ?? decodeCellText(value.inner)
 }
 
 // ─── Cache records XML builder ───────────────────────────────────────────────
@@ -577,9 +580,9 @@ function buildCacheRecordsXml(
         if (value === null || value === '') return '<m/>'
         if (typeof value === 'boolean') return `<b v="${value ? '1' : '0'}"/>`
         if (typeof value === 'number') return `<n v="${value}"/>`
-        const n = Number(value)
-        if (Number.isFinite(n)) return `<n v="${n}"/>`
-        return `<s v="${escapeAttribute(String(value))}"/>`
+        const n = finiteDecimalCellValue(value)
+        if (n !== null) return `<n v="${n}"/>`
+        return `<s v="${escapeAttribute(encodeXlsxEscapes(value))}"/>`
       })
       return `<r>${cells.join('')}</r>`
     })
