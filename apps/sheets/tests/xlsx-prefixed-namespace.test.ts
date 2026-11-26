@@ -116,6 +116,15 @@ describe('normalizeOoxmlPartPrefix', () => {
     )
   })
 
+  it('keeps foreign and empty default namespaces while normalizing SpreadsheetML elements', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><x:ext xmlns='urn:foreign'>` +
+      '<item><x:tag/><bare xmlns=""/></item></x:ext><x:sheetData/></x:worksheet>'
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<ext xmlns="${MAIN_NS}"><item xmlns="urn:foreign"><tag xmlns="${MAIN_NS}"/><bare xmlns=""/></item></ext>` +
+      '<sheetData/></worksheet>',
+    )
+  })
+
   it('leaves parts of other namespaces alone', () => {
     const chart =
       '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">' +

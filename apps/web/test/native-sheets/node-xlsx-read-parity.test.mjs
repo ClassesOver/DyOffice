@@ -127,6 +127,23 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     assert.ok(xml.includes(extension))
   })
 
+  await t.test('saves prefixed worksheets with a foreign default namespace in an extension', async () => {
+    const extension = '<payload xmlns="urn:example:extension"><item/><bare xmlns=""/></payload>'
+    const bytes = await workbook({
+      [sheetPath]: `<s:worksheet xmlns:s="${spreadsheet}"><s:sheetData>
+        <s:row r="1"><s:c r="A1"><s:v>7</s:v></s:c></s:row></s:sheetData>
+        <s:extLst><s:ext uri="urn:example:extension">${extension}</s:ext></s:extLst>
+      </s:worksheet>`,
+    })
+    const values = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }))
+      .cells.map(({ value }) => value)
+    assert.deepEqual(await values(bytes), [7])
+    const saved = await saveValue(bytes, 0, 42)
+    assert.deepEqual(await values(saved), [42])
+    const xml = await (await JSZip.loadAsync(saved)).file(sheetPath).async('string')
+    assert.ok(xml.includes(extension))
+  })
+
   await t.test('opens and saves both empty-tag and expanded worksheet declarations with single quotes', async () => {
     const declarations = [
       "<sheet name='Acceptance' sheetId=\"1\" r:id='rId1'/>",

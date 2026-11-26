@@ -60,7 +60,7 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
   }
   if (rootAliases.size === 0 && xml.indexOf(uri, root.index! + root[0].length) === -1) return xml
 
-  const defaults = new Set<number>()
+  const defaults = new Map<number, { value: string; start: number; end: number }>()
   const localAliases = new Map<number, Array<[alias: string, equivalent: boolean]>>()
   let hasEquivalentAlias = rootAliases.size > 0
   let retainPrefix = false
@@ -72,11 +72,14 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
     if (!attributes.includes('xmlns') && !(qualified && attributes.includes(qualified))
       && !attributes.includes('Requires') && !attributes.includes('Ignorable')
       && !attributes.includes('MustUnderstand')) continue
-    for (const [, key, double, single] of attributes.matchAll(ATTRIBUTES)) {
-      const value = double ?? single
+    for (const attribute of attributes.matchAll(ATTRIBUTES)) {
+      const [, key, double, single] = attribute
+      const value = double ?? single ?? ''
       if (key === 'xmlns') {
-        if (value !== uri || defaults.has(match.index!)) return xml
-        defaults.add(match.index!)
+        const offset = match.index!
+        if ((offset === root.index && value !== uri) || defaults.has(offset)) return xml
+        const start = attribute.index!
+        defaults.set(offset, { value, start, end: start + attribute[0].length })
       }
       if (key?.startsWith('xmlns:')) {
         const alias = key.slice('xmlns:'.length)
@@ -93,7 +96,7 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
       }
       if (qualified && key?.startsWith(qualified)) retainPrefix = true
       if (qualified && key && /(?:^|:)(?:Requires|Ignorable|MustUnderstand|ProcessContent|PreserveElements|PreserveAttributes)$/.test(key)
-        && value?.trim().split(/\s+/).some(token => token === prefix || token.startsWith(qualified))) retainPrefix = true
+        && value.trim().split(/\s+/).some(token => token === prefix || token.startsWith(qualified))) retainPrefix = true
       if (key === 'xmlns:r' && value !== OFFICE_RELATIONSHIPS_NAMESPACE) addRelationshipBinding = false
     }
   }
@@ -102,7 +105,7 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
   const relationshipBinding = addRelationshipBinding ? ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"` : ''
   const bindings = ` xmlns="${uri}"` + (retainPrefix ? declaration[0] : '') + relationshipBinding
   const declarationOffset = declaration.index! - rootName.length - 1
-  const scopes: Array<{ aliases: Set<string>; original: boolean; normalized: boolean }> = []
+  const scopes: Array<{ aliases: Set<string>; original: string; normalized: string }> = []
   return xml.replace(MARKUP, (tag, closing: string, name: string | undefined, offset: number) => {
     if (!name) return tag
     const parent = closing ? scopes.pop() : scopes.at(-1)
@@ -120,17 +123,21 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
     const normalizedName = stripPrefix ? name.slice(separator + 1) : name
     const tail = tag.slice(1 + closing.length + name.length)
     if (closing) return `</${normalizedName}${tail}`
-    const declaresDefault = defaults.has(offset)
-    const original = declaresDefault || parent?.original === true
-    const inherited = declaresDefault || parent?.normalized === true
-    const usesDefault = stripPrefix || (separator > 0 ? inherited : original)
-    if (!tag.endsWith('/>')) scopes.push({ aliases, original, normalized: usesDefault })
+    const localDefault = defaults.get(offset)
+    const original = localDefault?.value ?? parent?.original ?? ''
+    const inherited = localDefault?.value ?? parent?.normalized ?? ''
+    const normalized = stripPrefix ? uri : (separator > 0 ? inherited : original)
+    if (!tag.endsWith('/>')) scopes.push({ aliases, original, normalized })
     if (offset === root.index) {
-      if (declaresDefault) return `<${normalizedName}${relationshipBinding}${tail}`
+      if (localDefault) return `<${normalizedName}${relationshipBinding}${tail}`
       return `<${normalizedName}${tail.slice(0, declarationOffset)}${bindings}${tail.slice(declarationOffset + declaration[0].length)}`
     }
-    // Bare extension elements had no namespace before the root gained a default binding.
-    const binding = usesDefault === inherited ? '' : ` xmlns="${usesDefault ? uri : ''}"`
+    if (normalized === inherited) return `<${normalizedName}${tail}`
+    // Restore the original default on unqualified descendants if an ancestor's namespace changed.
+    const binding = ` xmlns="${normalized.replaceAll('"', '&quot;')}"`
+    if (localDefault) {
+      return `<${normalizedName}${tail.slice(0, localDefault.start)}${binding}${tail.slice(localDefault.end)}`
+    }
     return `<${normalizedName}${binding}${tail}`
   })
 }
