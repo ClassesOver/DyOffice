@@ -198,11 +198,18 @@ export function parseGridCellAddress(address: string): { row: number; column: nu
   return row < MAX_GRID_ROWS && column < MAX_GRID_COLUMNS ? { row, column } : undefined
 }
 
-export function worksheetData(xml: string): ScopedElement | undefined {
+// Direct SpreadsheetML children, with offsets relative to the full worksheet XML.
+export function worksheetChildren(xml: string): ScopedElement[] {
   const root = worksheetRoot(xml)
-  if (!root) return undefined
-  const data = scopedChildren(root).find((child) => isElement(child, 'sheetData', root.namespace))
-  return data && { ...data, start: root.start + root.opening.length + data.start }
+  if (!root) return []
+  const offset = root.start + root.opening.length
+  return scopedChildren(root)
+    .filter((child) => child.namespace === root.namespace)
+    .map((child) => ({ ...child, start: offset + child.start }))
+}
+
+export function worksheetData(xml: string): ScopedElement | undefined {
+  return worksheetChildren(xml).find((child) => child.local === 'sheetData')
 }
 
 function* worksheetRows(sheetData: ScopedElement) {

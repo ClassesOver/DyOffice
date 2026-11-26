@@ -135,4 +135,25 @@ test('Node XLSX preserves implicit and quoted coordinates on cell saves', async 
       [0, 2, 'Real'],
     ])
   })
+
+  await t.test('builds the saved worksheet dimension from grid cells only', async () => {
+    const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const extension = '<payload xmlns="urn:example:extension">' +
+      '<dimension ref="A1:K500"/><row r="900"><c r="J900"/></row></payload>'
+    for (const dimension of ['', '<dimension ref="A1"/>', "<dimension ref='B1'></dimension>"]) {
+      zip.file(path, `<worksheet xmlns="${spreadsheet}"><sheetPr/>${dimension}
+        <sheetData><row r="1"><c r="B1"><v>10</v></c><c><v>11</v></c></row></sheetData>
+        <extLst><ext uri="urn:example:extension">${extension}</ext></extLst>
+      </worksheet>`)
+      const input = await zip.generateAsync({ type: 'nodebuffer' })
+      const edit = sheetsSaveRequest('sheet-1', [{ row: 1, column: 0, writeValue: true, value: 12 }])
+      const saved = (await native.savePlan(input, await runtime.sheetsWorkbookPlanner(input, edit))).bytes
+      const savedXml = await (await JSZip.loadAsync(saved)).file(path).async('string')
+      assert.equal(XMLValidator.validate(savedXml), true)
+      assert.match(savedXml, /<sheetPr\s*\/>\s*<dimension ref="A1:C2"(?:\s*\/>|><\/dimension>)/)
+      assert.ok(savedXml.includes(extension))
+      const [{ rowCount, columnCount }] = (await native.inspect(saved)).sheets
+      assert.deepEqual([rowCount, columnCount], [2, 3])
+    }
+  })
 })

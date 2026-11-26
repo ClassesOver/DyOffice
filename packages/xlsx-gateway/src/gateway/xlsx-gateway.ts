@@ -203,6 +203,7 @@ import {
   translateSharedFormula,
   updateWorksheetTagAttribute,
   worksheetCellPositions,
+  worksheetChildren,
   worksheetData,
   type TableColumnInsertion,
 } from './xlsx-structure.ts'
@@ -1551,7 +1552,7 @@ export async function planCellEditsToXlsx(
       editsBySheet.get(sheetName) ?? [],
     )
     const materialized = materializeEditedSharedFormulaGroups(worksheetXml, cellMutations)
-    const dimensionPatch = worksheetDimensionPatcher(cellMutations, materialized)
+    const dimensionPatch = worksheetDimensionPatcher(cellMutations)
     const edited = transformWorksheetCells(
       materialized,
       cellMutations,
@@ -3354,7 +3355,7 @@ function transformWorksheetCells<T>(
   /// while the output is being assembled, so metadata like <dimension> is
   /// patched inside the same single-copy pass instead of respliced into one
   /// more full-size generation afterwards.
-  patchPrefix?: (prefix: string) => string,
+  patchPrefix?: (prefix: string, children: readonly ScopedElement[], sheetData: ScopedElement) => string,
 ): string {
   if (cellItems.size === 0) return worksheetXml
   worksheetXml = inferWorksheetAddresses(worksheetXml)
@@ -3371,7 +3372,8 @@ function transformWorksheetCells<T>(
     return cells.length === 0 ? '' : `<row r="${rowNumber}">${cells.join('')}</row>`
   }
 
-  const sheetData = worksheetData(worksheetXml)
+  const children = worksheetChildren(worksheetXml)
+  const sheetData = children.find((child) => child.local === 'sheetData')
   if (!sheetData) {
     if (!insertMissing || targetRows.map(buildRow).join('') === '') return worksheetXml
     throw new Error('Worksheet has no sheetData element.')
@@ -3381,14 +3383,14 @@ function transformWorksheetCells<T>(
     const rowsXml = targetRows.map(buildRow).join('')
     if (rowsXml === '') return worksheetXml
     const prefix = worksheetXml.slice(0, sheetData.start)
-    return (patchPrefix ? patchPrefix(prefix) : prefix) + withBody(sheetData, rowsXml) +
+    return (patchPrefix ? patchPrefix(prefix, children, sheetData) : prefix) + withBody(sheetData, rowsXml) +
       worksheetXml.slice(sheetData.start + sheetData.xml.length)
   }
 
   const bodyStart = sheetData.start + sheetData.opening.length
   const body = sheetData.inner
   const documentPrefix = worksheetXml.slice(0, bodyStart)
-  const parts: string[] = [patchPrefix ? patchPrefix(documentPrefix) : documentPrefix]
+  const parts: string[] = [patchPrefix ? patchPrefix(documentPrefix, children, sheetData) : documentPrefix]
   let cursor = 0
   let pendingIndex = 0
   for (const row of scopedChildren(sheetData)) {
@@ -3531,127 +3533,76 @@ function insertRowInOrder(worksheetXml: string, rowNumber: number, cellXml: stri
   throw new Error('Worksheet has no sheetData element.')
 }
 
-function worksheetDimensionPatcher<T>(
-  items: SheetCellItems<T>,
-  worksheetXml: string,
-): { patch: (prefix: string) => string; matched: () => boolean } | null {
+function worksheetDimensionPatcher<T>(items: SheetCellItems<T>) {
   if (items.size === 0) return null
-  let targetRow = 1
-  let targetColumn = 0
+  let firstRow = MAX_GRID_ROWS - 1
+  let lastRow = 0
+  let firstColumn = MAX_GRID_COLUMNS - 1
+  let lastColumn = 0
   for (const [row, columns] of items) {
-    targetRow = Math.max(targetRow, row)
-    for (const column of columns.keys()) targetColumn = Math.max(targetColumn, column)
+    firstRow = Math.min(firstRow, row - 1)
+    lastRow = Math.max(lastRow, row - 1)
+    for (const column of columns.keys()) {
+      firstColumn = Math.min(firstColumn, column)
+      lastColumn = Math.max(lastColumn, column)
+    }
   }
   let sawDimension = false
-  const patch = (prefix: string): string => {
-    // Also consume a paired empty form (<dimension ref="..."></dimension>) —
-    // replacing only the opening tag would orphan the closing tag and produce
-    // malformed XML.
-    const dimension = /<dimension\b[^>]*\bref="([^"]+)"[^>]*\/?>(?:\s*<\/dimension\s*>)?/.exec(
-      prefix,
-    )
-    if (!dimension?.[1]) return prefix
+  const patch = (prefix: string, children: readonly ScopedElement[], sheetData: ScopedElement): string => {
+    const dimension = children.find((child) => child.local === 'dimension' && child.start < sheetData.start)
+    const endpoints = dimension?.attributes.get('ref')?.replaceAll('$', '').split(':') ?? []
+    const start = parseGridCellAddress(endpoints[0] ?? '')
+    const end = parseGridCellAddress(endpoints.at(-1) ?? '')
+    if (!dimension || !start || !end || endpoints.length > 2) return prefix
+
     sawDimension = true
-    let currentRow = 1
-    let currentColumn = 0
-    for (const reference of dimension[1].split(':')) {
-      const cell = /^([A-Z]{1,3})([1-9][0-9]*)$/.exec(reference.replace(/\$/g, ''))
-      if (!cell?.[1] || !cell[2]) continue
-      currentRow = Math.max(currentRow, Number(cell[2]))
-      currentColumn = Math.max(currentColumn, lettersToColumn(cell[1]))
+    if (start.row <= firstRow && start.column <= firstColumn &&
+      end.row >= lastRow && end.column >= lastColumn) return prefix
+
+    // A stale declaration can omit existing cells as well as this save's edits.
+    let top = Math.min(start.row, firstRow)
+    let left = Math.min(start.column, firstColumn)
+    let bottom = Math.max(end.row, lastRow)
+    let right = Math.max(end.column, lastColumn)
+    for (const { row, column } of worksheetCellPositions(sheetData)) {
+      top = Math.min(top, row)
+      left = Math.min(left, column)
+      bottom = Math.max(bottom, row)
+      right = Math.max(right, column)
     }
-    if (currentRow >= targetRow && currentColumn >= targetColumn) return prefix
-    // The stated ref did not even cover this save's writes, so it cannot be
-    // trusted for anything else either (minimal writers ship A1:A1 over a
-    // populated sheet). Rescan the real used range — an allocation-free
-    // pointer walk, unlike the old whole-document rebuild — or cells outside
-    // both the old ref and this mutation set would stay beyond the declared
-    // extent and vanish from the streamed viewport on reopen.
-    const used = scanExplicitCellBounds(worksheetXml)
-    const start = dimension[1].replace(/\$/g, '').split(':')[0] ?? 'A1'
-    const end = toA1Address(
-      Math.max(currentRow, targetRow, used.row) - 1,
-      Math.max(currentColumn, targetColumn, used.column),
-    )
-    return (
-      prefix.slice(0, dimension.index) +
-      `<dimension ref="${start}:${end}"/>` +
-      prefix.slice(dimension.index + dimension[0].length)
-    )
+    const ref = `${toA1Address(top, left)}:${toA1Address(bottom, right)}`
+    return replaceDimensionRef(prefix, dimension, ref)
   }
   return { patch, matched: () => sawDimension }
 }
 
-/// Largest explicit ` r="XX9"` reference in the document (rows contribute
-/// their number; cells contribute both axes) via a rolling pointer walk that
-/// allocates nothing — implicit unaddressed cells are ignored, matching the
-/// historical full-scan fidelity.
-function scanExplicitCellBounds(xml: string): { row: number; column: number } {
-  let row = 1
-  let column = 0
-  let at = xml.indexOf(' r="')
-  while (at !== -1) {
-    let index = at + 4
-    let letters = 0
-    let letterCount = 0
-    while (index < xml.length) {
-      const code = xml.charCodeAt(index)
-      if (code < 65 || code > 90) break
-      letters = letters * 26 + (code - 64)
-      letterCount += 1
-      index += 1
-    }
-    let digits = 0
-    let sawDigit = false
-    while (index < xml.length) {
-      const code = xml.charCodeAt(index)
-      if (code < 48 || code > 57) break
-      digits = digits * 10 + (code - 48)
-      sawDigit = true
-      index += 1
-    }
-    // Only a clean `"`-terminated reference counts (letters are optional:
-    // a row's own r attribute still advances the row bound).
-    if (sawDigit && letterCount <= 3 && xml.charCodeAt(index) === 34) {
-      row = Math.max(row, digits)
-      if (letterCount > 0) column = Math.max(column, letters - 1)
-    }
-    at = xml.indexOf(' r="', index)
-  }
-  return { row, column }
+function replaceDimensionRef(xml: string, dimension: ScopedElement, ref: string): string {
+  const opening = updateWorksheetTagAttribute(dimension.opening, 'ref', ref)
+  return xml.slice(0, dimension.start) + opening + xml.slice(dimension.start + dimension.opening.length)
 }
 
-/// The sidecar uses worksheet dimension metadata to choose the streamable
-/// viewport. Some minimal workbooks start at A1:A1; after inserting cells the
-/// dimension must grow too, or a successful save appears to lose every cell
-/// outside A1 when the workbook is reopened.
+/// A worksheet without a usable dimension needs one covering the saved grid.
 function expandWorksheetDimensionToCells(worksheetXml: string): string {
-  let maximumRow = 1
-  let maximumColumn = 0
-  const include = (reference: string): void => {
-    const cleaned = reference.replace(/\$/g, '')
-    const cell = /^([A-Z]{1,3})([1-9][0-9]*)$/.exec(cleaned)
-    if (!cell?.[1] || !cell[2]) return
-    const row = Number(cell[2])
-    const column = lettersToColumn(cell[1])
-    maximumRow = Math.max(maximumRow, row)
-    maximumColumn = Math.max(maximumColumn, column)
+  const children = worksheetChildren(worksheetXml)
+  const sheetData = children.find((child) => child.local === 'sheetData')
+  if (!sheetData) return worksheetXml
+  let lastRow = 0
+  let lastColumn = 0
+  for (const { row, column } of worksheetCellPositions(sheetData)) {
+    lastRow = Math.max(lastRow, row)
+    lastColumn = Math.max(lastColumn, column)
   }
+  const lastCell = toA1Address(lastRow, lastColumn)
+  const ref = lastCell === 'A1' ? 'A1' : `A1:${lastCell}`
+  const dimension = children.find((child) => child.local === 'dimension')
+  if (dimension) return replaceDimensionRef(worksheetXml, dimension, ref)
 
-  const dimension = /<dimension\b[^>]*\bref="([^"]+)"[^>]*\/?>/.exec(worksheetXml)
-  if (dimension?.[1]) {
-    for (const reference of dimension[1].split(':')) include(reference)
-  }
-  for (const match of worksheetXml.matchAll(/<c\b[^>]*\br="([A-Z]{1,3}[1-9][0-9]*)"/g)) {
-    if (match[1]) include(match[1])
-  }
-
-  const last = toA1Address(maximumRow - 1, maximumColumn)
-  const reference = last === 'A1' ? 'A1' : `A1:${last}`
-  if (dimension) {
-    return worksheetXml.replace(/(<dimension\b[^>]*\bref=")[^"]+("[^>]*\/?>)/, `$1${reference}$2`)
-  }
-  return worksheetXml.replace(/(<worksheet\b[^>]*>)/, `$1<dimension ref="${reference}"/>`)
+  // SpreadsheetML places dimension immediately after the optional sheetPr.
+  const sheetPr = children.find((child) => child.local === 'sheetPr')
+  const at = sheetPr ? sheetPr.start + sheetPr.xml.length : (children[0] ?? sheetData).start
+  const rootName = readRootOpening(worksheetXml)?.name ?? 'worksheet'
+  const prefix = rootName.slice(0, rootName.indexOf(':') + 1)
+  return worksheetXml.slice(0, at) + `<${prefix}dimension ref="${ref}"/>` + worksheetXml.slice(at)
 }
 
 function serializeStyledCell(
