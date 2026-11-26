@@ -59,6 +59,37 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('registers newly created styles and spill metadata after XML comments', async () => {
+    const relsPath = 'xl/_rels/workbook.xml.rels'
+    const typesPath = '[Content_Types].xml'
+    const relComment = '<!-- </Relationships> -->'
+    const typeComment = '<!-- </Types> -->'
+    const input = await JSZip.loadAsync(await workbook({
+      [relsPath]: (xml) => xml.replace(/<Relationship\b[^>]*\/styles"[^>]*\/>/, '').replace('</Relationships>', relComment + '</Relationships >'),
+      [typesPath]: (xml) => xml.replace(/<Override\b[^>]*PartName="\/xl\/styles.xml"[^>]*\/>/, '').replace('</Types>', typeComment + '</Types >'),
+      [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData>'),
+    }))
+    input.remove(stylesPath)
+    const bytes = await input.generateAsync({ type: 'nodebuffer' })
+    const request = sheetsSaveRequest('sheet-1', [
+      { row: 0, column: 0, writeValue: false, value: null, style: { bold: true } },
+      { row: 0, column: 1, writeValue: true, value: null, formula: '=SEQUENCE(2)' },
+    ])
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    const zip = await JSZip.loadAsync(saved)
+    const rels = await zip.file(relsPath).async('string')
+    const types = await zip.file(typesPath).async('string')
+    assert.ok(rels.includes(relComment + '<Relationship'))
+    assert.ok(types.includes(typeComment + '<Override'))
+    assert.ok(rels.slice(rels.indexOf(relComment) + relComment.length).includes('Target="styles.xml"'))
+    assert.ok(rels.slice(rels.indexOf(relComment) + relComment.length).includes('Target="metadata.xml"'))
+    assert.ok(types.slice(types.indexOf(typeComment) + typeComment.length).includes('PartName="/xl/styles.xml"'))
+    assert.ok(types.slice(types.indexOf(typeComment) + typeComment.length).includes('PartName="/xl/metadata.xml"'))
+    assert.ok(zip.file(stylesPath))
+    assert.ok(zip.file('xl/metadata.xml'))
+    assert.match(await zip.file(sheetPath).async('string'), /<c r="B1"[^>]* cm="1"/)
+  })
+
   await t.test('registers a new worksheet with whitespace and comments in the content types root', async () => {
     const contentTypes = '[Content_Types].xml'
     const comment = '<!-- </Types> -->'

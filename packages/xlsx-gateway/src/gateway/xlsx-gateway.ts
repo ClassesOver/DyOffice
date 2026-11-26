@@ -35,7 +35,9 @@ import { applyChartEdit } from './xlsx-chart.ts'
 import { applyVisualEdits } from './xlsx-drawing-edit.ts'
 import { applyCellImageAdditions } from './xlsx-cell-image-add.ts'
 import {
+  appendRelationship,
   applyVisualAdditions,
+  registerContentTypeOverride,
   type ChartAdd,
   type DrawingAnchor,
   type ImageAdd,
@@ -95,7 +97,6 @@ import {
   classifyRemovedSheetRels,
   definedNamesReferenceSheet,
   definedNamesUseToken,
-  nextFreeRelationshipId,
   nextFreeRelationshipIds,
   nextWorkbookSheetIds,
   parseRelationships,
@@ -455,26 +456,23 @@ async function addDefaultStylesheet(
   pkg.add(stylesPath, DEFAULT_STYLESHEET_XML)
   touchedEntries.add(stylesPath)
 
+  await registerWorkbookPart(pkg, 'styles.xml', STYLES_REL_TYPE, STYLES_CONTENT_TYPE, touchedEntries)
+}
+
+async function registerWorkbookPart(
+  pkg: PackageEditor,
+  partName: string,
+  relationshipType: string,
+  contentType: string,
+  touchedEntries: Set<string>,
+): Promise<void> {
   const relationshipsPath = 'xl/_rels/workbook.xml.rels'
-  const relationships = await pkg.readText(relationshipsPath)
-  if (!relationships.includes(`Type="${STYLES_REL_TYPE}"`)) {
-    const relationship =
-      `<Relationship Id="${nextFreeRelationshipId(relationships)}" ` +
-      `Type="${STYLES_REL_TYPE}" Target="styles.xml"/>`
-    pkg.write(
-      relationshipsPath,
-      relationships.replace('</Relationships>', `${relationship}</Relationships>`),
-    )
+  const relationships = parseRelationships(await pkg.readText(relationshipsPath))
+  if (!relationships.some((entry) => !entry.external && entry.type === relationshipType)) {
+    await appendRelationship(pkg, relationshipsPath, relationshipType, partName)
     touchedEntries.add(relationshipsPath)
   }
-
-  const contentTypesPath = '[Content_Types].xml'
-  const contentTypes = await pkg.readText(contentTypesPath)
-  if (!contentTypes.includes('PartName="/xl/styles.xml"')) {
-    const override = `<Override PartName="/xl/styles.xml" ContentType="${STYLES_CONTENT_TYPE}"/>`
-    pkg.write(contentTypesPath, contentTypes.replace('</Types>', `${override}</Types>`))
-    touchedEntries.add(contentTypesPath)
-  }
+  await registerContentTypeOverride(pkg, `xl/${partName}`, contentType, touchedEntries)
 }
 
 const METADATA_REL_TYPE =
@@ -521,26 +519,7 @@ async function ensureDynamicArrayMetadata(
   pkg.add(metadataPath, DYNAMIC_ARRAY_METADATA_XML)
   touchedEntries.add(metadataPath)
 
-  const relationshipsPath = 'xl/_rels/workbook.xml.rels'
-  const relationships = await pkg.readText(relationshipsPath)
-  if (!relationships.includes(`Type="${METADATA_REL_TYPE}"`)) {
-    const relationship =
-      `<Relationship Id="${nextFreeRelationshipId(relationships)}" ` +
-      `Type="${METADATA_REL_TYPE}" Target="metadata.xml"/>`
-    pkg.write(
-      relationshipsPath,
-      relationships.replace('</Relationships>', `${relationship}</Relationships>`),
-    )
-    touchedEntries.add(relationshipsPath)
-  }
-
-  const contentTypesPath = '[Content_Types].xml'
-  const contentTypes = await pkg.readText(contentTypesPath)
-  if (!contentTypes.includes('PartName="/xl/metadata.xml"')) {
-    const override = `<Override PartName="/xl/metadata.xml" ContentType="${METADATA_CONTENT_TYPE}"/>`
-    pkg.write(contentTypesPath, contentTypes.replace('</Types>', `${override}</Types>`))
-    touchedEntries.add(contentTypesPath)
-  }
+  await registerWorkbookPart(pkg, 'metadata.xml', METADATA_REL_TYPE, METADATA_CONTENT_TYPE, touchedEntries)
   return 1
 }
 
