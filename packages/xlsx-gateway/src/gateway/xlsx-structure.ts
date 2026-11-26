@@ -472,77 +472,60 @@ function formatSize(size: number): string {
 /// file never materialized are created in order — but only when the op sets
 /// something (a default-reset on a missing row is already the default).
 function applyRowAttributeOp(xml: string, op: AxisAttributeOp): string {
-  // col-only op: never dispatched here, but narrow the union for the checks below
   if ('style' in op) return xml
-  // start/end are 0-based. The op schema caps `row`, but a direct caller need
-  // not, and an uncapped span materialises <row r="5000000">. Clamp the tail;
-  // a span starting outside the grid is dropped rather than written onto the
-  // last row in its place.
-  const start = op.start
+  // Do not materialize rows outside the Excel grid, even for direct callers.
+  const start = Math.max(0, op.start)
   const end = Math.min(op.end, MAX_GRID_ROWS - 1)
   if (start > end) return xml
-  const seen = new Set<number>()
-  let result = xml.replace(/<row\b([^>]*?)(\/>|>)/g, (full, attributes: string, close: string) => {
-    const rowNumber = /(?:^|\s)r="([0-9]+)"/.exec(attributes)?.[1]
-    if (rowNumber === undefined) return full
-    const rowIndex = Number(rowNumber) - 1
-    if (rowIndex < start || rowIndex > end) return full
-    seen.add(rowIndex)
-    let patched = attributes
-    if ('size' in op) {
-      patched = patched.replace(/\s*ht="[^"]*"/, '').replace(/\s*customHeight="[^"]*"/, '')
-      if (op.size !== null) patched += ` ht="${formatSize(op.size)}" customHeight="1"`
-    } else if ('level' in op) {
-      patched = patched.replace(/\s*outlineLevel="[^"]*"/, '')
-      if (op.level > 0) patched += ` outlineLevel="${op.level}"`
-      if (op.collapsed !== undefined) {
-        patched = patched.replace(/\s*collapsed="[^"]*"/, '')
-        if (op.collapsed) patched += ' collapsed="1"'
-      }
-    } else {
-      patched = patched.replace(/\s*hidden="[^"]*"/, '')
-      if (op.hidden) patched += ' hidden="1"'
-    }
-    return `<row${patched}${close}`
-  })
-  const setsSomething =
-    'size' in op
-      ? op.size !== null
-      : 'level' in op
-        ? op.level > 0 || op.collapsed === true
-        : op.hidden
-  if (!setsSomething) return result
-  const newAttributes =
-    'size' in op
-      ? ` ht="${formatSize(op.size ?? 0)}" customHeight="1"`
-      : 'level' in op
-        ? (op.level > 0 ? ` outlineLevel="${op.level}"` : '') +
-          (op.collapsed ? ' collapsed="1"' : '')
-        : ' hidden="1"'
-  for (let rowIndex = start; rowIndex <= end; rowIndex += 1) {
-    if (seen.has(rowIndex)) continue
-    result = insertEmptyRow(result, rowIndex + 1, newAttributes)
-  }
-  return result
-}
 
-function insertEmptyRow(worksheetXml: string, rowNumber: number, attributes: string): string {
-  const newRow = `<row r="${rowNumber}"${attributes}/>`
-  const rowStartPattern = /<row\b[^>]*?\br="([1-9][0-9]*)"/g
-  let match: RegExpExecArray | null
-  while ((match = rowStartPattern.exec(worksheetXml)) !== null) {
-    if (Number(match[1]) > rowNumber) {
-      return worksheetXml.slice(0, match.index) + newRow + worksheetXml.slice(match.index)
+  let names: string[]
+  let attributes: string
+  if ('size' in op) {
+    names = ['ht', 'customHeight']
+    attributes = op.size === null ? '' : ` ht="${formatSize(op.size)}" customHeight="1"`
+  } else if ('level' in op) {
+    names = op.collapsed === undefined ? ['outlineLevel'] : ['outlineLevel', 'collapsed']
+    attributes = (op.level > 0 ? ` outlineLevel="${op.level}"` : '') + (op.collapsed ? ' collapsed="1"' : '')
+  } else {
+    names = ['hidden']
+    attributes = op.hidden ? ' hidden="1"' : ''
+  }
+
+  const data = worksheetData(xml)
+  if (!data) {
+    if (attributes === '') return xml
+    throw new StructuralShiftError('Worksheet has no sheetData element.')
+  }
+  const rows = [...worksheetRowPositions(data)]
+  const existing = attributes === '' ? undefined : new Set(rows.map(({ rowNumber }) => rowNumber - 1))
+  const qualifier = prefixOf(data.name)
+  const parts: string[] = []
+  let cursor = 0
+  let next = start
+  const insertBefore = (rowIndex: number, offset: number) => {
+    if (!existing) return
+    for (; next < rowIndex && next <= end; next += 1) {
+      if (existing.has(next)) continue
+      if (cursor < offset) parts.push(data.inner.slice(cursor, offset))
+      parts.push(`<${qualifier}row r="${next + 1}"${attributes}/>`)
+      cursor = offset
     }
   }
-  if (worksheetXml.includes('</sheetData>')) {
-    return worksheetXml.replace('</sheetData>', () => `${newRow}</sheetData>`)
+
+  for (const { row, rowNumber } of rows) {
+    const rowIndex = rowNumber - 1
+    insertBefore(rowIndex, row.start)
+    if (rowIndex < start || rowIndex > end) continue
+    const kept = omitWorksheetTagAttributes(row.opening, names)
+    const opening = kept.replace(/(\s*\/?>)$/, (_end, suffix) => attributes + suffix)
+    if (opening === row.opening) continue
+    parts.push(data.inner.slice(cursor, row.start), opening)
+    cursor = row.start + row.opening.length
   }
-  const emptySheetData = /<sheetData\s*\/>/
-  if (emptySheetData.test(worksheetXml)) {
-    return worksheetXml.replace(emptySheetData, () => `<sheetData>${newRow}</sheetData>`)
-  }
-  throw new StructuralShiftError('Worksheet has no sheetData element.')
+  insertBefore(end + 1, data.inner.length)
+  if (parts.length === 0) return xml
+  const body = parts.join('') + data.inner.slice(cursor)
+  return applyPatches(xml, [patchElement(data, withBody(data, body))])
 }
 
 interface ColDefinition {

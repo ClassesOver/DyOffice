@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import JSZip from 'jszip'
+import { XMLValidator } from 'fast-xml-parser'
 import { workbookRowOutlineResultSchema } from '../../../sheets/src/shared/desktop-api.ts'
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
@@ -161,5 +162,42 @@ test('Node XLSX reopens worksheet outlines and existing sparklines after a value
       [1, 1, 24, true, 2],
       [2, 5, 18, false, undefined],
     ])
+  })
+
+  await t.test('styles existing and missing grid rows without touching foreign rows', async () => {
+    const foreignRow = '<row xmlns="urn:example:layout" r="4" ht="90" outlineLevel="7"/>'
+    const comment = '<!-- <row r="6" /> -->'
+    const extension = '<extLst><ext uri="urn:example:layout"><row xmlns="urn:example:layout" r="5" ht="91"/></ext></extLst>'
+    zip.file(worksheetPart, worksheet
+      .replace('<row r="2">', "<row r=\"2\" ht='21' customHeight='1' hidden='1' outlineLevel='1'>")
+      .replace('</sheetData>', foreignRow + comment + '</sheetData>')
+      .replace('</worksheet>', extension + '</worksheet>'))
+    const input = await zip.generateAsync({ type: 'nodebuffer' })
+    const save = async (bytes, structuralOps) => {
+      const request = sheetsSaveRequest(sheet.id, [])
+      request.structuralOps = structuralOps.map((op) => ({ sheetId: sheet.id, ...op }))
+      return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    }
+    const saved = await save(input, [
+      { kind: 'set-row-size', start: 1, end: 5, size: 24 },
+      { kind: 'set-rows-hidden', start: 1, end: 5, hidden: true },
+      { kind: 'set-rows-outline', start: 1, end: 5, level: 2 },
+    ])
+    const savedXml = await (await JSZip.loadAsync(saved)).file(worksheetPart).async('string')
+    assert.equal(XMLValidator.validate(savedXml), true)
+    const cleared = await save(saved, [
+      { kind: 'set-row-size', start: 1, end: 1, size: null },
+      { kind: 'set-rows-hidden', start: 1, end: 1, hidden: false },
+      { kind: 'set-rows-outline', start: 1, end: 1, level: 0 },
+    ])
+    for (const bytes of [saved, cleared]) {
+      const xml = await (await JSZip.loadAsync(bytes)).file(worksheetPart).async('string')
+      for (const preserved of [foreignRow, comment, extension]) assert.ok(xml.includes(preserved), preserved)
+    }
+    const layout = async (bytes) => (await native.readRange(bytes, sheet.name, range)).rows
+      .map(({ row, height, hidden, outlineLevel }) => [row, height, hidden, outlineLevel])
+    const expected = [1, 2, 3, 4, 5].map((row) => [row, 24, true, 2])
+    assert.deepEqual(await layout(saved), expected)
+    assert.deepEqual(await layout(cleared), expected.slice(1))
   })
 })
