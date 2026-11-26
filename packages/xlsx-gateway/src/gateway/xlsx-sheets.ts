@@ -10,6 +10,7 @@ import {
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-references.ts'
+import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
 import { ensureRelationshipNamespace, readRelationshipId, readRelationshipIdAttribute, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
@@ -355,9 +356,8 @@ export function sanitizeClonedWorksheetXml(worksheetXml: string): string {
 export function assertNoSheetScopedDefinedNames(workbookXml: string, sourceName: string): void {
   const index = parseSheetElements(workbookXml).findIndex((sheet) => sheet.name === sourceName)
   if (index < 0) throw new SheetEditError(`Sheet "${sourceName}" was not found in the workbook.`)
-  const names = workbookSection(workbookXml, 'definedNames')
-  if (names && workbookSectionEntries(names.section, 'definedName').some((entry) =>
-    readTabIndex(entry.opening, 'localSheetId') === index,
+  if (workbookDefinedNameElements(workbookXml).some(({ attributes }) =>
+    parseWorkbookTabIndex(attributes.get('localSheetId')) === index,
   )) {
     throw new SheetEditError(
       `Sheet "${sourceName}" has sheet-scoped defined names — duplicating it is ` +
@@ -560,10 +560,11 @@ export function applySheetPlanToWorkbookXml(
     const mapped = plan.order.indexOf(renameByOriginal.get(originalName) ?? originalName)
     return mapped < 0 ? null : mapped
   }
-  const definedNames = workbookSection(result, 'definedNames')
-  if (definedNames) {
-    const patches = workbookSectionEntries(definedNames.section, 'definedName').flatMap((name) => {
-      const localId = readTabIndex(name.opening, 'localSheetId')
+  const definedNames = workbookNameParts(result)
+  if (definedNames?.section) {
+    const { bodyStart, section, entries } = definedNames
+    const patches = entries.flatMap((name) => {
+      const localId = parseWorkbookTabIndex(name.attributes.get('localSheetId'))
       if (localId === undefined) return []
       const mapped = oldIndexToNew(localId)
       if (mapped === localId) return []
@@ -575,11 +576,12 @@ export function applySheetPlanToWorkbookXml(
       return [patchElement(name, updated)]
     })
     if (patches.length > 0) {
-      const inner = applyPatches(definedNames.section.inner, patches)
+      const inner = applyPatches(section.inner, patches)
+      const offset = bodyStart + section.start
       result =
-        result.slice(0, definedNames.start) +
-        (inner.trim() ? withBody(definedNames.section, inner) : '') +
-        result.slice(definedNames.end)
+        result.slice(0, offset) +
+        (inner.trim() ? withBody(section, inner) : '') +
+        result.slice(offset + section.xml.length)
     }
   }
 
@@ -636,14 +638,6 @@ export function applySheetPlanToWorkbookXml(
   return additions.length > 0 ? ensureRelationshipNamespace(result) : result
 }
 
-function readTabIndex(
-  opening: string,
-  attribute: 'localSheetId' | 'activeTab',
-): number | undefined {
-  const raw = readWorksheetTagAttribute(opening, attribute)
-  return parseWorkbookTabIndex(raw === undefined ? undefined : decodeAttribute(raw))
-}
-
 export function parseWorkbookTabIndex(raw: string | undefined): number | undefined {
   const value = raw?.trim() ?? ''
   const index = Number(value)
@@ -664,10 +658,8 @@ function workbookSectionEntries(section: { inner: string }, name: string) {
 }
 
 function* survivingDefinedNameFormulas(workbookXml: string, removedLocalIds: ReadonlySet<number>) {
-  const names = workbookSection(workbookXml, 'definedNames')
-  if (!names) return
-  for (const name of workbookSectionEntries(names.section, 'definedName')) {
-    const localId = readTabIndex(name.opening, 'localSheetId')
+  for (const name of workbookDefinedNameElements(workbookXml)) {
+    const localId = parseWorkbookTabIndex(name.attributes.get('localSheetId'))
     if (localId !== undefined && removedLocalIds.has(localId)) continue
     const formula = readDefinedNameText(name.inner)
     if (formula !== undefined) yield formula

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   applySheetPlanToWorkbookXml,
+  assertNoSheetScopedDefinedNames,
   definedNamesReferenceSheet,
   definedNamesUseToken,
   type SheetEditPlan,
@@ -19,6 +20,18 @@ function apply(beforeSheets: string, plan: Partial<SheetEditPlan>, afterSheets =
 }
 
 describe('sheet tab metadata', () => {
+  it('ignores foreign names when checking duplicates and remapping sheet scopes', () => {
+    const foreign = '<e:definedName name="Foreign" localSheetId="0">First!A1</e:definedName>'
+    const actual = '<definedName name="Actual" localSheetId="1">Second!A1</definedName>'
+    const input = `<workbook xmlns:e="urn:example">${sheets}<definedNames>${foreign}${actual}</definedNames></workbook>`
+    expect(() => assertNoSheetScopedDefinedNames(input, 'First')).not.toThrow()
+    expect(definedNamesReferenceSheet(input, 'First', new Set())).toBe(false)
+    const output = applySheetPlanToWorkbookXml(input, {
+      renames: [], additions: [], removals: [], order: ['Second', 'First'],
+    }, [])
+    expect(output).toContain(foreign + actual.replace('localSheetId="1"', 'localSheetId="0"'))
+  })
+
   it.each([
     ['<bookViews><workbookView/></bookViews>'],
     ["<bookViews><workbookView activeTab = '0'/></bookViews>"],

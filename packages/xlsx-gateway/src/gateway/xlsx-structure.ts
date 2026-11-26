@@ -7,6 +7,7 @@
 import type { WorkbookStyleEdit } from '../shared/edit-schemas.ts'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { rewriteChartReferences } from './xlsx-chart-references.ts'
+import { workbookNameParts } from './xlsx-defined-names.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
@@ -692,17 +693,15 @@ export function rewriteDefinedNames(
   workbookXml: string,
   rewrite: (formula: string, opening: string) => string | null,
 ): string {
-  const position = findRootChild(workbookXml, 'workbook', 'definedNames')
-  if (!position) return workbookXml
-  const [section] = childElements(workbookXml.slice(position.start, position.end))
-  if (!section?.inner) return workbookXml
+  const parts = workbookNameParts(workbookXml)
+  if (!parts?.section?.inner) return workbookXml
+  const { bodyStart, section, entries } = parts
+  const offset = bodyStart + section.start
 
   const chunks: string[] = []
   let start = 0
-  for (const child of childElements(section.inner)) {
-    if (child.name.slice(child.name.lastIndexOf(':') + 1) !== 'definedName' || !child.inner) {
-      continue
-    }
+  for (const child of entries) {
+    if (!child.inner) continue
     const content = definedNameContent(child.inner)
     if (!content) continue
     const { nodes, text } = content
@@ -729,7 +728,7 @@ export function rewriteDefinedNames(
   const replacement = inner.trim()
     ? section.opening + inner + section.xml.slice(section.opening.length + section.inner.length)
     : ''
-  return workbookXml.slice(0, position.start) + replacement + workbookXml.slice(position.end)
+  return workbookXml.slice(0, offset) + replacement + workbookXml.slice(offset + section.xml.length)
 }
 
 /// Fully deleted print ranges disappear. References in actual named formulas

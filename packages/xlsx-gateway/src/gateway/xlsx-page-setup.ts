@@ -5,7 +5,8 @@
 
 import { columnIndex, parseRange } from '../domain/cell-address.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
-import { decodeAttribute, parseSheetElements } from './xlsx-sheets.ts'
+import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
+import { parseSheetElements, parseWorkbookTabIndex } from './xlsx-sheets.ts'
 import {
   readDefinedNameText,
   readWorksheetTagAttribute,
@@ -13,6 +14,7 @@ import {
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
+import { isElement, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PageSetupError extends Error {}
 
@@ -516,13 +518,12 @@ export function applyPrintAreas(
   return xml
 }
 
-function scopedNames(section: ChildElement, name: string, sheetIndex: number): ChildElement[] {
-  return childElements(section.inner).filter((child) => {
-    if (localName(child.name) !== 'definedName') return false
-    const definedName = decodeAttribute(readWorksheetTagAttribute(child.opening, 'name') ?? '')
-    const scope = decodeAttribute(readWorksheetTagAttribute(child.opening, 'localSheetId') ?? '')
-    return definedName === name && /^[0-9]+$/.test(scope) && Number(scope) === sheetIndex
-  })
+function scopedNames(entries: readonly ScopedElement[], name: string, sheetIndex: number) {
+  return entries.filter(
+    ({ attributes }) =>
+      attributes.get('name') === name &&
+      parseWorkbookTabIndex(attributes.get('localSheetId')) === sheetIndex,
+  )
 }
 
 function setSheetScopedName(
@@ -534,9 +535,10 @@ function setSheetScopedName(
   const makeEntry = (tag: string, body: string) =>
     `<${tag} name="${name}" localSheetId="${sheetIndex}">${body}</${tag}>`
   const body = reference === null ? null : escapeXml(reference)
-  const section = rootChild(workbookXml, 'workbook', 'definedNames')
-  if (section) {
-    const matches = scopedNames(section, name, sheetIndex)
+  const parts = workbookNameParts(workbookXml)
+  if (parts?.section) {
+    const { bodyStart, section, entries: definedNames } = parts
+    const matches = scopedNames(definedNames, name, sheetIndex)
     const first = matches[0]
     let entries = section.inner
     for (const match of matches.reverse()) {
@@ -549,25 +551,22 @@ function setSheetScopedName(
     if (!first && body !== null) entries += makeEntry(prefix(section.name) + 'definedName', body)
     return replaceElement(
       workbookXml,
-      section,
+      { ...section, start: bodyStart + section.start },
       entries.trim() ? withChildren(section, entries) : '',
     )
   }
   if (body === null) return workbookXml
 
   // Schema order: definedNames follows sheets, functionGroups and externalReferences.
-  const [workbook] = childElements(workbookXml)
-  const anchor =
-    workbook &&
-    childElements(workbook.inner)
-      .reverse()
-      .find((child) =>
-        ['sheets', 'functionGroups', 'externalReferences'].includes(localName(child.name)),
-      )
-  if (!workbook || !anchor) throw new PageSetupError('workbook.xml has no sheets section.')
-  const qualifier = prefix(workbook.name)
+  if (!parts) throw new PageSetupError('workbook.xml has no sheets section.')
+  const { root, children, bodyStart } = parts
+  const anchor = ['externalReferences', 'functionGroups', 'sheets']
+    .map((name) => children.find((child) => isElement(child, name, root.namespace)))
+    .find((child) => child !== undefined)
+  if (!anchor) throw new PageSetupError('workbook.xml has no sheets section.')
+  const qualifier = prefix(root.name)
   const element = `<${qualifier}definedNames>${makeEntry(qualifier + 'definedName', body)}</${qualifier}definedNames>`
-  const at = workbook.start + workbook.opening.length + anchor.start + anchor.xml.length
+  const at = bodyStart + anchor.start + anchor.xml.length
   return workbookXml.slice(0, at) + element + workbookXml.slice(at)
 }
 
@@ -627,8 +626,7 @@ function existingTitleSpans(
   workbookXml: string,
   sheetIndex: number,
 ): { rows?: string; cols?: string } {
-  const section = rootChild(workbookXml, 'workbook', 'definedNames')
-  const match = section && scopedNames(section, '_xlnm.Print_Titles', sheetIndex)[0]
+  const match = scopedNames(workbookDefinedNameElements(workbookXml), '_xlnm.Print_Titles', sheetIndex)[0]
   const formula = match && readDefinedNameText(match.inner)
   if (!formula) return {}
   const out: { rows?: string; cols?: string } = {}

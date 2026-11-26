@@ -37,7 +37,7 @@ export interface DefinedNamesState {
 const NAME_PATTERN = /^[\p{L}_\\][\p{L}\p{N}_.\\]*$/u
 const CELL_REF_PATTERN = /^(?:[A-Za-z]{1,3}[0-9]+|[Rr][0-9]*[Cc][0-9]*)$/
 
-function workbookNameParts(workbookXml: string) {
+export function workbookNameParts(workbookXml: string) {
   const [element] = childElements(workbookXml)
   const root = element && withNamespaces(element, new Map())
   if (root?.local !== 'workbook') return undefined
@@ -46,7 +46,7 @@ function workbookNameParts(workbookXml: string) {
   const entries = section
     ? scopedChildren(section).filter((node) => isElement(node, 'definedName', root.namespace))
     : []
-  return { root, children, section, entries }
+  return { root, children, section, entries, bodyStart: root.start + root.opening.length }
 }
 
 export function workbookDefinedNameElements(workbookXml: string) {
@@ -66,7 +66,7 @@ export function applyDefinedNamesState(workbookXml: string, state: DefinedNamesS
     if (state.names.length === 0) return workbookXml
     throw new DefinedNameError('workbook.xml has no workbook element.')
   }
-  const { root, children, section, entries } = parts
+  const { root, children, section, entries, bodyStart } = parts
   const preserved = new Set(state.preserveNames)
   const preservedKeys = new Set<string>()
   const patches = entries.flatMap((entry) => {
@@ -100,7 +100,6 @@ export function applyDefinedNamesState(workbookXml: string, state: DefinedNamesS
     return `<${prefix}definedName name="${escapeXmlAttribute(entry.name)}"${scope}>${formula}</${prefix}definedName>`
   }).join('')
 
-  const bodyStart = root.start + root.opening.length
   if (section) {
     const inner = applyPatches(section.inner, patches) + additions
     const offset = bodyStart + section.start

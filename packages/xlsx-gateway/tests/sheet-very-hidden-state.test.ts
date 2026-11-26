@@ -47,7 +47,7 @@ describe('veryHidden sheet state', () => {
     ])
   })
 
-  it('survives visibility changes on other sheets and points activeTab off it', () => {
+  it('keeps veryHidden sheets hidden and moves the active tab to the first visible sheet', () => {
     const result = applySheetPlanToWorkbookXml(
       WORKBOOK,
       plan([{ sheetName: 'B', hidden: false }]),
@@ -55,7 +55,7 @@ describe('veryHidden sheet state', () => {
     )
     expect(result).toContain('<sheet name="B" sheetId="2" r:id="rId2"/>')
     expect(result).toContain('<sheet name="C" sheetId="3" state="veryHidden" r:id="rId3"/>')
-    expect(result).toContain('activeTab="2"')
+    expect(result).toContain('activeTab="0"')
   })
 
   it('is not downgraded by a redundant hide of the sheet itself', () => {

@@ -45,12 +45,11 @@ it('rewrites chart series and pivot sources using their original sheet names', (
   expect(renamer.chart('<c:f>Data!$A$2:$A$4</c:f><c:f>Summary!$B$2:$B$4</c:f>')).toBe(
     "<c:f>Summary!$A$2:$A$4</c:f><c:f>'Bright &amp; Clear'!$B$2:$B$4</c:f>",
   )
-  expect(renamer.pivotCache('<worksheetSource sheet="Data" ref="A1:B4"/>')).toBe(
-    '<worksheetSource sheet="Summary" ref="A1:B4"/>',
-  )
-  expect(renamer.pivotCache('<worksheetSource sheet="Summary" ref="A1:B4"/>')).toBe(
-    '<worksheetSource sheet="Bright &amp; Clear" ref="A1:B4"/>',
-  )
+  const cache = (sheet: string) =>
+    '<pivotCacheDefinition><cacheSource type="worksheet">' +
+    `<worksheetSource sheet="${sheet}" ref="A1:B4"/></cacheSource></pivotCacheDefinition>`
+  expect(renamer.pivotCache(cache('Data'))).toBe(cache('Summary'))
+  expect(renamer.pivotCache(cache('Summary'))).toBe(cache('Bright &amp; Clear'))
 })
 
 it('rewrites only local sheet references and checks the same scope before deletion', () => {
