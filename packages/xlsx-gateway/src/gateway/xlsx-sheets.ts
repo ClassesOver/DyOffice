@@ -865,10 +865,16 @@ export function classifyRemovedSheetRels(relsXml: string, sheetName: string): st
 /// displayName of the table defined in a table part — the token surviving
 /// formulas would use in structured references (Table1[Amount]).
 export function tableDisplayName(tableXml: string): string | undefined {
-  const openTag = /<table\b[^>]*>/.exec(tableXml)?.[0]
-  if (!openTag) return undefined
-  const name = readAttribute(openTag, 'displayName') ?? readAttribute(openTag, 'name')
-  return name === undefined ? undefined : decodeAttribute(name)
+  return tablePartNames(tableXml)[0]
+}
+
+export function tablePartNames(tableXml: string): string[] {
+  const opening = readRootStartTag(tableXml)
+  if (!/^<(?:[\w.-]+:)?table[\s/>]/.test(opening)) return []
+  return ['displayName', 'name'].flatMap((attribute) => {
+    const value = readWorksheetTagAttribute(opening, attribute)
+    return value ? [decodeAttribute(value)] : []
+  })
 }
 
 /// True when a defined name that survives the removal mentions the token

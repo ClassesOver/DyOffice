@@ -12,6 +12,7 @@ import {
 } from './xlsx-drawing-add.ts'
 import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
 import { rootTail } from './xlsx-root-tail.ts'
+import { tablePartNames } from './xlsx-sheets.ts'
 
 /// Persists tables (ListObjects) created in the editor as brand-new OOXML
 /// parts: xl/tables/tableN.xml, the worksheet's <tableParts> element, the
@@ -141,11 +142,7 @@ function validateAddition(addition: TableAddition): void {
 export async function collectExistingTableNames(pkg: MutablePackage): Promise<Set<string>> {
   const names = new Set<string>()
   for (const path of await tablePartPaths(pkg)) {
-    const xml = await pkg.readText(path)
-    for (const attribute of ['name', 'displayName']) {
-      const value = new RegExp(`<table\\b[^>]*\\b${attribute}="([^"]+)"`).exec(xml)?.[1]
-      if (value) names.add(value.toLowerCase())
-    }
+    for (const name of tablePartNames(await pkg.readText(path))) names.add(name.toLowerCase())
   }
   return names
 }

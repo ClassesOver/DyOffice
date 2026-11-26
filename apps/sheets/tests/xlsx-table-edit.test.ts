@@ -37,6 +37,37 @@ describe('table edits', () => {
     expect(xml).toContain('ref="A1:B2"')
   })
 
+  it('edits real table elements with single-quoted attributes and preserves extension markup', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const path = 'xl/tables/table1.xml'
+    const comment = '<!-- <table name="Table1" ref="Z1:Z2"><autoFilter ref="Z1:Z2"/></table> -->'
+    const columnComment = '<!-- <tableColumn id="900" name="Ghost"/> -->'
+    const ext = '<extLst><ext uri="urn:example"><e:tableStyleInfo name="Foreign"/></ext></extLst>'
+    zip.file(path, `${comment}<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:e='urn:example' id='1' name='Table&#49;' displayName='Table&#49;' ref='A1:B2' e:label='A " B'>` +
+      "<autoFilter ref='A1:B2'><filterColumn colId='0'><filters><filter val='1'/></filters></filterColumn></autoFilter>" +
+      `<tableColumns count='2'>${columnComment}<tableColumn id='3' name='A'/>` +
+      "<tableColumn id='7' name='hdr'><calculatedColumnFormula>[@A]*2</calculatedColumnFormula></tableColumn></tableColumns>" +
+      `<tableStyleInfo name='TableStyleLight1' showFirstColumn='1'/>${ext}</table>`)
+
+    const plan = await planWith([edit({
+      name: 'Sales', style: 'TableStyleLight9', bandedRows: true,
+      area: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 1 },
+      columnNames: ['A', 'Total'],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    const xml = plan.replaced.get(path)
+    expect(xml).toContain(comment)
+    expect(xml).toContain('name="Sales" displayName="Sales" ref="A1:B4"')
+    expect(xml).toContain("e:label='A \" B'")
+    expect(xml).toContain('<autoFilter ref="A1:B4"><filterColumn')
+    expect(xml).toContain(columnComment)
+    expect(xml).toContain('<tableColumn id=\'7\' name="Total"><calculatedColumnFormula>[@A]*2</calculatedColumnFormula>')
+    const style = xml?.match(/<tableStyleInfo\b[^>]*\/>/)?.[0]
+    expect(style).toContain('name="TableStyleLight9"')
+    expect(style).toContain("showFirstColumn='1'")
+    expect(style).toContain('showRowStripes="1"')
+    expect(xml).toContain(ext)
+  })
+
   it('writes the style and option flags into tableStyleInfo', async () => {
     const plan = await planWith([
       edit({
