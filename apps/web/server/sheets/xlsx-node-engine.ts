@@ -25,6 +25,7 @@ import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult,WorkbookSharedFo
 import { readWorkbookWithCellDetails } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
 import type { WorkbookRichRun } from '../../../../packages/xlsx-gateway/src/shared/edit-schemas.ts'
 import { BUILTIN_NUMBER_FORMATS } from '../../../../packages/xlsx-gateway/src/shared/builtin-number-formats.ts'
+import { workbookPartPath } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts.ts'
 import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/src/shared/grid-bounds.ts'
 
 // Isolated Node fallback sidecar for XLSX when the Rust xlsx-sidecar binary is not compiled.
@@ -670,7 +671,8 @@ function readThemeFonts(xml: string): WorkbookFile['themeFonts'] {
 }
 
 async function readWorkbookStyles(text: ZipText) {
-  const [xml, themeXml] = await Promise.all([text('xl/styles.xml'), text('xl/theme/theme1.xml')])
+  const stylesXml = text('xl/_rels/workbook.xml.rels').then((rels) => text(workbookPartPath(rels, 'styles')))
+  const [xml, themeXml] = await Promise.all([stylesXml, text('xl/theme/theme1.xml')])
   const localName = (name: string) => name.slice(name.lastIndexOf(':') + 1)
   const root = childElements(xml).find(element => localName(element.name) === 'styleSheet')
   const sections = childElements(root?.inner ?? '')

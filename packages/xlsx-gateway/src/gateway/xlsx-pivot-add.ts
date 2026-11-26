@@ -27,6 +27,7 @@ import {
 import { decodeAttribute, parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
 import { readWorksheetTagAttribute } from './xlsx-structure.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
+import { readWorkbookPartPath } from './xlsx-workbook-parts.ts'
 import {
   decodeCellText,
   elementText,
@@ -346,8 +347,9 @@ type SourceValue = string | number | boolean | null
 type SourceCell = SourceValue | { readonly raw: number; readonly label: string }
 
 async function readPivotNumberFormats(pkg: MutablePackage): Promise<(string | undefined)[]> {
-  if (!(await pkg.has('xl/styles.xml'))) return []
-  const [node] = childElements(await pkg.readText('xl/styles.xml'))
+  const path = await readWorkbookPartPath(pkg, 'styles')
+  if (!(await pkg.has(path))) return []
+  const [node] = childElements(await pkg.readText(path))
   if (!node) return []
   const root = withNamespaces(node, new Map())
   const codes = new Map<number, string>()
@@ -388,8 +390,9 @@ function pivotCellText(element: ScopedElement): string {
 }
 
 async function readPivotSharedStrings(pkg: MutablePackage): Promise<readonly string[]> {
-  if (!(await pkg.has('xl/sharedStrings.xml'))) return []
-  const [element] = childElements(await pkg.readText('xl/sharedStrings.xml'))
+  const path = await readWorkbookPartPath(pkg, 'sharedStrings')
+  if (!(await pkg.has(path))) return []
+  const [element] = childElements(await pkg.readText(path))
   if (!element) return []
   const root = withNamespaces(element, new Map())
   return scopedChildren(root).filter((child) => isElement(child, 'si', root.namespace))

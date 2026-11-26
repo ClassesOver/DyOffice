@@ -83,6 +83,7 @@ import {
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { decodeCellText, elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
+import { readWorkbookPartPath } from './xlsx-workbook-parts.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
   SheetAllocation,
@@ -459,13 +460,17 @@ const STYLES_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.sprea
 
 async function addDefaultStylesheet(
   pkg: PackageEditor,
+  stylesPath: string,
   touchedEntries: Set<string>,
 ): Promise<void> {
-  const stylesPath = 'xl/styles.xml'
   pkg.add(stylesPath, DEFAULT_STYLESHEET_XML)
   touchedEntries.add(stylesPath)
 
-  await registerWorkbookPart(pkg, 'styles.xml', STYLES_REL_TYPE, STYLES_CONTENT_TYPE, touchedEntries)
+  if (stylesPath === 'xl/styles.xml') {
+    await registerWorkbookPart(pkg, 'styles.xml', STYLES_REL_TYPE, STYLES_CONTENT_TYPE, touchedEntries)
+  } else {
+    await registerContentTypeOverride(pkg, stylesPath, STYLES_CONTENT_TYPE, touchedEntries)
+  }
 }
 
 async function registerWorkbookPart(
@@ -641,8 +646,9 @@ export async function readSheetRows(buffer: Buffer, sheetName?: string): Promise
   const sharedStrings = await readSharedStrings(zip)
   const name = sheetName ?? firstSheetName(workbookXml)
   const worksheetXml = await zip.readText(await resolveWorksheetPath(zip, name))
-  const dateStyles = (await zip.has('xl/styles.xml'))
-    ? dateStyleIndexes(await zip.readText('xl/styles.xml'))
+  const stylesPath = await readWorkbookPartPath(zip, 'styles')
+  const dateStyles = (await zip.has(stylesPath))
+    ? dateStyleIndexes(await zip.readText(stylesPath))
     : new Set<number>()
   const date1904 = /<workbookPr\b[^>]*\bdate1904="(?:1|true)"/.test(workbookXml)
   return worksheetRows(worksheetXml, sharedStrings, { dateStyles, date1904 })
@@ -1374,13 +1380,13 @@ export async function planCellEditsToXlsx(
   // 'set-col-style' structural ops (select-all/full-column formatting) intern
   // their column xf during the structural pass below.
   let stylesheet: StylesheetEditor | null = null
-  const stylesPath = 'xl/styles.xml'
+  const stylesPath = await readWorkbookPartPath(pkg, 'styles')
   if (
     edits.some((edit) => edit.style !== undefined) ||
     cfStates.length > 0 ||
     structuralOps.some(({ ops }) => ops.some((op) => op.kind === 'set-col-style'))
   ) {
-    if (!(await pkg.has(stylesPath))) await addDefaultStylesheet(pkg, touchedEntries)
+    if (!(await pkg.has(stylesPath))) await addDefaultStylesheet(pkg, stylesPath, touchedEntries)
     stylesheet = new StylesheetEditor(await pkg.readText(stylesPath))
   }
   const resolveColStyle =
@@ -3905,16 +3911,18 @@ function sharedFormulaIndex(id: string): number | undefined {
 }
 
 async function readSharedStrings(source: EntrySource): Promise<readonly string[]> {
-  if (!(await source.has('xl/sharedStrings.xml'))) return []
-  return parseSharedStringsXml(await source.readText('xl/sharedStrings.xml'))
+  const path = await readWorkbookPartPath(source, 'sharedStrings')
+  if (!(await source.has(path))) return []
+  return parseSharedStringsXml(await source.readText(path))
 }
 
 async function readSharedTextEntries(
   source: EntrySource,
   readRunStyle?: ReadRunStyle,
 ): Promise<CellText[]> {
-  if (!(await source.has('xl/sharedStrings.xml'))) return []
-  const xml = await source.readText('xl/sharedStrings.xml')
+  const path = await readWorkbookPartPath(source, 'sharedStrings')
+  if (!(await source.has(path))) return []
+  const xml = await source.readText(path)
   return Array.from(sharedStringItems(xml), (item) => parseCellText(item, readRunStyle))
 }
 

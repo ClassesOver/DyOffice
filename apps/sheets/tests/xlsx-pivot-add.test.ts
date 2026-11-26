@@ -87,6 +87,31 @@ describe('pivot additions', () => {
     )
   })
 
+  it('uses the declared styles and shared-string parts when default paths contain unrelated files', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const relsPath = 'xl/_rels/workbook.xml.rels'
+    const rels = await zip.file(relsPath)!.async('text')
+    zip.file(relsPath, rels.replace('Target="styles.xml"', "Target='parts/styles%20one.xml'")
+      .replace('Target="sharedStrings.xml"', "Target='parts/strings.xml'"))
+    zip.file('xl/parts/styles one.xml',
+      '<styleSheet><numFmts><numFmt numFmtId="164" formatCode="000"/></numFmts>' +
+      '<cellXfs><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs></styleSheet>')
+    zip.file('xl/parts/strings.xml', '<sst><si><t>West</t></si></sst>')
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      '<row r="2"><c r="A2" s="1"><v>1</v></c><c r="B2"><v>10</v></c></row>' +
+      '<row r="3"><c r="A3" t="s"><v>0</v></c><c r="B3"><v>20</v></c></row></sheetData>'))
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 },
+      fieldNames: ['Region', 'Amount'], rowItems: ['001', 'West'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')).toContain(
+      '<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r>',
+    )
+  })
+
   it('reads cache data from real source cells and preserves rich-text members', async () => {
     const zip = await JSZip.loadAsync(await buildEditFixture())
     const path = 'xl/worksheets/sheet1.xml'

@@ -36,15 +36,25 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
   t.after(() => runtime.close())
   const native = runtime.sheetsNative
   const zip = await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url)))
+  const stylesPath = 'xl/parts/styles one.xml'
+  const stringsPath = 'xl/parts/strings.xml'
+  const workbookRelsPath = 'xl/_rels/workbook.xml.rels'
+  const workbookRels = await zip.file(workbookRelsPath).async('string')
+  zip.file(workbookRelsPath, workbookRels.replace('Target="styles.xml"', "Target='parts/styles%20one.xml'")
+    .replace('</Relationships>',
+      relationship('sst', 'sharedStrings', 'parts/strings.xml') + '</Relationships>'))
+  zip.file(stringsPath, `<sst xmlns="${main}"><si><t>Linked text</t></si></sst>`)
+  zip.file('xl/sharedStrings.xml', `<sst xmlns="${main}"><si><t>Unrelated text</t></si></sst>`)
   const formats = [5, 14, 20, 44, 46, 49, 58, 164]
-  zip.file('xl/styles.xml', `<styleSheet xmlns="${main}">
+  zip.file(stylesPath, `<styleSheet xmlns="${main}">
     <numFmts count="1"><numFmt numFmtId="164" formatCode="00.000"/></numFmts>
     <fonts count="2"><font><color indexed="1"/></font><font><color indexed="2"/></font></fonts>
+    <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
     <cellXfs count="${formats.length}">${formats.map((id) => `<xf numFmtId="${id}" fontId="${id === 164 ? 1 : 0}"/>`).join('')}</cellXfs>
     <colors><indexedColors><rgbColor rgb="FF010203"/><rgbColor rgb="FF223344"/></indexedColors></colors>
   </styleSheet>`)
   zip.file(worksheetPath, `<worksheet xmlns="${main}" xmlns:r="${office}" xmlns:xdr="${drawing}">
-    <sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+    <sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1" t="s"><v>0</v></c></row></sheetData>
     <drawing r:id="drawing"/><legacyDrawing r:id="oleVml"/><legacyDrawingHF r:id="headerVml"/>
     <oleObjects>
       <oleObject progId="Package" shapeId="1025" r:id="embed"/>
@@ -85,7 +95,10 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
   zip.file('xl/media/ole.emf', 'synthetic metafile bytes')
   zip.file('xl/embeddings/object.bin', 'inert embedded object')
   const contentTypes = await zip.file('[Content_Types].xml').async('string')
-  zip.file('[Content_Types].xml', contentTypes.replace('</Types>', '<Default Extension="png" ContentType="image/png"/><Default Extension="emf" ContentType="image/x-emf"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>'))
+  zip.file('[Content_Types].xml', contentTypes.replace('</Types>',
+    '<Override PartName="/xl/parts/styles%20one.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+    '<Override PartName="/xl/parts/strings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>' +
+    '<Default Extension="png" ContentType="image/png"/><Default Extension="emf" ContentType="image/x-emf"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>'))
   const bytes = await zip.generateAsync({ type: 'nodebuffer' })
   const range = { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }
   const metadata = await native.inspect(bytes)
@@ -101,6 +114,19 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
   await t.test('uses the nested indexed palette and falls back for undefined indices', () => {
     assert.equal(metadata.styles[0].fontColor, '#223344')
     assert.equal(metadata.styles.at(-1).fontColor, '#FF0000')
+  })
+
+  await t.test('reads linked strings and saves formatting in the linked stylesheet', async () => {
+    const { cells } = await native.readRange(bytes, 'Acceptance', { ...range, startColumn: 1, endColumn: 1 })
+    assert.equal(cells[0].value, 'Linked text')
+    const request = sheetsSaveRequest('sheet-1', [
+      { row: 0, column: 0, writeValue: false, value: null, style: { bold: true } },
+    ])
+    const result = await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))
+    const saved = await JSZip.loadAsync(result.bytes)
+    assert.equal(await saved.file('xl/styles.xml').async('string'), await zip.file('xl/styles.xml').async('string'))
+    assert.notEqual(await saved.file(stylesPath).async('string'), await zip.file(stylesPath).async('string'))
+    assert.ok((await native.inspect(result.bytes)).styles.some((style) => style.bold))
   })
 
   await t.test('loads the internal header image by slot without exposing external relationships', async () => {
@@ -133,7 +159,7 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
     const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 0, value: 7, writeValue: true }])
     const result = await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))
     const saved = await JSZip.loadAsync(result.bytes)
-    for (const path of ['xl/styles.xml', 'xl/drawings/header.vml', 'xl/drawings/ole.vml',
+    for (const path of [stylesPath, stringsPath, 'xl/styles.xml', 'xl/drawings/header.vml', 'xl/drawings/ole.vml',
       'xl/worksheets/_rels/sheet1.xml.rels', 'xl/media/fixture.png', 'xl/media/ole.emf', 'xl/embeddings/object.bin']) {
       assert.deepEqual(await saved.file(path).async('nodebuffer'), await zip.file(path).async('nodebuffer'), path)
     }
