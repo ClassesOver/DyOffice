@@ -8,12 +8,13 @@ import {readWorksheetValidations} from '../../../../packages/xlsx-gateway/src/ga
 import {parseSheetElements,parseRelationships,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
+import {parseRange} from '../../../../packages/xlsx-gateway/src/domain/cell-address.ts'
 import {childElements,resolvedStyleEntries} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
 import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {inferWorksheetAddresses} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
-import {pivotBandMetadata,pivotTheme} from './pivot-band-metadata'
+import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
 import {readCustomTableStyles,readWorksheetTables,type TableDxf} from './xlsx-node-tables'
 import {mixHexColors,readHeaderFooterPictures,readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
@@ -626,16 +627,22 @@ async function readPivotMetadata(text:ZipText){
     if(!rel)continue
     const sheetPath=resolveRelTarget(workbookPath,rel.target)
     const pivotTables:WorkbookFile['sheets'][number]['pivotTables']=[]
+    const pivotRanges:WorkbookFile['sheets'][number]['pivotRanges']=[]
     for(const pivotRel of parseRelationships(await text(relsPathFor(sheetPath)))){
       if(pivotRel.external||!pivotRel.type.endsWith('/pivotTable'))continue
       const path=resolveRelTarget(sheetPath,pivotRel.target),xml=await text(path)
-      const location=/<(?:[\w.-]+:)?location\b[^>]*>/.exec(xml)?.[0]
-      const outputRef=location&&readAttribute(location,'ref')
-      if(!outputRef)continue
+      const pivot=readPivotPartMetadata(xml,theme)
+      if(!pivot)continue
       const cacheRel=parseRelationships(await text(relsPathFor(path))).find(rel=>!rel.external&&rel.type.endsWith('/pivotCacheDefinition'))
-      pivotTables.push({...pivotBandMetadata(xml,theme),path,cachePath:cacheRel?resolveRelTarget(path,cacheRel.target):null,outputRef:decodeAttribute(outputRef),firstDataRow:Number(readAttribute(location,'firstDataRow')??1),firstDataCol:Number(readAttribute(location,'firstDataCol')??1)})
+      pivotTables.push({...pivot,path,cachePath:cacheRel?resolveRelTarget(path,cacheRel.target):null})
+      try {
+        const range=parseRange(pivot.outputRef.toUpperCase())
+        if(range.endRow<MAX_GRID_ROWS&&range.endColumn<MAX_GRID_COLUMNS)pivotRanges.push(range)
+      } catch {
+        // Keep the pivot part visible in metadata, but a broken ref cannot lock cells.
+      }
     }
-    result.set(sheet.name,{pivotTables,pivotRanges:pivotTables.map(pivot=>parseRef(pivot.outputRef))})
+    result.set(sheet.name,{pivotTables,pivotRanges})
   }
   return result
 }

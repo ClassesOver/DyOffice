@@ -172,13 +172,19 @@ export function findPivotAtSelection(ctx: PivotActionContext): PivotHit | null {
   const sheetMeta = state.file.sheets.find((sheet) => sheet.id === selection.sheetId)
   if (!sheetMeta) return null
   for (const pivot of sheetMeta.pivotTables) {
+    let bounds: ReturnType<typeof parseRange>
+    try {
+      bounds = parseRange(pivot.outputRef)
+    } catch {
+      continue
+    }
     const definition = state.pivotDefinitions.get(pivot.path)
     const relayout =
       pivot.cachePath === null
         ? undefined
         : state.editJournal.pivotRefreshUpdates.get(pivot.cachePath)?.relayout
     const pageCount = relayout?.pageFieldIndices?.length ?? definition?.pageFields.length ?? 0
-    if (hitsBlock(selection, parseRange(pivot.outputRef), pivotPageRows(pageCount))) {
+    if (hitsBlock(selection, bounds, pivotPageRows(pageCount))) {
       return { kind: 'file', sheetId: selection.sheetId, pivot, definition, relayout }
     }
   }

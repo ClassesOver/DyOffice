@@ -59,6 +59,31 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('opens a workbook with a broken pivot output reference alongside a usable pivot', async () => {
+    const broken = 'xl/pivotTables/pivotTable1.xml'
+    const usable = 'xl/pivotTables/pivotTable2.xml'
+    const pivot = (name, location) => `<pivotTableDefinition xmlns="${spreadsheet}" name="${name}" cacheId="1">
+      ${location}<pivotTableStyleInfo name="PivotStyleLight1"/></pivotTableDefinition>`
+    const bytes = await workbook({
+      [broken]: pivot('Broken', '<location ref="#REF!" firstDataRow="-1" firstDataCol="invalid"/>'),
+      [usable]: pivot('Usable', "<location ref='$d$4:$c$2' firstDataRow='1' firstDataCol='0'/>"),
+      'xl/worksheets/_rels/sheet1.xml.rels': (xml) => xml.replace('</Relationships>', [broken, usable].map((path, index) =>
+        `<Relationship Id="auditPivot${index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../${path.slice(3)}"/>`,
+      ).join('') + '</Relationships>'),
+      '[Content_Types].xml': (xml) => xml.replace('</Types>', [broken, usable].map((path) =>
+        `<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>`,
+      ).join('') + '</Types>'),
+    })
+    const [{ pivotTables, pivotRanges }] = (await native.inspect(bytes)).sheets
+    assert.deepEqual(pivotTables.map(({ outputRef, firstDataRow, firstDataCol }) => [outputRef, firstDataRow, firstDataCol]), [
+      ['#REF!', 1, 1], ['$d$4:$c$2', 1, 0],
+    ])
+    assert.ok(pivotTables.every(pivot => !Object.hasOwn(pivot, 'rowKinds')))
+    assert.deepEqual(pivotRanges, [{ startRow: 1, startColumn: 2, endRow: 3, endColumn: 3 }])
+    const { cells } = await native.readRange(bytes, sheetName, { startRow: 1, endRow: 1, startColumn: 0, endColumn: 0 })
+    assert.equal(cells[0].value, 12.5)
+  })
+
   await t.test('decodes inline and rich text whitespace like GenOffice after save and reopen', async () => {
     const bytes = await workbook({
       [sheetPath]: worksheet(`<sheetData><row r="1">
