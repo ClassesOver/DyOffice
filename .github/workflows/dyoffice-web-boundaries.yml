@@ -168,9 +168,14 @@ jobs:
         run: npm run build:saas
       - name: Build the XLSX engine for browser file verification
         run: npm run build:web:native
+      - name: Install pinned DBHub for Chromium source tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dyoffice-dbhub" --no-audit --no-fund --no-save --package-lock=false @bytebase/dbhub@2.1.0
+          test -s "$RUNNER_TEMP/dyoffice-dbhub/node_modules/@bytebase/dbhub/dist/index.js"
       - name: Verify the local workspace and four native editors in Chromium
         env:
           NODE_ENV: test
+          DYOFFICE_DBHUB_ENTRY: ${{ runner.temp }}/dyoffice-dbhub/node_modules/@bytebase/dbhub/dist/index.js
           DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY: ${{ github.workspace }}/apps/web/dist-local-shell
           DYOFFICE_TEST_NATIVE_DOCS_DIST: ${{ github.workspace }}/apps/web/dist-docs
           DYOFFICE_TEST_SHEETS_DIST: ${{ github.workspace }}/apps/web/dist-sheets
