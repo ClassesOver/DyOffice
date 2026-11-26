@@ -24,6 +24,7 @@ import {applyTint} from '../../../sheets/src/renderer/table-styles'
 import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult,WorkbookSharedFormulaGroup} from '../../../sheets/src/shared/desktop-api.ts'
 import { readWorkbookWithCellDetails } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
 import type { WorkbookRichRun } from '../../../../packages/xlsx-gateway/src/shared/edit-schemas.ts'
+import { BUILTIN_NUMBER_FORMATS } from '../../../../packages/xlsx-gateway/src/shared/builtin-number-formats.ts'
 import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/src/shared/grid-bounds.ts'
 
 // Isolated Node fallback sidecar for XLSX when the Rust xlsx-sidecar binary is not compiled.
@@ -648,30 +649,6 @@ async function readPivotMetadata(text:ZipText){
     result.set(sheet.name,{pivotTables,pivotRanges})
   }
   return result
-}
-
-// The Web worker opens files with locale "en", matching GenOffice's English fallbacks.
-const BUILTIN_NUMBER_FORMATS: Record<number, string> = {
-  0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00',
-  5: '"$"#,##0_);("$"#,##0)', 6: '"$"#,##0_);[Red]("$"#,##0)',
-  7: '"$"#,##0.00_);("$"#,##0.00)', 8: '"$"#,##0.00_);[Red]("$"#,##0.00)',
-  9: '0%', 10: '0.00%', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??',
-  14: 'm/d/yyyy', 15: 'd-mmm-yy', 16: 'd-mmm', 17: 'mmm-yy',
-  18: 'h:mm AM/PM', 19: 'h:mm:ss AM/PM', 20: 'hh:mm', 21: 'hh:mm:ss', 22: 'm/d/yy hh:mm',
-  27: 'm/d/yyyy', 28: 'm/d/yyyy', 29: 'm/d/yyyy', 30: 'm/d/yyyy', 31: 'yyyy/m/d',
-  32: 'm/d/yyyy', 33: 'm/d/yyyy', 34: 'm/d/yyyy', 35: 'm/d/yyyy', 36: 'm/d/yyyy',
-  37: '#,##0 ;(#,##0)', 38: '#,##0 ;[Red](#,##0)',
-  39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)',
-  41: '_(* #,##0_);_(* \\(#,##0\\);_(* "-"_);_(@_)',
-  42: '_("$"* #,##0_);_("$"* \\(#,##0\\);_("$"* "-"_);_(@_)',
-  43: '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* "-"??_);_(@_)',
-  44: '_("$"* #,##0.00_);_("$"* \\(#,##0.00\\);_("$"* "-"??_);_(@_)',
-  45: 'mm:ss', 46: '[h]:mm:ss', 47: 'mm:ss.0', 48: '##0.0E+0', 49: '@',
-  50: 'm/d/yyyy', 51: 'm/d/yyyy', 52: 'm/d/yyyy', 53: 'm/d/yyyy', 54: 'm/d/yyyy',
-  55: 'm/d/yyyy', 56: 'm/d/yyyy', 57: 'm/d/yyyy', 58: 'm/d/yyyy',
-  59: '0', 60: '0.00', 61: '#,##0', 62: '#,##0.00', 67: '0%', 68: '0.00%',
-  69: '# ?/?', 70: '# ??/??', 71: 'd/m/yyyy', 72: 'd-mmm-yy', 73: 'd-mmm', 74: 'mmm-yy',
-  75: 'h:mm', 76: 'h:mm:ss', 77: 'd/m/yyyy h:mm', 78: 'mm:ss', 79: '[h]:mm:ss', 80: 'mm:ss.0', 81: 'd/m/yy',
 }
 
 type StyleFontXml = Partial<Record<'color' | 'name' | 'rFont' | 'sz' | 'scheme' | 'vertAlign' | 'b' | 'i' | 'u' | 'strike', XmlElement>>

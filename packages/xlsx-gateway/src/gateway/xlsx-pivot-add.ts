@@ -1,5 +1,7 @@
-import { ensureRelationshipNamespace, relationshipNamespaceOverride } from './xlsx-namespace.ts'
+import * as numfmt from 'numfmt'
+import { ensureRelationshipNamespace, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { columnIndex, columnLabel } from '../domain/cell-address.ts'
+import { BUILTIN_NUMBER_FORMATS } from '../shared/builtin-number-formats.ts'
 import { shortDateNumFmtId } from '../shared/short-date.ts'
 import { isValidPivotFilter, type PivotFilterDef } from '../domain/pivot-filters.ts'
 import { formatPivotFormula, parsePivotFormula } from '../domain/pivot-formula.ts'
@@ -22,8 +24,9 @@ import {
   resolveRelTarget,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
-import { parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
-import { childElements } from './xlsx-style-entries.ts'
+import { decodeAttribute, parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
+import { readWorksheetTagAttribute } from './xlsx-structure.ts'
+import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import {
   decodeCellText,
   elementText,
@@ -340,6 +343,38 @@ export async function registerWorkbookPivotCache(
 /// Strings are the decoded text; numbers are JS numbers; null = blank.
 type SourceValue = string | number | boolean | null
 
+type SourceCell = SourceValue | { readonly raw: number; readonly label: string }
+
+async function readPivotNumberFormats(pkg: MutablePackage): Promise<(string | undefined)[]> {
+  if (!(await pkg.has('xl/styles.xml'))) return []
+  const [node] = childElements(await pkg.readText('xl/styles.xml'))
+  if (!node) return []
+  const root = withNamespaces(node, new Map())
+  const codes = new Map<number, string>()
+  const formats = childByName(root, 'numFmts')
+  for (const entry of resolvedStyleEntries(formats?.inner ?? '', 'numFmt', true)) {
+    const tag = readRootStartTag(entry)
+    const id = readWorksheetTagAttribute(tag, 'numFmtId')
+    const code = readWorksheetTagAttribute(tag, 'formatCode')
+    if (id !== undefined && code !== undefined) codes.set(Number(id), decodeAttribute(code))
+  }
+  const styles = childByName(root, 'cellXfs')
+  return resolvedStyleEntries(styles?.inner ?? '', 'xf', true).map((entry) => {
+    const id = Number(readWorksheetTagAttribute(readRootStartTag(entry), 'numFmtId') ?? 0)
+    return codes.get(id) ?? BUILTIN_NUMBER_FORMATS[id]
+  })
+}
+
+function formatPivotNumber(raw: number, format: string, date1904: boolean): string {
+  try {
+    const type = date1904 ? numfmt.getFormatInfo(format).type : undefined
+    const serial = type === 'date' || type === 'datetime' ? raw + 1462 : raw
+    return numfmt.format(format, serial, { nbsp: true, throws: false })
+  } catch {
+    return String(raw)
+  }
+}
+
 function childByName(element: ScopedElement, name: string): ScopedElement | undefined {
   return scopedChildren(element).find((child) => isElement(child, name, element.namespace))
 }
@@ -381,11 +416,11 @@ async function resolveSourcePath(pkg: MutablePackage, sheetName: string): Promis
 }
 
 /// Extract data rows (skipping the header row) from the source area.
-/// Returns an array of SourceValue arrays, one per data row, in column order.
+/// Returns an array of source-cell arrays, one per data row, in column order.
 async function readSourceRows(
   pkg: MutablePackage,
   addition: PivotAddition,
-): Promise<SourceValue[][]> {
+): Promise<SourceCell[][]> {
   let worksheetXml: string
   try {
     const sourcePath = await resolveSourcePath(pkg, addition.sourceSheetName)
@@ -399,9 +434,19 @@ async function readSourceRows(
   const sheetData = worksheet && childByName(worksheet, 'sheetData')
   if (!sheetData) return []
   const sharedStrings = await readPivotSharedStrings(pkg)
+  const styles = await readPivotNumberFormats(pkg)
+  const { root } = workbookCacheElements(await pkg.readText('xl/workbook.xml'))
+  const dateSystem = childByName(root, 'workbookPr')?.attributes.get('date1904')
+  const date1904 = dateSystem === '1' || dateSystem === 'true'
+  const dimensions = new Set([
+    ...addition.rowFieldIndices,
+    ...colFieldIndicesOf(addition),
+    ...(addition.pageFieldIndices ?? []),
+  ])
+  for (const value of addition.values) dimensions.delete(value.fieldIndex)
   const { startRow, startColumn, endRow, endColumn } = addition.sourceArea
   const rows = Array.from({ length: endRow - startRow }, () =>
-    new Array<SourceValue>(endColumn - startColumn + 1).fill(null),
+    new Array<SourceCell>(endColumn - startColumn + 1).fill(null),
   )
 
   let rowIndex = -1
@@ -424,7 +469,13 @@ async function readSourceRows(
       }
       if (column < startColumn || column > endColumn) continue
       const outputRow = rows[cellRow - startRow - 1]
-      if (outputRow) outputRow[column - startColumn] = extractCellValue(cell, sharedStrings)
+      if (!outputRow) continue
+      const field = column - startColumn
+      const raw = extractCellValue(cell, sharedStrings)
+      const format = styles[Number(cell.attributes.get('s') ?? 0)]
+      outputRow[field] = typeof raw === 'number' && dimensions.has(field) && format && format !== 'General'
+        ? { raw, label: formatPivotNumber(raw, format, date1904) }
+        : raw
     }
   }
   return rows
@@ -457,7 +508,7 @@ function extractCellValue(cell: ScopedElement, sharedStrings: readonly string[])
 ///   - blank cells: <m/>
 ///   - string-type value fields (unusual): <s v="TEXT"/>
 function buildCacheRecordsXml(
-  sourceRows: readonly SourceValue[][],
+  sourceRows: readonly SourceCell[][],
   addition: PivotAddition,
 ): string {
   if (sourceRows.length === 0) {
@@ -506,12 +557,15 @@ function buildCacheRecordsXml(
 
   const records = sourceRows
     .map((row) => {
-      const cells = row.map((value, colOffset) => {
+      const cells = row.map((cell, colOffset) => {
+        const formatted = cell !== null && typeof cell === 'object' ? cell : undefined
+        const value = cell !== null && typeof cell === 'object' ? cell.raw : cell
         if (dimensionFields.has(colOffset)) {
           const lookup = sharedItemsByField.get(colOffset)!
           const grouping = groupingByField.get(colOffset)
           const key = grouping ? groupLabel(grouping, value) : value === null ? '' : String(value)
-          const idx = lookup.get(key)
+          const label = formatted && (grouping ? groupLabel(grouping, formatted.label) : formatted.label)
+          const idx = (label === undefined ? undefined : lookup.get(label)) ?? lookup.get(key)
           if (idx === undefined) {
             return '<m/>'
           }

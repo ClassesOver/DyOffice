@@ -450,6 +450,7 @@ test(
       const rankedGrid = [
         ['Region', 'Amount', 'Page'], ['001', -10, true],
         ['1', 100, false], ['1', -20, true], ['2', 'unavailable', true],
+        ['1/1/2024', 5, false],
       ]
       const rankedRows = rankedGrid.map((line, index) => {
         const row = index + 1
@@ -457,6 +458,7 @@ test(
           const cell = `${'ABC'[column]}${row}`
           if (cell === 'A2') return "<c r='A2' t='inlineStr'><is><r><t>0</t></r><r><t>01</t></r></is></c>"
           if (cell === 'B2') return "<c r='B2'><v><![CDATA[-10]]></v></c>"
+          if (cell === 'A6') return '<c r="A6" s="1"><v>45292</v></c>'
           if (typeof value === 'boolean') return `<c r="${cell}" t="b"><v>${Number(value)}</v></c>`
           return typeof value === 'number'
             ? `<c r="${cell}"><v>${value}</v></c>`
@@ -476,7 +478,7 @@ test(
       const rankedWorkbook = await save(rankedSource, [], [first, second], {
         pivotAdditions: [{
           ...ranked.definition, sheetId: second, sourceSheetId: first, name: 'RankedSales',
-          sourceArea: { startRow: 0, startColumn: 0, endRow: 4, endColumn: 2 },
+          sourceArea: { startRow: 0, startColumn: 0, endRow: 5, endColumn: 2 },
           location: { startRow: 2, startColumn: 5, endRow: 4, endColumn: 6 },
         }],
       })
@@ -484,12 +486,13 @@ test(
       const rankedRecords = await xmlPart(await JSZip.loadAsync(rankedWorkbook), 'xl/pivotCache/pivotCacheRecords1.xml')
       assert.match(rankedRecords, /<r><x v="0"\/><n v="-10"\/><x v="0"\/><\/r>/)
       assert.match(rankedRecords, /<r><x v="1"\/><n v="100"\/><x v="1"\/><\/r>/)
+      assert.match(rankedRecords, /<r><x v="3"\/><n v="5"\/><x v="1"\/><\/r>/)
       const restoredRank = await runtime.sheetsPackageReader(rankedWorkbook, undefined, {
         path: savedRank.path, cachePath: savedRank.cachePath,
       })
       const refreshedRank = growPivotDefinition(restoredRank, rankedGrid)
       assert.equal(refreshedRank.grown, false)
-      assert.deepEqual(restoredRank.fields[0].sharedItems, ['001', '1', '2'])
+      assert.deepEqual(restoredRank.fields[0].sharedItems, ['001', '1', '2', '1/1/2024'])
       assert.deepEqual(recomputePivotData(refreshedRank.definition, rankedGrid).data, [[-10], [-10]])
       const comment = '<!-- <worksheetSource name="SourceData"/> -->'
       const source = await editPart(withPivot, before.cachePath, (xml) => xml.replace(

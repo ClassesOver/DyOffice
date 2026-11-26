@@ -58,6 +58,35 @@ async function planWith(
 }
 
 describe('pivot additions', () => {
+  it.each([
+    [false, 45292, '1/1/2024'],
+    [true, 0, '1/1/1904'],
+  ] as const)('matches formatted cache members with date1904=%s', async (date1904, serial, date) => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    if (date1904) zip.file(workbookPath, workbook.replace('<sheets>', "<workbookPr date1904='true'/><sheets>"))
+    const stylesPath = 'xl/styles.xml'
+    const styles = await zip.file(stylesPath)!.async('text')
+    zip.file(stylesPath, styles.replace(/<cellXfs\b[^>]*>[\s\S]*?<\/cellXfs>/,
+      "<cellXfs count='3'><xf numFmtId='0'/><xf numFmtId='14'/><xf numFmtId='164'/></cellXfs>")
+      .replace(/<styleSheet\b[^>]*>/, "$&<numFmts count='1'><numFmt numFmtId='164' formatCode='000'/></numFmts>"))
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(sheetPath)!.async('text')
+    zip.file(sheetPath, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      `<row r="2"><c r="A2" s="1"><v>${serial}</v></c><c r="B2"><v>10</v></c></row>` +
+      '<row r="3"><c r="A3" s="2"><v>1</v></c><c r="B3"><v>20</v></c></row>' +
+      '<row r="4"><c r="A4"><v>1</v></c><c r="B4"><v>30</v></c></row></sheetData>'))
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 1 },
+      fieldNames: ['Label', 'Amount'], rowItems: [date, '001', '1'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')).toContain(
+      '<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r><r><x v="2"/><n v="30"/></r>',
+    )
+  })
+
   it('reads cache data from real source cells and preserves rich-text members', async () => {
     const zip = await JSZip.loadAsync(await buildEditFixture())
     const path = 'xl/worksheets/sheet1.xml'
