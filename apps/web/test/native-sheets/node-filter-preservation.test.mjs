@@ -157,6 +157,34 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
   })
 
   await t.test(
+    'routes a filter into a single-quoted table and excludes the totals row',
+    async () => {
+      const add = sheetsSaveRequest('sheet-1', [])
+      add.tableAdditions = [{
+        sheetId: 'sheet-1', area: span, name: 'QuotedTotals',
+        columnNames: ['Revenue', 'Formula', 'Date'], bandedRows: true,
+        totalsRow: true, filterButton: false,
+      }]
+      const zip = await JSZip.loadAsync(await save(source, add))
+      const table = zip.file(/^xl\/tables\/table\d+\.xml$/)[0]
+      const comment = '<!-- <table ref="Z1:Z4" totalsRowCount="0"/> -->'
+      zip.file(table.name, (await table.async('string')).replaceAll('"', "'")
+        .replace('<table ', comment + '<table '))
+      const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+      const saved = await save(bytes, filterChange([{ colId: 0, values: ['12.5'] }]))
+      const result = await JSZip.loadAsync(saved)
+      const xml = await result.file(table.name).async('string')
+      assert.ok(xml.includes(comment))
+      assert.match(xml, /<autoFilter ref="A1:C2"><filterColumn colId="0">/)
+      assert.doesNotMatch(await result.file(part).async('string'), /<autoFilter\b/)
+      const [updated] = (await native.inspect(saved)).sheets[0].tables
+      assert.equal(updated.name, 'QuotedTotals')
+      assert.equal(updated.totalsRowCount, 1)
+      assert.equal(updated.filterActive, true)
+    },
+  )
+
+  await t.test(
     'updates the active worksheet filter independently of the filter in a custom view',
     async () => {
       const zip = await JSZip.loadAsync(source)

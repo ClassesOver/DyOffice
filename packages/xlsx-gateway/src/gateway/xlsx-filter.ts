@@ -5,10 +5,12 @@
 /// part instead (Excel stores table filters there, never on the worksheet) —
 /// see `applyTableFilterState` and `applyRowVisibilityState`.
 
+import { readRootStartTag } from './xlsx-namespace'
 import { findRootChild } from './xlsx-root-tail'
 import { decodeAttribute } from './xlsx-sheets'
 import { childElements } from './xlsx-style-entries'
-import { readWorksheetTagAttribute } from './xlsx-structure'
+import { readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure'
+import { prefixOf } from './xlsx-worksheet-xml'
 
 export class FilterEditError extends Error {}
 
@@ -141,6 +143,8 @@ export function applyTableFilterState(
   if (route.headerRowCount === 0) {
     return existing ? tableXml.slice(0, existing.start) + tableXml.slice(existing.end) : tableXml
   }
+  const [root] = childElements(tableXml)
+  if (!root) throw new FilterEditError('The table has no root element.')
   const raw = existing ? tableXml.slice(existing.start, existing.end) : ''
   const ref = toRef({ ...route.area, endRow: route.area.endRow - route.totalsRowCount })
   let offset = 0
@@ -160,11 +164,13 @@ export function applyTableFilterState(
     offset,
     raw,
     filter !== null && preserveUneditable,
+    prefixOf(root.name),
   )
   if (existing) {
     return tableXml.slice(0, existing.start) + element + tableXml.slice(existing.end)
   }
-  return tableXml.replace(/<table\b[^>]*>/, (open) => `${open}${element}`)
+  const insertAt = root.start + root.opening.length
+  return tableXml.slice(0, insertAt) + element + tableXml.slice(insertAt)
 }
 
 function matchesMixedDateFilter(xml: string, column: FilterColumnState): boolean {
@@ -191,12 +197,13 @@ function serializeAutoFilter(
   offset: number,
   previous: string,
   preserveUneditable: boolean,
+  defaultPrefix = '',
 ): string {
-  const prefix = AUTO_FILTER.exec(previous)?.[1] ?? ''
+  const opening = readRootStartTag(previous)
+  const prefix = AUTO_FILTER.exec(opening)?.[1] ?? defaultPrefix
   const raw = preserveUneditable ? previous : ''
-  const opening = /^<[^>]+>/.exec(raw)?.[0] ?? ''
-  const refAttribute = /\sref\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(opening)
-  const fileRef = refAttribute?.[1] ?? refAttribute?.[2]
+  const refAttribute = readWorksheetTagAttribute(opening, 'ref')
+  const fileRef = refAttribute === undefined ? undefined : decodeAttribute(refAttribute)
   const snapshot = new Map(columns.map(column => [column.colId + offset, column]))
   const entries = new Map(columns.map(column => [column.colId + offset, serializeFilterColumn(column, offset, prefix)]))
   for (const [part, , attrs] of raw.matchAll(FILTER_COLUMN)) {
@@ -219,8 +226,8 @@ function serializeAutoFilter(
     .map(([, xml]) => xml)
     .join('')
   // Keep attributes and local namespace declarations from the original wrapper.
-  const header = refAttribute
-    ? opening.replace(refAttribute[0], ` ref="${ref}"`).replace(/\/?\s*>$/, '')
+  const header = opening
+    ? updateWorksheetTagAttribute(opening, 'ref', ref).replace(/\/?\s*>$/, '')
     : `<${prefix}autoFilter ref="${ref}"`
   return body === '' ? `${header}/>` : `${header}>${body}</${prefix}autoFilter>`
 }

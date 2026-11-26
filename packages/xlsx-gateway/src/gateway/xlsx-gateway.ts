@@ -67,7 +67,7 @@ import {
   type PivotAddRowLine,
   type PivotValueSpec,
 } from './xlsx-pivot-add.ts'
-import type { SheetFilterState } from './xlsx-filter.ts'
+import type { SheetFilterState, TableFilterRoute } from './xlsx-filter.ts'
 import {
   applyFilterState,
   applyRowVisibilityState,
@@ -75,7 +75,7 @@ import {
   hasUneditableAutoFilter,
   FilterEditError,
 } from './xlsx-filter.ts'
-import { normalizeOoxmlPartPrefix, readRelationshipId } from './xlsx-namespace.ts'
+import { normalizeOoxmlPartPrefix, readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
@@ -2648,17 +2648,18 @@ async function applyRoutedFilterState(
   touchedEntries: Set<string>,
 ): Promise<void> {
   const match = state.filter?.range ?? state.visibilityRange
-  let routed: { table: LocatedTable; area: TableArea } | undefined
+  let routed: { table: LocatedTable; route: TableFilterRoute } | undefined
   for (const table of await sheetTableParts(pkg, worksheetPath)) {
-    const area = tablePartArea(table)
-    if (area === null) continue
+    const route = tableFilterRoute(table.xml)
+    if (!route) continue
+    const { area } = route
     const contains =
       area.startRow <= match.startRow &&
       match.endRow <= area.endRow &&
       area.startColumn <= match.startColumn &&
       match.endColumn <= area.endColumn
     if (contains) {
-      routed = { table, area }
+      routed = { table, route }
       continue
     }
     if (areasOverlap(area, match)) {
@@ -2674,9 +2675,9 @@ async function applyRoutedFilterState(
     touchedEntries.add(worksheetPath)
     return
   }
-  const { table, area } = routed
+  const { table, route } = routed
   const tableXml = applyTableFilterState(
-    table.xml, { area, ...tablePartCounts(table.xml) }, state.filter, state.preserveUneditable,
+    table.xml, route, state.filter, state.preserveUneditable,
   )
   pkg.write(table.path, tableXml)
   touchedEntries.add(table.path)
@@ -2686,23 +2687,23 @@ async function applyRoutedFilterState(
   touchedEntries.add(worksheetPath)
 }
 
-function tablePartArea(table: LocatedTable): TableArea | null {
-  const ref = /<table\b[^>]*\bref="([^"]+)"/.exec(table.xml)?.[1]
+function tableFilterRoute(tableXml: string): TableFilterRoute | null {
+  const opening = readRootStartTag(tableXml)
+  const ref = readWorksheetTagAttribute(opening, 'ref')
   if (ref === undefined) return null
+  const count = (name: string, fallback: number) => {
+    const value = decodeXmlText(readWorksheetTagAttribute(opening, name) ?? '').trim()
+    const parsed = Number(value)
+    return /^\+?\d+$/.test(value) && Number.isSafeInteger(parsed) ? parsed : fallback
+  }
   try {
-    return parseRef(ref)
+    return {
+      area: parseRef(decodeXmlText(ref)),
+      headerRowCount: count('headerRowCount', 1),
+      totalsRowCount: count('totalsRowCount', 0),
+    }
   } catch {
     return null
-  }
-}
-
-function tablePartCounts(tableXml: string): {
-  headerRowCount: number
-  totalsRowCount: number
-} {
-  return {
-    headerRowCount: Number(/<table\b[^>]*?\bheaderRowCount="(\d+)"/.exec(tableXml)?.[1] ?? '1'),
-    totalsRowCount: Number(/<table\b[^>]*?\btotalsRowCount="(\d+)"/.exec(tableXml)?.[1] ?? '0'),
   }
 }
 
