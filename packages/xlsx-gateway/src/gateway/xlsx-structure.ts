@@ -10,7 +10,7 @@ import { rewriteChartReferences } from './xlsx-chart-references.ts'
 import { workbookNameParts } from './xlsx-defined-names.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
-import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
+import { readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { findRootChild, rootChildren } from './xlsx-root-tail.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
@@ -18,7 +18,9 @@ import {
   applyPatches,
   isElement,
   patchElement,
+  prefixOf,
   scopedChildren,
+  withBody,
   worksheetRoot,
   type ScopedElement,
   type XmlPatch,
@@ -360,85 +362,71 @@ function shiftVmlAnchorValues(values: readonly number[], ops: readonly RowColumn
   return next
 }
 
-const SHEET_PR_PATTERN = /<sheetPr\b[^>]*\/>|<sheetPr\b[^>]*>[\s\S]*?<\/sheetPr>/
-const OUTLINE_PR_PATTERN = /<outlinePr\b[^>]*\/>|<outlinePr\b[^>]*>[\s\S]*?<\/outlinePr>/
-
 export function applyOutlinePr(
   xml: string,
   op: Extract<StructuralOp, { summaryBelow: boolean }>,
 ): string {
-  const attributes =
+  const root = worksheetRoot(xml)
+  if (!root) return xml
+  const sheetPr = scopedChildren(root).find((child) => isElement(child, 'sheetPr', root.namespace))
+  const qualifier = prefixOf(sheetPr?.name ?? root.name)
+  const offset = root.start + root.opening.length
+  const attrs =
     (op.summaryBelow ? '' : ' summaryBelow="0"') + (op.summaryRight ? '' : ' summaryRight="0"')
-  const existing = SHEET_PR_PATTERN.exec(xml)
-  const sheetPr = existing?.[0]
-  const current = sheetPr === undefined ? undefined : OUTLINE_PR_PATTERN.exec(sheetPr)?.[0]
-  // Other outlinePr attributes (applyStyles, showOutlineSymbols) stay verbatim.
-  const kept = (current ?? '')
-    .replace(/^<outlinePr\b|\/?>$|<\/outlinePr>$/g, '')
-    .replace(/\s+summary(?:Below|Right)="[^"]*"/g, '')
-    .replace(/>.*$/s, '')
-    .trim()
-  const element =
-    kept === '' && attributes === '' ? '' : `<outlinePr${kept ? ` ${kept}` : ''}${attributes}/>`
-  if (sheetPr === undefined) {
-    if (element === '') return xml
-    return xml.replace(
-      /(<worksheet\b[^>]*>)/,
-      (_full, open: string) => `${open}<sheetPr>${element}</sheetPr>`,
-    )
+  const element = attrs === '' ? '' : `<${qualifier}outlinePr${attrs}/>`
+  if (!sheetPr) {
+    return element === '' ? xml : xml.slice(0, offset) +
+      `<${qualifier}sheetPr>${element}</${qualifier}sheetPr>` + xml.slice(offset)
   }
-  let next: string
-  if (current !== undefined) {
-    next = sheetPr.replace(OUTLINE_PR_PATTERN, () => element)
-  } else if (element === '') {
-    next = sheetPr
-  } else if (sheetPr.endsWith('/>')) {
-    next = `${sheetPr.slice(0, -2)}>${element}</sheetPr>`
-  } else {
+
+  const children = scopedChildren(sheetPr)
+  const outline = children.find((child) => isElement(child, 'outlinePr', sheetPr.namespace))
+  let body = sheetPr.inner
+  if (outline) {
+    const keptOpening = omitWorksheetTagAttributes(outline.opening, ['summaryBelow', 'summaryRight'])
+    const opening = keptOpening.replace(/(\s*\/?>)$/, (_end, suffix) => attrs + suffix)
+    const otherAttributes = [...outline.attributes.keys()].some((name) => name !== 'summaryBelow' && name !== 'summaryRight')
+    const replacement = attrs || otherAttributes || outline.inner.trim()
+      ? opening + outline.xml.slice(outline.opening.length)
+      : ''
+    body = body.slice(0, outline.start) + replacement + body.slice(outline.start + outline.xml.length)
+  } else if (element !== '') {
     // Schema order: tabColor, outlinePr, pageSetUpPr.
-    const pageSetUp = /<pageSetUpPr\b/.exec(sheetPr)
-    next = pageSetUp
-      ? `${sheetPr.slice(0, pageSetUp.index)}${element}${sheetPr.slice(pageSetUp.index)}`
-      : sheetPr.replace(/<\/sheetPr>$/, `${element}</sheetPr>`)
+    const next = children.find((child) => isElement(child, 'pageSetUpPr', sheetPr.namespace))
+    const at = next?.start ?? body.length
+    body = body.slice(0, at) + element + body.slice(at)
   }
-  const emptied = /^<sheetPr\b([^>]*)>\s*<\/sheetPr>$/.exec(next)
-  if (emptied && emptied[1]!.trim() === '') next = ''
-  return xml.replace(SHEET_PR_PATTERN, () => next)
+  if (body === sheetPr.inner) return xml
+  const updated = { ...sheetPr, start: offset + sheetPr.start }
+  const keepProperties = body.trim() !== '' || sheetPr.attributes.size > 0
+  return applyPatches(xml, [patchElement(updated, keepProperties ? withBody(sheetPr, body) : '')])
 }
 
-/// Excel sizes the outline gutter from sheetFormatPr's outlineLevelRow/Col;
-/// recompute both maxima after outline edits so the bars actually show.
+/// Excel sizes the outline gutter from the largest real row and column levels.
 function syncOutlineSummaryLevels(xml: string): string {
+  const children = worksheetChildren(xml)
+  const data = children.find((child) => child.local === 'sheetData')
+  const cols = children.find((child) => child.local === 'cols')
+  const format = children.find((child) => child.local === 'sheetFormatPr')
   let maxRow = 0
-  for (const match of xml.matchAll(/<row\b[^>]*?\boutlineLevel="([0-9]+)"/g)) {
-    maxRow = Math.max(maxRow, Number(match[1]))
-  }
   let maxCol = 0
-  for (const match of xml.matchAll(/<col\b[^>]*?\boutlineLevel="([0-9]+)"/g)) {
-    maxCol = Math.max(maxCol, Number(match[1]))
+  for (const { row } of data ? worksheetRowPositions(data) : []) {
+    maxRow = Math.max(maxRow, readPositiveInteger(row.attributes.get('outlineLevel')) ?? 0)
   }
-  const attributes =
-    (maxRow > 0 ? ` outlineLevelRow="${maxRow}"` : '') +
-    (maxCol > 0 ? ` outlineLevelCol="${maxCol}"` : '')
-  const existing = /<sheetFormatPr\b([^>]*?)(\/?)>/.exec(xml)
-  if (existing) {
-    const kept = existing[1]!
-      .replace(/\s+outlineLevelRow="[^"]*"/g, '')
-      .replace(/\s+outlineLevelCol="[^"]*"/g, '')
-    return (
-      xml.slice(0, existing.index) +
-      `<sheetFormatPr${kept}${attributes}${existing[2]}>` +
-      xml.slice(existing.index + existing[0].length)
-    )
+  for (const col of cols ? scopedChildren(cols) : []) {
+    if (isElement(col, 'col', cols?.namespace))
+      maxCol = Math.max(maxCol, readPositiveInteger(col.attributes.get('outlineLevel')) ?? 0)
   }
-  if (!attributes) return xml
-  const anchor = /<cols\b|<sheetData\b/.exec(xml)
-  if (!anchor) return xml
-  return (
-    xml.slice(0, anchor.index) +
-    `<sheetFormatPr defaultRowHeight="15"${attributes}/>` +
-    xml.slice(anchor.index)
-  )
+  const attrs = (maxRow ? ` outlineLevelRow="${maxRow}"` : '') + (maxCol ? ` outlineLevelCol="${maxCol}"` : '')
+  if (format) {
+    const kept = omitWorksheetTagAttributes(format.opening, ['outlineLevelRow', 'outlineLevelCol'])
+    const opening = kept.replace(/(\s*\/?>)$/, (_end, suffix) => attrs + suffix)
+    return applyPatches(xml, [patchElement(format, opening + format.xml.slice(format.opening.length))])
+  }
+  const anchor = cols ?? data
+  if (!anchor || (!maxRow && !maxCol)) return xml
+  const qualifier = prefixOf(readRootOpening(xml)?.name ?? '')
+  return xml.slice(0, anchor.start) + `<${qualifier}sheetFormatPr defaultRowHeight="15"${attrs}/>` + xml.slice(anchor.start)
 }
 
 function toRef(range: CellArea): string {
@@ -558,6 +546,8 @@ function insertEmptyRow(worksheetXml: string, rowNumber: number, attributes: str
 }
 
 interface ColDefinition {
+  name: string
+  tail: string
   min: number
   max: number
   /// Attributes other than min/max, in original order.
@@ -573,22 +563,26 @@ function applyColAttributeOp(
   resolveColStyle?: (baseXfIndex: number, delta: WorkbookStyleEdit) => number,
 ): string {
   if ('style' in op && resolveColStyle === undefined) return xml
+  const children = worksheetChildren(xml)
+  const section = children.find((child) => child.local === 'cols')
   const existing: ColDefinition[] = []
-  const section = /<cols\b[^>]*>([\s\S]*?)<\/cols>/.exec(xml)
-  if (section?.[1]) {
-    for (const element of section[1].matchAll(/<col\b([^>]*?)\/>/g)) {
-      const attrs = new Map<string, string>()
-      for (const attribute of (element[1] ?? '').matchAll(/([\w:]+)="([^"]*)"/g)) {
-        if (attribute[1] && attribute[2] !== undefined) attrs.set(attribute[1], attribute[2])
-      }
-      const min = Number(attrs.get('min'))
-      const max = Number(attrs.get('max'))
-      if (!Number.isInteger(min) || !Number.isInteger(max)) continue
-      attrs.delete('min')
-      attrs.delete('max')
-      existing.push({ min: min - 1, max: max - 1, attrs })
-    }
+  const originalBody = section?.inner ?? ''
+  const untouched: string[] = []
+  let past = 0
+  for (const element of section ? scopedChildren(section) : []) {
+    if (!isElement(element, 'col', section?.namespace)) continue
+    const min = readPositiveInteger(element.attributes.get('min'))
+    const max = readPositiveInteger(element.attributes.get('max'))
+    if (min === undefined || max === undefined || min > max || max > MAX_GRID_COLUMNS) continue
+    const attrs = new Map(element.attributes)
+    attrs.delete('min')
+    attrs.delete('max')
+    const tail = element.opening.endsWith('/>') ? '/>' : '>' + element.xml.slice(element.opening.length)
+    existing.push({ name: element.name, tail, min: min - 1, max: max - 1, attrs })
+    untouched.push(originalBody.slice(past, element.start))
+    past = element.start + element.xml.length
   }
+  const qualifier = prefixOf(section?.name ?? readRootOpening(xml)?.name ?? '')
 
   const patch = (attrs: Map<string, string>): Map<string, string> => {
     const next = new Map(attrs)
@@ -624,13 +618,14 @@ function applyColAttributeOp(
       continue
     }
     if (col.min < op.start)
-      result.push({ min: col.min, max: op.start - 1, attrs: new Map(col.attrs) })
+      result.push({ ...col, max: op.start - 1 })
     result.push({
+      ...col,
       min: Math.max(col.min, op.start),
       max: Math.min(col.max, op.end),
       attrs: patch(col.attrs),
     })
-    if (col.max > op.end) result.push({ min: op.end + 1, max: col.max, attrs: new Map(col.attrs) })
+    if (col.max > op.end) result.push({ ...col, min: op.end + 1 })
   }
   // Span parts no existing <col> covered get an element carrying only the
   // change (unless the change is a reset back to the default).
@@ -654,28 +649,30 @@ function applyColAttributeOp(
     }
     if (cursor <= op.end) gaps.push({ min: cursor, max: op.end })
     for (const gap of gaps) {
-      result.push({ min: gap.min, max: gap.max, attrs: patch(new Map()) })
+      result.push({ name: qualifier + 'col', tail: '/>', ...gap, attrs: patch(new Map()) })
     }
   }
 
   const kept = result
-    .filter((col) => col.attrs.size > 0)
+    .filter((col) => col.attrs.size > 0 || col.tail !== '/>')
     .sort((left, right) => left.min - right.min)
   const serialized = kept
     .map((col) => {
-      const attributes = [...col.attrs].map(([name, value]) => ` ${name}="${value}"`).join('')
-      return `<col min="${col.min + 1}" max="${col.max + 1}"${attributes}/>`
+      const attributes = [...col.attrs].map(([name, value]) => ` ${name}="${escapeXmlAttribute(value)}"`).join('')
+      return `<${col.name} min="${col.min + 1}" max="${col.max + 1}"${attributes}${col.tail}`
     })
     .join('')
-  const newSection = kept.length === 0 ? '' : `<cols>${serialized}</cols>`
+  const body = serialized + untouched.join('') + originalBody.slice(past)
   if (section) {
-    return xml.replace(/<cols\b[^>]*>[\s\S]*?<\/cols>/, () => newSection)
+    const keepSection = body.trim() !== '' || section.attributes.size > 0
+    const replacement = keepSection ? withBody(section, body) : ''
+    return applyPatches(xml, [patchElement(section, replacement)])
   }
-  if (newSection === '') return xml
+  if (body === '') return xml
   // Schema order places cols immediately before sheetData.
-  const sheetData = /<sheetData\s*\/>|<sheetData\b[^>]*>/.exec(xml)
+  const sheetData = children.find((child) => child.local === 'sheetData')
   if (!sheetData) throw new StructuralShiftError('Worksheet has no sheetData element.')
-  return xml.slice(0, sheetData.index) + newSection + xml.slice(sheetData.index)
+  return xml.slice(0, sheetData.start) + `<${qualifier}cols>${body}</${qualifier}cols>` + xml.slice(sheetData.start)
 }
 
 function refreshMergeCount(xml: string): string {

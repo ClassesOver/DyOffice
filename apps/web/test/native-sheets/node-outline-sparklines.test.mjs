@@ -127,4 +127,39 @@ test('Node XLSX reopens worksheet outlines and existing sparklines after a value
     ).value,
     101,
   )
+
+  await t.test('reads and saves only SpreadsheetML column layout and outline settings', async () => {
+    const foreign = 'xmlns="urn:example:layout"'
+    const properties = `<sheetPr ${foreign}><outlinePr summaryBelow="1" summaryRight="1"/></sheetPr>`
+    const outline = `<outlinePr ${foreign} summaryBelow="1"/>`
+    const format = `<sheetFormatPr ${foreign} defaultRowHeight="90" defaultColWidth="90" outlineLevelCol="7"/>`
+    const columns = `<cols ${foreign}><col min="1" max="6" width="90" outlineLevel="7"/></cols>`
+    const column = `<col ${foreign} min="2" max="2" width="80" hidden="1" outlineLevel="6"/>`
+    zip.file(worksheetPart, worksheet
+      .replace('<dimension ', properties + `<sheetPr>${outline}<outlinePr summaryBelow="0"/></sheetPr><dimension `)
+      .replace('<sheetFormatPr defaultRowHeight="15"/>', format + '<sheetFormatPr defaultRowHeight="18" defaultColWidth="13"/>')
+      .replace('<cols>', columns + `<cols>${column}`))
+    const input = await zip.generateAsync({ type: 'nodebuffer' })
+    const initial = (await native.inspect(input)).sheets[0]
+    assert.deepEqual([initial.defaultRowHeight, initial.defaultColumnWidth, initial.outlineSummaryBelow], [18, 13, false])
+    assert.deepEqual(initial.columnWidths.map(({ startColumn, endColumn, width }) => [startColumn, endColumn, width]), [[0, 5, 18]])
+    const edit = sheetsSaveRequest(sheet.id, [])
+    edit.structuralOps = [
+      { sheetId: sheet.id, kind: 'set-col-size', start: 1, end: 1, size: 24 },
+      { sheetId: sheet.id, kind: 'set-cols-hidden', start: 1, end: 1, hidden: true },
+      { sheetId: sheet.id, kind: 'set-cols-outline', start: 1, end: 1, level: 2 },
+      { sheetId: sheet.id, kind: 'set-outline-pr', summaryBelow: true, summaryRight: false },
+    ]
+    const result = (await native.savePlan(input, await runtime.sheetsWorkbookPlanner(input, edit))).bytes
+    const xml = await (await JSZip.loadAsync(result)).file(worksheetPart).async('string')
+    for (const preserved of [properties, outline, format, columns, column]) assert.ok(xml.includes(preserved), preserved)
+    const edited = (await native.inspect(result)).sheets[0]
+    assert.deepEqual([edited.outlineLevelCol, edited.outlineSummaryBelow, edited.outlineSummaryRight], [2, undefined, false])
+    assert.deepEqual(edited.columnWidths.map(({ startColumn, endColumn, width, hidden, outlineLevel }) =>
+      [startColumn, endColumn, width, hidden, outlineLevel]), [
+      [0, 0, 18, false, undefined],
+      [1, 1, 24, true, 2],
+      [2, 5, 18, false, undefined],
+    ])
+  })
 })

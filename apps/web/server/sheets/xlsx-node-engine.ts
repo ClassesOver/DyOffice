@@ -116,7 +116,7 @@ const metadataXmlOptions:X2jOptions={
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
-    'worksheet.cols.col','worksheet.mergeCells.mergeCell','worksheet.conditionalFormatting',
+    'worksheet.mergeCells.mergeCell','worksheet.conditionalFormatting',
     'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
     'worksheet.conditionalFormatting.cfRule.colorScale.color',
     'worksheet.conditionalFormatting.cfRule.formula','worksheet.conditionalFormatting.cfRule.dataBar.cfvo',
@@ -201,10 +201,6 @@ function sheetArea(ref:string|undefined){
   if(!ref||!/^\$?[A-Z]{1,3}\$?[1-9]\d{0,6}(?::\$?[A-Z]{1,3}\$?[1-9]\d{0,6})?$/i.test(ref))return null
   const area=parseRef(ref.toUpperCase())
   return area.startRow<=area.endRow&&area.endRow<1_048_576&&area.startColumn<=area.endColumn&&area.endColumn<16_384?area:null
-}
-
-function sizeAttribute(element:XmlElement|undefined,name:string){
-  return sizeValue(attribute(element,name))
 }
 
 function sizeValue(raw:string|undefined){
@@ -470,16 +466,23 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     ...(parsed.password?{password:parsed.password}:{}),
   }
   const columns:SheetMetadata['columnWidths']=[]
-  const format=worksheet?.sheetFormatPr
-  const outline=worksheet?.sheetPr?.outlinePr
-  let outlineLevelCol=outlineLevel(attribute(format,'outlineLevelCol'))
-  let outlineLevelRow=outlineLevel(attribute(format,'outlineLevelRow'))
-  for(const col of worksheet?.cols?.col??[]){
-    const first=Number(attribute(col,'min')),last=Number(attribute(col,'max'))
+  const format=children.find(child=>child.local==='sheetFormatPr')?.attributes
+  const properties=children.find(child=>child.local==='sheetPr')
+  const propertyChildren=properties ? scopedChildren(properties) : []
+  const outline=propertyChildren.find(child=>isElement(child,'outlinePr',properties?.namespace))?.attributes
+  const tabColor=propertyChildren.find(child=>isElement(child,'tabColor',properties?.namespace))
+  const tabColorAttrs=tabColor && Object.fromEntries([...tabColor.attributes].map(([name,value])=>[`@_${name}`,value]))
+  let outlineLevelCol=outlineLevel(format?.get('outlineLevelCol'))
+  let outlineLevelRow=outlineLevel(format?.get('outlineLevelRow'))
+  const cols=children.find(child=>child.local==='cols')
+  for(const col of cols ? scopedChildren(cols) : []){
+    if(!isElement(col,'col',cols?.namespace))continue
+    const attrs=col.attributes
+    const first=Number(attrs.get('min')),last=Number(attrs.get('max'))
     if(!Number.isInteger(first)||!Number.isInteger(last)||first<1||last<first||last>MAX_GRID_COLUMNS)continue
-    const level=outlineLevel(attribute(col,'outlineLevel')),width=sizeAttribute(col,'width')
-    const hidden=enabled(attribute(col,'hidden')),collapsed=enabled(attribute(col,'collapsed'))
-    const styleIndex=positiveStyle(attribute(col,'style'))
+    const level=outlineLevel(attrs.get('outlineLevel')),width=sizeValue(attrs.get('width'))
+    const hidden=enabled(attrs.get('hidden')),collapsed=enabled(attrs.get('collapsed'))
+    const styleIndex=positiveStyle(attrs.get('style'))
     if(width===undefined&&!hidden&&!collapsed&&!level&&styleIndex===undefined)continue
     outlineLevelCol=Math.max(outlineLevelCol,level)
     columns.push({startColumn:first-1,endColumn:last-1,width,hidden,
@@ -539,7 +542,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     colBreaks:readManualBreaks(children.find(child=>child.local==='colBreaks'),MAX_GRID_COLUMNS-1),
     pageSetup:readPageSetup(children),
     view:{
-      tabColor:resolveColor(worksheet?.sheetPr?.tabColor).rgb??null,
+      tabColor:resolveColor(tabColorAttrs).rgb??null,
       showGridLines:!disabled(view?.attributes.get('showGridLines')),
       showFormulas:enabled(view?.attributes.get('showFormulas'))||undefined,
       showRowColHeaders:disabled(view?.attributes.get('showRowColHeaders'))?false:undefined,
@@ -547,12 +550,12 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
       zoomScale:zoomScale===100?undefined:zoomScale,
       outlineLevelRow:outlineLevelRow||undefined,
       outlineLevelCol:outlineLevelCol||undefined,
-      outlineSummaryBelow:disabled(attribute(outline,'summaryBelow'))?false:undefined,
-      outlineSummaryRight:disabled(attribute(outline,'summaryRight'))?false:undefined,
+      outlineSummaryBelow:disabled(outline?.get('summaryBelow'))?false:undefined,
+      outlineSummaryRight:disabled(outline?.get('summaryRight'))?false:undefined,
     },
     freeze:frozen&&(frozenRows||frozenColumns)?{frozenRows,frozenColumns}:null,
-    defaultRowHeight:sizeAttribute(format,'defaultRowHeight')||null,defaultColumnWidth:sizeAttribute(format,'defaultColWidth')||null,
-    defaultRowHeightFixed:enabled(attribute(format,'customHeight'))||undefined,baseColumnWidth:sizeAttribute(format,'baseColWidth')||null}
+    defaultRowHeight:sizeValue(format?.get('defaultRowHeight'))||null,defaultColumnWidth:sizeValue(format?.get('defaultColWidth'))||null,
+    defaultRowHeightFixed:enabled(format?.get('customHeight'))||undefined,baseColumnWidth:sizeValue(format?.get('baseColWidth'))||null}
 }
 
 function positiveStyle(raw:string|undefined){
