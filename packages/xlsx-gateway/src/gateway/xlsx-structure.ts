@@ -2180,17 +2180,23 @@ function moveArea(area: CellArea, shift: Shift, axis: Axis): CellArea | null {
     : { ...area, startColumn: moved.start, endColumn: moved.end }
 }
 
+export function findPivotTableLocation(xml: string): { start: number; opening: string } | undefined {
+  const location = findRootChild(xml, 'pivotTableDefinition', 'location')
+  if (!location) return undefined
+  const opening = readRootStartTag(xml.slice(location.start, location.end))
+  return opening ? { start: location.start, opening } : undefined
+}
+
 /// A pivot body and its report filters can move together as one block. The
 /// layout offsets and item records are relative to the body and cannot
 /// describe cells that were deleted, rearranged, or pulled apart.
 export function shiftPivotTablePart(xml: string, ops: readonly StructuralOp[]): string {
-  const location = findRootChild(xml, 'pivotTableDefinition', 'location')
-  const tag =
-    location && /^(?:[^>"']|"[^"]*"|'[^']*')*>/.exec(xml.slice(location.start, location.end))?.[0]
-  const reference = tag ? readWorksheetTagAttribute(tag, 'ref') : undefined
-  if (!location || !tag || reference === undefined) {
+  const location = findPivotTableLocation(xml)
+  const reference = location && readWorksheetTagAttribute(location.opening, 'ref')
+  if (!location || reference === undefined) {
     throw new StructuralShiftError('A pivot table has no output reference.')
   }
+  const tag = location.opening
   const ref = decodeXmlText(reference)
   const [first = '', last = first, extra] = ref.split(':')
   const start = parseA1(first)

@@ -296,6 +296,38 @@ describe('applyPivotLayoutExpansions', () => {
     expect(updatedTable).not.toContain('ref="F1:G4"')
   })
 
+  it('expands the actual pivot location and preserves lookalikes in comments', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const tablePath = 'xl/pivotTables/pivotTable1.xml'
+    const comment = '<!-- <location ref="F1:G4"/> -->'
+    const table = await zip.file(tablePath)!.async('text')
+    zip.file(tablePath, table.replace('<location ref="F1:G4"',
+      `${comment}<location ref='F1:G&#52;'`))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])
+    expect(plan.replaced.get(tablePath)).toContain(`${comment}<location ref="F1:G5"`)
+  })
+
+  it('finds the linked pivot table when its cache relationship uses single quotes', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const relsPath = 'xl/pivotTables/_rels/pivotTable1.xml.rels'
+    const rels = await zip.file(relsPath)!.async('text')
+    const type = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition'
+    const external = `<Relationship Id="ext" Type="${type}" Target="pivotCacheDefinition9.xml" TargetMode="External"/>`
+    zip.file(relsPath, rels.replace('<Relationship Id="rId1"',
+      external + "<Relationship Id='rId1'").replace(`Type="${type}" Target="../pivotCache/pivotCacheDefinition1.xml"`,
+      `Type='${type}' Target='../pivotCache/pivotCacheDefinition&#49;.xml'`))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])
+    expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('ref="F1:G5"')
+  })
+
   it('expands two extra rows correctly', async () => {
     const buf = await buildPivotFixture()
     const update: PivotRefreshUpdate = {

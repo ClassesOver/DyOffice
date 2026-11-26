@@ -287,6 +287,22 @@ test(
           await xmlPart(await JSZip.loadAsync(result), after.cachePath),
           await xmlPart(await JSZip.loadAsync(withPivot), before.cachePath),
         )
+
+        const comment = '<!-- <location ref="G2:H7"/> -->'
+        const zip = await JSZip.loadAsync(result)
+        const table = await xmlPart(zip, after.path)
+        zip.file(after.path, table.replace('<location ref="G2:H7"',
+          `${comment}<location ref='G2:H&#55;'`))
+        const relsPath = after.path.replace(/\/([^/]+)$/, '/_rels/$1.rels')
+        zip.file(relsPath, (await xmlPart(zip, relsPath)).replaceAll('"', "'"))
+        const expanded = await save(await zip.generateAsync({ type: 'nodebuffer' }), [], [first, second], {
+          pivotCacheRefreshPaths: [after.cachePath],
+          pivotRefreshUpdates: [{ sheetId: second, cachePath: after.cachePath, newOutputRef: 'G2:H8' }],
+        })
+        const expandedPivot = (await inspect(expanded)).sheets[1].pivotTables[0]
+        assert.equal(expandedPivot.outputRef, 'G2:H8')
+        assert.ok((await xmlPart(await JSZip.loadAsync(expanded), after.path))
+          .includes(`${comment}<location ref="G2:H8"`))
       },
     )
 

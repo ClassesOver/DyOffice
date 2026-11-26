@@ -18,9 +18,14 @@ import {
   decodeAttribute,
   localPivotWorksheetSource,
   parseRelationships,
+  partPathForRels,
   relationshipIdsMatch,
 } from './xlsx-sheets.ts'
-import { readWorksheetTagAttribute } from './xlsx-structure.ts'
+import {
+  findPivotTableLocation,
+  readWorksheetTagAttribute,
+  updateWorksheetTagAttribute,
+} from './xlsx-structure.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { scopedChildren, withNamespaces } from './xlsx-worksheet-xml.ts'
 
@@ -92,38 +97,13 @@ async function findPivotTablePathForCache(
   const tableRelsPattern = /^xl\/pivotTables\/_rels\/[^/]+\.rels$/
   for (const relsPath of allPaths) {
     if (!tableRelsPattern.test(relsPath)) continue
-    const relsXml = await pkg.readText(relsPath)
-    // Each pivot table rels file has exactly one pivotCacheDefinition relationship
-    const targetMatch =
-      /Target="([^"]+)"[^>]*Type="[^"]*pivotCacheDefinition[^"]*"/.exec(relsXml) ??
-      /Type="[^"]*pivotCacheDefinition[^"]*"[^>]*Target="([^"]+)"/.exec(relsXml)
-    if (!targetMatch?.[1]) continue
-    // Resolve the target relative to the rels file's directory
-    // rels path: xl/pivotTables/_rels/pivotTable1.xml.rels
-    // Target: ../pivotCache/pivotCacheDefinition1.xml
-    // Resolved: xl/pivotCache/pivotCacheDefinition1.xml
-    const relsDir = relsPath.replace(/\/_rels\/[^/]+$/, '')
-    const sourcePart = relsPath.replace(/\/_rels\/([^/]+)\.rels$/, '/$1')
-    const resolved = resolveRelTarget(sourcePart, targetMatch[1])
-    if (resolved !== cachePath) continue
-    // The pivot table path: strip _rels/ and .rels suffix
-    const tableFilename = relsPath.replace(/.*\/_rels\//, '').replace(/\.rels$/, '')
-    return `${relsDir}/${tableFilename}`
+    const tablePath = partPathForRels(relsPath)
+    if (parseRelationships(await pkg.readText(relsPath)).some(({ external, type, target }) =>
+      !external && type.endsWith('/pivotCacheDefinition') &&
+      resolveRelTarget(tablePath, target) === cachePath,
+    )) return tablePath
   }
   return null
-}
-
-/// Read the current <location ref="…"> from a pivot table XML.
-function extractLocationRef(pivotTableXml: string): string | null {
-  return /<location\b[^>]*\bref="([^"]+)"/.exec(pivotTableXml)?.[1] ?? null
-}
-
-/// Replace the ref attribute on the <location …> element.
-function updateLocationRef(pivotTableXml: string, newRef: string): string {
-  return pivotTableXml.replace(
-    /<location\b([^>]*)\bref="[^"]*"([^>]*)>/,
-    (_, before, after) => `<location${before}ref="${newRef}"${after}>`,
-  )
 }
 
 // ─── Conflict detection ───────────────────────────────────────────────────────
@@ -220,10 +200,11 @@ export async function applyPivotLayoutExpansions(
     }
 
     const pivotTableXml = await pkg.readText(pivotTablePath)
-    const currentRef = extractLocationRef(pivotTableXml)
-    if (!currentRef) continue
+    const location = findPivotTableLocation(pivotTableXml)
+    const currentRef = location && readWorksheetTagAttribute(location.opening, 'ref')
+    if (!location || !currentRef) continue
 
-    const oldArea = parseAreaRef(currentRef)
+    const oldArea = parseAreaRef(decodeAttribute(currentRef))
     const newArea = parseAreaRef(update.newOutputRef)
     const sameArea =
       oldArea.start.col === newArea.start.col &&
@@ -263,7 +244,10 @@ export async function applyPivotLayoutExpansions(
     }
 
     if (update.relayout === undefined) {
-      const updatedTableXml = updateLocationRef(pivotTableXml, update.newOutputRef)
+      const { start, opening } = location
+      const updated = updateWorksheetTagAttribute(opening, 'ref', areaRefToString(newArea))
+      const updatedTableXml =
+        pivotTableXml.slice(0, start) + updated + pivotTableXml.slice(start + opening.length)
       pkg.write(pivotTablePath, updatedTableXml)
       touchedEntries.add(pivotTablePath)
       continue
