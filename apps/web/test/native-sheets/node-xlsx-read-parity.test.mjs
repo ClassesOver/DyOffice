@@ -144,6 +144,26 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     assert.ok(xml.includes(extension))
   })
 
+  await t.test('opens and saves prefixed XLSX parts with a foreign root default namespace', async () => {
+    const bytes = await workbook({
+      [workbookPath]: `<s:workbook xmlns:s="${spreadsheet}" xmlns="urn:example:extension"
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        <s:sheets><s:sheet name="Acceptance" sheetId="1" r:id="rId1"/></s:sheets>
+      </s:workbook>`,
+      [sheetPath]: `<s:worksheet xmlns:s="${spreadsheet}" xmlns="urn:example:extension">
+        <s:sheetData><s:row r="1"><s:c r="A1"><s:v>7</s:v></s:c></s:row></s:sheetData>
+        <s:extLst><s:ext uri="urn:example:extension"><payload><item/></payload></s:ext></s:extLst>
+      </s:worksheet>`,
+    })
+    const values = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }))
+      .cells.map(({ value }) => value)
+    assert.deepEqual(await values(bytes), [7])
+    const saved = await saveValue(bytes, 0, 42)
+    assert.deepEqual(await values(saved), [42])
+    const xml = await (await JSZip.loadAsync(saved)).file(sheetPath).async('string')
+    assert.ok(xml.includes('<payload xmlns="urn:example:extension"><item/></payload>'))
+  })
+
   await t.test('opens and saves both empty-tag and expanded worksheet declarations with single quotes', async () => {
     const declarations = [
       "<sheet name='Acceptance' sheetId=\"1\" r:id='rId1'/>",

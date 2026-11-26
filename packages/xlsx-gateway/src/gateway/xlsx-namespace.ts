@@ -77,7 +77,7 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
       const value = double ?? single ?? ''
       if (key === 'xmlns') {
         const offset = match.index!
-        if ((offset === root.index && value !== uri) || defaults.has(offset)) return xml
+        if (defaults.has(offset)) return xml
         const start = attribute.index!
         defaults.set(offset, { value, start, end: start + attribute[0].length })
       }
@@ -128,15 +128,15 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
     const inherited = localDefault?.value ?? parent?.normalized ?? ''
     const normalized = stripPrefix ? uri : (separator > 0 ? inherited : original)
     if (!tag.endsWith('/>')) scopes.push({ aliases, original, normalized })
-    if (offset === root.index) {
-      if (localDefault) return `<${normalizedName}${relationshipBinding}${tail}`
+    if (offset === root.index && !localDefault) {
       return `<${normalizedName}${tail.slice(0, declarationOffset)}${bindings}${tail.slice(declarationOffset + declaration[0].length)}`
     }
-    if (normalized === inherited) return `<${normalizedName}${tail}`
+    const rootRelationships = offset === root.index ? relationshipBinding : ''
+    if (normalized === inherited) return `<${normalizedName}${rootRelationships}${tail}`
     // Restore the original default on unqualified descendants if an ancestor's namespace changed.
     const binding = ` xmlns="${normalized.replaceAll('"', '&quot;')}"`
     if (localDefault) {
-      return `<${normalizedName}${tail.slice(0, localDefault.start)}${binding}${tail.slice(localDefault.end)}`
+      return `<${normalizedName}${rootRelationships}${tail.slice(0, localDefault.start)}${binding}${tail.slice(localDefault.end)}`
     }
     return `<${normalizedName}${binding}${tail}`
   })

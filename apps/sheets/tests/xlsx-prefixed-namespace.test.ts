@@ -132,9 +132,12 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalizeOoxmlPartPrefix(chart)).toBe(chart)
   })
 
-  it('bails out when a default namespace is already bound', () => {
-    const xml = `<x:workbook xmlns:x="${MAIN_NS}" xmlns="urn:other">` + '<x:sheets/></x:workbook>'
-    expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
+  it('restores a foreign root default on unqualified descendants', () => {
+    const xml = `<x:workbook xmlns:x="${MAIN_NS}" xmlns='urn:other'>` +
+      '<x:sheets/><x:ext><payload><item/><x:tag/></payload></x:ext></x:workbook>'
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toMatch(/^<workbook\s/)
+    expect(normalized).toContain(`<sheets/><ext><payload xmlns="urn:other"><item/><tag xmlns="${MAIN_NS}"/></payload></ext></workbook>`)
   })
 
   it('normalizes the root prefix outside a foreign rebinding', () => {
