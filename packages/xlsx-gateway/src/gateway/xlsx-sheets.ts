@@ -504,6 +504,7 @@ export function applySheetPlanToWorkbookXml(
   workbookXml: string,
   plan: SheetEditPlan,
   additions: readonly SheetAllocation[],
+  unavailableSheets: ReadonlySet<string> = new Set(),
 ): string {
   const sheetList = workbookSection(workbookXml, 'sheets')
   if (!sheetList) throw new SheetEditError('The workbook has no sheet list.')
@@ -545,7 +546,8 @@ export function applySheetPlanToWorkbookXml(
   ) {
     throw new SheetEditError('The sheet order does not match the final sheet set.')
   }
-  const firstVisible = plan.order.findIndex((name) => !finalElements.get(name)?.hidden)
+  const isVisible = (name: string) => !unavailableSheets.has(name) && !finalElements.get(name)?.hidden
+  const firstVisible = plan.order.findIndex(isVisible)
   if (firstVisible === -1) {
     throw new SheetEditError('A workbook needs at least one visible sheet.')
   }
@@ -592,12 +594,14 @@ export function applySheetPlanToWorkbookXml(
 
   // Both editors open the first visible sheet when the saved active tab is
   // stale. Resolve that fallback in the old order before remapping it.
-  const firstOriginallyVisible = elements.findIndex((element) => !element.hidden)
+  const originallyVisible = ({ name, hidden }: SheetElement) => !hidden && !unavailableSheets.has(name)
+  const firstOriginallyVisible = elements.findIndex(originallyVisible)
   const activeIndex = (oldIndex: number): number => {
-    const original = elements[oldIndex]?.hidden === false ? oldIndex : firstOriginallyVisible
+    const previous = elements[oldIndex]
+    const original = previous && originallyVisible(previous) ? oldIndex : firstOriginallyVisible
     const mapped = oldIndexToNew(original)
     if (mapped === null) return firstVisible
-    return finalElements.get(plan.order[mapped]!)?.hidden ? firstVisible : mapped
+    return isVisible(plan.order[mapped]!) ? mapped : firstVisible
   }
   // A missing workbook view has the same implicit active index as an empty one.
   const implicitActiveIndex = activeIndex(0)

@@ -2515,7 +2515,32 @@ async function applySheetPlanToPackage(
     touchedEntries.add(contentTypesPath)
   }
 
-  return applySheetPlanToWorkbookXml(workbookXml, plan, additions)
+  // The editor omits unreadable tabs. Keep those declarations in the file
+  // so their names and other positional metadata retain the same owners.
+  const requestedOrder = new Set(plan.order)
+  const removedNames = new Set(plan.removals)
+  const unavailableSheets = new Set<string>()
+  for (const { name, relationshipId } of elements) {
+    if (requestedOrder.has(name) || removedNames.has(name) || renameByOriginal.has(name)) continue
+    if (relationshipId) {
+      try {
+        if (await pkg.has(await resolveWorksheetPath(pkg, name))) continue
+      } catch (error) {
+        if (!isMissingPartError(error)) throw error
+      }
+    }
+    unavailableSheets.add(name)
+  }
+  if (unavailableSheets.size === 0) return applySheetPlanToWorkbookXml(workbookXml, plan, additions)
+
+  const order: string[] = []
+  let next = 0
+  for (const name of originalNames) {
+    if (unavailableSheets.has(name)) order.push(name)
+    else if (!removedNames.has(name) && next < plan.order.length) order.push(plan.order[next++]!)
+  }
+  order.push(...plan.order.slice(next))
+  return applySheetPlanToWorkbookXml(workbookXml, { ...plan, order }, additions, unavailableSheets)
 }
 
 /// Fails closed when a mutation altered any package entry it did not intend

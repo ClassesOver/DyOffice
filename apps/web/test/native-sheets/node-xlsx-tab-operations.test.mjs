@@ -114,6 +114,33 @@ test(
       await assert.rejects(saveValue('sheet-10'), /Invalid workbook input/)
     })
 
+    await t.test('reorders and renames readable tabs around missing worksheets', async () => {
+      const dangling = '<sheet name="Missing" sheetId="9" r:id="rId9"/>'
+      const source = await fixture({
+        changeWorkbook: (xml) => xml
+          .replace('<workbookView/>', '<workbookView activeTab="1"/>')
+          .replace('<sheet name="Other"', `${dangling}<sheet name="Other"`)
+          .replace('</definedNames>', '<definedName name="LocalData" localSheetId="2">Other!$A$1</definedName><definedName name="MissingLocal" localSheetId="1">Missing!$A$1</definedName></definedNames>'),
+      })
+      const before = await inspect(source)
+      assert.deepEqual(before.sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      assert.equal(before.sheets[before.activeTab]?.name, 'Acceptance')
+      const saved = await save(source, [
+        { kind: 'rename-sheet', sheetId: second, newName: 'Renamed' },
+        { kind: 'reorder-sheets' },
+      ], [second, first])
+      const after = await inspect(saved)
+      assert.deepEqual(after.sheets.map(({ name }) => name), ['Renamed', 'Acceptance'])
+      assert.equal(after.sheets[after.activeTab]?.name, 'Acceptance')
+      assert.deepEqual(after.definedNames.find(({ name }) => name === 'LocalData'),
+        { name: 'LocalData', formula: 'Renamed!$A$1', sheetIndex: 0 })
+      const zip = await JSZip.loadAsync(saved)
+      const xml = await xmlPart(zip, wbPath)
+      assert.match(xml, new RegExp(`name="Renamed"[^>]+/>${dangling}<sheet name="Acceptance"`))
+      assert.ok(xml.includes('<definedName name="MissingLocal" localSheetId="1">Missing!$A$1</definedName>'))
+      assert.equal(await xmlPart(zip, relPath), await xmlPart(await JSZip.loadAsync(source), relPath))
+    })
+
     await t.test('reorders actual worksheets and preserves foreign tab metadata', async () => {
       const foreignViews = '<ext:bookViews><ext:workbookView activeTab="0"/></ext:bookViews>'
       const foreignView = '<ext:workbookView activeTab="1"/>'
