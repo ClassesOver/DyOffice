@@ -23,7 +23,9 @@ import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { localPivotWorksheetSource, parseRelationships, parseSheetElements, parseWorkbookTabIndex, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
 import { readDefinedNameText, readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { childElements } from './xlsx-style-entries.ts'
 import { areaToRef, parseRef, sheetTableParts } from './xlsx-table-add.ts'
+import { isElement, scopedChildren, withNamespaces, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PivotParseError extends Error {}
 
@@ -109,53 +111,59 @@ export interface PivotDefinition {
   readonly unsupported: readonly string[]
 }
 
-function attr(element: string, name: string): string | null {
-  const found = new RegExp(` ${name}="([^"]*)"`).exec(element)
-  return found?.[1] ?? null
+function pivotRoot(xml: string, name: string): ScopedElement | null {
+  const [element] = childElements(xml)
+  if (!element) return null
+  const root = withNamespaces(element, new Map())
+  return root.local === name && (
+    root.namespace === '' ||
+    root.namespace === 'http://schemas.openxmlformats.org/spreadsheetml/2006/main' ||
+    root.namespace === 'http://purl.oclc.org/ooxml/spreadsheetml/main'
+  ) ? root : null
 }
 
-function decodeEntities(value: string): string {
-  return value
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&')
+function attr(element: ScopedElement, name: string): string | null {
+  return element.attributes.get(name) ?? null
 }
 
-/// All <tag …>…</tag> or <tag …/> occurrences at any depth (regex-scoped —
-/// fine for pivot parts, which never nest a tag inside itself). The self-closing
-/// branch is matched first on its own: otherwise, when <tag …/> is followed by a
-/// paired tag of the same name, the `>[\s\S]*?` branch would swallow both elements
-/// as one (mixing both forms inside filters triggers this).
-function elements(xml: string, tag: string): string[] {
-  const pattern = new RegExp(`<${tag}(?:\\s[^>]*)?/>|<${tag}(?:\\s[^>]*)?>[\\s\\S]*?</${tag}>`, 'g')
-  return [...xml.matchAll(pattern)].map((match) => match[0])
+function elements(scope: ScopedElement | null, tag: string): ScopedElement[] {
+  return scope ? scopedChildren(scope).filter((child) => isElement(child, tag, scope.namespace)) : []
 }
 
-function firstElement(xml: string, tag: string): string | null {
-  return elements(xml, tag)[0] ?? null
+function firstElement(scope: ScopedElement | null, tag: string): ScopedElement | null {
+  return elements(scope, tag)[0] ?? null
 }
 
-function parseSharedItems(cacheFieldXml: string): PivotSharedItem[] {
-  const container = firstElement(cacheFieldXml, 'sharedItems')
+function parseSharedItems(cacheField: ScopedElement): PivotSharedItem[] {
+  const container = firstElement(cacheField, 'sharedItems')
   if (!container) return []
   const items: PivotSharedItem[] = []
-  const pattern = /<(s|n|b|d|m|e)(\s[^>]*)?\/?>(?:<\/\1>)?/g
-  for (const match of container.matchAll(pattern)) {
-    const kind = match[1]
-    const value = attr(match[0], 'v')
-    if (kind === 's') items.push(decodeEntities(value ?? ''))
-    else if (kind === 'n') items.push(Number(value ?? '0'))
-    else if (kind === 'b') items.push(value === '1' || value === 'true')
-    else if (kind === 'd') items.push(decodeEntities(value ?? ''))
-    else if (kind === 'm') items.push(null)
-    else items.push(decodeEntities(value ?? '#ERROR'))
+  for (const item of scopedChildren(container)) {
+    if (item.namespace !== container.namespace) continue
+    const value = attr(item, 'v')
+    switch (item.local) {
+      case 's':
+      case 'd':
+        items.push(value ?? '')
+        break
+      case 'n':
+        items.push(Number(value ?? '0'))
+        break
+      case 'b':
+        items.push(value === '1' || value === 'true')
+        break
+      case 'm':
+        items.push(null)
+        break
+      case 'e':
+        items.push(value ?? '#ERROR')
+        break
+    }
   }
   return items
 }
 
-function parseLayoutLines(containerXml: string | null, axisFieldCount: number): PivotLayoutLine[] {
+function parseLayoutLines(containerXml: ScopedElement | null, axisFieldCount: number): PivotLayoutLine[] {
   if (!containerXml) {
     // No axis fields: the implicit single line covers everything.
     return [{ t: 'data', members: [], depth: 0, dataField: 0 }]
@@ -346,7 +354,9 @@ export function parsePivotDefinition(
 ): PivotDefinition {
   const unsupported: string[] = []
 
-  const location = firstElement(pivotTableXml, 'location')
+  const table = pivotRoot(pivotTableXml, 'pivotTableDefinition')
+  const cache = pivotRoot(cacheDefinitionXml, 'pivotCacheDefinition')
+  const location = firstElement(table, 'location')
   if (!location) throw new PivotParseError('pivotTable part has no location element.')
   const outputRef = attr(location, 'ref')
   if (!outputRef) throw new PivotParseError('pivotTable location has no ref.')
@@ -366,10 +376,15 @@ export function parsePivotDefinition(
   // Our own grouped-field metadata: stored in a private pivotTable extLst
   // extension (fieldIndex → grouping rule). Corrupt/invalid metadata fails closed.
   const groupingByField = new Map<number, PivotFieldGrouping>()
-  const groupingExt = /<(?:\w+:)?aioPivotGroupings\b[^>]*\bv="([^"]*)"/.exec(pivotTableXml)
+  const groupingExt = elements(firstElement(table, 'extLst'), 'ext').find(
+    (extension) => attr(extension, 'uri') === '{AIO-PIVOT-GROUPINGS}',
+  )
+  const grouping = groupingExt && scopedChildren(groupingExt).find(
+    (child) => isElement(child, 'aioPivotGroupings', 'urn:aioffice:pivot'),
+  )
   if (groupingExt) {
     try {
-      const entries = JSON.parse(decodeEntities(groupingExt[1] ?? '')) as unknown
+      const entries = JSON.parse(grouping?.attributes.get('v') ?? '') as unknown
       if (!Array.isArray(entries)) throw new Error('not an array')
       for (const entry of entries) {
         const { fieldIndex, ...grouping } = entry as { fieldIndex?: unknown }
@@ -383,17 +398,17 @@ export function parsePivotDefinition(
     }
   }
 
-  const cacheFieldsBlock = firstElement(cacheDefinitionXml, 'cacheFields')
-  const cacheFields = cacheFieldsBlock === null ? [] : elements(cacheFieldsBlock, 'cacheField')
+  const cacheFieldsBlock = firstElement(cache, 'cacheFields')
+  const cacheFields = elements(cacheFieldsBlock, 'cacheField')
   // Calculated fields (cacheField@formula): strip the optional leading = and
   // validate against source field names.
   const formulaByField = new Map<number, string>()
   cacheFields.forEach((fieldXml, index) => {
     const formula = attr(fieldXml, 'formula')
-    if (formula !== null) formulaByField.set(index, decodeEntities(formula).replace(/^\s*=/, ''))
+    if (formula !== null) formulaByField.set(index, formula.replace(/^\s*=/, ''))
   })
   const fields: PivotCacheField[] = cacheFields.map((fieldXml, index) => ({
-    name: decodeEntities(attr(fieldXml, 'name') ?? ''),
+    name: attr(fieldXml, 'name') ?? '',
     sharedItems: parseSharedItems(fieldXml),
     ...(groupingByField.has(index) ? { grouping: groupingByField.get(index)! } : {}),
     ...(formulaByField.has(index) ? { formula: formulaByField.get(index)! } : {}),
@@ -431,8 +446,8 @@ export function parsePivotDefinition(
     }
   })
 
-  const pivotFieldsBlock = firstElement(pivotTableXml, 'pivotFields')
-  const pivotFields = pivotFieldsBlock === null ? [] : elements(pivotFieldsBlock, 'pivotField')
+  const pivotFieldsBlock = firstElement(table, 'pivotFields')
+  const pivotFields = elements(pivotFieldsBlock, 'pivotField')
   const fieldItems: PivotFieldItem[][] = pivotFields.map((fieldXml) => {
     const itemsBlock = firstElement(fieldXml, 'items')
     if (!itemsBlock) return []
@@ -445,17 +460,15 @@ export function parsePivotDefinition(
   })
 
   const readAxis = (tag: string): number[] => {
-    const block = firstElement(pivotTableXml, tag)
+    const block = firstElement(table, tag)
     if (!block) return []
     return elements(block, 'field').map((field) => Number(attr(field, 'x') ?? '0'))
   }
   const rowFields = readAxis('rowFields')
   const colFields = readAxis('colFields')
 
-  const dataFieldsBlock = firstElement(pivotTableXml, 'dataFields')
-  const dataFields: PivotDataField[] = (
-    dataFieldsBlock === null ? [] : elements(dataFieldsBlock, 'dataField')
-  ).map((fieldXml) => {
+  const dataFieldsBlock = firstElement(table, 'dataFields')
+  const dataFields: PivotDataField[] = elements(dataFieldsBlock, 'dataField').map((fieldXml) => {
     // showDataAs="normal" (or absent) = normal display, not recorded; the file
     // spelling "percent" maps to our "% Of…" mode. Unsupported display modes
     // only record an unsupported reason, and the mode itself is not carried
@@ -467,7 +480,7 @@ export function parsePivotDefinition(
       unsupported.push(`"show values as" mode "${ooxmlMode}" does not support recompute`)
     }
     const field = Number(attr(fieldXml, 'fld') ?? '0')
-    const dataFieldName = decodeEntities(attr(fieldXml, 'name') ?? '')
+    const dataFieldName = attr(fieldXml, 'name') ?? ''
     // Base-field modes: the base field must be a row/column axis field and the
     // base item a concrete member of it — Excel's "(previous)"/"(next)" special
     // values and anything out of range fail closed.
@@ -528,8 +541,8 @@ export function parsePivotDefinition(
   }
   if (dataFields.length === 0) unsupported.push('this pivot table has no data fields')
 
-  const pageFieldsBlock = firstElement(pivotTableXml, 'pageFields')
-  const pageFields = (pageFieldsBlock === null ? [] : elements(pageFieldsBlock, 'pageField')).map(
+  const pageFieldsBlock = firstElement(table, 'pageFields')
+  const pageFields = elements(pageFieldsBlock, 'pageField').map(
     (fieldXml) => {
       const item = attr(fieldXml, 'item')
       return {
@@ -563,12 +576,13 @@ export function parsePivotDefinition(
     captionBeginsWith: 'beginsWith',
   }
   const filters: PivotFilterDef[] = []
-  const filtersBlock = firstElement(pivotTableXml, 'filters')
-  for (const filterXml of filtersBlock === null ? [] : elements(filtersBlock, 'filter')) {
+  const filtersBlock = firstElement(table, 'filters')
+  for (const filterXml of elements(filtersBlock, 'filter')) {
     const type = attr(filterXml, 'type') ?? ''
     const field = Number(attr(filterXml, 'fld') ?? '0')
     const dataField = Number(attr(filterXml, 'iMeasureFld') ?? '0')
-    const customValues = elements(filterXml, 'customFilter').map((custom) =>
+    const filterColumn = firstElement(firstElement(filterXml, 'autoFilter'), 'filterColumn')
+    const customValues = elements(firstElement(filterColumn, 'customFilters'), 'customFilter').map((custom) =>
       Number(attr(custom, 'val') ?? 'NaN'),
     )
     const labelOp = LABEL_FILTER_OPS[type]
@@ -577,10 +591,10 @@ export function parsePivotDefinition(
         kind: 'label',
         field,
         op: labelOp,
-        value: decodeEntities(attr(filterXml, 'stringValue1') ?? ''),
+        value: attr(filterXml, 'stringValue1') ?? '',
       })
     } else if (type === 'count') {
-      const top10 = firstElement(filterXml, 'top10')
+      const top10 = firstElement(filterColumn, 'top10')
       const count = Number(top10 === null ? 'NaN' : (attr(top10, 'val') ?? 'NaN'))
       // top="0" means bottom N, which is unsupported.
       if (!Number.isFinite(count) || count < 1 || (top10 !== null && attr(top10, 'top') === '0')) {
@@ -620,8 +634,8 @@ export function parsePivotDefinition(
     fieldItems,
     rowFields,
     colFields,
-    rowLines: parseLayoutLines(firstElement(pivotTableXml, 'rowItems'), rowFields.length),
-    colLines: parseLayoutLines(firstElement(pivotTableXml, 'colItems'), colFields.length),
+    rowLines: parseLayoutLines(firstElement(table, 'rowItems'), rowFields.length),
+    colLines: parseLayoutLines(firstElement(table, 'colItems'), colFields.length),
     dataFields,
     pageFields,
     filters,

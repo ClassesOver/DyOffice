@@ -377,6 +377,18 @@ test(
         const workbook = await xmlPart(await JSZip.loadAsync(withSecond), wbPath)
         assert.ok(workbook.includes(decoy))
         assert.match(workbook, /<pivotCaches><pivotCache cacheId='&#49;'[^>]*\/><pivotCache cacheId="2"[^>]*\/><\/pivotCaches>/)
+
+        const imported = await editPart(edited, changed.path, (xml) => xml
+          .replace('<location ref="G2:H8"', '<!-- <location ref="A1:A2"/> --><location ref=\'G&#50;:H8\'')
+          .replace('subtotal="count"', "subtotal='count'")
+          .replace('fld="1"', "fld='1'"))
+        const reopened = await runtime.sheetsPackageReader(imported, undefined, {
+          path: changed.path, cachePath: changed.cachePath,
+        })
+        assert.equal(reopened.outputRef, 'G2:H8')
+        assert.equal(reopened.dataFields[0].field, 1)
+        assert.equal(reopened.dataFields[0].subtotal, 'count')
+        assert.deepEqual(reopened.unsupported, [])
       },
     )
 

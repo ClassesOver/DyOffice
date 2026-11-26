@@ -65,6 +65,29 @@ describe('parsePivotDefinition', () => {
     expect(definition.unsupported).toEqual([])
   })
 
+  it('reads prefixed and single-quoted pivot XML without using commented or nested lookalikes', () => {
+    const main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const prefix = (xml: string) => xml.replace(/<(\/?)(\w+)/g, '<$1p:$2')
+    const pivot = prefix(PIVOT_XML.replace('name="PivotTable1"', `xmlns:p="${main}" name="PivotTable1"`)
+      .replace('ref="E3:H7"', 'ref="E&#51;:H7"')
+      .replace('name="Sum of Sales" fld="2"', 'name="Sales &#62; plan" fld="2" subtotal="count"'))
+      .replace('<p:location', '<!-- <p:location ref="A1:B2"/> --><p:location')
+      .replace('<p:dataFields', '<p:extLst><p:ext><p:dataFields><p:dataField fld="0"/></p:dataFields></p:ext></p:extLst><p:dataFields')
+      .replaceAll('"', "'")
+    const cache = prefix(CACHE_XML.replace('<pivotCacheDefinition>', `<pivotCacheDefinition xmlns:p="${main}">`)
+      .replace('<s v="East"/>', '<s v="E&#97;st"/>'))
+      .replace('<p:s v="West"/>', '<!-- <p:s v="Phantom"/> --><p:s v="West"/>')
+      .replaceAll('"', "'")
+
+    const definition = parsePivotDefinition(pivot, cache)
+    expect(definition.outputRef).toBe('E3:H7')
+    expect(definition.firstDataRow).toBe(2)
+    expect(definition.rowFields).toEqual([0])
+    expect(definition.fields[0]?.sharedItems).toEqual(['East', 'West'])
+    expect(definition.dataFields).toEqual([{ name: 'Sales > plan', field: 2, subtotal: 'count' }])
+    expect(definition.unsupported).toEqual([])
+  })
+
   it('flags bad calculated fields and unsupported filter types', () => {
     // The formula references a nonexistent field (Revenue), so calculated fields fail closed.
     const withFormula = CACHE_XML.replace(
