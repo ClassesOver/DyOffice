@@ -550,6 +550,43 @@ describe('sheet duplicate save', () => {
     expect(copy).not.toContain('r:id="rId2"')
   })
 
+  it('copies prefixed hyperlink relationships and removes only the real page setup relationship attribute', async () => {
+    const zip = await JSZip.loadAsync(await buildSheetsFixture())
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const pkg = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    const worksheet = await zip.file(sheetPath)!.async('text')
+    const comment = '<!-- <pageSetup r:id="rId2"/> -->'
+    zip.file(sheetPath, worksheet.replace('</worksheet>',
+      `${comment}<pageSetup xmlns:p="${office}" xmlns:e="urn:example" p:id='rId2' e:id="rId2" orientation='landscape'/></worksheet>`))
+    const hyperlink = `<p:Relationship Target='https://example.com' Id='rId1' Type='${office}/hyperlink' TargetMode='External'></p:Relationship>`
+    zip.file(relsPath, `<p:Relationships xmlns:p="${pkg}">${hyperlink}` +
+      `<p:Relationship Id='rId2' Type='${office}/printerSettings' Target='../printerSettings/settings.bin'/>` +
+      `<!-- <Relationship Id="fake" Type="${office}/drawing" Target="fake.xml"/> -->` +
+      '</p:Relationships>')
+
+    const mutation = await applyCellEditsToXlsx(await zip.generateAsync({ type: 'nodebuffer' }), [], [], [], {
+      renames: [], additions: [{ name: 'Data Copy', sourceSheetName: 'Data' }], removals: [],
+      order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
+    })
+
+    const clone = await entryText(mutation.buffer, 'xl/worksheets/sheet4.xml')
+    const clonedRels = await entryText(mutation.buffer, 'xl/worksheets/_rels/sheet4.xml.rels')
+    expect(clone).toContain(comment)
+    expect(clone).toContain(`<pageSetup xmlns:p="${office}" xmlns:e="urn:example" e:id="rId2" orientation='landscape'/>`)
+    expect(clonedRels).toContain('https://example.com')
+    expect(clonedRels).not.toContain('printerSettings')
+    expect(() => assertOnlyTouchedEntriesChanged(mutation)).not.toThrow()
+  })
+
+  it('rejects a real drawing relationship with a prefix and a paired tag', async () => {
+    const rels = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      "<p:Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/draw&#105;ng' Target='../drawings/drawing1.xml'></p:Relationship>" +
+      '</p:Relationships>'
+    expect(() => prepareClonedSheetRels(rels, 'Data')).toThrow('not supported yet')
+  })
+
   it('fails closed on drawings, tables, and sheet-scoped defined names', async () => {
     const zip = await JSZip.loadAsync(await buildSheetsFixture())
     zip.file(

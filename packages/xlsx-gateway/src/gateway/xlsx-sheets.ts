@@ -11,16 +11,19 @@ import {
 } from './xlsx-structure.ts'
 import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-references.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
-import { ensureRelationshipNamespace, readRelationshipId, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
+import { ensureRelationshipNamespace, readRelationshipId, readRelationshipIdAttribute, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
   applyPatches,
   elementText,
+  isElement,
   patchElement,
   prefixOf,
+  scopedChildren,
   withBody,
+  worksheetRoot,
 } from './xlsx-worksheet-xml.ts'
 
 /// '>' is legal inside XML attribute values (sheet names can carry it), so
@@ -284,14 +287,22 @@ export function prepareClonedSheetRels(
   relsXml: string,
   sourceName: string,
 ): { relsXml: string | null; droppedPrinterSettings: boolean } {
-  let droppedPrinterSettings = false
-  let result = relsXml
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*?\bType="([^"]+)"[^>]*?\/>\s*/g)) {
-    if (/\/hyperlink$/.test(match[1] ?? '')) continue
-    if (/\/printerSettings$/.test(match[1] ?? '')) {
-      droppedPrinterSettings = true
-      result = result.replace(match[0], '')
-      continue
+  const root = findRelationshipsRoot(relsXml)
+  if (!root) throw new SheetEditError(`Sheet "${sourceName}" has an invalid relationships part.`)
+  const printerSettings = []
+  let hasHyperlinks = false
+  for (const entry of childElements(root.inner)) {
+    const rawType = readWorksheetTagAttribute(entry.opening, 'Type')
+    const type = rawType === undefined ? '' : decodeAttribute(rawType)
+    if (entry.name.slice(entry.name.lastIndexOf(':') + 1) === 'Relationship') {
+      if (type.endsWith('/hyperlink')) {
+        hasHyperlinks = true
+        continue
+      }
+      if (type.endsWith('/printerSettings')) {
+        printerSettings.push(patchElement(entry, ''))
+        continue
+      }
     }
     throw new SheetEditError(
       `Sheet "${sourceName}" carries charts, images, tables, or comments — ` +
@@ -299,8 +310,10 @@ export function prepareClonedSheetRels(
     )
   }
   return {
-    relsXml: /<Relationship\b/.test(result) ? result : null,
-    droppedPrinterSettings,
+    relsXml: hasHyperlinks
+      ? applyPatches(relsXml, [patchElement(root, withBody(root, applyPatches(root.inner, printerSettings)))])
+      : null,
+    droppedPrinterSettings: printerSettings.length > 0,
   }
 }
 
@@ -308,10 +321,16 @@ export function prepareClonedSheetRels(
 /// printerSettings relationship was not cloned; the copy falls back to
 /// default print settings instead of a dangling reference.
 export function stripPageSetupRelIds(worksheetXml: string): string {
-  return worksheetXml.replace(
-    /(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,
-    (_full, prefix: string) => prefix,
-  )
+  const root = worksheetRoot(worksheetXml)
+  const pageSetup = root
+    ? scopedChildren(root).find((child) => isElement(child, 'pageSetup', root.namespace))
+    : childElements(worksheetXml).find((child) => child.name === 'pageSetup')
+  if (!pageSetup) return worksheetXml
+  const attribute = readRelationshipIdAttribute(pageSetup.opening, '', root?.opening ?? '')
+  if (!attribute) return worksheetXml
+  const opening = updateWorksheetTagAttribute(pageSetup.opening, attribute.name, null)
+  const offset = (root ? root.start + root.opening.length : 0) + pageSetup.start
+  return worksheetXml.slice(0, offset) + opening + worksheetXml.slice(offset + pageSetup.opening.length)
 }
 
 /// A clone must not claim the selected-tab state of its source.

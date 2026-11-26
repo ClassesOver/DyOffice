@@ -62,6 +62,12 @@ export function relationshipNamespaceOverride(parent: string, root: string): str
 }
 
 export function readRelationshipId(opening: string, parent: string, root: string): string | undefined {
+  return readRelationshipIdAttribute(opening, parent, root)?.value
+}
+
+export function readRelationshipIdAttribute(
+  opening: string, parent: string, root: string,
+): { name: string; value: string } | undefined {
   const bindings = new Map<string, string>()
   for (const tag of [root, parent, opening]) {
     for (const [, name, double, single] of tag.matchAll(ATTRIBUTES)) {
@@ -69,19 +75,20 @@ export function readRelationshipId(opening: string, parent: string, root: string
     }
   }
 
-  let id: string | undefined
-  let unbound: string | undefined
+  let id: { name: string; value: string } | undefined
+  let unbound: typeof id
   for (const [, name, double, single] of opening.matchAll(ATTRIBUTES)) {
     if (!name?.endsWith(':id') || name === 'xmlns:id') continue
     const alias = name.slice(0, -':id'.length)
     const uri = bindings.get(alias)
     const value = double ?? single
+    if (value === undefined) continue
     if (isOfficeRelationshipNamespace(uri)) {
       if (id !== undefined) return undefined
-      id = value
+      id = { name, value }
     } else if (uri === undefined && (unbound === undefined || alias === 'r')) {
       // Some producers and callers provide fragments with an undeclared prefix.
-      unbound = value
+      unbound = { name, value }
     }
   }
   return id ?? unbound
