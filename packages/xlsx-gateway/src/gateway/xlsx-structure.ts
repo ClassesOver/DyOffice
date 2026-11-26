@@ -9,6 +9,7 @@ import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { rewriteChartReferences } from './xlsx-chart-references.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
+import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { findRootChild, rootChildren } from './xlsx-root-tail.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
@@ -1900,6 +1901,7 @@ export function rewriteWorksheetHyperlinks(
   rewriteReference?: (ref: string) => string | null,
 ): string {
   if (!xml.includes('hyperlinks')) return xml
+  const root = readRootStartTag(xml)
   return rewriteWorksheetSections(xml, ['hyperlinks'], (section) =>
     rewriteRangeSection(section, 'hyperlink', (opening) => {
       if (rewriteReference) {
@@ -1908,7 +1910,7 @@ export function rewriteWorksheetHyperlinks(
         opening = anchor
       }
       const raw = readWorksheetTagAttribute(opening, 'location')
-      if (raw === undefined || readWorksheetTagAttribute(opening, 'r:id') !== undefined)
+      if (raw === undefined || readRelationshipId(opening, section.opening, root) !== undefined)
         return opening
       const location = decodeEntities(raw)
       const moved = rewriteLocation(location, readWorksheetTagAttribute(opening, 'ref'))

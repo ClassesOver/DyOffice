@@ -28,6 +28,21 @@ async function fixtureWorksheet(): Promise<string> {
 }
 
 describe('applyStructuralOps rows', () => {
+  it('shifts internal hyperlink targets and keeps external locations intact regardless of prefix', () => {
+    const relationships = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const xml = '<worksheet><sheetData/>' +
+      `<hyperlinks xmlns:link="${relationships}" xmlns:r="urn:extension">` +
+      '<hyperlink ref="A1:B1" link:id="rId3" location="Data!A1"/>' +
+      '<hyperlink ref="C1" r:id="extension-id" location="Data!A1"/></hyperlinks></worksheet>'
+    const ops = [{ kind: 'insert-rows', index: 0, count: 1 }] as const
+    const local = applyStructuralOps(xml, ops, SHEET)
+    expect(local).toContain('<hyperlink ref="A2:B2" link:id="rId3" location="Data!A1"/>')
+    expect(local).toContain('<hyperlink ref="C2" r:id="extension-id" location="Data!A2"/>')
+    const other = shiftCrossSheetFormulas(xml, SHEET, ops)
+    expect(other).toContain('<hyperlink ref="A1:B1" link:id="rId3" location="Data!A1"/>')
+    expect(other).toContain('<hyperlink ref="C1" r:id="extension-id" location="Data!A2"/>')
+  })
+
   it('inserting rows renumbers rows, cells, merges, dimension, and scoped ranges', async () => {
     const xml = applyStructuralOps(
       await fixtureWorksheet(),

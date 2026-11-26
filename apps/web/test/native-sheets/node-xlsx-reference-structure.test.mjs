@@ -113,6 +113,32 @@ test(
       { kind: 'insert-rows', sheetId, index: 0, count: 1 },
       { kind: 'insert-cols', sheetId, index: 0, count: 1 },
     ]
+    await t.test('shifts hyperlink ranges and internal destinations while preserving external locations', async () => {
+      const target = 'https://example.com/workbook.xlsx'
+      const links = `<hyperlinks xmlns:link="${r}" xmlns:r="urn:example:extension">` +
+        '<hyperlink ref="A1:B1" link:id="rId4" location="Acceptance!A1"/>' +
+        '<hyperlink ref="C1" r:id="extension-id" location="Acceptance!A1"/></hyperlinks>'
+      const external = `<Relationship Id="rId4" Type="${r}/hyperlink" Target="${target}" TargetMode="External"/>`
+      const source = await JSZip.loadAsync(await fixture({
+        changeOne: xml => xml.replace('<drawing', () => links + '<drawing'),
+        tail: links,
+      }))
+      const oneRels = 'xl/worksheets/_rels/sheet1.xml.rels'
+      source.file(oneRels, (await xmlPart(source, oneRels)).replace('</Relationships>', () => external + '</Relationships>'))
+      source.file('xl/worksheets/_rels/sheet2.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        external + '</Relationships>')
+      const saved = await save(await source.generateAsync({ type: 'nodebuffer' }), [], [first, second], { structuralOps: insertOn(first) })
+      const zip = await JSZip.loadAsync(saved)
+      const local = await xmlPart(zip, one)
+      assert.ok(local.includes('<hyperlink ref="B2:C2" link:id="rId4" location="Acceptance!A1"/>'))
+      assert.ok(local.includes('<hyperlink ref="D2" r:id="extension-id" location="Acceptance!B2"/>'))
+      const other = await xmlPart(zip, two)
+      assert.ok(other.includes('<hyperlink ref="A1:B1" link:id="rId4" location="Acceptance!A1"/>'))
+      assert.ok(other.includes('<hyperlink ref="C1" r:id="extension-id" location="Acceptance!B2"/>'))
+      assert.deepEqual((await read(saved, 'Acceptance')).hyperlinks, [
+        { row: 1, column: 1, target }, { row: 1, column: 3, target: '#Acceptance!B2' },
+      ])
+    })
     await t.test('rewrites cross-sheet formulas in CDATA and preserves literal formula-shaped text', async () => {
       const literal = 'Example <f>Other!A1</f> text'
       const comment = '<!-- <f>Other!A1</f> -->'
