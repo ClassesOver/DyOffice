@@ -44,7 +44,7 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
   const rootName = root?.[2]
   if (!root || !rootName) return xml
   const colon = rootName.indexOf(':')
-  if (colon === 0 || !root[0].includes('xmlns:')) return xml
+  if (colon === 0) return xml
   const prefix = colon < 0 ? '' : rootName.slice(0, colon)
   const qualified = prefix ? `${prefix}:` : ''
   const namespace = prefix ? `xmlns:${prefix}` : 'xmlns'
@@ -54,13 +54,15 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
   const uri = declaration?.[2] ?? declaration?.[3]
   if (!declaration || declarations.length !== 1 || uri === undefined || !NORMALIZABLE_NAMESPACES.has(uri)) return xml
 
-  const aliases = new Set<string>()
+  const rootAliases = new Set<string>()
   for (const [, key, double, single] of rootAttrs) {
-    if (key?.startsWith('xmlns:') && (double ?? single) === uri) aliases.add(key.slice('xmlns:'.length))
+    if (key?.startsWith('xmlns:') && (double ?? single) === uri) rootAliases.add(key.slice('xmlns:'.length))
   }
-  if (aliases.size === 0) return xml
+  if (rootAliases.size === 0 && xml.indexOf(uri, root.index! + root[0].length) === -1) return xml
 
   const defaults = new Set<number>()
+  const localAliases = new Map<number, Array<[alias: string, equivalent: boolean]>>()
+  let hasEquivalentAlias = rootAliases.size > 0
   let retainPrefix = false
   let addRelationshipBinding = prefix !== '' && uri === SPREADSHEETML_NAMESPACE && !rootAttrs.some(([, name]) => name === 'xmlns:r')
   for (const match of xml.matchAll(MARKUP)) {
@@ -76,34 +78,52 @@ export function normalizeOoxmlPartPrefix(xml: string): string {
         if (value !== uri || defaults.has(match.index!)) return xml
         defaults.add(match.index!)
       }
-      if (key?.startsWith('xmlns:') && aliases.has(key.slice('xmlns:'.length)) && value !== uri) return xml
+      if (key?.startsWith('xmlns:')) {
+        const alias = key.slice('xmlns:'.length)
+        const equivalent = value === uri
+        if (rootAliases.has(alias) && !equivalent) return xml
+        if (match.index !== root.index) {
+          const offset = match.index!
+          const bindings = localAliases.get(offset) ?? []
+          bindings.push([alias, equivalent])
+          localAliases.set(offset, bindings)
+          hasEquivalentAlias ||= equivalent
+        }
+      }
       if (qualified && key?.startsWith(qualified)) retainPrefix = true
       if (qualified && key && /(?:^|:)(?:Requires|Ignorable|MustUnderstand|ProcessContent|PreserveElements|PreserveAttributes)$/.test(key)
         && value?.trim().split(/\s+/).some(token => token === prefix || token.startsWith(qualified))) retainPrefix = true
       if (key === 'xmlns:r' && value !== OFFICE_RELATIONSHIPS_NAMESPACE) addRelationshipBinding = false
     }
   }
+  if (!hasEquivalentAlias) return xml
 
   const relationshipBinding = addRelationshipBinding ? ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"` : ''
   const bindings = ` xmlns="${uri}"` + (retainPrefix ? declaration[0] : '') + relationshipBinding
   const declarationOffset = declaration.index! - rootName.length - 1
-  const defaultScopes: Array<{ original: boolean; normalized: boolean }> = []
+  const scopes: Array<{ aliases: Set<string>; original: boolean; normalized: boolean }> = []
   return xml.replace(MARKUP, (tag, closing: string, name: string | undefined, offset: number) => {
     if (!name) return tag
+    const parent = closing ? scopes.pop() : scopes.at(-1)
+    let aliases = parent?.aliases ?? rootAliases
+    const local = localAliases.get(offset)
+    if (local) {
+      aliases = new Set(aliases)
+      for (const [alias, equivalent] of local) {
+        if (equivalent) aliases.add(alias)
+        else aliases.delete(alias)
+      }
+    }
     const separator = name.indexOf(':')
     const stripPrefix = separator > 0 && aliases.has(name.slice(0, separator))
     const normalizedName = stripPrefix ? name.slice(separator + 1) : name
     const tail = tag.slice(1 + closing.length + name.length)
-    if (closing) {
-      defaultScopes.pop()
-      return `</${normalizedName}${tail}`
-    }
-    const parent = defaultScopes.at(-1)
+    if (closing) return `</${normalizedName}${tail}`
     const declaresDefault = defaults.has(offset)
     const original = declaresDefault || parent?.original === true
     const inherited = declaresDefault || parent?.normalized === true
     const usesDefault = stripPrefix || (separator > 0 ? inherited : original)
-    if (!tag.endsWith('/>')) defaultScopes.push({ original, normalized: usesDefault })
+    if (!tag.endsWith('/>')) scopes.push({ aliases, original, normalized: usesDefault })
     if (offset === root.index) {
       if (declaresDefault) return `<${normalizedName}${relationshipBinding}${tail}`
       return `<${normalizedName}${tail.slice(0, declarationOffset)}${bindings}${tail.slice(declarationOffset + declaration[0].length)}`

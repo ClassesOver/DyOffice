@@ -99,6 +99,15 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalizeOoxmlPartPrefix(xml)).toContain('<sheetData><row><c ext:flag="1"/></row></sheetData><ext:c/></worksheet>')
   })
 
+  it('uses a locally declared alias throughout its scope and respects local rebindings', () => {
+    const xml = `<worksheet xmlns="${MAIN_NS}" xmlns:s="urn:foreign">` +
+      `<s:sheetData xmlns:s="${MAIN_NS}"><s:row><s:c/><s:c xmlns:s="urn:foreign"/></s:row></s:sheetData>` +
+      '<s:c/></worksheet>'
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<sheetData xmlns:s="${MAIN_NS}"><row><c/><s:c xmlns:s="urn:foreign"/></row></sheetData><s:c/>`,
+    )
+  })
+
   it('preserves the scope of a nested equivalent default namespace', () => {
     const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><custom>` +
       `<x:sheetData xmlns="${MAIN_NS}"><row/></x:sheetData><other/></custom></x:worksheet>`

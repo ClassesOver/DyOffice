@@ -98,6 +98,18 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     assert.deepEqual(await values(await saveValue(bytes, 0, 42)), [42])
   })
 
+  await t.test('reads and saves cells using a locally declared SpreadsheetML prefix', async () => {
+    const bytes = await workbook({
+      [sheetPath]: `<worksheet xmlns="${spreadsheet}"><s:sheetData xmlns:s="${spreadsheet}">
+        <s:row r="1"><s:c r="A1"><s:v>7</s:v></s:c></s:row></s:sheetData>
+      </worksheet>`,
+    })
+    const values = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }))
+      .cells.map(({ value }) => value)
+    assert.deepEqual(await values(bytes), [7])
+    assert.deepEqual(await values(await saveValue(bytes, 0, 42)), [42])
+  })
+
   await t.test('opens and saves both empty-tag and expanded worksheet declarations with single quotes', async () => {
     const declarations = [
       "<sheet name='Acceptance' sheetId=\"1\" r:id='rId1'/>",
