@@ -18,7 +18,8 @@ import {
 } from './xlsx-namespace.ts'
 import { decodeAttribute, parseRelationships, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
 import { readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
-import { isElement, prefixOf, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { isElement, prefixOf, scopedChildren, withNamespaces, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 /// Persists tables (ListObjects) created in the editor as brand-new OOXML
 /// parts: xl/tables/tableN.xml, the worksheet's <tableParts> element, the
@@ -210,11 +211,18 @@ export async function tablePartPaths(pkg: MutablePackage): Promise<string[]> {
 
 /// Table names share Excel's defined-name namespace.
 export async function assertNameNotDefined(pkg: MutablePackage, name: string): Promise<void> {
-  const workbookXml = await pkg.readText('xl/workbook.xml')
-  for (const match of workbookXml.matchAll(/<definedName\b[^>]*\bname="([^"]+)"/g)) {
-    if (match[1]?.toLowerCase() === name.toLowerCase()) {
-      throw new TableAddError(`Table name "${name}" collides with a defined name in the workbook.`)
-    }
+  const [element] = childElements(await pkg.readText('xl/workbook.xml'))
+  const root = element && withNamespaces(element, new Map())
+  if (root?.local !== 'workbook') return
+  const section = scopedChildren(root).find((entry) => isElement(entry, 'definedNames', root.namespace))
+  if (!section) return
+  const lowerName = name.toLowerCase()
+  const collision = scopedChildren(section).some((entry) =>
+    isElement(entry, 'definedName', root.namespace) &&
+    entry.attributes.get('name')?.toLowerCase() === lowerName,
+  )
+  if (collision) {
+    throw new TableAddError(`Table name "${name}" collides with a defined name in the workbook.`)
   }
 }
 

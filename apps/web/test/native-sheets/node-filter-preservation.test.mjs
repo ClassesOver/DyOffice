@@ -54,6 +54,30 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
   const save = async (bytes, request) =>
     (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
 
+  await t.test('uses defined name declarations when adding and renaming tables', async () => {
+    const zip = await JSZip.loadAsync(source)
+    const workbookPath = 'xl/workbook.xml'
+    const comment = '<!-- <definedName name="CommentOnly">1</definedName> -->'
+    const hidden = "<definedName name='Con&#102;lict' hidden='1'>1</definedName>"
+    zip.file(workbookPath, (await zip.file(workbookPath).async('string')).replace('</definedNames>',
+      comment + hidden + '</definedNames>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const request = sheetsSaveRequest('sheet-1', [])
+    request.tableAdditions = [{
+      sheetId: 'sheet-1', area: span, name: 'Conflict',
+      columnNames: ['Revenue', 'Formula', 'Date'], bandedRows: true,
+    }]
+    await assert.rejects(() => save(bytes, request), { statusCode: 400 })
+    request.tableAdditions[0].name = 'CommentOnly'
+    const saved = await save(bytes, request)
+    assert.equal((await native.inspect(saved)).sheets[0].tables[0].name, 'CommentOnly')
+    const rename = sheetsSaveRequest('sheet-1', [])
+    rename.tableEdits = [{ sheetId: 'sheet-1', tableName: 'CommentOnly', name: 'CONFLICT' }]
+    await assert.rejects(() => save(saved, rename), { statusCode: 400 })
+    const workbook = await (await JSZip.loadAsync(saved)).file(workbookPath).async('string')
+    assert.ok(workbook.includes(comment) && workbook.includes(hidden))
+  })
+
   await t.test(
     'keeps Top 1 and date grouping when replacing a different worksheet column',
     async () => {

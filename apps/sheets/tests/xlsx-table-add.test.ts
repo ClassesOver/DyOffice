@@ -188,6 +188,22 @@ describe('table additions', () => {
     )
   })
 
+  it('checks real defined names with encoded attributes and ignores commented or foreign names', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/workbook.xml'
+    const workbook = await zip.file(path)!.async('text')
+    const misleading = '<!-- <definedName name="CommentOnly">1</definedName> -->' +
+      '<e:definedName xmlns:e="urn:example" name="CommentOnly">1</e:definedName>'
+    zip.file(path, workbook.replace('</definedNames>',
+      "<definedName name='Con&#102;lict' hidden='1'>1</definedName>" + misleading + '</definedNames>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+
+    await expect(planWith([tableAddition({ name: 'CONFLICT' })], bytes).then(() => 'saved'))
+      .rejects.toThrow('collides with a defined name')
+    const plan = await planWith([tableAddition({ name: 'CommentOnly' })], bytes)
+    expect(plan.added.get('xl/tables/table1.xml')).toContain('displayName="CommentOnly"')
+  })
+
   it('rejects bad column names and header-only areas', async () => {
     await expect(planWith([tableAddition({ columnNames: ['Country', ' '] })])).rejects.toThrow(
       /blank column name/,
