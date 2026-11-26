@@ -60,6 +60,18 @@ test(
         )
       ).bytes
     const read = (bytes, name = 'Acceptance') => native.readRange(bytes, name, bounds)
+    await t.test('keeps mixed encoded and implicit addresses through a structural save', async () => {
+      const encoded = await book(xml => xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/,
+        '<sheetData><row r="&#51;"><c r="&#x43;3" s="1"><v>101</v></c><c><v>102</v></c></row>' +
+        '<row><c><v>103</v></c></row></sheetData>'))
+      const cells = async input => (await read(input)).cells
+        .map(({ row, column, value }) => [row, column, value])
+      assert.deepEqual(await cells(encoded), [[2, 2, 101], [2, 3, 102], [3, 0, 103]])
+      const saved = await save(encoded, { structuralOps: [insert[0]] })
+      assert.deepEqual(await cells(saved), [[3, 2, 101], [3, 3, 102], [4, 0, 103]])
+      assert.equal((await read(saved)).cells[0].styleIndex, 1)
+    })
+
     await t.test(
       'moves the source and target of same-sheet links and renames a quoted target',
       async () => {

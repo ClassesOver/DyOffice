@@ -4048,7 +4048,7 @@ fn assigns_implicit_addresses_without_r() {
             "xl/worksheets/sheet1.xml",
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <sheetData>
-<row r="3" spans="3:5"><c r="C3"><v>1</v></c><c><v>2</v></c><c><v>3</v></c></row>
+<row r="&#51;" spans="3:5"><c r="&#x43;3"><v>1</v></c><c><v>2</v></c><c><v>3</v></c></row>
 <row><c><v>9</v></c></row>
 </sheetData>
 </worksheet>"#,

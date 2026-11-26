@@ -99,7 +99,7 @@ export function inferWorksheetAddresses(worksheetXml: string): string {
   const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
   const body = worksheetXml.slice(bodyStart, closeIndex)
   // Typical worksheets already put the canonical address first on every tag.
-  if (!/<(?:row|c)(?=[\s/>])(?!\s+r="[^">]*")/.test(body)) return worksheetXml
+  if (!/<(?:row|c)(?=[\s/>])(?!\s+r="[^">&]*")/.test(body)) return worksheetXml
   let currentRow = 0
   let nextColumn: number | undefined
   const tags =
@@ -110,7 +110,8 @@ export function inferWorksheetAddresses(worksheetXml: string): string {
       return tag
     }
     const attribute = worksheetTagAttribute(tag, 'r')
-    const explicit = attribute?.[2] ?? attribute?.[3]
+    const rawAddress = attribute?.[2] ?? attribute?.[3]
+    const explicit = rawAddress === undefined ? undefined : decodeXmlText(rawAddress)
     let address: string
     if (name === 'row') {
       currentRow = readPositiveInteger(explicit) ?? currentRow + 1
@@ -123,10 +124,11 @@ export function inferWorksheetAddresses(worksheetXml: string): string {
     } else {
       return tag
     }
-    if (attribute === undefined) return addTagAttribute(tag, 'r', address)
-    if (attribute[0].trimStart() === `r="${address}"`) return tag
+    const encoded = escapeXmlAttribute(address)
+    if (attribute === undefined) return addTagAttribute(tag, 'r', encoded)
+    if (attribute[0].trimStart() === `r="${encoded}"`) return tag
     const rest = tag.slice(0, attribute.index) + tag.slice(attribute.index + attribute[0].length)
-    return addTagAttribute(rest, 'r', address.replaceAll('"', '&quot;'))
+    return addTagAttribute(rest, 'r', encoded)
   })
 
   return normalizedBody === body
