@@ -236,25 +236,40 @@ export function assertNoSheetConflicts(
   addition: Pick<TableAddition, 'name' | 'area'>,
   worksheetXml: string,
 ): void {
+  const conflict = tableWorksheetConflict(worksheetXml, addition.area)
+  if (conflict) throw new TableAddError(`Table "${addition.name}" overlaps ${conflict}`)
+}
+
+export function tableWorksheetConflict(
+  worksheetXml: string,
+  area: TableArea,
+  previousArea?: TableArea,
+): string | undefined {
   const root = worksheetRoot(worksheetXml)
   if (!root) return
+  const introducesOverlap = (ref: string) => {
+    const other = parseRef(ref)
+    if (!areasOverlap(area, other)) return false
+    // A resize can leave an existing conflict confined to the same cells.
+    return !previousArea ||
+      Math.max(area.startRow, other.startRow) < previousArea.startRow ||
+      Math.min(area.endRow, other.endRow) > previousArea.endRow ||
+      Math.max(area.startColumn, other.startColumn) < previousArea.startColumn ||
+      Math.min(area.endColumn, other.endColumn) > previousArea.endColumn
+  }
   const children = scopedChildren(root)
   const filter = children.find((entry) => isElement(entry, 'autoFilter', root.namespace))
   const autoFilterRef = filter?.attributes.get('ref')
-  if (autoFilterRef && areasOverlap(addition.area, parseRef(autoFilterRef))) {
-    throw new TableAddError(
-      `Table "${addition.name}" overlaps the sheet auto-filter (${autoFilterRef}) — clear it first.`,
-    )
+  if (autoFilterRef && introducesOverlap(autoFilterRef)) {
+    return `the sheet auto-filter (${autoFilterRef}) — clear it first.`
   }
   const merges = children.find((entry) => isElement(entry, 'mergeCells', root.namespace))
   if (!merges) return
   for (const entry of scopedChildren(merges)) {
     if (!isElement(entry, 'mergeCell', root.namespace)) continue
     const ref = entry.attributes.get('ref')
-    if (ref && areasOverlap(addition.area, parseRef(ref))) {
-      throw new TableAddError(
-        `Table "${addition.name}" overlaps merged cells (${ref}) — unmerge them first.`,
-      )
+    if (ref && introducesOverlap(ref)) {
+      return `merged cells (${ref}) — unmerge them first.`
     }
   }
 }

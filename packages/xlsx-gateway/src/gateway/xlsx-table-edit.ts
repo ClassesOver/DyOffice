@@ -23,6 +23,7 @@ import {
   escapeAttribute,
   parseRef,
   sheetTableParts,
+  tableWorksheetConflict,
   worksheetTableParts,
   type LocatedTable,
   type TableArea,
@@ -162,7 +163,7 @@ async function rewriteTable(
     )
   }
   if (edit.area) {
-    await assertAreaFree(pkg, edit, table, area)
+    await assertAreaFree(pkg, edit, table, area, previousArea)
     opening = updateWorksheetTagAttribute(opening, 'ref', areaToRef(area))
   }
   opening = updateWorksheetTagAttribute(opening, 'headerRowCount', headerRows === 0 ? '0' : null)
@@ -245,6 +246,7 @@ async function assertAreaFree(
   edit: TableEdit,
   table: LocatedTable,
   area: TableArea,
+  previousArea: TableArea,
 ): Promise<void> {
   for (const part of await sheetTableParts(pkg, edit.worksheetPath)) {
     if (part.path === table.path) continue
@@ -254,15 +256,8 @@ async function assertAreaFree(
       throw new TableEditError(`Table "${edit.tableName}" would overlap table ${ref}.`)
     }
   }
-  const worksheetXml = await pkg.readText(edit.worksheetPath)
-  for (const match of worksheetXml.matchAll(/<mergeCell\b[^>]*\bref="([^"]+)"/g)) {
-    const ref = match[1]
-    if (ref && areasOverlap(area, parseRef(ref))) {
-      throw new TableEditError(
-        `Table "${edit.tableName}" would overlap merged cells (${ref}) — unmerge them first.`,
-      )
-    }
-  }
+  const conflict = tableWorksheetConflict(await pkg.readText(edit.worksheetPath), area, previousArea)
+  if (conflict) throw new TableEditError(`Table "${edit.tableName}" would overlap ${conflict}`)
 }
 
 /// Existing <tableColumn> elements follow their sheet column, so a left-edge

@@ -128,6 +128,33 @@ describe('table edits', () => {
     )
   })
 
+  it.each([
+    ['<mergeCells count="1"><mergeCell ref=\'A3:B3\'/></mergeCells>', 'merged cells (A3:B3)'],
+    ["<autoFilter ref='A3:B4'/>", 'sheet auto-filter (A3:B4)'],
+  ])('rejects a resize into a real worksheet conflict', async (conflict, message) => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const worksheet = await zip.file(path)!.async('text')
+    zip.file(path, worksheet.replace('<autoFilter ref="A1:B2"/>', conflict))
+    const fixture = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(planWith([edit({ area: {
+      startRow: 0, startColumn: 0, endRow: 3, endColumn: 1,
+    } })], [], fixture).then(() => 'saved')).rejects.toThrow(message)
+  })
+
+  it('allows resize past markup in a comment and leaves existing filter overlap confined', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const worksheet = await zip.file(path)!.async('text')
+    const comment = '<!-- <mergeCells><mergeCell ref="A3:B3"/></mergeCells> -->'
+    zip.file(path, worksheet.replace('<legacyDrawing', comment + '<legacyDrawing'))
+    const plan = await planWith([edit({ area: {
+      startRow: 0, startColumn: 0, endRow: 3, endColumn: 1,
+    } })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get('xl/tables/table1.xml')).toContain('ref="A1:B4"')
+    expect(plan.replaced.get(path)).toBeUndefined()
+  })
+
   it('keeps filter criteria on edits that leave the columns alone', async () => {
     const source = await createBufferEntrySource(await buildKitchenSinkFixture())
     const xmlWithCriteria = (await source.readText('xl/tables/table1.xml')).replace(
