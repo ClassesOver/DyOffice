@@ -413,6 +413,11 @@ function pictureCrop(blipFill?: XmlElement): WorkbookVisualObject['crop'] {
   return { left, top, right, bottom }
 }
 
+function blipOpacity(blip: XmlElement | undefined): number | undefined {
+  const alpha = finite(attribute(child(blip, 'alphaModFix'), 'amt'))
+  return alpha === undefined || alpha >= 100_000 ? undefined : Math.max(0, alpha / 100_000)
+}
+
 function readShapeParagraphs(body: XmlElement | undefined, theme: readonly string[]): ShapeParagraph[] {
   return children(body).filter(node => node.tag === 'p').slice(0, 200).map(paragraph => {
     const properties = child(paragraph, 'pPr')
@@ -450,9 +455,22 @@ function readShapeParagraphs(body: XmlElement | undefined, theme: readonly strin
   })
 }
 
-type VisualBase = Pick<WorkbookVisualObject, 'id' | 'sheetId' | 'anchor' | 'name' | 'drawingPath' | 'drawingIndex' | 'editAs' | 'altText'>
+type VisualBase = Pick<WorkbookVisualObject, 'id' | 'sheetId' | 'anchor' | 'name' | 'drawingPath' | 'drawingIndex' | 'editAs' | 'altText' | 'hyperlink'>
+type DrawingReferences = {
+  relationships: Map<string, XmlElement>
+  part: string
+  hasPart: (path: string) => boolean
+}
 
-function readShape(node: XmlElement, base: VisualBase, theme: readonly string[]): WorkbookVisualObject | undefined {
+function drawingHyperlink(nonvisual: XmlElement | undefined, relationships: Map<string, XmlElement>) {
+  const id = attribute(child(nonvisual, 'hlinkClick'), 'id')
+  const rel = id === undefined ? undefined : relationships.get(id)
+  return attribute(rel, 'Type')?.endsWith('/hyperlink') ? attribute(rel, 'Target') || undefined : undefined
+}
+
+function readShape(
+  node: XmlElement, base: VisualBase, theme: readonly string[], references: DrawingReferences,
+): WorkbookVisualObject | undefined {
   const properties = child(node, 'spPr')
   const body = child(node, 'txBody')
   const bodyProperties = child(body, 'bodyPr')
@@ -476,11 +494,16 @@ function readShape(node: XmlElement, base: VisualBase, theme: readonly string[])
   const extent = angle ? child(xfrm, 'ext') : undefined
   const frameWidth = finite(attribute(extent, 'cx'))
   const frameHeight = finite(attribute(extent, 'cy'))
+  const blip = child(child(properties, 'blipFill'), 'blip')
+  const fillMediaPath = previewPath(references.relationships, references.part, attribute(blip, 'embed'), references.hasPart)
+  const fillColor = child(properties, 'noFill') ? 'none'
+    : color(properties, theme) ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
   return {
     ...base,
     kind: 'shape',
     shapeType,
-    fillColor: child(properties, 'noFill') ? 'none' : color(properties, theme) ?? styleColor('fillRef') ?? 'none',
+    fillColor,
+    ...(fillMediaPath ? { fillMediaPath, fillMediaType: visualMediaType(fillMediaPath), opacity: blipOpacity(blip) } : {}),
     lineColor: child(line, 'noFill') ? 'none' : color(line, theme) ?? styleColor('lnRef') ?? 'none',
     lineWidth: width === undefined ? undefined : width / 12_700,
     lineDash: val(line, 'prstDash'),
@@ -506,7 +529,9 @@ const supportedGroupTransform = (transform: XmlElement | undefined) =>
   !finite(attribute(transform, 'rot')) && !trueAttribute(transform, 'flipH') && !trueAttribute(transform, 'flipV')
 const groupChildTags = new Set(['grpSp', 'sp', 'cxnSp', 'pic', 'graphicFrame'])
 
-function readGroupShapes(group: XmlElement, base: VisualBase, theme: readonly string[]): WorkbookVisualObject[] {
+function readGroupShapes(
+  group: XmlElement, base: VisualBase, theme: readonly string[], references: DrawingReferences,
+): WorkbookVisualObject[] {
   const shapeVisuals: WorkbookVisualObject[] = []
   const rootTransform = groupTransform(group)
   const width = transformValue(rootTransform, 'ext', 'cx')
@@ -560,7 +585,8 @@ function readGroupShapes(group: XmlElement, base: VisualBase, theme: readonly st
       const shape = readShape(entry, {
         id, sheetId: base.sheetId, drawingPath: base.drawingPath, anchor,
         name: attribute(nonvisual, 'name'), altText: attribute(nonvisual, 'descr') || undefined,
-      }, theme)
+        hyperlink: drawingHyperlink(nonvisual, references.relationships),
+      }, theme, references)
       if (shape) shapeVisuals.push(shape)
     }
   }
@@ -773,6 +799,7 @@ export async function readWorkbookVisuals(
       if (!drawingPath || !/^xl\/drawings\/[\w./-]+\.xml$/.test(drawingPath)) continue
       const drawing = roots(await read(drawingPath)).find(node => node.tag === 'wsDr')
       const drawingRels = await readRelationships(read, drawingPath)
+      const references = { relationships: drawingRels, part: drawingPath, hasPart }
       const directAnchors = new Set(children(drawing).map(node => node.tokens))
       const anchors = [...descendants(drawing)].filter(node => anchorTags.has(node.tag))
       for (const [drawingIndex, entry] of anchors.entries()) {
@@ -801,10 +828,11 @@ export async function readWorkbookVisuals(
         const editAs = entry.tag === 'twoCellAnchor'
           ? member(attribute(entry, 'editAs'), ['twoCell', 'oneCell', 'absolute'] as const) ?? 'twoCell' : undefined
         const altText = attribute(nonvisual, 'descr') || undefined
-        const base = { id, sheetId, anchor, name, drawingPath, drawingIndex, editAs, altText }
+        const hyperlink = drawingHyperlink(nonvisual, drawingRels)
+        const base = { id, sheetId, anchor, name, drawingPath, drawingIndex, editAs, altText, ...(hyperlink ? { hyperlink } : {}) }
         const group = child(entry, 'grpSp')
         if (group) {
-          for (const shape of readGroupShapes(group, base, theme)) result.push(shape)
+          for (const shape of readGroupShapes(group, base, theme, references)) result.push(shape)
           continue
         }
         const chartNode = first(child(entry, 'graphicFrame'), 'chart')
@@ -816,7 +844,7 @@ export async function readWorkbookVisuals(
           continue
         }
         if (shapeNode) {
-          const shape = readShape(shapeNode, base, theme)
+          const shape = readShape(shapeNode, base, theme, references)
           if (shape) result.push(shape)
           continue
         }
@@ -828,14 +856,13 @@ export async function readWorkbookVisuals(
         const mediaType = visualMediaType(mediaPath)
         if (!mediaType || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&
           anchor.fromRowOffset === anchor.toRowOffset && anchor.fromColumnOffset === anchor.toColumnOffset)) continue
-        const alpha = finite(attribute(child(blip, 'alphaModFix'), 'amt'))
         const xfrm = child(child(picture, 'spPr'), 'xfrm')
         const rotation = finite(attribute(xfrm, 'rot'))
         const frame = rotation ? child(xfrm, 'ext') : undefined
         const frameWidth = finite(attribute(frame, 'cx'))
         const frameHeight = finite(attribute(frame, 'cy'))
         result.push({ ...base, kind: 'image', mediaPath, mediaType,
-          opacity: alpha === undefined || alpha >= 100_000 ? undefined : Math.max(0, alpha / 100_000),
+          opacity: blipOpacity(blip),
           crop: pictureCrop(blipFill), rotation: rotation ? rotation / 60_000 : undefined,
           flipH: ['1', 'true'].includes(attribute(xfrm, 'flipH') ?? ''), flipV: ['1', 'true'].includes(attribute(xfrm, 'flipV') ?? ''),
           frameWidth: frameWidth && frameWidth > 0 ? frameWidth : undefined,

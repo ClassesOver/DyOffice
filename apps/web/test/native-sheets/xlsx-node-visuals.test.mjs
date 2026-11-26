@@ -201,6 +201,68 @@ test('resolves an embedded picture without mislabeling unsupported or external d
   })
 })
 
+test('opens shape picture fills and hyperlinks and preserves them through a cell save', async t => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const fillPath = 'xl/media/shape-fill.png'
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const href = 'https://example.invalid/help?view=sheet&item=shape'
+  const shape = (id, name, imageId, linkId) => `
+    <xdr:sp xmlns:r="${relationships.slice(0, -1)}"><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}">
+      <a:hlinkClick r:id="${linkId}"/></xdr:cNvPr><xdr:cNvSpPr/></xdr:nvSpPr>
+      <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="900000" cy="450000"/></a:xfrm>
+        <a:prstGeom prst="ellipse"/><a:blipFill><a:blip r:embed="${imageId}">
+          <a:alphaModFix amt="60000"/></a:blip><a:stretch><a:fillRect/></a:stretch></a:blipFill></xdr:spPr>
+      <xdr:style><a:fillRef idx="1"><a:srgbClr val="112233"/></a:fillRef></xdr:style>
+    </xdr:sp>`
+  const anchor = (column, object) => `<xdr:oneCellAnchor><xdr:from><xdr:col>${column}</xdr:col>
+    <xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="900000" cy="450000"/>${object}<xdr:clientData/></xdr:oneCellAnchor>`
+  const group = `<xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="82" name="Group"/></xdr:nvGrpSpPr>
+    <xdr:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="900000" cy="450000"/>
+      <a:chOff x="0" y="0"/><a:chExt cx="900000" cy="450000"/></a:xfrm></xdr:grpSpPr>
+    ${shape(83, 'Grouped shape', 'fill', 'help')}</xdr:grpSp>`
+  await appendDrawing(zip, anchor(1, shape(81, 'Filled shape', 'fill', 'help')) + anchor(3, group) +
+    anchor(5, shape(84, 'External fill', 'external', 'fill')))
+  zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>', `
+    <Relationship Id="fill" Type="${relationships}image" Target="../media/shape-fill.png"/>
+    <Relationship Id="external" Type="${relationships}image" Target="https://example.invalid/image.png" TargetMode="External"/>
+    <Relationship Id="help" Type="${relationships}hyperlink" Target="${href.replace('&', '&amp;')}" TargetMode="External"/>
+  </Relationships>`))
+  zip.file(fillPath, Buffer.from(png, 'base64'))
+  zip.file('[Content_Types].xml', (await textOf(zip)('[Content_Types].xml')).replace('</Types>',
+    '<Default Extension="png" ContentType="image/png"/></Types>'))
+  const fillProperties = ({ fillColor, fillMediaPath, fillMediaType, opacity, hyperlink }) =>
+    ({ fillColor, fillMediaPath, fillMediaType, opacity, hyperlink })
+  const expected = { fillColor: 'none', fillMediaPath: fillPath, fillMediaType: 'image/png', opacity: 0.6, hyperlink: href }
+  const visuals = await readWorkbookVisuals(textOf(zip), sourceSheet, [], path => Boolean(zip.file(path)))
+  const [, filled, grouped, external] = visuals
+  assert.deepEqual(fillProperties(filled), expected)
+  assert.deepEqual(fillProperties(grouped), expected)
+  assert.equal(grouped.drawingIndex, undefined)
+  assert.deepEqual(fillProperties(external), fillProperties({ fillColor: '#112233' }))
+
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-native-shape-fills-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const native = runtime.sheetsNative
+  const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+  assert.deepEqual(await native.readMedia(bytes, filled.id), { mediaType: 'image/png', base64: png })
+  const request = sheetsSaveRequest('sheet-1', [{ row: 1, column: 0, value: 22, writeValue: true }])
+  const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+  const reopened = (await native.inspect(saved)).visuals.find(visual => visual.id === filled.id)
+  assert.deepEqual(fillProperties(reopened), expected)
+  const savedZip = await JSZip.loadAsync(saved)
+  for (const part of [drawingPath, drawingRels, fillPath]) {
+    assert.deepEqual(await savedZip.file(part).async('nodebuffer'), await zip.file(part).async('nodebuffer'))
+  }
+})
+
 test('opens a native XLSX text box and edits its paint at the original drawing index', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   await appendDrawing(zip, `<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="10000" cy="10000"/><xdr:sp/></xdr:absoluteAnchor>
