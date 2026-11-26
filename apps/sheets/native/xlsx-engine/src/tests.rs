@@ -5,6 +5,55 @@ use crate::visuals::resolve_part_target;
 use crate::visuals::{reset_sheet_passes, sheet_passes};
 
 #[test]
+fn worksheet_hyperlinks_resolve_the_office_relationship_namespace() {
+    let (_directory, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>7</v></c><c r="B1"><v>8</v></c><c r="C1"><v>9</v></c></row></sheetData><hyperlinks xmlns:link="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:ext="urn:extension"><hyperlink ref="A1" ext:id="rId2" link:id="rId1"/><hyperlink ref="B1" link:id="rId1" ext:id="rId2"/><hyperlink ref="C1" ext:id="rId2" location="S!A1"/></hyperlinks></worksheet>"#,
+        ),
+        (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/expected" TargetMode="External"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/extension" TargetMode="External"/></Relationships>"#,
+        ),
+    ]);
+    let mut sessions = WorkbookSessions::new();
+    let metadata = sessions.open(&path).unwrap();
+    let result = sessions
+        .read_range(
+            &metadata.session_id,
+            "sheet-1",
+            &CellRange {
+                start_row: 0,
+                end_row: 0,
+                start_column: 0,
+                end_column: 2,
+            },
+        )
+        .unwrap();
+    let links: Vec<_> = result
+        .hyperlinks
+        .iter()
+        .map(|link| (link.column, link.target.as_str()))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            (0, "https://example.com/expected"),
+            (1, "https://example.com/expected"),
+            (2, "#S!A1"),
+        ]
+    );
+}
+
+#[test]
 fn normalizes_crlf_and_stray_cr_to_lf() {
     let mut crlf = "Hyderabad Day Shift\r\n(500 Seats)".to_owned();
     normalize_line_endings(&mut crlf);

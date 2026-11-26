@@ -40,6 +40,13 @@ const EMPTY_RELS =
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   '</Relationships>'
 
+export function findWorksheetHyperlinkSection(worksheetXml: string) {
+  const span = findRootChild(worksheetXml, 'worksheet', 'hyperlinks')
+  if (!span) return undefined
+  const [element] = childElements(worksheetXml.slice(span.start, span.end))
+  return element ? { ...span, element } : undefined
+}
+
 export function applyHyperlinkEdits(
   worksheetXml: string,
   relsXml: string | null,
@@ -48,8 +55,8 @@ export function applyHyperlinkEdits(
   let rels = relsXml
   let relsChanged = false
   const root = readRootStartTag(worksheetXml)
-  const section = findRootChild(worksheetXml, 'worksheet', 'hyperlinks')
-  const element = section ? childElements(worksheetXml.slice(section.start, section.end))[0] : undefined
+  const section = findWorksheetHyperlinkSection(worksheetXml)
+  const element = section?.element
   const parent = element?.opening ?? ''
   const inheritedNamespace = readWorksheetTagAttribute(parent, 'xmlns:r') ?? readWorksheetTagAttribute(root, 'xmlns:r')
   const relationshipBinding = inheritedNamespace !== undefined && !isOfficeRelationshipNamespace(inheritedNamespace)

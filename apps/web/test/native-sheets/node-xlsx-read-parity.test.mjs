@@ -59,6 +59,24 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('disambiguates Office hyperlink relationship IDs from extension attributes', async () => {
+    const namespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const target = 'https://example.com/expected'
+    const bytes = await workbook({
+      [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><v>7</v></c><c r="B1"><v>8</v></c><c r="C1"><v>9</v></c></row></sheetData>' +
+        `<hyperlinks xmlns:link="${namespace}" xmlns:ext="urn:example:extension">` +
+        '<hyperlink ref="A1" ext:id="rId2" link:id="rId1"/><hyperlink ref="B1" link:id="rId1" ext:id="rId2"/>' +
+        '<hyperlink ref="C1" ext:id="rId2" location="Acceptance!A1"/></hyperlinks>'),
+      'xl/worksheets/_rels/sheet1.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        `<Relationship Id="rId1" Type="${namespace}/hyperlink" Target="${target}" TargetMode="External"/>` +
+        `<Relationship Id="rId2" Type="${namespace}/hyperlink" Target="https://example.com/extension" TargetMode="External"/></Relationships>`,
+    })
+    const links = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 2 })).hyperlinks
+    const expected = [{ row: 0, column: 0, target }, { row: 0, column: 1, target }, { row: 0, column: 2, target: '#Acceptance!A1' }]
+    assert.deepEqual(await links(bytes), expected)
+    assert.deepEqual(await links(await saveValue(bytes, 0, 42)), expected)
+  })
+
   await t.test('opens and saves prefixed workbook and worksheet parts containing comments and CDATA', async () => {
     const comment = '<!-- <x:c xmlns:x="urn:comment"/> -->'
     const literal = '<x:row r="97"> sample </x:row>'

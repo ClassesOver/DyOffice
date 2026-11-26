@@ -3,12 +3,54 @@
 //! setup and header/footer text into the session's `SheetIndex`.
 
 use super::*;
+use quick_xml::{NsReader, name::ResolveResult};
 
 /// The worksheet extension carrying x14 data validations. Excel parks
 /// cross-sheet rules in an extension of its own; the x14 conditional
 /// formatting extension ({78C0D931-…}) is a different one, and Excel
 /// ignores validation rules placed there.
 pub(crate) const X14_DV_EXT_URI: &str = "{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}";
+
+fn hyperlink_relationship_id<R: std::io::BufRead>(
+    reader: &NsReader<R>,
+    element: &BytesStart<'_>,
+) -> Result<Option<String>, SidecarError> {
+    let mut id = None;
+    let mut unbound = None;
+    for attribute in element.attributes().with_checks(false) {
+        let attribute = attribute.map_err(|error| SidecarError::Workbook(error.to_string()))?;
+        if attribute.key.local_name().as_ref() != b"id" {
+            continue;
+        }
+        match reader.resolve_attribute(attribute.key).0 {
+            ResolveResult::Bound(namespace)
+                if matches!(
+                    namespace.as_ref(),
+                    b"http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                        | b"http://purl.oclc.org/ooxml/officeDocument/relationships"
+                ) =>
+            {
+                if id.is_some() {
+                    return Ok(None);
+                }
+                id = Some(
+                    attribute
+                        .decode_and_unescape_value(reader.decoder())?
+                        .into_owned(),
+                );
+            }
+            ResolveResult::Unknown(prefix) if unbound.is_none() || prefix == b"r" => {
+                unbound = Some(
+                    attribute
+                        .decode_and_unescape_value(reader.decoder())?
+                        .into_owned(),
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(id.or(unbound))
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn index_worksheet(
@@ -27,7 +69,7 @@ pub(crate) fn index_worksheet(
     let mut archive = ZipArchive::new(file)?;
     let link_targets = visuals::hyperlink_targets(&mut archive, worksheet_path)?;
     let entry = zip_entry(&mut archive, worksheet_path)?;
-    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut reader = NsReader::from_reader(BufReader::new(entry));
     let mut buffer = Vec::new();
     let mut cell_builder: Option<CellBuilder> = None;
     // <row r=> and <c r=> are both optional: a missing row is one below its
@@ -379,7 +421,7 @@ pub(crate) fn index_worksheet(
                 if let Some(reference) = attribute_value(&reader, &element, b"ref")? {
                     let anchor = reference.split(':').next().unwrap_or(&reference);
                     if let Ok((row, column)) = parse_address(&anchor.replace('$', "")) {
-                        let target = match attribute_value(&reader, &element, b"id")? {
+                        let target = match hyperlink_relationship_id(&reader, &element)? {
                             Some(id) => link_targets.get(&id).cloned(),
                             None => attribute_value(&reader, &element, b"location")?
                                 .map(|location| format!("#{location}")),
