@@ -113,6 +113,21 @@ test(
       { kind: 'insert-rows', sheetId, index: 0, count: 1 },
       { kind: 'insert-cols', sheetId, index: 0, count: 1 },
     ]
+    await t.test('reorders and updates sheet tabs inside a sheet list with attributes and comments', async () => {
+      const comment = '<!-- worksheet list -->'
+      const bytes = await fixture({ changeWorkbook: (xml) => xml
+        .replace('<sheets>', '<sheets xmlns="' + main + '">' + comment)
+        .replace('</sheets>', '</sheets >') })
+      const saved = await save(bytes, [
+        { kind: 'rename-sheet', sheetId: first, newName: 'Renamed' },
+        { kind: 'set-sheet-hidden', sheetId: first, hidden: true },
+      ], [second, first])
+      const metadata = await inspect(saved)
+      assert.deepEqual(metadata.sheets.map(({ name, hidden }) => [name, hidden]), [['Other', false], ['Renamed', true]])
+      const xml = await xmlPart(await JSZip.loadAsync(saved), wbPath)
+      assert.ok(xml.includes('<sheets xmlns="' + main + '">' + comment))
+      assert.ok(xml.includes('</sheets >'))
+    })
     await t.test('shifts hyperlink ranges and internal destinations while preserving external locations', async () => {
       const target = 'https://example.com/workbook.xlsx'
       const links = `<hyperlinks xmlns:link="${r}" xmlns:r="urn:example:extension">` +

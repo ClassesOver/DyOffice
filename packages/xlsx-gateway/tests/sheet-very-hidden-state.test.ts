@@ -21,6 +21,24 @@ const plan = (hiddenChanges: { sheetName: string; hidden: boolean }[]) => ({
 })
 
 describe('veryHidden sheet state', () => {
+  it('updates real sheet attributes and preserves the sheet-list wrapper and comments', () => {
+    const comment = '<!-- <sheets><sheet name="Fake"/></sheets> -->'
+    const xml = WORKBOOK.replace('<sheets>', '<sheets xmlns:ext="urn:example">' + comment)
+      .replace('name="B" sheetId="2" state="hidden"', "ext:name='extension' name = 'B' sheetId='2' state = 'hidden'")
+      .replace('</sheets></workbook>', '</sheets ></workbook>')
+    const result = applySheetPlanToWorkbookXml(xml, {
+      ...plan([{ sheetName: 'B', hidden: false }]),
+      renames: [{ sheetName: 'B', newName: 'Renamed' }],
+      order: ['Renamed', 'A', 'C'],
+    }, [])
+    expect(result).toContain('<sheets xmlns:ext="urn:example">' + comment)
+    expect(result).toContain('</sheets >')
+    expect(result).toContain("ext:name='extension'")
+    expect(parseSheetElements(result).map(({ name, hidden }) => [name, hidden])).toEqual([
+      ['Renamed', false], ['A', false], ['C', true],
+    ])
+  })
+
   it('parses the tri-state', () => {
     expect(parseSheetElements(WORKBOOK).map((e) => [e.hidden, e.veryHidden])).toEqual([
       [false, false],

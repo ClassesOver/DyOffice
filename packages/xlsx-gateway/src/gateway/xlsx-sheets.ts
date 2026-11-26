@@ -368,7 +368,8 @@ export function parseSheetElements(workbookXml: string): SheetElement[] {
     const name = readWorksheetTagAttribute(opening, 'name')
     if (name === undefined) continue
     const id = readWorksheetTagAttribute(opening, 'sheetId')
-    const state = readWorksheetTagAttribute(opening, 'state')
+    const rawState = readWorksheetTagAttribute(opening, 'state')
+    const state = rawState === undefined ? undefined : decodeAttribute(rawState)
     elements.push({
       xml,
       name: decodeAttribute(name),
@@ -469,6 +470,9 @@ export function applySheetPlanToWorkbookXml(
   plan: SheetEditPlan,
   additions: readonly SheetAllocation[],
 ): string {
+  const sheetList = workbookSection(workbookXml, 'sheets')
+  if (!sheetList) throw new SheetEditError('The workbook has no sheet list.')
+  const sheetPrefix = prefixOf(sheetList.section.name)
   const elements = parseSheetElements(workbookXml)
   const originalNames = elements.map((element) => element.name)
   const renameByOriginal = new Map(plan.renames.map((rename) => [rename.sheetName, rename.newName]))
@@ -478,15 +482,14 @@ export function applySheetPlanToWorkbookXml(
   for (const element of elements) {
     if (removedSet.has(element.name)) continue
     const newName = renameByOriginal.get(element.name)
-    const xml =
-      newName === undefined
-        ? element.xml
-        : element.xml.replace(/\bname="[^"]*"/, () => `name="${escapeXmlAttribute(newName)}"`)
+    const opening = readRootStartTag(element.xml)
+    const xml = newName === undefined ? element.xml
+      : updateWorksheetTagAttribute(opening, 'name', escapeXmlAttribute(newName)) + element.xml.slice(opening.length)
     finalElements.set(newName ?? element.name, { xml, hidden: element.hidden })
   }
   for (const addition of additions) {
     finalElements.set(addition.name, {
-      xml: `<sheet name="${escapeXmlAttribute(addition.name)}" sheetId="${addition.sheetId}" r:id="${addition.relationshipId}"/>`,
+      xml: `<${sheetPrefix}sheet name="${escapeXmlAttribute(addition.name)}" sheetId="${addition.sheetId}" r:id="${addition.relationshipId}"/>`,
       hidden: false,
     })
   }
@@ -511,11 +514,13 @@ export function applySheetPlanToWorkbookXml(
     throw new SheetEditError('A workbook needs at least one visible sheet.')
   }
 
-  const sheetsInner = plan.order.map((name) => finalElements.get(name)?.xml ?? '').join('')
-  let result = workbookXml.replace(
-    /<sheets>[\s\S]*?<\/sheets>/,
-    () => `<sheets>${sheetsInner}</sheets>`,
+  const ordered = plan.order.map((name) => finalElements.get(name)!.xml)
+  const slots = workbookSectionEntries(sheetList.section, 'sheet').filter(({ opening }) =>
+    readWorksheetTagAttribute(opening, 'name') !== undefined,
   )
+  const inner = applyPatches(sheetList.section.inner, slots.map((slot, index) => patchElement(slot, ordered[index] ?? '')))
+    + ordered.slice(slots.length).join('')
+  let result = workbookXml.slice(0, sheetList.start) + withBody(sheetList.section, inner) + workbookXml.slice(sheetList.end)
 
   // Defined-name scopes are positional (localSheetId = tab index).
   const oldIndexToNew = (oldIndex: number): number | null => {
@@ -629,10 +634,12 @@ function* survivingDefinedNameFormulas(workbookXml: string, removedLocalIds: Rea
 /// veryHidden when re-hidden; unhiding clears either state (the renderer
 /// never emits that for veryHidden, so only an explicit op reaches here).
 function setSheetStateAttribute(sheetXml: string, hidden: boolean): string {
-  if (hidden && /\sstate="veryHidden"/.test(sheetXml)) return sheetXml
-  const withoutState = sheetXml.replace(/\s+state="[^"]*"/, '')
-  if (!hidden) return withoutState
-  return withoutState.replace(/^<sheet\b/, '<sheet state="hidden"')
+  const opening = readRootStartTag(sheetXml)
+  const state = readWorksheetTagAttribute(opening, 'state')
+  if (hidden && state !== undefined && decodeAttribute(state) === 'veryHidden') return sheetXml
+  const withoutState = updateWorksheetTagAttribute(opening, 'state', null)
+  const updated = hidden ? withoutState.replace(/^<[^\s/>]+/, '$& state="hidden"') : withoutState
+  return updated + sheetXml.slice(opening.length)
 }
 
 export function addWorksheetOverride(contentTypesXml: string, partPath: string): string {
