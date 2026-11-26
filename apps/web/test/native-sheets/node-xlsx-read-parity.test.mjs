@@ -59,6 +59,26 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('assigns a distinct ID when adding a sheet after an encoded sheet ID', async () => {
+    const bytes = await workbook({
+      [workbookPath]: (xml) => xml.replace('sheetId="1"', "sheetId = '&#49;'"),
+    })
+    const newSheetId = 'local-new-sheet'
+    const request = {
+      ...sheetsSaveRequest(newSheetId, [{ row: 0, column: 0, value: 'New cell', writeValue: true }]),
+      sheetOps: [{ kind: 'add-sheet', sheetId: newSheetId, name: 'Added' }],
+      sheetOrder: ['sheet-1', newSheetId],
+    }
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    const { sheets } = await native.inspect(saved)
+    assert.deepEqual(sheets.map(({ id, name }) => ({ id, name })), [
+      { id: 'sheet-1', name: 'Acceptance' }, { id: 'sheet-2', name: 'Added' },
+    ])
+    const range = { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }
+    assert.equal((await native.readRange(saved, 'Acceptance', range)).cells[0]?.value, 'Revenue')
+    assert.equal((await native.readRange(saved, 'Added', range)).cells[0]?.value, 'New cell')
+  })
+
   await t.test('opens and saves worksheet relationships with equivalent encoded IDs', async () => {
     const relsPath = 'xl/_rels/workbook.xml.rels'
     for (const parts of [

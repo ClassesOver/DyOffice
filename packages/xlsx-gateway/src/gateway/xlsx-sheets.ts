@@ -383,10 +383,10 @@ export function parseSheetElements(workbookXml: string): SheetElement[] {
 
 export function maxSheetIdInWorkbook(workbookXml: string): number {
   let max = 0
-  for (const match of workbookXml.matchAll(
-    new RegExp(`<sheet\\b${TAG_ATTRIBUTES}\\bsheetId="([0-9]+)"`, 'g'),
-  )) {
-    max = Math.max(max, Number(match[1]))
+  for (const { sheetId } of parseSheetElements(workbookXml)) {
+    if (sheetId === undefined || !/^[0-9]+$/.test(sheetId)) continue
+    const id = Number(sheetId)
+    if (Number.isSafeInteger(id)) max = Math.max(max, id)
   }
   return max
 }

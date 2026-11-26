@@ -78,6 +78,13 @@ describe('element scans with ">" inside attribute values', () => {
     expect(maxSheetIdInWorkbook(workbook)).toBe(5)
   })
 
+  it('counts decoded IDs from actual worksheet declarations', () => {
+    const xml = '<workbook xmlns:ext="urn:example"><sheets><!-- <sheet sheetId="71"/> -->' +
+      '<sheet name="One" sheetId = \'&#x39;\'/><sheet name="Two" ext:sheetId="82" sheetId="3"/>' +
+      '</sheets></workbook>'
+    expect(maxSheetIdInWorkbook(xml)).toBe(9)
+  })
+
   it('worksheetSource scans survive a ">" sheet name', () => {
     const cache =
       '<cacheSource type="worksheet"><worksheetSource sheet="2. Output>" ref="A1:B2"/></cacheSource>'
