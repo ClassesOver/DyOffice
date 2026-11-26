@@ -15,6 +15,7 @@ const NORMALIZABLE_NAMESPACES = new Set([
 const SPREADSHEETML_NAMESPACE = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const OFFICE_RELATIONSHIPS_NAMESPACE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const STRICT_OFFICE_RELATIONSHIPS_NAMESPACE = 'http://purl.oclc.org/ooxml/officeDocument/relationships'
 
 // Literal markup is read atomically. Only real element names and attributes
 // participate in the namespace checks and the rewrite.
@@ -27,6 +28,36 @@ function rootOpeningTag(xml: string) {
     if (match[2] !== undefined) return match[1] === '' ? match : undefined
   }
   return undefined
+}
+
+export function readRootStartTag(xml: string): string {
+  return rootOpeningTag(xml)?.[0] ?? ''
+}
+
+export function readRelationshipId(opening: string, parent: string, root: string): string | undefined {
+  const bindings = new Map<string, string>()
+  for (const tag of [root, parent, opening]) {
+    for (const [, name, double, single] of tag.matchAll(ATTRIBUTES)) {
+      if (name?.startsWith('xmlns:')) bindings.set(name.slice('xmlns:'.length), double ?? single ?? '')
+    }
+  }
+
+  let id: string | undefined
+  let unbound: string | undefined
+  for (const [, name, double, single] of opening.matchAll(ATTRIBUTES)) {
+    if (!name?.endsWith(':id') || name === 'xmlns:id') continue
+    const alias = name.slice(0, -':id'.length)
+    const uri = bindings.get(alias)
+    const value = double ?? single
+    if (uri === OFFICE_RELATIONSHIPS_NAMESPACE || uri === STRICT_OFFICE_RELATIONSHIPS_NAMESPACE) {
+      if (id !== undefined) return undefined
+      id = value
+    } else if (uri === undefined && (unbound === undefined || alias === 'r')) {
+      // Some producers and callers provide fragments with an undeclared prefix.
+      unbound = value
+    }
+  }
+  return id ?? unbound
 }
 
 /// Elements the pipeline appends carry r:-prefixed attributes; some

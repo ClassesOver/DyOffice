@@ -186,6 +186,17 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     await assert.rejects(() => saveValue(duplicate, 0, 'edited'), /Invalid workbook input/)
   })
 
+  await t.test('opens and saves sheet declarations using a single-quoted relationship alias', async () => {
+    const bytes = await workbook({
+      [workbookPath]: (xml) => xml.replace(/<sheet\b[^>]*\/>/, () =>
+        '<sheet name="Acceptance" sheetId="1" xmlns:link="http://schemas.openxmlformats.org/officeDocument/2006/relationships" link:id = \'rId1\'/>'),
+    })
+    const values = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }))
+      .cells.map(({ value }) => value)
+    assert.deepEqual(await values(bytes), ['Revenue'])
+    assert.deepEqual(await values(await saveValue(bytes, 0, 42)), [42])
+  })
+
   await t.test('keeps literal worksheet text through bulk fills and row inserts', async t => {
     const literal = 'Example </row><row r="97"><c r="A97"> text'
     const comment = '<!-- <row r="99"/> -->'

@@ -11,7 +11,7 @@ import {
 } from './xlsx-structure.ts'
 import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-references.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { ensureRelationshipNamespace, readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
@@ -361,7 +361,9 @@ export function parseSheetElements(workbookXml: string): SheetElement[] {
   const span = findRootChild(workbookXml, 'workbook', 'sheets')
   if (!span) return elements
   const [sheets] = childElements(workbookXml.slice(span.start, span.end))
-  for (const { name: tag, xml, opening } of childElements(sheets?.inner ?? '')) {
+  if (!sheets) return elements
+  const root = readRootStartTag(workbookXml)
+  for (const { name: tag, xml, opening } of childElements(sheets.inner)) {
     if (tag.slice(tag.lastIndexOf(':') + 1) !== 'sheet') continue
     const name = readWorksheetTagAttribute(opening, 'name')
     if (name === undefined) continue
@@ -373,10 +375,7 @@ export function parseSheetElements(workbookXml: string): SheetElement[] {
       sheetId: id === undefined ? undefined : decodeAttribute(id),
       hidden: state === 'hidden' || state === 'veryHidden',
       veryHidden: state === 'veryHidden',
-      // The relationships namespace is conventionally bound to "r", but any
-      // prefix is legal — fall back to whatever prefix the producer chose.
-      relationshipId:
-        readWorksheetTagAttribute(opening, 'r:id') ?? /(?:^|\s)[A-Za-z_][\w.-]*:id="([^"]*)"/.exec(opening)?.[1],
+      relationshipId: readRelationshipId(opening, sheets.opening, root),
     })
   }
   return elements
