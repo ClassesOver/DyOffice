@@ -77,6 +77,26 @@ describe('pivot source cell reads', () => {
     expect(records).toContain('<r><x v="0"/><m/><n v="9"/></r>')
   })
 
+  it.each(['', 's:'])('infers source positions with namespace prefix "%s"', async (prefix) => {
+    const worksheet = WORKSHEET.replace('</sheetData>', [
+      '<row r="invalid"><c r="bad"><v>900</v></c><c><v>11</v></c><c><v>12</v></c></row>',
+      '<row><c r="&#x42;4"><v>21</v></c><c><v>22</v></c></row>',
+      '<row r="&#53;"><c r="$B$5"><v>901</v></c><c><v>32</v></c></row>',
+      '</sheetData>',
+    ].join(''))
+    const xml = prefix
+      ? worksheet.replace(/<(\/?)([A-Za-z][A-Za-z0-9]*)\b/g, `<$1${prefix}$2`)
+        .replace('xmlns=', 'xmlns:s=')
+      : worksheet
+    const records = await cacheRecords(xml, 4)
+    expect(records).toContain(
+      '<r><x v="0"/><m/><n v="9"/></r>' +
+      '<r><m/><n v="11"/><n v="12"/></r>' +
+      '<r><m/><n v="21"/><n v="22"/></r>' +
+      '<r><m/><m/><n v="32"/></r>',
+    )
+  })
+
   it('preserves the grid value types in saved pivot cache records', async () => {
     const worksheet = WORKSHEET.replace('</sheetData>', [
       '<row r="3"><c r="B3" t="b"><v>unknown</v></c><c r="C3"><v>0x10</v></c></row>',

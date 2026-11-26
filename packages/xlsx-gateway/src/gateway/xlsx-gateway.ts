@@ -186,6 +186,7 @@ import {
   isShiftingOp,
   materializeSharedFormulaGroups,
   omitWorksheetTagAttributes,
+  parseGridCellAddress,
   renameStructuredTableReferences,
   rewriteDefinedNames,
   readWorksheetTagAttribute,
@@ -4057,15 +4058,7 @@ function parseCellText(xml: string, readRunStyle?: ReadRunStyle, scope?: ScopedE
 
 /** Cell addresses outside the Excel grid cannot exist in a valid file; skip them. Exported for tests. */
 export function isGridCellAddress(address: string): boolean {
-  const match = /^([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(address)
-  if (!match) return false
-  const row = Number(match[2])
-  if (row > MAX_GRID_ROWS) return false
-  let column = 0
-  for (const character of match[1]!) {
-    column = column * 26 + character.charCodeAt(0) - 64
-  }
-  return column <= MAX_GRID_COLUMNS
+  return parseGridCellAddress(address) !== undefined
 }
 
 function cellsEqual(left: CellState, right: CellState): boolean {

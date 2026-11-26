@@ -1,6 +1,6 @@
 import * as numfmt from 'numfmt'
 import { ensureRelationshipNamespace, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
-import { columnIndex, columnLabel } from '../domain/cell-address.ts'
+import { columnLabel } from '../domain/cell-address.ts'
 import { BUILTIN_NUMBER_FORMATS } from '../shared/builtin-number-formats.ts'
 import { finiteDecimalCellValue } from '../shared/decimal-cell-value.ts'
 import { shortDateNumFmtId } from '../shared/short-date.ts'
@@ -26,7 +26,12 @@ import {
 } from './xlsx-drawing-add.ts'
 import { decodeAttribute, parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
 import { encodeXlsxEscapes } from './xlsx-escapes.ts'
-import { readWorksheetTagAttribute } from './xlsx-structure.ts'
+import {
+  parseGridCellAddress,
+  readPositiveInteger,
+  readWorksheetTagAttribute,
+  worksheetCellColumn,
+} from './xlsx-structure.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import {
@@ -455,24 +460,20 @@ async function readSourceRows(
     new Array<SourceCell>(endColumn - startColumn + 1).fill(null),
   )
 
-  let rowIndex = -1
+  let rowNumber = 0
   for (const row of scopedChildren(sheetData)) {
     if (!isElement(row, 'row', sheetData.namespace)) continue
-    const rowNumber = row.attributes.get('r')
-    rowIndex = rowNumber === undefined ? rowIndex + 1 : Number(rowNumber) - 1
-    let column = -1
+    rowNumber = readPositiveInteger(row.attributes.get('r')) ?? rowNumber + 1
+    let nextColumn = 0
     for (const cell of scopedChildren(row)) {
       if (!isElement(cell, 'c', row.namespace)) continue
       const address = cell.attributes.get('r')
-      let cellRow = rowIndex
-      if (address === undefined) {
-        column += 1
-      } else {
-        const position = /^([A-Z]+)([1-9][0-9]*)$/.exec(address)
-        if (!position) continue
-        column = columnIndex(position[1]!)
-        cellRow = Number(position[2]) - 1
-      }
+      const position = address === undefined
+        ? { row: rowNumber - 1, column: nextColumn }
+        : parseGridCellAddress(address)
+      nextColumn = (position?.column ?? worksheetCellColumn(address, nextColumn)) + 1
+      if (!position) continue
+      const { row: cellRow, column } = position
       if (column < startColumn || column > endColumn) continue
       const outputRow = rows[cellRow - startRow - 1]
       if (!outputRow) continue

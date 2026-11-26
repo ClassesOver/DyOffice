@@ -118,7 +118,7 @@ export function inferWorksheetAddresses(worksheetXml: string): string {
       nextColumn = tag.endsWith('/>') ? undefined : 0
       address = explicit ?? String(currentRow)
     } else if (nextColumn !== undefined) {
-      const column = (explicit === undefined ? null : parseA1(explicit))?.column ?? nextColumn
+      const column = worksheetCellColumn(explicit, nextColumn)
       nextColumn = column + 1
       address = explicit ?? `${columnToLetters(column)}${currentRow}`
     } else {
@@ -188,10 +188,23 @@ function addTagAttribute(tag: string, name: string, value: string): string {
   return `${tag.slice(0, nameEnd)} ${name}="${value}"${tag.slice(nameEnd)}`
 }
 
-function readPositiveInteger(value: string | undefined): number | undefined {
+export function readPositiveInteger(value: string | undefined): number | undefined {
   if (value === undefined || !/^[0-9]+$/.test(value)) return undefined
   const number = Number(value)
   return number > 0 && Number.isSafeInteger(number) ? number : undefined
+}
+
+// Even a cell with an unusable address advances the cursor for the next cell.
+export function worksheetCellColumn(address: string | undefined, fallback: number): number {
+  return (address === undefined ? null : parseA1(address))?.column ?? fallback
+}
+
+export function parseGridCellAddress(address: string): { row: number; column: number } | undefined {
+  const match = /^([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(address)
+  if (!match?.[1] || !match[2]) return undefined
+  const row = Number(match[2]) - 1
+  const column = lettersToColumn(match[1])
+  return row < MAX_GRID_ROWS && column < MAX_GRID_COLUMNS ? { row, column } : undefined
 }
 
 export function applyStructuralOps(
