@@ -448,8 +448,8 @@ test(
       assert.deepEqual(recomputePivotData(refreshedLayout.definition, dataRows).data, [[50], [50]])
 
       const rankedGrid = [
-        ['Region', 'Amount', 'Page'], ['East', -10, true],
-        ['West', 100, false], ['North', 'unavailable', true],
+        ['Region', 'Amount', 'Page'], ['001', -10, true],
+        ['1', 100, false], ['1', -20, true], ['2', 'unavailable', true],
       ]
       const rankedRows = rankedGrid.map((line, index) => {
         const row = index + 1
@@ -469,11 +469,11 @@ test(
         values: [{ field: 'Amount', agg: 'sum' }],
         filters: [{ kind: 'value', field: 'Region', valueIndex: 0, op: 'top', count: 1 }],
       })
-      assert.deepEqual(ranked.matrix.slice(1), [['East', -10], ['Grand Total', -10]])
+      assert.deepEqual(ranked.matrix.slice(1), [['001', -10], ['Grand Total', -10]])
       const rankedWorkbook = await save(rankedSource, [], [first, second], {
         pivotAdditions: [{
           ...ranked.definition, sheetId: second, sourceSheetId: first, name: 'RankedSales',
-          sourceArea: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 2 },
+          sourceArea: { startRow: 0, startColumn: 0, endRow: 4, endColumn: 2 },
           location: { startRow: 2, startColumn: 5, endRow: 4, endColumn: 6 },
         }],
       })
@@ -485,6 +485,7 @@ test(
       })
       const refreshedRank = growPivotDefinition(restoredRank, rankedGrid)
       assert.equal(refreshedRank.grown, false)
+      assert.deepEqual(restoredRank.fields[0].sharedItems, ['001', '1', '2'])
       assert.deepEqual(recomputePivotData(refreshedRank.definition, rankedGrid).data, [[-10], [-10]])
       const comment = '<!-- <worksheetSource name="SourceData"/> -->'
       const source = await editPart(withPivot, before.cachePath, (xml) => xml.replace(

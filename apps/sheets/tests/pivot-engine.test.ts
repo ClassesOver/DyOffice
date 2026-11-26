@@ -183,6 +183,33 @@ describe('recomputePivotData', () => {
     expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
   })
 
+  it('keeps zero-padded labels separate from displayed numbers', () => {
+    const cache = CACHE_XML.replace('<s v="East"/><s v="West"/>', '<s v="001"/><s v="1"/>')
+    const source = [['Region', 'Product', 'Sales'], ['001', 'A', 10], [1, 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
+  })
+
+  it('respects separately cached numeric and text members with the same caption', () => {
+    const cache = CACHE_XML.replace('<s v="East"/><s v="West"/>', '<n v="1"/><s v="1"/>')
+    const source = [['Region', 'Product', 'Sales'], [1, 'A', 10], ['1', 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
+  })
+
+  it.each([
+    ['<n v="1"/>', '1.00'],
+    ['<s v="1.00"/>', 1],
+  ] as const)('matches an unambiguous numeric member across display formatting', (member, value) => {
+    const cache = CACHE_XML.replace('<s v="East"/>', member)
+    const source = [['Region', 'Product', 'Sales'], [value, 'A', 10], ['West', 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
+  })
+
   it('fails closed when the source grows a new category', () => {
     const definition = parsePivotDefinition(PIVOT_XML, CACHE_XML)
     expect(() => recomputePivotData(definition, [...SOURCE, ['North', 'A', 9]])).toThrow(

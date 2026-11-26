@@ -30,8 +30,6 @@ function groupKey(value: PivotSharedItem | SourceCell): string {
   if (value === null || value === undefined || value === '') return '\u0000blank'
   if (typeof value === 'number') return `n:${value}`
   if (typeof value === 'boolean') return `b:${value}`
-  const numeric = Number(value)
-  if (String(value).trim() !== '' && Number.isFinite(numeric)) return `n:${numeric}`
   return `s:${String(value).trim().toLowerCase()}`
 }
 
@@ -44,24 +42,42 @@ interface AxisPredicate {
 /// (date/numeric ranges) are first bucketed into labels, then keyed with pivot
 /// semantics — the cache's sharedItems are the group labels, so both sides agree.
 function pivotSourceKey(definition: PivotDefinition): (field: number, value: SourceCell) => string {
-  const textBooleansByField = new Map<number, Set<boolean>>()
+  const membersByField = new Map<number, {
+    keys: Set<string>
+    numericLabels: Map<number, string | null>
+  }>()
   return (field, value) => {
     const cache = definition.fields[field]
     if (cache?.grouping) return groupKey(groupLabel(cache.grouping, value))
-    if (typeof value !== 'boolean') return groupKey(value)
-    let textBooleans = textBooleansByField.get(field)
-    if (!textBooleans) {
+    const key = groupKey(value)
+    if (value === null || value === undefined || value === '') return key
+    let members = membersByField.get(field)
+    if (!members) {
       const shared = cache?.sharedItems ?? []
-      textBooleans = new Set([true, false].filter((candidate) =>
-        !shared.includes(candidate) && shared.some((item) =>
-          typeof item === 'string' && groupKey(item) === groupKey(String(candidate)),
-        ),
-      ))
-      textBooleansByField.set(field, textBooleans)
+      const numericLabels = new Map<number, string | null>()
+      for (const item of shared) {
+        if (typeof item !== 'string' || item.trim() === '') continue
+        const number = Number(item)
+        if (!Number.isFinite(number)) continue
+        const label = groupKey(item)
+        const prior = numericLabels.get(number)
+        numericLabels.set(number, prior === undefined || prior === label ? label : null)
+      }
+      members = { keys: new Set(shared.map(groupKey)), numericLabels }
+      membersByField.set(field, members)
     }
-    // Our generated caches store dimension labels as text. Prefer typed
-    // Boolean members when an imported cache distinguishes them from text.
-    return groupKey(textBooleans.has(value) ? String(value) : value)
+    // A member explicitly cached with this type or label takes priority.
+    if (members.keys.has(key)) return key
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      const label = groupKey(String(value))
+      if (members.keys.has(label)) return label
+      return typeof value === 'number' ? members.numericLabels.get(value) ?? key : key
+    }
+    // Formatted source numbers can read as text. Use a typed numeric member
+    // as a fallback without collapsing distinct text labels already in the cache.
+    const number = value.trim() === '' ? Number.NaN : Number(value)
+    const numericKey = groupKey(number)
+    return Number.isFinite(number) && members.keys.has(numericKey) ? numericKey : key
   }
 }
 
