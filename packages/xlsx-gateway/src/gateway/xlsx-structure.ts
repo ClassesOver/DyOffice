@@ -2484,6 +2484,36 @@ function formulaQuoteEnd(formula: string, start: number, quote: string): number 
   return formula.length
 }
 
+export function renameStructuredTableReferences(formula: string, names: ReadonlyMap<string, string>): string {
+  const tokens = /["'[]|[\p{L}\p{N}_.\\]+/gu
+  let result = ''
+  let cursor = 0
+  for (let match = tokens.exec(formula); match; match = tokens.exec(formula)) {
+    const token = match[0]
+    const start = match.index
+    const end = tokens.lastIndex
+    if (token === '"' || token === "'") {
+      tokens.lastIndex = formulaQuoteEnd(formula, start, token)
+      continue
+    }
+    if (token === '[') {
+      tokens.lastIndex = formulaBracketEnd(formula, start)
+      continue
+    }
+    if (formula[end] !== '[' || formula[start - 1] === ']') continue
+    const replacement = names.get(token.toLowerCase())
+    if (replacement === undefined || replacement === token) continue
+    if (formula[start - 1] === '!') {
+      const qualifier = formula.slice(0, start)
+      if (/\][\p{L}\p{N}_.\\]+!$/u.test(qualifier) ||
+        /'(?:[^']|'')*'!$/u.exec(qualifier)?.[0]?.includes('[')) continue
+    }
+    result += formula.slice(cursor, start) + replacement
+    cursor = end
+  }
+  return result + formula.slice(cursor)
+}
+
 function translateSharedToken(token: string, rowDelta: number, columnDelta: number): string | null {
   const parts = token.split(':').map((part) => {
     const cell = /^(\$?)([A-Z]{1,3})(\$?)([0-9]+)$/.exec(part)

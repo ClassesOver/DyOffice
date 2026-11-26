@@ -57,18 +57,30 @@ export async function applyTableEdits(
   edits: readonly TableEdit[],
   touchedEntries: Set<string>,
   checkWorkbookNames = true,
-): Promise<void> {
-  if (edits.length === 0) return
+): Promise<Map<string, string>> {
+  const renames = new Map<string, { original: string[]; name: string }>()
   for (const edit of edits) {
     const located = await locateTable(pkg, edit)
     if (edit.remove) {
       await removeTable(pkg, edit.worksheetPath, located, touchedEntries)
+      renames.delete(located.path)
       continue
     }
     const rewritten = await rewriteTable(pkg, edit, located, checkWorkbookNames)
     pkg.write(located.path, rewritten)
     touchedEntries.add(located.path)
+    if (edit.name !== undefined) {
+      const original = renames.get(located.path)?.original ?? tablePartNames(located.xml)
+      renames.set(located.path, { original, name: edit.name })
+    }
   }
+  const names = new Map<string, string>()
+  for (const { original, name } of renames.values()) {
+    for (const alias of original) {
+      if (alias !== name) names.set(alias.toLowerCase(), name)
+    }
+  }
+  return names
 }
 
 async function locateTable(pkg: MutablePackage, edit: TableEdit): Promise<LocatedTable> {

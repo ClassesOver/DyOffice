@@ -37,6 +37,33 @@ describe('table edits', () => {
     expect(xml).toContain('ref="A1:B2"')
   })
 
+  it('keeps local structured references attached to the renamed table', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const workbookPath = 'xl/workbook.xml'
+    const tablePath = 'xl/tables/table1.xml'
+    const sheet = await zip.file(sheetPath)!.async('text')
+    const comment = '<!-- <f>Table1[A]</f> -->'
+    const formula = 'SUM(table1[A])+SUM(OtherTable[Table1[A]])+N("Table1[A]")+SUM([Other.xlsx]Table1[A])'
+    zip.file(sheetPath, sheet.replace('<row r="2">', `${comment}<row r="2"><c r="C2"><f>${formula}</f><v>1</v></c>`))
+    const workbook = await zip.file(workbookPath)!.async('text')
+    zip.file(workbookPath, workbook.replace('</workbook>',
+      '<definedNames><definedName name="List">Table1[A]</definedName></definedNames></workbook>'))
+    const table = await zip.file(tablePath)!.async('text')
+    zip.file(tablePath, table.replace('<tableColumn id="2" name="hdr"/>',
+      '<tableColumn id="2" name="hdr"><calculatedColumnFormula>SUM(Table1[A])</calculatedColumnFormula></tableColumn>'))
+    const chartPath = 'xl/charts/chart1.xml'
+    zip.file(chartPath, '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
+      '<c:chart><c:f>Table1&#91;A&#93;</c:f></c:chart></c:chartSpace>')
+
+    const plan = await planWith([edit({ name: 'Sales' })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get(sheetPath)).toContain(comment)
+    expect(plan.replaced.get(sheetPath)).toContain(`<f>${formula.replace('table1[A]', 'Sales[A]')}</f>`)
+    expect(plan.replaced.get(workbookPath)).toContain('<definedName name="List">Sales[A]</definedName>')
+    expect(plan.replaced.get(tablePath)).toContain('<calculatedColumnFormula>SUM(Sales[A])</calculatedColumnFormula>')
+    expect(plan.replaced.get(chartPath)).toContain('<c:f>Sales[A]</c:f>')
+  })
+
   it('edits real table elements with single-quoted attributes and preserves extension markup', async () => {
     const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
     const path = 'xl/tables/table1.xml'

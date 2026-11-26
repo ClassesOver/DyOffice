@@ -59,8 +59,11 @@ import {
 } from './xlsx-table-add.ts'
 import {
   applyTableEdits,
+  TableEditError,
   type TableEdit,
 } from './xlsx-table-edit.ts'
+import { rewriteChartReferences } from './xlsx-chart-references.ts'
+import { rewriteTableReferencesInPart } from './xlsx-table-references.ts'
 import type { PivotFilterDef } from '../domain/pivot-filters.ts'
 import {
   applyPivotAdditions,
@@ -167,6 +170,8 @@ import {
   isShiftingOp,
   materializeSharedFormulaGroups,
   omitWorksheetTagAttributes,
+  renameStructuredTableReferences,
+  rewriteDefinedNames,
   readWorksheetTagAttribute,
   type SharedFormulaCell,
   shiftChartReferences,
@@ -1818,6 +1823,7 @@ export async function planCellEditsToXlsx(
     touchedEntries.add(cachePath)
   }
 
+  let tableRenames = new Map<string, string>()
   // File-table edits run first: a Convert to Range or rename must not
   // block a new table over the same cells or with the freed name.
   if (tableEdits.length > 0) {
@@ -1828,7 +1834,7 @@ export async function planCellEditsToXlsx(
         worksheetPath: additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName)),
       })
     }
-    await applyTableEdits(pkg, resolvedEdits, touchedEntries, definedNamesState === null)
+    tableRenames = await applyTableEdits(pkg, resolvedEdits, touchedEntries, definedNamesState === null)
   }
   // New tables also run on the flushed worksheet XML: the <tableParts>
   // element and overlap checks see the final sheet content.
@@ -1958,6 +1964,26 @@ export async function planCellEditsToXlsx(
       if (conflict !== undefined) {
         throw new DefinedNameError(`The name "${conflict}" conflicts with a table in the workbook.`)
       }
+    }
+  }
+
+  if (tableRenames.size > 0) {
+    const rewrite = (formula: string) => renameStructuredTableReferences(formula, tableRenames)
+    workbookXml = rewriteDefinedNames(workbookXml, rewrite)
+    for (const path of await pkg.paths()) {
+      const kind = /^xl\/(worksheets|tables|charts)\/[^/]+\.xml$/.exec(path)?.[1]
+      if (!kind) continue
+      if (!(await pkg.canPatch(path))) {
+        if (!(await pkg.containsText(path, '[')) && !(await pkg.containsText(path, '&#'))) continue
+        throw new TableEditError(`${path} is too large to update references to a renamed table.`)
+      }
+      const xml = await pkg.readText(path)
+      const next = kind === 'charts' ? rewriteChartReferences(xml, rewrite)
+        : rewriteTableReferencesInPart(xml, kind === 'tables' ? 'table' : 'worksheet', rewrite)
+      pkg.releaseSourceText(path)
+      if (next === xml) continue
+      pkg.write(path, next)
+      touchedEntries.add(path)
     }
   }
 

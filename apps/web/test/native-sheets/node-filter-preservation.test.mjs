@@ -78,6 +78,16 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
     await assert.rejects(() => save(saved, rename), { statusCode: 400 })
     const workbook = await (await JSZip.loadAsync(saved)).file(workbookPath).async('string')
     assert.ok(workbook.includes(comment) && workbook.includes(hidden))
+
+    const referenced = await JSZip.loadAsync(saved)
+    const worksheet = await referenced.file(part).async('string')
+    referenced.file(part, worksheet.replace('</sheetData>',
+      '<row r="5"><c r="A5"><f>SUM(CommentOnly[Revenue])</f><v>20</v></c></row></sheetData>'))
+    rename.tableEdits[0].name = 'RenamedTable'
+    const renamed = await save(await referenced.generateAsync({ type: 'nodebuffer' }), rename)
+    const reopened = await native.readRange(renamed, 'Acceptance',
+      { startRow: 4, endRow: 4, startColumn: 0, endColumn: 0 })
+    assert.equal(reopened.cells[0].formula, '=SUM(RenamedTable[Revenue])')
   })
 
   await t.test('validates the table and defined names in the final save batch', async (t) => {
