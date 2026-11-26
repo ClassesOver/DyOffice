@@ -4,7 +4,7 @@
 
 import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart.ts'
 import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
-import { appendRelationshipRecord, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { addContentTypeEntry, appendRelationshipRecord, nextFreeRelationshipId } from './xlsx-sheets.ts'
 
 export class VisualAddError extends Error {}
 
@@ -1023,13 +1023,10 @@ export async function registerContentTypeDefault(
 ): Promise<void> {
   const path = '[Content_Types].xml'
   const xml = await pkg.readText(path)
-  if (new RegExp(`<Default[^>]*Extension="${extension}"`, 'i').test(xml)) return
-  const closeAt = xml.lastIndexOf('</Types>')
-  if (closeAt < 0) throw new VisualAddError('[Content_Types].xml is malformed.')
-  const element =
-    `<Default Extension="${escapeXmlAttribute(extension)}" ` +
-    `ContentType="${escapeXmlAttribute(contentType)}"/>`
-  pkg.write(path, xml.slice(0, closeAt) + element + xml.slice(closeAt))
+  const updated = addContentTypeEntry(xml, 'Default', extension, contentType)
+  if (updated === undefined) throw new VisualAddError('[Content_Types].xml is malformed.')
+  if (updated === xml) return
+  pkg.write(path, updated)
   touchedEntries.add(path)
 }
 
@@ -1041,14 +1038,10 @@ export async function registerContentTypeOverride(
 ): Promise<void> {
   const path = '[Content_Types].xml'
   const xml = await pkg.readText(path)
-  const partName = `/${partPath}`
-  if (xml.includes(`PartName="${partName}"`)) return
-  const closeAt = xml.lastIndexOf('</Types>')
-  if (closeAt < 0) throw new VisualAddError('[Content_Types].xml is malformed.')
-  const element =
-    `<Override PartName="${escapeXmlAttribute(partName)}" ` +
-    `ContentType="${escapeXmlAttribute(contentType)}"/>`
-  pkg.write(path, xml.slice(0, closeAt) + element + xml.slice(closeAt))
+  const updated = addContentTypeEntry(xml, 'Override', `/${partPath}`, contentType)
+  if (updated === undefined) throw new VisualAddError('[Content_Types].xml is malformed.')
+  if (updated === xml) return
+  pkg.write(path, updated)
   touchedEntries.add(path)
 }
 

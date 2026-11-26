@@ -13,7 +13,7 @@ import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-refer
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
 import { ensureRelationshipNamespace, readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { findRootChild } from './xlsx-root-tail.ts'
-import { childElements } from './xlsx-style-entries.ts'
+import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
   applyPatches,
@@ -636,21 +636,54 @@ function setSheetStateAttribute(sheetXml: string, hidden: boolean): string {
 }
 
 export function addWorksheetOverride(contentTypesXml: string, partPath: string): string {
-  const override = `<Override PartName="/${partPath}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
-  if (!contentTypesXml.includes('</Types>')) {
-    throw new SheetEditError('The workbook has no [Content_Types].xml Types element.')
-  }
-  return contentTypesXml.replace('</Types>', () => `${override}</Types>`)
+  const updated = addContentTypeEntry(
+    contentTypesXml, 'Override', `/${partPath}`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
+  )
+  if (updated === undefined) throw new SheetEditError('The workbook has no [Content_Types].xml Types element.')
+  return updated
+}
+
+function findTypesRoot(xml: string) {
+  return childElements(xml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Types')
+}
+
+export function addContentTypeEntry(
+  xml: string,
+  kind: 'Default' | 'Override',
+  value: string,
+  contentType: string,
+): string | undefined {
+  const root = findTypesRoot(xml)
+  if (!root) return undefined
+  const name = root.name.slice(0, -'Types'.length) + kind
+  const key = kind === 'Default' ? 'Extension' : 'PartName'
+  const exists = childElements(root.inner).some((element) => {
+    if (element.name !== name) return false
+    const raw = readWorksheetTagAttribute(element.opening, key)
+    if (raw === undefined) return false
+    const registered = decodeAttribute(raw)
+    return kind === 'Default' ? registered.toLowerCase() === value.toLowerCase() : registered === value
+  })
+  if (exists) return xml
+  const element = `<${name} ${key}="${escapeXmlAttribute(value)}" ContentType="${escapeXmlAttribute(contentType)}"/>`
+  return appendChildAtRoot(xml, root, element)
 }
 
 /// Removes the [Content_Types].xml Override for any part path (worksheets,
 /// drawings, charts, comments, tables). Parts covered by a Default extension
 /// mapping have no Override; the call is a no-op for them.
 export function removePartOverride(contentTypesXml: string, partPath: string): string {
-  return contentTypesXml.replace(
-    new RegExp(`<Override\\b[^>]*PartName="/${escapeRegExp(partPath)}"[^>]*/>\\s*`),
-    '',
-  )
+  const root = findTypesRoot(contentTypesXml)
+  if (!root) return contentTypesXml
+  const name = root.name.slice(0, -'Types'.length) + 'Override'
+  const entry = childElements(root.inner).find((element) => {
+    if (element.name !== name) return false
+    const part = readWorksheetTagAttribute(element.opening, 'PartName')
+    return part !== undefined && decodeAttribute(part) === `/${partPath}`
+  })
+  if (!entry) return contentTypesXml
+  const start = root.start + root.opening.length + entry.start
+  return contentTypesXml.slice(0, start) + contentTypesXml.slice(start + entry.xml.length)
 }
 
 export function addWorksheetRelationship(
@@ -681,6 +714,10 @@ export function appendRelationshipRecord(
   const name = root.name.slice(0, -1)
   const element = `<${name} Id="${escapeXmlAttribute(id)}" Type="${escapeXmlAttribute(type)}" ` +
     `Target="${escapeXmlAttribute(target)}"${targetMode ? ` TargetMode="${targetMode}"` : ''}/>`
+  return appendChildAtRoot(xml, root, element)
+}
+
+function appendChildAtRoot(xml: string, root: ChildElement, element: string): string {
   const endOfOpening = root.start + root.opening.length
   if (root.opening.endsWith('/>')) {
     return xml.slice(0, endOfOpening - 2) + `>${element}</${root.name}>` + xml.slice(endOfOpening)

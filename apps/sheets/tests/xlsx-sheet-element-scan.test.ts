@@ -11,8 +11,10 @@ import { describe, expect, it } from 'vitest'
 import { applyCellEditsToXlsx } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import {
   addWorksheetRelationship,
+  addWorksheetOverride,
   maxSheetIdInWorkbook,
   nextWorkbookSheetIds,
+  removePartOverride,
   parseSheetElements,
   pivotCacheReadsFromSheet,
   renameSheetInPivotCacheSource,
@@ -101,6 +103,17 @@ describe('element scans with ">" inside attribute values', () => {
     expect(added).toBe(opening + comment + '<p:Relationship Id="rId1" ' +
       'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" ' +
       'Target="worksheets/sheet2.xml"/></p:Relationships >')
+  })
+
+  it('adds and removes worksheet content types without changing comments or prefixed attributes', () => {
+    const opening = '<p:Types xmlns:p="http://schemas.openxmlformats.org/package/2006/content-types" xmlns:ext="urn:example">'
+    const comment = '<!-- <p:Override PartName="/xl/sheet2.xml"/> </p:Types> -->'
+    const other = '<p:Override ext:PartName="/xl/sheet2.xml" PartName="/xl/other.xml" ContentType="other"/>'
+    const original = opening + comment + other + '</p:Types >'
+    const added = addWorksheetOverride(original, 'xl/sheet2.xml')
+    expect(added).toBe(opening + comment + other + '<p:Override PartName="/xl/sheet2.xml" ' +
+      'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></p:Types >')
+    expect(removePartOverride(added.replace('PartName="/xl/sheet2.xml" ContentType="application', "PartName = '/xl/sheet&#50;.xml' ContentType=\"application"), 'xl/sheet2.xml')).toBe(original)
   })
 
   it('worksheetSource scans survive a ">" sheet name', () => {

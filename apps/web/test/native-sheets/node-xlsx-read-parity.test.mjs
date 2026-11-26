@@ -59,6 +59,24 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('registers a new worksheet with whitespace and comments in the content types root', async () => {
+    const contentTypes = '[Content_Types].xml'
+    const comment = '<!-- </Types> -->'
+    const bytes = await workbook({ [contentTypes]: (xml) => xml.replace('</Types>', comment + '</Types >') })
+    const newSheetId = 'local-tab'
+    const request = {
+      ...sheetsSaveRequest(newSheetId, [{ row: 0, column: 0, value: 42, writeValue: true }]),
+      sheetOps: [{ kind: 'add-sheet', sheetId: newSheetId, name: 'Added' }],
+      sheetOrder: ['sheet-1', newSheetId],
+    }
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    const types = await (await JSZip.loadAsync(saved)).file(contentTypes).async('string')
+    assert.ok(types.includes(comment + '<Override PartName="/xl/worksheets/sheet2.xml"'))
+    assert.ok(types.endsWith('</Types >'))
+    const { cells } = await native.readRange(saved, 'Added', { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    assert.equal(cells[0]?.value, 42)
+  })
+
   await t.test('adds a worksheet when the relationships closing tag contains XML whitespace', async () => {
     const relsPath = 'xl/_rels/workbook.xml.rels'
     const comment = '<!-- </Relationships> -->'
