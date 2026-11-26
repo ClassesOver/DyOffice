@@ -3,6 +3,7 @@
 //! defined names.
 
 use super::*;
+use quick_xml::{NsReader, name::ResolveResult};
 use roxmltree::Node;
 
 pub(crate) const WORKBOOK_PATH: &str = "xl/workbook.xml";
@@ -534,87 +535,119 @@ pub(crate) fn read_shared_strings(
     let Ok(entry) = zip_entry(archive, path) else {
         return Ok(Vec::new());
     };
-    let mut reader = Reader::from_reader(BufReader::new(entry));
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Element {
+        Table,
+        Item,
+        Run,
+        RunProperties,
+        RunProperty,
+        Text,
+        Other,
+    }
+
+    let mut reader = NsReader::from_reader(BufReader::new(entry));
     let mut buffer = Vec::new();
+    let mut parents = Vec::new();
+    let mut table_namespace = Vec::new();
     let mut strings = Vec::new();
     let mut current = String::new();
     let mut runs: Vec<RichRun> = Vec::new();
     let mut current_run: Option<RichRun> = None;
-    let mut in_text = false;
     let mut text_preserve = false;
     let mut text_node = String::new();
-    let mut in_phonetic = false;
     loop {
-        match reader.read_event_into(&mut buffer)? {
-            // A self-closing item still occupies a shared-string index.
-            Event::Empty(element) if element.local_name().as_ref() == b"si" => {
-                strings.push(SharedString {
-                    text: String::new(),
-                    runs: None,
-                });
-            }
-            Event::Start(element) if element.local_name().as_ref() == b"si" => {
-                current.clear();
-                runs.clear();
-                current_run = None;
-            }
-            Event::Start(element) if element.local_name().as_ref() == b"r" => {
-                current_run = Some(RichRun::default());
-            }
-            // Phonetic guide text (<rPh><t>…</t></rPh>) is ruby annotation,
-            // not cell content.
-            Event::Start(element) if element.local_name().as_ref() == b"rPh" => {
-                in_phonetic = true;
-            }
-            Event::End(element) if element.local_name().as_ref() == b"rPh" => {
-                in_phonetic = false;
-            }
-            Event::Start(element) | Event::Empty(element) if current_run.is_some() => {
-                if element.local_name().as_ref() == b"t" {
-                    in_text = true;
-                    text_preserve = preserves_space(&reader, &element)?;
-                    text_node.clear();
-                } else if let Some(run) = current_run.as_mut() {
-                    apply_run_property(run, &reader, &element, colors)?;
+        let event = reader.read_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let start = matches!(event, Event::Start(_));
+                let (resolved, local) = reader.resolve_element(element.name());
+                let namespace = match resolved {
+                    ResolveResult::Unbound => Some(&[][..]),
+                    ResolveResult::Bound(namespace) => Some(namespace.into_inner()),
+                    ResolveResult::Unknown(_) => None,
+                };
+                let parent = parents.last().copied();
+                let tag = if parent.is_none()
+                    && local.as_ref() == b"sst"
+                    && matches!(
+                        namespace,
+                        Some(
+                            b"" | b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                                | b"http://purl.oclc.org/ooxml/spreadsheetml/main"
+                        )
+                    ) {
+                    table_namespace = namespace.unwrap_or_default().to_vec();
+                    Element::Table
+                } else if namespace == Some(table_namespace.as_slice()) {
+                    match (parent, local.as_ref()) {
+                        (Some(Element::Table), b"si") => Element::Item,
+                        (Some(Element::Item), b"r") => Element::Run,
+                        (Some(Element::Run), b"rPr") => Element::RunProperties,
+                        (Some(Element::RunProperties), _) => Element::RunProperty,
+                        (Some(Element::Item | Element::Run), b"t") => Element::Text,
+                        _ => Element::Other,
+                    }
+                } else {
+                    Element::Other
+                };
+
+                match tag {
+                    // Empty items still occupy a shared-string index.
+                    Element::Item if !start => strings.push(SharedString {
+                        text: String::new(),
+                        runs: None,
+                    }),
+                    Element::Run if start => current_run = Some(RichRun::default()),
+                    Element::Run => runs.push(RichRun::default()),
+                    Element::RunProperty => {
+                        if let Some(run) = &mut current_run {
+                            apply_run_property(run, &reader, element, colors)?;
+                        }
+                    }
+                    Element::Text if start => {
+                        text_preserve = preserves_space(&reader, element)?;
+                    }
+                    _ => {}
+                }
+                if start {
+                    parents.push(tag);
                 }
             }
-            Event::Start(element) if element.local_name().as_ref() == b"t" => {
-                in_text = !in_phonetic;
-                text_preserve = preserves_space(&reader, &element)?;
-                text_node.clear();
+            Event::Text(text) if parents.last() == Some(&Element::Text) => {
+                text_node.push_str(&decode_text(&text)?);
             }
-            Event::Text(text) if in_text => text_node.push_str(&decode_text(&text)?),
-            Event::CData(text) if in_text => text_node.push_str(&decode_cdata(&text)?),
-            Event::GeneralRef(reference) if in_text => {
+            Event::CData(text) if parents.last() == Some(&Element::Text) => {
+                text_node.push_str(&decode_cdata(&text)?);
+            }
+            Event::GeneralRef(reference) if parents.last() == Some(&Element::Text) => {
                 text_node.push_str(&general_ref_text(&reference)?);
             }
-            Event::End(element) if element.local_name().as_ref() == b"t" => {
-                if in_text {
+            Event::End(_) => match parents.pop() {
+                Some(Element::Text) => {
                     let text = text_node_content(std::mem::take(&mut text_node), text_preserve);
                     current.push_str(&text);
                     if let Some(run) = &mut current_run {
                         run.text.push_str(&text);
                     }
                 }
-                in_text = false;
-            }
-            Event::End(element) if element.local_name().as_ref() == b"r" => {
-                if let Some(run) = current_run.take() {
-                    runs.push(run);
+                Some(Element::Run) => {
+                    if let Some(run) = current_run.take() {
+                        runs.push(run);
+                    }
                 }
-            }
-            Event::End(element) if element.local_name().as_ref() == b"si" => {
-                let mut finished = std::mem::take(&mut runs);
-                for run in &mut finished {
-                    normalize_cell_text(&mut run.text);
+                Some(Element::Item) => {
+                    for run in &mut runs {
+                        normalize_cell_text(&mut run.text);
+                    }
+                    normalize_cell_text(&mut current);
+                    strings.push(SharedString {
+                        text: std::mem::take(&mut current),
+                        runs: qualify_runs(std::mem::take(&mut runs)),
+                    });
                 }
-                let mut text = current.clone();
-                normalize_cell_text(&mut text);
-                strings.push(SharedString {
-                    text,
-                    runs: qualify_runs(finished),
-                });
-            }
+                _ => {}
+            },
             Event::Eof => break,
             _ => {}
         }

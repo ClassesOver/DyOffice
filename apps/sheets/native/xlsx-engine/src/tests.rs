@@ -1527,7 +1527,13 @@ fn workbook_uses_linked_styles_and_shared_strings() {
         ),
         (
             "xl/parts/strings.xml",
-            r#"<s:sst xmlns:s="http://purl.oclc.org/ooxml/spreadsheetml/main"><s:si/><s:si><s:r><s:rPr><s:b/></s:rPr><s:t>Linked</s:t></s:r><s:r><s:t xml:space="preserve"> text</s:t></s:r></s:si></s:sst>"#,
+            r#"<s:sst xmlns:s="http://purl.oclc.org/ooxml/spreadsheetml/main" xmlns:e="urn:example">
+                <s:si/><e:si><e:t>Foreign item</e:t></e:si>
+                <e:extension><s:si><s:t>Nested item</s:t></s:si></e:extension>
+                <s:si><s:r><s:rPr><s:b/><e:i/></s:rPr><s:t>Linked</s:t></s:r>
+                <e:r><s:t>Foreign run</s:t></e:r><s:rPh><s:t>Phonetic text</s:t></s:rPh>
+                <s:r><s:t xml:space="preserve"> text</s:t></s:r></s:si>
+            </s:sst>"#,
         ),
         (
             "xl/sharedStrings.xml",
@@ -1551,6 +1557,12 @@ fn workbook_uses_linked_styles_and_shared_strings() {
         result.cells[0].value.as_ref(),
         Some(CellValue::String(text)) if text == "Linked text"
     ));
+    let rich = result.cells[0].rich.as_ref().unwrap();
+    assert_eq!(rich.len(), 2);
+    assert_eq!(rich[0].text, "Linked");
+    assert!(rich[0].bold);
+    assert!(!rich[0].italic);
+    assert_eq!(rich[1].text, " text");
 }
 
 #[test]
