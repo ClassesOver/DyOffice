@@ -5,7 +5,7 @@
 
 import { decodeXlsxEscapes, decodeXmlText } from './xlsx-escapes.ts'
 import { resolveRelTarget } from './xlsx-drawing-add.ts'
-import { nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { addContentTypeEntry, appendRelationshipRecord, nextFreeRelationshipId } from './xlsx-sheets.ts'
 import { rootTail } from './xlsx-root-tail.ts'
 
 export const THREADED_COMMENTS_REL_TYPE =
@@ -344,10 +344,9 @@ function ensurePerson(persons: PersonsPart, id: string, displayName: string): bo
 }
 
 function appendRel(relsXml: string, id: string, type: string, target: string): string {
-  return relsXml.replace(
-    '</Relationships>',
-    `<Relationship Id="${id}" Type="${type}" Target="${target}"/></Relationships>`,
-  )
+  const updated = appendRelationshipRecord(relsXml, id, type, target)
+  if (updated === undefined) throw new Error('Threaded comment relationships have no XML root.')
+  return updated
 }
 
 async function ensureContentType(
@@ -357,14 +356,10 @@ async function ensureContentType(
   touchedEntries: Set<string>,
 ): Promise<void> {
   const contentTypes = await pkg.readText(CONTENT_TYPES_PATH)
-  if (contentTypes.includes(`PartName="/${partName}"`)) return
-  pkg.write(
-    CONTENT_TYPES_PATH,
-    contentTypes.replace(
-      '</Types>',
-      `<Override PartName="/${partName}" ContentType="${contentType}"/></Types>`,
-    ),
-  )
+  const updated = addContentTypeEntry(contentTypes, 'Override', `/${partName}`, contentType)
+  if (updated === undefined) throw new Error('The workbook has no [Content_Types].xml Types element.')
+  if (updated === contentTypes) return
+  pkg.write(CONTENT_TYPES_PATH, updated)
   touchedEntries.add(CONTENT_TYPES_PATH)
 }
 

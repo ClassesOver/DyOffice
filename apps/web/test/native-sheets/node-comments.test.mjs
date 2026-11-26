@@ -53,6 +53,30 @@ test('Node XLSX keeps existing notes and comment threads when a new note is save
  const thread={id:'{11111111-1111-1111-1111-111111111111}',personId:'{22222222-2222-2222-2222-222222222222}',
   author:'Ada',dT:'2026-09-01T08:30:00',done:true,replies:[reply]}
  const modern={row:3,column:0,author:'Ada',text:'Root for A4',thread}
+ await t.test('registers first threaded comments and persons at their actual XML roots',async()=>{
+  const sourceZip=await JSZip.loadAsync(source)
+  const sheetRels='xl/worksheets/_rels/sheet1.xml.rels', workbookRels='xl/_rels/workbook.xml.rels'
+  const typesPath='[Content_Types].xml'
+  const relComment='<!-- </Relationships> -->', typeComment='<!-- </Types> -->'
+  for(const path of [sheetRels,workbookRels]){
+   sourceZip.file(path,(await sourceZip.file(path).async('string')).replace('</Relationships>',relComment+'</Relationships >'))
+  }
+  sourceZip.file(typesPath,(await sourceZip.file(typesPath).async('string')).replace('</Types>',typeComment+'</Types >'))
+  const saved=await saveNotes(await sourceZip.generateAsync({type:'nodebuffer'}),[modern])
+  const output=await JSZip.loadAsync(saved)
+  const workbookXml=await output.file(workbookRels).async('string')
+  const worksheetXml=await output.file(sheetRels).async('string')
+  const types=await output.file(typesPath).async('string')
+  assert.match(workbookXml,/<!-- <\/Relationships> --><Relationship[^>]+Target="persons\/person\.xml"/)
+  assert.match(worksheetXml,/<!-- <\/Relationships> --><Relationship[^>]+Target="\.\.\/threadedComments\/threadedComment1\.xml"/)
+  assert.ok(types.includes(typeComment+'<Override'))
+  assert.ok(types.includes('PartName="/xl/persons/person.xml"'))
+  assert.ok(types.includes('PartName="/xl/threadedComments/threadedComment1.xml"'))
+  const [comment]=(await native.inspect(saved)).sheets[0].comments
+  assert.equal(comment.thread.author,'Ada')
+  assert.equal(comment.thread.replies[0].author,'Grace')
+  assert.equal(comment.thread.replies[0].text,'Reply for A4')
+ })
  const base64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
  const picture={mediaType:'image/png',base64,widthPx:1,heightPx:1,name:'Note.png'}
  const input=await saveNotes(source,[{...legacy,picture},modern])
