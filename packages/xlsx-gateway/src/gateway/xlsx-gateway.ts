@@ -111,6 +111,7 @@ import {
   relationshipIdsMatch,
   removePartOverride,
   removeRelationshipById,
+  renameTableInPivotCacheSource,
   tableDisplayName,
   sanitizeClonedWorksheetXml,
   SheetEditError,
@@ -1971,14 +1972,20 @@ export async function planCellEditsToXlsx(
     const rewrite = (formula: string) => renameStructuredTableReferences(formula, tableRenames)
     workbookXml = rewriteDefinedNames(workbookXml, rewrite)
     for (const path of await pkg.paths()) {
-      const kind = /^xl\/(worksheets|tables|charts)\/[^/]+\.xml$/.exec(path)?.[1]
+      const kind = /^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path)
+        ? 'pivotCache'
+        : /^xl\/(worksheets|tables|charts)\/[^/]+\.xml$/.exec(path)?.[1]
       if (!kind) continue
       if (!(await pkg.canPatch(path))) {
-        if (!(await pkg.containsText(path, '[')) && !(await pkg.containsText(path, '&#'))) continue
+        const possibleReference = kind === 'pivotCache'
+          ? await pkg.containsText(path, 'worksheetSource')
+          : await pkg.containsText(path, '[') || await pkg.containsText(path, '&#')
+        if (!possibleReference) continue
         throw new TableEditError(`${path} is too large to update references to a renamed table.`)
       }
       const xml = await pkg.readText(path)
-      const next = kind === 'charts' ? rewriteChartReferences(xml, rewrite)
+      const next = kind === 'pivotCache' ? renameTableInPivotCacheSource(xml, tableRenames)
+        : kind === 'charts' ? rewriteChartReferences(xml, rewrite)
         : rewriteTableReferencesInPart(xml, kind === 'tables' ? 'table' : 'worksheet', rewrite)
       pkg.releaseSourceText(path)
       if (next === xml) continue

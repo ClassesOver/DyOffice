@@ -289,6 +289,33 @@ test(
       },
     )
 
+    await t.test('keeps a pivot cache attached to a renamed source table', async () => {
+      const area = { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 }
+      const withPivot = await save(await fixture(), [], [first, second], {
+        tableAdditions: [{ sheetId: first, name: 'SourceData', area,
+          columnNames: ['Revenue', 'Formula'], bandedRows: true }],
+        pivotAdditions: [{ sheetId: second, sourceSheetId: first, sourceArea: area,
+          location: { startRow: 0, startColumn: 5, endRow: 3, endColumn: 6 },
+          name: 'Sales', fieldNames: ['Revenue', 'Formula'], rowFieldIndices: [0],
+          rowItems: ['East', 'West'], values: [{ fieldIndex: 1, agg: 'sum' }] }],
+      })
+      const before = (await inspect(withPivot)).sheets[1].pivotTables[0]
+      const comment = '<!-- <worksheetSource name="SourceData"/> -->'
+      const source = await editPart(withPivot, before.cachePath, (xml) => xml.replace(
+        /<worksheetSource\b[^>]*\/>/, `${comment}<worksheetSource name='SourceData'/>`,
+      ))
+      const saved = await save(source, [], [first, second], {
+        tableEdits: [{ sheetId: first, tableName: 'SourceData', name: 'SalesData' }],
+      })
+      const metadata = await inspect(saved)
+      assert.equal(metadata.sheets[0].tables[0].name, 'SalesData')
+      const after = metadata.sheets[1].pivotTables[0]
+      assert.equal(after.cachePath, before.cachePath)
+      assert.equal(after.outputRef, before.outputRef)
+      const cache = await xmlPart(await JSZip.loadAsync(saved), after.cachePath)
+      assert.ok(cache.includes(`${comment}<worksheetSource name="SalesData"/>`))
+    })
+
     await t.test('preserves pending references to a new tab that takes an old name', async () => {
       const base = await save(await fixture(), [], [first, second], {
         hyperlinkEdits: [{ sheetId: second, row: 0, column: 4, target: '#Acceptance!A2' }],

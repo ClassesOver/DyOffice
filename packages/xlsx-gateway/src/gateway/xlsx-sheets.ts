@@ -27,10 +27,6 @@ import {
   worksheetRoot,
 } from './xlsx-worksheet-xml.ts'
 
-/// '>' is legal inside XML attribute values (sheet names can carry it), so
-/// element scans consume quoted runs atomically instead of using [^>]*.
-const TAG_ATTRIBUTES = `(?:"[^"]*"|'[^']*'|[^>"'])*?`
-
 /// Sheet-level workbook surgery: rename, add, and remove worksheets. Renames
 /// rewrite every qualified reference (other sheets' formulas, defined names,
 /// chart series, hyperlink anchors); removals fail closed when anything still
@@ -897,16 +893,12 @@ export function definedNamesUseToken(
 /// sheet (cacheSource/worksheetSource@sheet). Sheet names compare
 /// case-insensitively, matching Excel.
 export function pivotCacheReadsFromSheet(cacheXml: string, sheetName: string): boolean {
-  const target = sheetName.toLowerCase()
-  for (const [element] of cacheXml.matchAll(WORKSHEET_SOURCE)) {
-    if (pivotSourceSheet(element)?.toLowerCase() === target) return true
-  }
-  return false
+  const source = localPivotWorksheetSource(cacheXml)
+  return source?.element.attributes.get('sheet')?.toLowerCase() === sheetName.toLowerCase()
 }
 
 /// Rewrites worksheetSource@sheet in a pivotCacheDefinition part when the
-/// pivot's source sheet is renamed — the attribute holds the plain sheet
-/// name, so the formula-oriented rename helpers never see it.
+/// pivot's source sheet is renamed.
 export function renameSheetInPivotCacheSource(
   cacheXml: string,
   oldName: string,
@@ -916,20 +908,48 @@ export function renameSheetInPivotCacheSource(
 }
 
 function rewritePivotCacheSource(cacheXml: string, lookup: SheetNameLookup): string {
-  return cacheXml.replace(WORKSHEET_SOURCE, (element) => {
-    const sheet = pivotSourceSheet(element)
-    const newName = sheet === undefined ? undefined : lookup(sheet)
-    return newName === undefined
-      ? element
-      : updateWorksheetTagAttribute(element, 'sheet', escapeXmlAttribute(newName))
-  })
+  return rewritePivotWorksheetSource(cacheXml, 'sheet', lookup)
 }
 
-const WORKSHEET_SOURCE = new RegExp(`<worksheetSource(?=[\\s/>])${TAG_ATTRIBUTES}/?>`, 'g')
+export function renameTableInPivotCacheSource(
+  cacheXml: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  return rewritePivotWorksheetSource(cacheXml, 'name', (name) => names.get(name.toLowerCase()))
+}
 
-function pivotSourceSheet(element: string): string | undefined {
-  const raw = readWorksheetTagAttribute(element, 'sheet')
-  return raw === undefined ? undefined : decodeAttribute(raw)
+function rewritePivotWorksheetSource(
+  xml: string,
+  attribute: 'sheet' | 'name',
+  lookup: (name: string) => string | undefined,
+): string {
+  const source = localPivotWorksheetSource(xml)
+  if (!source) return xml
+  const { element, start } = source
+  const old = element.attributes.get(attribute)
+  const next = old === undefined ? undefined : lookup(old)
+  if (next === undefined || next === old) return xml
+  const opening = updateWorksheetTagAttribute(element.opening, attribute, escapeXmlAttribute(next))
+  return xml.slice(0, start) + opening + xml.slice(start + element.opening.length)
+}
+
+function localPivotWorksheetSource(xml: string) {
+  if (!xml.includes('worksheetSource')) return undefined
+  const [element] = childElements(xml)
+  if (!element) return undefined
+  const root = withNamespaces(element, new Map())
+  const cache = root.local === 'cacheSource' ? root
+    : root.local === 'pivotCacheDefinition'
+      ? scopedChildren(root).find((entry) => isElement(entry, 'cacheSource', root.namespace))
+      : undefined
+  if (cache?.attributes.get('type') !== 'worksheet') return undefined
+  const source = scopedChildren(cache).find((entry) => isElement(entry, 'worksheetSource', cache.namespace))
+  if (!source || readRelationshipId(source.opening, cache.opening, root.opening) !== undefined) {
+    return undefined
+  }
+  const cacheBody = cache === root ? root.start + root.opening.length
+    : root.start + root.opening.length + cache.start + cache.opening.length
+  return { element: source, start: cacheBody + source.start }
 }
 
 /// DefinedNames scoped to a removed sheet are dropped with it, so their

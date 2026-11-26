@@ -64,6 +64,25 @@ describe('table edits', () => {
     expect(plan.replaced.get(chartPath)).toContain('<c:f>Sales[A]</c:f>')
   })
 
+  it('keeps a local pivot cache attached to the renamed table', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const local = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const external = 'xl/pivotCache/pivotCacheDefinition2.xml'
+    const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const comment = '<!-- <s:worksheetSource name="Table1"/> -->'
+    const root = `<s:pivotCacheDefinition xmlns:s="${ns}" xmlns:r="${office}">`
+    zip.file(local, `${root}${comment}<s:cacheSource type='worksheet'>` +
+      "<s:worksheetSource name='table&#49;' sheet='Data'/></s:cacheSource></s:pivotCacheDefinition>")
+    zip.file(external, `${root}<s:cacheSource type='worksheet'>` +
+      "<s:worksheetSource name='Table1' r:id='rId5'/></s:cacheSource></s:pivotCacheDefinition>")
+
+    const plan = await planWith([edit({ name: 'Sales' })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get(local)).toContain(comment)
+    expect(plan.replaced.get(local)).toMatch(/<(?:s:)?worksheetSource name="Sales" sheet='Data'\/>/)
+    expect(plan.replaced.has(external)).toBe(false)
+  })
+
   it('edits real table elements with single-quoted attributes and preserves extension markup', async () => {
     const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
     const path = 'xl/tables/table1.xml'
