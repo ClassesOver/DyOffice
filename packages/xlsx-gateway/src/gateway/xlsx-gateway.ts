@@ -186,6 +186,7 @@ import {
   shiftVmlObjectAnchors,
   StructuralShiftError,
   translateSharedFormula,
+  updateWorksheetTagAttribute,
   type TableColumnInsertion,
 } from './xlsx-structure.ts'
 import { StylesheetEditor } from './xlsx-styles.ts'
@@ -2838,11 +2839,10 @@ async function resolveWorksheetPath(
 function replaceSheetName(workbookXml: string, before: string, after: string): string {
   const element = findSheetElement(workbookXml, before)
   if (!element) throw new Error(`Sheet "${before}" was not found.`)
-  const renamedXml = element.xml.replace(
-    /(\bname=")[^"]*(")/,
-    (_match, prefix: string, suffix: string) => `${prefix}${escapeXmlAttribute(after)}${suffix}`,
-  )
-  return workbookXml.replace(element.xml, () => renamedXml)
+  const opening = readRootStartTag(element.xml)
+  const renamedXml = updateWorksheetTagAttribute(opening, 'name', escapeXmlAttribute(after)) +
+    element.xml.slice(opening.length)
+  return workbookXml.slice(0, element.start) + renamedXml + workbookXml.slice(element.start + element.xml.length)
 }
 
 function patchCell(worksheetXml: string, address: string, cell: CellState): string {

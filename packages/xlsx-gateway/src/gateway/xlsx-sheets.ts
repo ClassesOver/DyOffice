@@ -13,7 +13,6 @@ import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-refer
 import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
 import { rewriteX14DataValidations } from './xlsx-dv.ts'
 import { ensureRelationshipNamespace, readRelationshipId, readRelationshipIdAttribute, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
-import { findRootChild } from './xlsx-root-tail.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
@@ -26,6 +25,7 @@ import {
   withBody,
   withNamespaces,
   worksheetRoot,
+  type ScopedElement,
 } from './xlsx-worksheet-xml.ts'
 
 /// Sheet-level workbook surgery: rename, add, and remove worksheets. Renames
@@ -379,6 +379,7 @@ export function buildWorksheetPartXml(): string {
 
 export interface SheetElement {
   readonly xml: string
+  readonly start: number
   readonly name: string
   readonly sheetId: string | undefined
   readonly hidden: boolean
@@ -387,26 +388,27 @@ export interface SheetElement {
 }
 
 export function parseSheetElements(workbookXml: string): SheetElement[] {
+  const list = workbookSection(workbookXml, 'sheets')
+  return list ? readSheetElements(list) : []
+}
+
+function readSheetElements(list: NonNullable<ReturnType<typeof workbookSection>>): SheetElement[] {
+  const { section: sheets, root, start } = list
+  const bodyStart = start + sheets.opening.length
   const elements: SheetElement[] = []
-  const span = findRootChild(workbookXml, 'workbook', 'sheets')
-  if (!span) return elements
-  const [sheets] = childElements(workbookXml.slice(span.start, span.end))
-  if (!sheets) return elements
-  const root = readRootStartTag(workbookXml)
-  for (const { name: tag, xml, opening } of childElements(sheets.inner)) {
-    if (tag.slice(tag.lastIndexOf(':') + 1) !== 'sheet') continue
-    const name = readWorksheetTagAttribute(opening, 'name')
+  for (const sheet of workbookSectionEntries(sheets, 'sheet')) {
+    const { xml, opening, attributes } = sheet
+    const name = attributes.get('name')
     if (name === undefined) continue
-    const id = readWorksheetTagAttribute(opening, 'sheetId')
-    const rawState = readWorksheetTagAttribute(opening, 'state')
-    const state = rawState === undefined ? undefined : decodeAttribute(rawState)
+    const state = attributes.get('state')
     elements.push({
       xml,
-      name: decodeAttribute(name),
-      sheetId: id === undefined ? undefined : decodeAttribute(id),
+      start: bodyStart + sheet.start,
+      name,
+      sheetId: attributes.get('sheetId'),
       hidden: state === 'hidden' || state === 'veryHidden',
       veryHidden: state === 'veryHidden',
-      relationshipId: readRelationshipId(opening, sheets.opening, root),
+      relationshipId: readRelationshipId(opening, sheets.opening, root.opening),
     })
   }
   return elements
@@ -503,8 +505,8 @@ export function applySheetPlanToWorkbookXml(
   const sheetList = workbookSection(workbookXml, 'sheets')
   if (!sheetList) throw new SheetEditError('The workbook has no sheet list.')
   const sheetPrefix = prefixOf(sheetList.section.name)
-  const relationshipBinding = relationshipNamespaceOverride(sheetList.section.opening, readRootStartTag(workbookXml))
-  const elements = parseSheetElements(workbookXml)
+  const relationshipBinding = relationshipNamespaceOverride(sheetList.section.opening, sheetList.root.opening)
+  const elements = readSheetElements(sheetList)
   const originalNames = elements.map((element) => element.name)
   const renameByOriginal = new Map(plan.renames.map((rename) => [rename.sheetName, rename.newName]))
   const removedSet = new Set(plan.removals)
@@ -546,8 +548,8 @@ export function applySheetPlanToWorkbookXml(
   }
 
   const ordered = plan.order.map((name) => finalElements.get(name)!.xml)
-  const slots = workbookSectionEntries(sheetList.section, 'sheet').filter(({ opening }) =>
-    readWorksheetTagAttribute(opening, 'name') !== undefined,
+  const slots = workbookSectionEntries(sheetList.section, 'sheet').filter(({ attributes }) =>
+    attributes.has('name'),
   )
   const inner = applyPatches(sheetList.section.inner, slots.map((slot, index) => patchElement(slot, ordered[index] ?? '')))
     + ordered.slice(slots.length).join('')
@@ -599,14 +601,14 @@ export function applySheetPlanToWorkbookXml(
   const bookViews = workbookSection(result, 'bookViews')
   if (bookViews) {
     const views = workbookSectionEntries(bookViews.section, 'workbookView')
-    const savedTabs = views.map((view) => readWorksheetTagAttribute(view.opening, 'activeTab'))
+    const savedTabs = views.map((view) => view.attributes.get('activeTab'))
     const hasSavedTab = savedTabs.some((tab) => tab !== undefined)
     const patches = views.flatMap((view, viewIndex) => {
       const saved = savedTabs[viewIndex]
       // Both readers choose the last explicit active tab. A synthesized tab
       // on an implicit view could override the workbook's opening sheet.
       if (saved === undefined && hasSavedTab) return []
-      const index = parseWorkbookTabIndex(saved === undefined ? undefined : decodeAttribute(saved)) ?? 0
+      const index = parseWorkbookTabIndex(saved) ?? 0
       const mapped = activeIndex(index)
       if (index === mapped) return []
       const opening = updateWorksheetTagAttribute(view.opening, 'activeTab', String(mapped))
@@ -623,9 +625,9 @@ export function applySheetPlanToWorkbookXml(
         result.slice(bookViews.end)
     }
   } else if (implicitActiveIndex !== 0) {
-    const sheets = findRootChild(result, 'workbook', 'sheets')
+    const sheets = workbookSection(result, 'sheets')
     if (sheets) {
-      const prefix = prefixOf(childElements(result)[0]?.name ?? '')
+      const prefix = prefixOf(sheets.root.name)
       result =
         result.slice(0, sheets.start) +
         `<${prefix}bookViews><${prefix}workbookView activeTab="${implicitActiveIndex}"/></${prefix}bookViews>` +
@@ -645,16 +647,17 @@ export function parseWorkbookTabIndex(raw: string | undefined): number | undefin
 }
 
 function workbookSection(workbookXml: string, name: string) {
-  const position = findRootChild(workbookXml, 'workbook', name)
-  if (!position) return undefined
-  const [section] = childElements(workbookXml.slice(position.start, position.end))
-  return section ? { ...position, section } : undefined
+  const [element] = childElements(workbookXml)
+  const root = element && withNamespaces(element, new Map())
+  if (root?.local !== 'workbook') return undefined
+  const [section] = workbookSectionEntries(root, name)
+  if (!section) return undefined
+  const start = root.start + root.opening.length + section.start
+  return { root, section, start, end: start + section.xml.length }
 }
 
-function workbookSectionEntries(section: { inner: string }, name: string) {
-  return childElements(section.inner).filter(
-    (entry) => entry.name.slice(prefixOf(entry.name).length) === name,
-  )
+function workbookSectionEntries(section: ScopedElement, name: string) {
+  return scopedChildren(section).filter((entry) => isElement(entry, name, section.namespace))
 }
 
 function* survivingDefinedNameFormulas(workbookXml: string, removedLocalIds: ReadonlySet<number>) {

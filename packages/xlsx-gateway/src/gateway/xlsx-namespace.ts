@@ -42,6 +42,50 @@ export function readRootOpening(xml: string): { name: string; opening: string; s
   return name && root ? { name, opening: root[0], start: root.index } : undefined
 }
 
+/** Count real elements without treating extension tags or XML literals as declarations. */
+export function countRootNamespaceElements(xml: string, localName: string): number {
+  const bindings = new Map<string, string>([['', '']])
+  const scopes: Array<Array<[string, string | undefined]>> = []
+  let rootNamespace: string | undefined
+  let count = 0
+  const restore = (changes: Array<[string, string | undefined]>) => {
+    for (const [prefix, previous] of changes.reverse()) {
+      if (previous === undefined) bindings.delete(prefix)
+      else bindings.set(prefix, previous)
+    }
+  }
+  for (const [tag, closing, name] of xml.matchAll(MARKUP)) {
+    if (!name) continue
+    if (closing) {
+      const changes = scopes.pop()
+      if (!changes || scopes.length === 0) break
+      restore(changes)
+      continue
+    }
+    const changes: Array<[string, string | undefined]> = []
+    if (tag.includes('xmlns')) {
+      for (const [, attribute, double, single] of tag.matchAll(ATTRIBUTES)) {
+        if (attribute !== 'xmlns' && !attribute?.startsWith('xmlns:')) continue
+        const prefix = attribute === 'xmlns' ? '' : attribute.slice(6)
+        changes.push([prefix, bindings.get(prefix)])
+        bindings.set(prefix, decodeXmlText(double ?? single ?? ''))
+      }
+    }
+    const separator = name.indexOf(':')
+    const namespace = bindings.get(separator < 0 ? '' : name.slice(0, separator))
+    if (scopes.length === 0) rootNamespace = namespace
+    if (namespace !== undefined && namespace === rootNamespace &&
+        name.slice(separator + 1) === localName) count++
+    if (tag.endsWith('/>')) {
+      if (scopes.length === 0) break
+      restore(changes)
+    } else {
+      scopes.push(changes)
+    }
+  }
+  return count
+}
+
 export function hasXmlAttributeValue(xml: string, encodedValue: string): boolean {
   const value = decodeXmlText(encodedValue)
   for (const [tag, closing, name] of xml.matchAll(MARKUP)) {

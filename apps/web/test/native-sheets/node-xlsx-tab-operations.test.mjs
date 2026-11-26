@@ -92,6 +92,40 @@ test(
       return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request)))
         .bytes
     }
+    await t.test('reorders actual worksheets and preserves foreign tab metadata', async () => {
+      const foreignViews = '<ext:bookViews><ext:workbookView activeTab="0"/></ext:bookViews>'
+      const foreignView = '<ext:workbookView activeTab="1"/>'
+      const declaration = "<sheet name='Acceptance' sheetId='1' r:id='rId1'/>"
+      const foreignSheets = `<ext:sheets xmlns="urn:example:tabs">${declaration}</ext:sheets>`
+      const foreignSheet = '<ext:sheet name="ForeignSheet" sheetId="11" r:id="rId3"/>'
+      const source = await fixture({
+        changeWorkbook: (xml) => xml
+          .replace('<workbook ', '<workbook xmlns:ext="urn:example:tabs" ')
+          .replace('<bookViews><workbookView/></bookViews>',
+            `${foreignViews}<bookViews><workbookView activeTab="0"/>${foreignView}</bookViews>`)
+          .replace('<sheet name="Acceptance" sheetId="1" r:id="rId1"/>', declaration)
+          .replace('<sheets>', `${foreignSheets}<sheets>${foreignSheet}`),
+      })
+      const before = await inspect(source)
+      assert.deepEqual(before.sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      assert.equal(before.sheets[before.activeTab]?.name, 'Acceptance')
+
+      const reorder = [{ kind: 'reorder-sheets' }]
+      const saved = await save(source, reorder, [second, first])
+      const after = await inspect(saved)
+      assert.deepEqual(after.sheets.map(({ name }) => name), ['Other', 'Acceptance'])
+      assert.equal(after.sheets[after.activeTab]?.name, 'Acceptance')
+      const xml = await xmlPart(await JSZip.loadAsync(saved), wbPath)
+      for (const foreign of [foreignViews, foreignView, foreignSheets, foreignSheet]) {
+        assert.ok(xml.includes(foreign), foreign)
+      }
+
+      const misplaced = await fixture({
+        changeWorkbook: (xml) => xml.replace('<sheets>', `${declaration}<sheets>`),
+      })
+      await assert.rejects(save(misplaced, reorder, [second, first]), /Invalid workbook input/)
+    })
+
     await t.test(
       'keeps formulas and defined names attached to the original sheets during a name swap',
       async () => {

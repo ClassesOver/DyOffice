@@ -5,6 +5,7 @@ import {
   assertNoSheetScopedDefinedNames,
   definedNamesReferenceSheet,
   definedNamesUseToken,
+  parseSheetElements,
   type SheetEditPlan,
 } from '../src/gateway/xlsx-sheets'
 
@@ -20,6 +21,30 @@ function apply(beforeSheets: string, plan: Partial<SheetEditPlan>, afterSheets =
 }
 
 describe('sheet tab metadata', () => {
+  it('reads and reorders only workbook sheet declarations', () => {
+    const foreignList = '<e:sheets><e:sheet name="ForeignList" sheetId="9"/></e:sheets>'
+    const foreignSheet = '<e:sheet name="ForeignSheet" sheetId="10"/>'
+    const first = '<s:sheet name="First" sheetId="1"/>'
+    const second = '<s:sheet name="Second" sheetId="2"/>'
+    const input = `<s:workbook xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:e="urn:example">${foreignList}<s:sheets>${first}${foreignSheet}${second}</s:sheets></s:workbook>`
+    expect(parseSheetElements(input).map(({ name }) => name)).toEqual(['First', 'Second'])
+    const output = applySheetPlanToWorkbookXml(input, {
+      renames: [], additions: [], removals: [], order: ['Second', 'First'],
+    }, [])
+    expect(output).toContain(foreignList)
+    expect(output).toContain(`<s:sheets>${second}${foreignSheet}${first}</s:sheets>`)
+  })
+
+  it('remaps the workbook active tab and preserves extension views', () => {
+    const foreignViews = '<e:bookViews><e:workbookView activeTab="0"/></e:bookViews>'
+    const foreignView = '<e:workbookView activeTab="0"/>'
+    const input = `<workbook xmlns:e="urn:example">${foreignViews}<bookViews><workbookView activeTab="0"/>${foreignView}</bookViews>${sheets}</workbook>`
+    const output = applySheetPlanToWorkbookXml(input, {
+      renames: [], additions: [], removals: [], order: ['Second', 'First'],
+    }, [])
+    expect(output).toContain(`${foreignViews}<bookViews><workbookView activeTab="1"/>${foreignView}</bookViews>`)
+  })
+
   it('ignores foreign names when checking duplicates and remapping sheet scopes', () => {
     const foreign = '<e:definedName name="Foreign" localSheetId="0">First!A1</e:definedName>'
     const actual = '<definedName name="Actual" localSheetId="1">Second!A1</definedName>'

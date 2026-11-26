@@ -8,7 +8,9 @@ import { readPivotDefinitionWithSource } from '../../../../packages/xlsx-gateway
 import { workbookPivotDefinitionSchema, workbookSaveRequestSchema } from '../../../sheets/src/shared/desktop-api'
 import { mapWorkbookSaveRequest } from '../../../sheets/src/shared/workbook-save-plan'
 import { createBufferEntrySource, type EntrySource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway'
+import { countRootNamespaceElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace'
 import { parseSheetElements, readAttribute, parseRelationships, relationshipIdsMatch } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
+import { applyPatches } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml'
 import { resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add'
 import { planWorkbookMutation } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-package-io'
 import {readWorkbookExternalLinks} from './external-links.ts'
@@ -79,10 +81,9 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       return prepared
     }
     const workbook = await preparePart('xl/workbook.xml')
-    let canonicalWorkbook = workbook
     const elements = parseSheetElements(workbook)
-    // A declaration outside the worksheet list must never become a sheet.
-    if ([...workbook.matchAll(/<(?:[\w.-]+:)?sheet(?=[\s/>])/g)].length !== elements.length) throw new Error('Unsupported sheets')
+    if (countRootNamespaceElements(workbook, 'sheet') !== elements.length) throw new Error('Unsupported sheets')
+    const sheetPatches = []
     const relationshipsXml = await preparePart('xl/_rels/workbook.xml.rels')
     const relationships = parseRelationships(relationshipsXml)
     const ids = new Set<string>(), names = new Set<string>()
@@ -91,7 +92,9 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
     const sheets = []
     for (const element of elements) {
       const canonical = canonicalSheetDeclaration(element.xml)
-      if (canonical !== element.xml) canonicalWorkbook = canonicalWorkbook.replace(element.xml, () => canonical)
+      if (canonical !== element.xml) {
+        sheetPatches.push({ start: element.start, length: element.xml.length, xml: canonical })
+      }
       if (!element.sheetId || !element.relationshipId) throw new Error('Missing sheet identity')
       const id = `sheet-${element.sheetId}`, name = element.name
       if (id.length > 512 || !name.length || name.length > 255 || ids.has(id) || names.has(name)) throw new Error('Ambiguous sheets')
@@ -105,7 +108,7 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       worksheetPaths.add(path)
       ids.add(id); names.add(name); sheets.push({ id, name })
     }
-    if (canonicalWorkbook !== workbook) preparedEntries.set('xl/workbook.xml', canonicalWorkbook)
+    if (sheetPatches.length) preparedEntries.set('xl/workbook.xml', applyPatches(workbook, sheetPatches))
     if (!preparedEntries.size && !touchesCrossSheetReferences) return await planSave(source, sheets, request)
     const plan = await planSave({
       ...source,
