@@ -354,6 +354,14 @@ describe('applyPivotLayoutExpansions', () => {
     zip.file(sheetRels, rels.replace('</Relationships>',
       firstRelationship.replace('rId1', 'rId2').replace('pivotTable1.xml', 'pivotTable2.xml') +
       '</Relationships>'))
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    zip.file(workbookPath, workbook.replace('</workbook>',
+      '<pivotCaches><pivotCache cacheId="1" r:id="rId3"/></pivotCaches></workbook>'))
+    const workbookRelsPath = 'xl/_rels/workbook.xml.rels'
+    const workbookRels = await zip.file(workbookRelsPath)!.async('text')
+    zip.file(workbookRelsPath, workbookRels.replace('</Relationships>',
+      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/></Relationships>'))
     const shared = { cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml', sheetName: 'Data' }
     const bytes = await zip.generateAsync({ type: 'nodebuffer' })
     const plan = await planWithRefreshUpdate(bytes, [
@@ -363,8 +371,20 @@ describe('applyPivotLayoutExpansions', () => {
     expect(plan.replaced.get(first)).toContain('ref="F1:G5"')
     expect(plan.replaced.get(second)).toContain('ref="J1:K6"')
     if (identity === 'part path') {
-      await expect(planWithRefreshUpdate(bytes, [{ ...relayoutUpdate(), pivotPath: first }]))
-        .rejects.toThrow(/cannot rebuild a shared pivot cache/)
+      const layout = await planWithRefreshUpdate(bytes, [{ ...relayoutUpdate(), pivotPath: first }])
+      const originalRecords = 'xl/pivotCache/pivotCacheRecords1.xml'
+      const newCache = 'xl/pivotCache/pivotCacheDefinition2.xml'
+      expect(layout.replaced.get(first)).toContain('cacheId="2"')
+      expect(layout.replaced.get(firstRels)).toContain('Target="../pivotCache/pivotCacheDefinition2.xml"')
+      expect(layout.replaced.get(workbookPath)).toMatch(/<pivotCache cacheId="1" r:id="rId3"\/><pivotCache cacheId="2" r:id="rId\d+"\/>/)
+      expect(layout.replaced.get(workbookRelsPath)).toContain('Target="pivotCache/pivotCacheDefinition2.xml"')
+      expect(layout.replaced.has(second)).toBe(false)
+      expect(layout.replaced.has(secondRels)).toBe(false)
+      expect(layout.replaced.has(originalRecords)).toBe(false)
+      expect(layout.replaced.get(shared.cachePath)?.replace(' refreshOnLoad="1"', ''))
+        .toBe(await zip.file(shared.cachePath)!.async('text'))
+      expect(layout.added.get(newCache)).toContain('refreshOnLoad="1"')
+      expect(layout.added.get('xl/pivotCache/pivotCacheRecords2.xml')).toContain('count="0"')
       await expect(planWithRefreshUpdate(bytes, [{
         ...shared, pivotPath: 'xl/pivotTables/unrelated.xml', newOutputRef: 'F1:G5',
       }])).rejects.toThrow(/does not match the worksheet and cache relationships/)

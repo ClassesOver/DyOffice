@@ -250,22 +250,11 @@ export async function applyPivotAdditions(
     const recordsXml = buildCacheRecordsXml(sourceRows, addition)
     const recordCount = sourceRows.length
 
-    const recordsPath = await allocatePartPath(pkg, 'xl/pivotCache/pivotCacheRecords', '.xml')
-    pkg.add(recordsPath, recordsXml)
-    touchedEntries.add(recordsPath)
-    await registerContentTypeOverride(pkg, recordsPath, PIVOT_RECORDS_CONTENT_TYPE, touchedEntries)
-
-    const cachePath = await allocatePartPath(pkg, 'xl/pivotCache/pivotCacheDefinition', '.xml')
-    const recordsRelId = await appendRelationship(
-      pkg,
-      relsPathFor(cachePath),
-      PIVOT_RECORDS_REL_TYPE,
-      relativeTarget(cachePath, recordsPath),
+    const cachePath = await addPivotCacheParts(
+      pkg, recordsXml,
+      (recordsRelId) => buildCacheDefinitionXml(recordsRelId, addition, recordCount),
+      touchedEntries,
     )
-    touchedEntries.add(relsPathFor(cachePath))
-    pkg.add(cachePath, buildCacheDefinitionXml(recordsRelId, addition, recordCount))
-    touchedEntries.add(cachePath)
-    await registerContentTypeOverride(pkg, cachePath, PIVOT_CACHE_CONTENT_TYPE, touchedEntries)
 
     const tablePath = await allocatePartPath(pkg, 'xl/pivotTables/pivotTable', '.xml')
     // The pivot table part's rels carry the cache linkage; the definition
@@ -289,16 +278,49 @@ export async function applyPivotAdditions(
     )
     touchedEntries.add(relsPathFor(addition.worksheetPath))
 
-    const workbookRelId = await appendRelationship(
-      pkg,
-      'xl/_rels/workbook.xml.rels',
-      PIVOT_CACHE_REL_TYPE,
-      relativeTarget('xl/workbook.xml', cachePath),
+    patchedWorkbookXml = await registerWorkbookPivotCache(
+      pkg, patchedWorkbookXml, nextCacheId, cachePath, touchedEntries,
     )
-    touchedEntries.add('xl/_rels/workbook.xml.rels')
-    patchedWorkbookXml = addWorkbookPivotCache(patchedWorkbookXml, nextCacheId, workbookRelId)
   }
   return patchedWorkbookXml
+}
+
+export async function addPivotCacheParts(
+  pkg: MutablePackage,
+  recordsXml: string,
+  cacheDefinition: (recordsRelId: string) => string,
+  touchedEntries: Set<string>,
+): Promise<string> {
+  const recordsPath = await allocatePartPath(pkg, 'xl/pivotCache/pivotCacheRecords', '.xml')
+  const cachePath = await allocatePartPath(pkg, 'xl/pivotCache/pivotCacheDefinition', '.xml')
+  const cacheRels = relsPathFor(cachePath)
+  const recordsRelId = await appendRelationship(
+    pkg, cacheRels, PIVOT_RECORDS_REL_TYPE, relativeTarget(cachePath, recordsPath),
+  )
+  pkg.add(recordsPath, recordsXml)
+  pkg.add(cachePath, cacheDefinition(recordsRelId))
+  touchedEntries.add(recordsPath)
+  touchedEntries.add(cachePath)
+  touchedEntries.add(cacheRels)
+  await registerContentTypeOverride(pkg, recordsPath, PIVOT_RECORDS_CONTENT_TYPE, touchedEntries)
+  await registerContentTypeOverride(pkg, cachePath, PIVOT_CACHE_CONTENT_TYPE, touchedEntries)
+  return cachePath
+}
+
+export async function registerWorkbookPivotCache(
+  pkg: MutablePackage,
+  workbookXml: string,
+  cacheId: number,
+  cachePath: string,
+  touchedEntries: Set<string>,
+): Promise<string> {
+  const workbookPath = 'xl/workbook.xml'
+  const relsPath = relsPathFor(workbookPath)
+  const relId = await appendRelationship(
+    pkg, relsPath, PIVOT_CACHE_REL_TYPE, relativeTarget(workbookPath, cachePath),
+  )
+  touchedEntries.add(relsPath)
+  return addWorkbookPivotCache(workbookXml, cacheId, relId)
 }
 
 // ─── Source data extraction ───────────────────────────────────────────────
@@ -671,7 +693,7 @@ function workbookCacheElements(xml: string) {
   return { root, children, caches }
 }
 
-function maxCacheId(workbookXml: string): number {
+export function maxCacheId(workbookXml: string): number {
   const { caches } = workbookCacheElements(workbookXml)
   let max = 0
   if (caches) {

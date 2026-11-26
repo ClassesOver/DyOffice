@@ -2231,9 +2231,8 @@ export const workbookSaveRequestSchema = z
     /// pivotTableDefinition's location ref is widened to newOutputRef (conflict
     /// checks fail closed in the gateway). When relayout (an A3 layout edit) is
     /// present, the whole definition/cacheDefinition is regenerated from the new
-    /// layout (original name/cacheId/records rel kept; records are emptied and
-    /// rebuilt via refreshOnLoad); its name is a placeholder — the saver uses the
-    /// original name from the file.
+    /// layout. A shared cache gets a separate cache ID. Excel rebuilds that
+    /// cache's records on open. The saver keeps the pivot's original name.
     pivotRefreshUpdates: z
       .array(
         z

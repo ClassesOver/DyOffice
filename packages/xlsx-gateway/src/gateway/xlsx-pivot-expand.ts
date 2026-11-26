@@ -11,11 +11,21 @@ import {
   PIVOT_SHOW_DATA_AS_BASE_ITEM,
   showDataAsToOoxml,
 } from '../domain/pivot-value-modes.ts'
-import { relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
+import { relativeTarget, relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
 import { readRelationshipIdAttribute, readRootStartTag } from './xlsx-namespace.ts'
-import { buildCacheDefinitionXml, buildPivotTableXml, type PivotAddition } from './xlsx-pivot-add.ts'
+import { setPivotRefreshOnLoad } from './xlsx-pivot.ts'
+import {
+  addPivotCacheParts,
+  buildCacheDefinitionXml,
+  buildPivotTableXml,
+  maxCacheId,
+  registerWorkbookPivotCache,
+  type PivotAddition,
+} from './xlsx-pivot-add.ts'
+import { parseSlicerState } from './xlsx-slicer.ts'
 import {
   decodeAttribute,
+  findRelationshipsRoot,
   localPivotWorksheetSource,
   parseRelationships,
   relationshipIdsMatch,
@@ -49,8 +59,8 @@ export interface PivotRefreshUpdate {
   readonly newOutputRef: string
   /// Layout edit (A3): the full edited layout in the pivot-addition shape.
   /// The pivotTableDefinition and pivotCacheDefinition are regenerated from
-  /// it — the original name, cacheId, and records rel id stay; the emptied
-  /// records part is rebuilt by Excel via refreshOnLoad. The payload's own
+  /// it. The original name stays, and a shared cache gets a separate cache ID.
+  /// Excel rebuilds the edited cache's records on open. The payload's own
   /// `name` is a renderer placeholder and is ignored.
   readonly relayout?: Omit<PivotAddition, 'worksheetPath'> | undefined
 }
@@ -280,23 +290,69 @@ export async function applyPivotLayoutExpansions(
       touchedEntries.add(pivotTablePath)
       continue
     }
-    // Rebuilding the cache for one layout would change field indexes for its peers.
-    for (const sheetPath of await linkedParts(pkg, 'xl/workbook.xml', 'worksheet')) {
-      for (const peer of await linkedParts(pkg, sheetPath, 'pivotTable')) {
-        if (peer !== pivotTablePath &&
-          (await linkedParts(pkg, peer, 'pivotCacheDefinition')).includes(update.cachePath)) {
-          throw new PivotExpandError('A layout edit cannot rebuild a shared pivot cache.')
-        }
-      }
-    }
     await applyPivotRelayout(pkg, update, pivotTablePath, pivotTableXml, touchedEntries)
   }
 }
 
-/// Layout edit: regenerate the pivotTableDefinition and pivotCacheDefinition
-/// from the edited layout, keeping the original name, cacheId, and records
-/// rel id. The records part empties (recordCount 0) — refreshOnLoad, set via
-/// the same save's pivotCacheRefreshPaths, has Excel rebuild it on open.
+async function isPivotCacheShared(pkg: MutablePackage, cachePath: string, pivotPath: string) {
+  for (const sheetPath of await linkedParts(pkg, 'xl/workbook.xml', 'worksheet')) {
+    for (const peer of await linkedParts(pkg, sheetPath, 'pivotTable')) {
+      if (peer !== pivotPath &&
+        (await linkedParts(pkg, peer, 'pivotCacheDefinition')).includes(cachePath)) return true
+    }
+  }
+  return false
+}
+
+/// Give the edited pivot its own cache while preserving peer pivots and their cache.
+async function separatePivotCache(
+  pkg: MutablePackage,
+  update: PivotRefreshUpdate,
+  pivotPath: string,
+  cacheId: number,
+  cacheDefinition: (recordsRelId: string) => string,
+  touchedEntries: Set<string>,
+): Promise<number> {
+  if ((await parseSlicerState(pkg)).some((slicer) => slicer.pivotCacheDefinitionPath === update.cachePath)) {
+    throw new PivotExpandError('A layout edit cannot separate a shared pivot cache used by slicers.')
+  }
+  const pivotRelsPath = relsPathFor(pivotPath)
+  const pivotRels = await pkg.readText(pivotRelsPath)
+  const root = findRelationshipsRoot(pivotRels)
+  const entry = root && childElements(root.inner).find(({ name, opening }) => {
+    const type = decodeAttribute(readWorksheetTagAttribute(opening, 'Type') ?? '')
+    const target = readWorksheetTagAttribute(opening, 'Target')
+    return name.slice(name.lastIndexOf(':') + 1) === 'Relationship' &&
+      type.endsWith('/pivotCacheDefinition') && target !== undefined &&
+      readWorksheetTagAttribute(opening, 'TargetMode') !== 'External' &&
+      resolveRelTarget(pivotPath, decodeAttribute(target)) === update.cachePath
+  })
+  if (!root || !entry) {
+    throw new PivotExpandError('The pivot table has no cache relationship to update.')
+  }
+  const workbookPath = 'xl/workbook.xml'
+  const workbookXml = await pkg.readText(workbookPath)
+  const nextId = Math.max(cacheId, maxCacheId(workbookXml)) + 1
+  const newCache = await addPivotCacheParts(pkg, EMPTY_PIVOT_RECORDS, cacheDefinition, touchedEntries)
+  const workbook = await registerWorkbookPivotCache(pkg, workbookXml, nextId, newCache, touchedEntries)
+  pkg.write(workbookPath, workbook)
+  touchedEntries.add(workbookPath)
+
+  const offset = root.start + root.opening.length + entry.start
+  const updated = updateWorksheetTagAttribute(entry.opening, 'Target', relativeTarget(pivotPath, newCache))
+  pkg.write(pivotRelsPath,
+    pivotRels.slice(0, offset) + updated + pivotRels.slice(offset + entry.opening.length))
+  touchedEntries.add(pivotRelsPath)
+  return nextId
+}
+
+const EMPTY_PIVOT_RECORDS =
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+  '<pivotCacheRecords ' +
+  'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+  'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+  'count="0"/>'
+
 async function applyPivotRelayout(
   pkg: MutablePackage,
   update: PivotRefreshUpdate,
@@ -344,24 +400,25 @@ async function applyPivotRelayout(
     location: refToArea(update.newOutputRef),
   }
   const source = localPivotWorksheetSource(cacheXml)?.element
-  const rebuiltCache = buildCacheDefinitionXml(decodeAttribute(recordsRelId), addition, 0)
   const namedSource = source?.attributes.has('name') ? source.xml : undefined
-  pkg.write(pivotTablePath, buildPivotTableXml(cacheId, addition))
-  touchedEntries.add(pivotTablePath)
-  pkg.write(update.cachePath, namedSource === undefined ? rebuiltCache
-    : rebuiltCache.replace(/<worksheetSource\b[^>]*\/>/, () => namedSource))
-  touchedEntries.add(update.cachePath)
+  const cacheDefinition = (id: string): string => {
+    const rebuilt = buildCacheDefinitionXml(id, addition, 0)
+    return setPivotRefreshOnLoad(namedSource === undefined ? rebuilt
+      : rebuilt.replace(/<worksheetSource\b[^>]*\/>/, () => namedSource))
+  }
 
-  // Excel rebuilds the records from the source on open.
-  pkg.write(
-    recordsPath,
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-      '<pivotCacheRecords ' +
-      'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
-      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
-      'count="0"/>',
-  )
-  touchedEntries.add(recordsPath)
+  const shared = await isPivotCacheShared(pkg, update.cachePath, pivotTablePath)
+  const editedCacheId = shared
+    ? await separatePivotCache(pkg, update, pivotTablePath, cacheId, cacheDefinition, touchedEntries)
+    : cacheId
+  if (!shared) {
+    pkg.write(update.cachePath, cacheDefinition(decodeAttribute(recordsRelId)))
+    touchedEntries.add(update.cachePath)
+    pkg.write(recordsPath, EMPTY_PIVOT_RECORDS)
+    touchedEntries.add(recordsPath)
+  }
+  pkg.write(pivotTablePath, buildPivotTableXml(editedCacheId, addition))
+  touchedEntries.add(pivotTablePath)
 }
 
 // ─── Unmodelled-content guard ──────────────────────────────────────────────────

@@ -334,6 +334,31 @@ test(
         assert.equal(pivots.find((pivot) => pivot.path === after.path)?.outputRef, 'G2:H8')
         assert.equal(pivots.find((pivot) => pivot.path === peerPath)?.outputRef, 'J2:K9')
 
+        const edited = await save(both, [], [first, second], {
+          pivotCacheRefreshPaths: [after.cachePath],
+          pivotRefreshUpdates: [{
+            sheetId: second, cachePath: after.cachePath, pivotPath: after.path, newOutputRef: 'G2:H8',
+            relayout: {
+              sheetId: second, sourceSheetId: first,
+              sourceArea: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 1 },
+              location: { startRow: 1, startColumn: 6, endRow: 7, endColumn: 7 },
+              name: 'LayoutEdit', fieldNames: ['Region', 'Amount'], rowFieldIndices: [0],
+              rowItems: ['East', 'West'], values: [{ fieldIndex: 1, agg: 'count' }],
+            },
+          }],
+        })
+        const rebuilt = (await inspect(edited)).sheets[1].pivotTables
+        const changed = rebuilt.find((pivot) => pivot.path === after.path)
+        const unchanged = rebuilt.find((pivot) => pivot.path === peerPath)
+        assert.equal(unchanged.cachePath, after.cachePath)
+        assert.notEqual(changed.cachePath, after.cachePath)
+        const editedZip = await JSZip.loadAsync(edited)
+        assert.match(await xmlPart(editedZip, changed.path), /subtotal="count"/)
+        assert.match(await xmlPart(editedZip, changed.cachePath), /refreshOnLoad="1"/)
+        assert.equal(await xmlPart(editedZip, peerPath), await xmlPart(await JSZip.loadAsync(both), peerPath))
+        const records = 'xl/pivotCache/pivotCacheRecords1.xml'
+        assert.equal(await xmlPart(editedZip, records), await xmlPart(sharedCache, records))
+
         const decoy = '<!-- <pivotCaches><pivotCache cacheId="900"/></pivotCaches> -->'
         const existing = await editPart(withPivot, wbPath, (xml) =>
           xml.replace('<pivotCaches>', `${decoy}<pivotCaches>`).replace('cacheId="1"', "cacheId='&#49;'"))
