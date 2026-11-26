@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   areasOverlap,
   buildPivotLayout,
   PivotLayoutError,
   pivotOutputArea,
 } from '@genoffice/xlsx-gateway/domain/pivot-layout'
-import { readPivotSourceGrid } from '../src/renderer/workbook-ops'
+import type { PivotDefinition } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
+import { t } from '../src/renderer/i18n/locale'
+import type { UniverWorksheet } from '../src/renderer/univer-state'
+import { applyGrownPivotOutput, readPivotSourceGrid } from '../src/renderer/workbook-ops'
 
 const GRID = [
   ['region', 'product', 'amount'],
@@ -14,6 +17,33 @@ const GRID = [
   ['North', 'B', 5],
   ['West', 'A', 7],
 ]
+
+describe('applyGrownPivotOutput', () => {
+  it.each([{ f: '=IF(TRUE,"",1)' }, { si: '0' }])(
+    'keeps a formula with no visible result outside the original layout (%j)',
+    (cell) => {
+      const setValues = vi.fn()
+      const sheet = {
+        getRange: () => ({
+          getValues: () => [['']],
+          getCellDatas: () => [[cell]],
+          setValues,
+        }),
+      } as unknown as UniverWorksheet
+      const pivot: PivotDefinition = {
+        outputRef: 'F1:G2', firstDataRow: 1, firstDataCol: 1,
+        fields: [], fieldItems: [], rowFields: [0], colFields: [], rowLines: [], colLines: [],
+        dataFields: [], pageFields: [], filters: [], sourceSheet: 'Data', sourceRef: 'A1:C4',
+        unsupported: [],
+      }
+
+      expect(() => applyGrownPivotOutput(sheet, pivot, [[10], [20]], {
+        startRow: 0, startColumn: 5, endRow: 1, endColumn: 6,
+      })).toThrow(t('appPivotGrowConflict'))
+      expect(setValues).not.toHaveBeenCalled()
+    },
+  )
+})
 
 describe('buildPivotLayout', () => {
   it('sums currency-formatted source values while retaining formatted date labels', () => {

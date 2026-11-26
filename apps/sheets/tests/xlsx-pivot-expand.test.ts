@@ -351,6 +351,38 @@ describe('applyPivotLayoutExpansions', () => {
     await expect(planWithRefreshUpdate(buf, [update])).rejects.toThrow(/conflict/)
   })
 
+  it.each([
+    ['a formula without a cached value', '<row r="5"><c r="G5"><f>SUM(C2:C4)</f></c></row>'],
+    ['a shared formula follower', '<row r="5"><c r="G5"><f t="shared" si="0"/></c></row>'],
+    ['a value with single-quoted addresses', "<row r='5'><c r='G5'><v>999</v></c></row>"],
+    ['a value at an implicit address', '<row><c r="F5"/><c><v>999</v></c></row>'],
+  ])('rejects expansion over %s', async (_label, row) => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace('</sheetData>', `${row}</sheetData>`))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(planWithRefreshUpdate(bytes, [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])).rejects.toThrow(/conflicts with existing worksheet content/)
+  })
+
+  it('allows expansion over style-only cells and ignores commented data', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    const row = '<row r="5"><c r="F5" s="0"/><c r="G5" s="0"><!-- <v>999</v> --></c></row>'
+    zip.file(path, sheet.replace('</sheetData>', `${row}</sheetData>`))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])
+    expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('ref="F1:G5"')
+  })
+
   it('does not fail when conflict is outside the new area', async () => {
     // Row 6 (G6) has content, but we only expand to row 5
     const buf = await buildPivotFixture({ extraCellAtRow: 6 })

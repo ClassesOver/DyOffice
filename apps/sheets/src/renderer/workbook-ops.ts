@@ -456,15 +456,7 @@ export function applyAiPivotAdd(
     // Grown parts must be empty (same criteria as refresh growth); shrunken
     // parts are cleared via the union write.
     const assertEmpty = (row: number, column: number, rows: number, columns: number): void => {
-      if (rows <= 0 || columns <= 0) return
-      const values = targetSheet.getRange(row, column, rows, columns).getValues() as (
-        string | number | boolean | null | undefined
-      )[][]
-      if (
-        values.some((line) =>
-          line.some((value) => value !== null && value !== undefined && value !== ''),
-        )
-      ) {
+      if (hasPivotOutputContent(targetSheet, row, column, rows, columns)) {
         throw new Error(t('appPivotRelayoutOverlap'))
       }
     }
@@ -749,6 +741,22 @@ export function pivotColLineLabel(
   return parts.join(' ')
 }
 
+function hasPivotOutputContent(
+  sheet: UniverWorksheet,
+  row: number,
+  column: number,
+  rows: number,
+  columns: number,
+): boolean {
+  if (rows <= 0 || columns <= 0) return false
+  return sheet.getRange(row, column, rows, columns).getCellDatas().some((line) =>
+    line.some((cell) =>
+      cell != null &&
+      (cell.f != null || cell.si != null || cell.p != null || (cell.v != null && cell.v !== '')),
+    ),
+  )
+}
+
 export function applyGrownPivotOutput(
   target: UniverWorksheet,
   grown: PivotDefinition,
@@ -765,15 +773,7 @@ export function applyGrownPivotOutput(
   // Newly occupied areas (the downward/rightward growth) must be empty to
   // avoid overwriting user content.
   const assertAreaEmpty = (row: number, column: number, rows: number, columns: number): void => {
-    if (rows <= 0 || columns <= 0) return
-    const values = target.getRange(row, column, rows, columns).getValues() as (
-      string | number | boolean | null | undefined
-    )[][]
-    if (
-      values.some((line) =>
-        line.some((value) => value !== null && value !== undefined && value !== ''),
-      )
-    ) {
+    if (hasPivotOutputContent(target, row, column, rows, columns)) {
       throw new Error(t('appPivotGrowConflict'))
     }
   }

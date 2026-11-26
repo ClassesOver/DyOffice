@@ -27,7 +27,7 @@ import {
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { childElements } from './xlsx-style-entries.ts'
-import { scopedChildren, withNamespaces } from './xlsx-worksheet-xml.ts'
+import { isElement, scopedChildren, withNamespaces, worksheetRoot } from './xlsx-worksheet-xml.ts'
 
 export class PivotExpandError extends Error {}
 
@@ -110,32 +110,36 @@ async function findPivotTablePathForCache(
 
 /// True when the worksheet XML has any non-empty cell in the given area.
 function worksheetHasContentInArea(worksheetXml: string, area: AreaRef): boolean {
-  // Walk every <row r="N"> in the range, then every <c r="XX"> in the column band.
+  const worksheet = worksheetRoot(worksheetXml)
+  if (!worksheet) return false
+  const namespace = worksheet.namespace
+  const data = scopedChildren(worksheet).find((child) => isElement(child, 'sheetData', namespace))
+  if (!data) return false
+
   const { start, end } = area
-  const rowPattern = /<row\b([^>]*?)>([\s\S]*?)<\/row>/g
-  for (const rowMatch of worksheetXml.matchAll(rowPattern)) {
-    const rAttr = /\br="(\d+)"/.exec(rowMatch[1] ?? '')
-    if (!rAttr) continue
-    const rowIdx = Number(rAttr[1]) - 1 // 0-based
+  let rowIdx = -1
+  for (const row of scopedChildren(data)) {
+    if (!isElement(row, 'row', namespace)) continue
+    const rowNumber = row.attributes.get('r')
+    rowIdx = rowNumber === undefined ? rowIdx + 1 : Number(rowNumber) - 1
     if (rowIdx < start.row || rowIdx > end.row) continue
-    // Check each cell in this row
-    // Lazy attributes: greedy `[^>]*` swallows the "/" of a self-closing <c/>
-    // and makes the match run on to the next </c>, so an empty cell would
-    // borrow its neighbour's value.
-    const cellPattern = /<c\b([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g
-    for (const cellMatch of rowMatch[2]!.matchAll(cellPattern)) {
-      const rCell = /\br="([A-Z]+\d+)"/.exec(cellMatch[1] ?? '')
-      if (!rCell) continue
-      const colMatch = /^([A-Z]+)/.exec(rCell[1]!)
-      if (!colMatch) continue
-      const colIdx = columnIndex(colMatch[1]!)
+
+    let colIdx = -1
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', namespace)) continue
+      const ref = cell.attributes.get('r')
+      if (ref === undefined) {
+        colIdx += 1
+      } else {
+        const col = /^([A-Z]+)\d+$/.exec(ref.toUpperCase())?.[1]
+        if (!col) continue
+        colIdx = columnIndex(col)
+      }
       if (colIdx < start.col || colIdx > end.col) continue
-      // Cell exists in area — is it non-empty?
-      const cellXml = cellMatch[0]!
-      // Self-closing <c .../> or <c with no <v> = empty
-      if (cellXml.endsWith('/>')) continue
-      if (!/<v[^>]*>/.test(cellXml) && !/<is>/.test(cellXml)) continue
-      return true
+      // A formula, including a shared follower, can have no cached value.
+      if (scopedChildren(cell).some(({ local, namespace: childNamespace }) =>
+        childNamespace === namespace && (local === 'f' || local === 'v' || local === 'is'),
+      )) return true
     }
   }
   return false

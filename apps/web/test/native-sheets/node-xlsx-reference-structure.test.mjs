@@ -295,14 +295,20 @@ test(
           `${comment}<location ref='G2:H&#55;'`))
         const relsPath = after.path.replace(/\/([^/]+)$/, '/_rels/$1.rels')
         zip.file(relsPath, (await xmlPart(zip, relsPath)).replaceAll('"', "'"))
-        const expanded = await save(await zip.generateAsync({ type: 'nodebuffer' }), [], [first, second], {
+        const refresh = {
+          edits: [{ sheetId: second, row: 7, column: 7, writeValue: true, value: 100 }],
           pivotCacheRefreshPaths: [after.cachePath],
           pivotRefreshUpdates: [{ sheetId: second, cachePath: after.cachePath, newOutputRef: 'G2:H8' }],
-        })
+        }
+        const expanded = await save(await zip.generateAsync({ type: 'nodebuffer' }), [], [first, second], refresh)
         const expandedPivot = (await inspect(expanded)).sheets[1].pivotTables[0]
         assert.equal(expandedPivot.outputRef, 'G2:H8')
         assert.ok((await xmlPart(await JSZip.loadAsync(expanded), after.path))
           .includes(`${comment}<location ref="G2:H8"`))
+
+        const occupied = await editPart(await zip.generateAsync({ type: 'nodebuffer' }), two, (xml) =>
+          xml.replace('</sheetData>', "<row r='8'><c r='H8'><f>1+2</f></c></row></sheetData>"))
+        await assert.rejects(() => save(occupied, [], [first, second], refresh), { statusCode: 400 })
       },
     )
 
