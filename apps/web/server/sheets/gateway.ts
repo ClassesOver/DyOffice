@@ -53,6 +53,8 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       ...(request.bulkConstantFills ?? []),
       ...request.structuralOps,
     ].map(edit => edit.sheetId))
+    const touchesCrossSheetReferences = request.structuralOps.some(op => 'index' in op)
+      || request.sheetOps.some(op => op.kind === 'rename-sheet' || op.kind === 'remove-sheet')
     const preparedEntries = new Map<string, string>()
     const comments: string[] = []
     const prefix = `<!--dyoffice-${randomUUID()}-`
@@ -94,10 +96,13 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       worksheetPaths.add(path)
       ids.add(id); names.add(name); sheets.push({ id, name })
     }
-    if (!preparedEntries.size) return await planSave(source, sheets, request)
+    if (!preparedEntries.size && !touchesCrossSheetReferences) return await planSave(source, sheets, request)
     const plan = await planSave({
       ...source,
-      readText: async (path) => preparedEntries.get(path) ?? source.readText(path),
+      // Reference rewrites can read worksheets outside the explicit edit set.
+      readText: async (path) => preparedEntries.get(path) ?? (
+        touchesCrossSheetReferences && worksheetPaths.has(path) ? preparePart(path) : source.readText(path)
+      ),
     }, sheets, request)
     const restoreComments = (entries: ReadonlyMap<string, string>) => new Map(
       [...entries].map(([path, text]) => [path, text.replace(marker, (original, index) => comments[Number(index)] ?? original)]),

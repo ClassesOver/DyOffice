@@ -113,6 +113,32 @@ test(
       { kind: 'insert-rows', sheetId, index: 0, count: 1 },
       { kind: 'insert-cols', sheetId, index: 0, count: 1 },
     ]
+    await t.test('rewrites cross-sheet formulas in CDATA and preserves literal formula-shaped text', async () => {
+      const literal = 'Example <f>Other!A1</f> text'
+      const comment = '<!-- <f>Other!A1</f> -->'
+      const source = await fixture({
+        changeOne: (xml) => xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData><row r="1">
+          <c r="A1" t="str"><f><![CDATA[Other!A1&"x"]]></f><v>100x</v></c>
+          <c r="B1" t="inlineStr"><is>${comment}<t><![CDATA[${literal}]]></t></is></c>
+        </row></sheetData>`),
+      })
+      const verify = async (bytes, formula) => {
+        const { cells } = await read(bytes, 'Acceptance')
+        assert.equal(cells.find(({ row, column }) => row === 0 && column === 0).formula, formula)
+        assert.equal(cells.find(({ row, column }) => row === 0 && column === 1).value, literal)
+        assert.ok((await xmlPart(await JSZip.loadAsync(bytes), one)).includes(comment))
+      }
+      await verify(source, '=Other!A1&"x"')
+      const renamed = await save(source, [{ kind: 'rename-sheet', sheetId: second, newName: 'Renamed' }], [first, second])
+      await verify(renamed, '=Renamed!A1&"x"')
+      const shifted = await save(source, [], [first, second], { structuralOps: insertOn(second) })
+      await verify(shifted, '=Other!B2&"x"')
+
+      const literalOnly = await editPart(source, one, (xml) => xml.replace(/<c r="A1"[\s\S]*?<\/c>/, '<c r="A1"><v>1</v></c>'))
+      const removed = await save(literalOnly, [{ kind: 'remove-sheet', sheetId: second }], [first])
+      assert.deepEqual((await inspect(removed)).sheets.map(({ name }) => name), ['Acceptance'])
+      assert.equal((await read(removed, 'Acceptance')).cells.find(({ column }) => column === 1).value, literal)
+    })
     const quoteFormula = "'Q\"1'!$A$1"
     await t.test('shifts chart sources with an alternate namespace prefix', async () => {
       const base = await fixture()
