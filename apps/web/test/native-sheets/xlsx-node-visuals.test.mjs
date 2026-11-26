@@ -43,7 +43,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   zip.file('[Content_Types].xml', (await text('[Content_Types].xml')).replace('</Types>',
     `<Override PartName="/${chartSheet}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>`))
   zip.file(chartSheet, `<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/>${extension}</chartsheet>`)
+    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1"/></sheetViews><drawing r:id="rId1"/>${extension}</chartsheet>`)
   zip.file(chartSheetRels, await text('xl/worksheets/_rels/sheet1.xml.rels'))
   const worksheet = 'xl/worksheets/sheet1.xml'
   zip.file(worksheet, (await text(worksheet)).replace(/<drawing\b[^>]*\/>/, ''))
@@ -102,6 +102,34 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal((await inspect(await save(cleared, recolor), '#ABCDEF')).title, 'Chart sheet revenue')
   const cellEdit = sheetsSaveRequest('sheet-9', [{ row: 0, column: 0, value: 'invalid', writeValue: true }])
   await assert.rejects(save(cleared, cellEdit), /Invalid workbook input/)
+
+  const duplicate = sheetsSaveRequest('sheet-9', [])
+  duplicate.sheetOps = [{ kind: 'duplicate-sheet', sheetId: 'chart-copy', sourceSheetId: 'sheet-9', name: 'Chart Copy' }]
+  duplicate.sheetOrder = ['sheet-1', 'sheet-9', 'chart-copy']
+  const copied = await save(saved, duplicate)
+  const copiedMetadata = await runtime.sheetsNative.inspect(copied)
+  const copy = copiedMetadata.sheets.find(({ name }) => name === 'Chart Copy')
+  assert.equal(copy?.tabColor, '#654321')
+  const copiedVisual = copiedMetadata.visuals.find(({ sheetId }) => sheetId === copy.id)
+  assert.equal(copiedVisual?.kind, 'chart')
+  assert.notEqual(copiedVisual.chartPath, chartPath)
+  assert.notEqual(copiedVisual.drawingPath, drawingPath)
+  assert.deepEqual(copiedVisual.chart.series, chart.series)
+  const editCopy = sheetsSaveRequest(copy.id, [])
+  editCopy.chartEdits = [{ chartPath: copiedVisual.chartPath, title: 'Independent chart copy' }]
+  const edited = await save(copied, editCopy)
+  const editedMetadata = await runtime.sheetsNative.inspect(edited)
+  assert.deepEqual(new Map(editedMetadata.visuals.map(visual => [visual.sheetId, visual.chart.title])),
+    new Map([['sheet-9', 'Chart sheet revenue'], [copy.id, 'Independent chart copy']]))
+  const copiedPart = await textOf(await JSZip.loadAsync(copied))('xl/chartsheets/sheet2.xml')
+  assert.ok(copiedPart.includes(extension))
+  assert.ok(!copiedPart.includes('tabSelected'))
+  const removeCopy = sheetsSaveRequest('sheet-9', [])
+  removeCopy.sheetOps = [{ kind: 'remove-sheet', sheetId: copy.id }]
+  removeCopy.sheetOrder = ['sheet-1', 'sheet-9']
+  const removed = await save(edited, removeCopy)
+  assert.equal((await inspect(removed, '#654321')).title, 'Chart sheet revenue')
+  assert.equal((await JSZip.loadAsync(removed)).file(copiedVisual.chartPath), null)
 })
 
 test('imports the acceptance chart with a usable anchor, series cache, and editable source reference', async () => {

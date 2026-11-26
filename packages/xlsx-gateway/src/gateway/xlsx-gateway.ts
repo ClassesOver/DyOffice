@@ -37,6 +37,7 @@ import { applyCellImageAdditions } from './xlsx-cell-image-add.ts'
 import {
   appendRelationship,
   applyVisualAdditions,
+  cloneChartSheetParts,
   registerContentTypeOverride,
   type ChartAdd,
   type DrawingAnchor,
@@ -1259,7 +1260,7 @@ export async function planCellEditsToXlsx(
       ? []
       : await allocateAddedSheets(
           pkg,
-          sheetPlan.additions.map((addition) => addition.name),
+          sheetPlan.additions,
           touchedEntries,
         )
   const additionPaths = new Map(additions.map((addition) => [addition.name, addition.path]))
@@ -1306,6 +1307,11 @@ export async function planCellEditsToXlsx(
     }
     assertNoSheetScopedDefinedNames(await pkg.readText('xl/workbook.xml'), sourceSheetName)
     let cloneXml = sanitizeClonedWorksheetXml(await pkg.readText(sourcePath))
+    if (addition.chartSheetRelationshipType) {
+      await cloneChartSheetParts(pkg, sourcePath, addition.path, touchedEntries)
+      pkg.add(addition.path, cloneXml)
+      continue
+    }
     const sourceRelsPath = sourcePath.replace(/^(xl\/worksheets\/)([^/]+)$/, '$1_rels/$2.rels')
     if (await pkg.has(sourceRelsPath)) {
       const rels = prepareClonedSheetRels(await pkg.readText(sourceRelsPath), sourceSheetName)
@@ -2131,26 +2137,38 @@ export async function planCellEditsToXlsx(
 /// ids to the sheets being added.
 async function allocateAddedSheets(
   pkg: PackageEditor,
-  names: readonly string[],
+  additions: SheetEditPlan['additions'],
   touchedEntries: Set<string>,
 ): Promise<SheetAllocation[]> {
-  if (names.length === 0) return []
+  if (additions.length === 0) return []
   const workbookXml = await pkg.readText('xl/workbook.xml')
   const relationshipsPath = 'xl/_rels/workbook.xml.rels'
   const relationshipsXml = await pkg.readText(relationshipsPath)
-  let nextPartNumber = 1
+  const sheets = new Map(parseSheetElements(workbookXml).map(sheet => [sheet.name, sheet.relationshipId]))
+  const relationships = parseRelationships(relationshipsXml)
+  const nextPart = { worksheets: 1, chartsheets: 1 }
   for (const path of await pkg.paths()) {
-    const match = /^xl\/worksheets\/sheet([0-9]+)\.xml$/.exec(path)
-    if (match) nextPartNumber = Math.max(nextPartNumber, Number(match[1]) + 1)
+    const match = /^xl\/(worksheets|chartsheets)\/sheet([0-9]+)\.xml$/.exec(path)
+    if (!match) continue
+    const folder = match[1] === 'chartsheets' ? 'chartsheets' : 'worksheets'
+    nextPart[folder] = Math.max(nextPart[folder], Number(match[2]) + 1)
   }
-  const sheetIds = nextWorkbookSheetIds(workbookXml, names.length)
-  const relationshipIds = nextFreeRelationshipIds(relationshipsXml, names.length)
-  const allocations = names.map((name, index) => ({
-    name,
-    path: `xl/worksheets/sheet${nextPartNumber + index}.xml`,
-    sheetId: sheetIds[index]!,
-    relationshipId: relationshipIds[index]!,
-  }))
+  const sheetIds = nextWorkbookSheetIds(workbookXml, additions.length)
+  const relationshipIds = nextFreeRelationshipIds(relationshipsXml, additions.length)
+  const allocations = additions.map(({ name, sourceSheetName }, index) => {
+    const sourceId = sourceSheetName === undefined ? undefined : sheets.get(sourceSheetName)
+    const chartSheetRelationshipType = relationships.find(rel =>
+      !rel.external && rel.type.endsWith('/chartsheet') && relationshipIdsMatch(rel.id, sourceId),
+    )?.type
+    const folder = chartSheetRelationshipType ? 'chartsheets' : 'worksheets'
+    return {
+      name,
+      path: `xl/${folder}/sheet${nextPart[folder]++}.xml`,
+      sheetId: sheetIds[index]!,
+      relationshipId: relationshipIds[index]!,
+      chartSheetRelationshipType,
+    }
+  })
   // Written now rather than in applySheetPlanToPackage so later allocators
   // (styles.xml, metadata.xml) see these ids as taken.
   let updatedRelationships = relationshipsXml
@@ -2159,6 +2177,7 @@ async function allocateAddedSheets(
       updatedRelationships,
       allocation.relationshipId,
       allocation.path.replace(/^xl\//, ''),
+      allocation.chartSheetRelationshipType,
     )
   }
   pkg.write(relationshipsPath, updatedRelationships)
@@ -2478,7 +2497,7 @@ async function applySheetPlanToPackage(
     contentTypesXml = removePartOverride(contentTypesXml, part)
   }
   for (const addition of additions) {
-    contentTypesXml = addWorksheetOverride(contentTypesXml, addition.path)
+    contentTypesXml = addWorksheetOverride(contentTypesXml, addition.path, !!addition.chartSheetRelationshipType)
   }
   if (contentTypesXml !== originalContentTypes) {
     pkg.write(contentTypesPath, contentTypesXml)

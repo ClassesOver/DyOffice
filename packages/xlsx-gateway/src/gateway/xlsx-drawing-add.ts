@@ -4,8 +4,9 @@
 
 import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart.ts'
 import { ensureRelationshipNamespace, readRelationshipId, relationshipNamespaceOverride } from './xlsx-namespace.ts'
-import { addContentTypeEntry, appendRelationshipRecord, nextFreeRelationshipId, parseRelationships, relationshipIdsMatch } from './xlsx-sheets.ts'
-import { isElement, prefixOf, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
+import { addContentTypeEntry, appendRelationshipRecord, findRelationshipsRoot, nextFreeRelationshipId, parseRelationships, relationshipIdsMatch } from './xlsx-sheets.ts'
+import { updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, withNamespaces, worksheetRoot } from './xlsx-worksheet-xml.ts'
 
 export class VisualAddError extends Error {}
 
@@ -933,6 +934,67 @@ export function relativeTarget(fromPart: string, toPart: string): string {
   }
   const ups = fromDir.length - common
   return `${'../'.repeat(ups)}${toSegments.slice(common).join('/')}`
+}
+
+/// A chart sheet owns its drawing and editable charts. Ancillary assets such
+/// as image parts and chart styles can still be referenced by both copies.
+export async function cloneChartSheetParts(
+  pkg: MutablePackage,
+  sourceSheet: string,
+  destinationSheet: string,
+  touchedEntries: Set<string>,
+): Promise<void> {
+  type OwnedPart = 'drawing' | 'chart'
+  const parts = {
+    drawing: { prefix: 'xl/drawings/drawing', contentType: DRAWING_CONTENT_TYPE },
+    chart: { prefix: 'xl/charts/chart', contentType: CHART_CONTENT_TYPE },
+  }
+  const copies = new Map<string, string>()
+  const directory = (path: string) => path.slice(0, path.lastIndexOf('/'))
+
+  async function copyPart(source: string, kind: OwnedPart): Promise<string> {
+    const existing = copies.get(source)
+    if (existing !== undefined) return existing
+    const { prefix, contentType } = parts[kind]
+    const path = await allocatePartPath(pkg, prefix, '.xml')
+    pkg.add(path, await pkg.readText(source))
+    copies.set(source, path)
+    await registerContentTypeOverride(pkg, path, contentType, touchedEntries)
+    await copyRelationships(source, path, kind === 'drawing' ? 'chart' : undefined)
+    return path
+  }
+
+  async function copyRelationships(source: string, destination: string, ownedKind?: OwnedPart) {
+    const sourceRels = relsPathFor(source)
+    if (!(await pkg.has(sourceRels))) return
+    const xml = await pkg.readText(sourceRels)
+    const element = findRelationshipsRoot(xml)
+    if (!element) throw new VisualAddError(`${sourceRels} is not a relationships part.`)
+    const root = withNamespaces(element, new Map())
+    const patches = []
+    for (const entry of scopedChildren(root)) {
+      if (!isElement(entry, 'Relationship', root.namespace) ||
+          entry.attributes.get('TargetMode') === 'External') continue
+      const target = entry.attributes.get('Target')
+      const type = entry.attributes.get('Type')
+      if (target === undefined || type === undefined) continue
+      const owned = ownedKind !== undefined && type.endsWith(`/${ownedKind}`)
+      if (!owned && directory(source) === directory(destination)) continue
+      const part = resolveRelTarget(source, target)
+      const path = owned ? await copyPart(part, ownedKind) : part
+      const fragmentAt = target.indexOf('#')
+      const fragment = fragmentAt === -1 ? '' : target.slice(fragmentAt)
+      const relative = relativeTarget(destination, path).split('/').map(encodeURIComponent).join('/')
+      const opening = updateWorksheetTagAttribute(entry.opening, 'Target', escapeXmlAttribute(relative + fragment))
+      patches.push(patchElement(entry, opening + entry.xml.slice(entry.opening.length)))
+    }
+    const updated = patches.length === 0 ? xml : applyPatches(xml, [
+      patchElement(root, withBody(root, applyPatches(root.inner, patches))),
+    ])
+    pkg.add(relsPathFor(destination), updated)
+  }
+
+  await copyRelationships(sourceSheet, destinationSheet, 'drawing')
 }
 
 export function resolveRelTarget(fromPart: string, target: string): string {

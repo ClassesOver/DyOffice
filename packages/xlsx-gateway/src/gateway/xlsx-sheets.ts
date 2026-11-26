@@ -22,6 +22,7 @@ import {
   patchElement,
   prefixOf,
   scopedChildren,
+  spreadsheetSheetRoot,
   withBody,
   withNamespaces,
   worksheetRoot,
@@ -61,6 +62,7 @@ export interface SheetAllocation {
   readonly path: string
   readonly sheetId: number
   readonly relationshipId: string
+  readonly chartSheetRelationshipType?: string | undefined
 }
 
 const INVALID_NAME_CHARACTERS = /[\\/?*[\]:]/
@@ -333,7 +335,7 @@ export function stripPageSetupRelIds(worksheetXml: string): string {
 
 /// A clone must not claim the selected-tab state of its source.
 export function sanitizeClonedWorksheetXml(worksheetXml: string): string {
-  const root = worksheetRoot(worksheetXml)
+  const root = spreadsheetSheetRoot(worksheetXml)
   const children = root
     ? scopedChildren(root)
     : childElements(worksheetXml).map((child) => withNamespaces(child, new Map()))
@@ -681,9 +683,10 @@ function setSheetStateAttribute(sheetXml: string, hidden: boolean): string {
   return updated + sheetXml.slice(opening.length)
 }
 
-export function addWorksheetOverride(contentTypesXml: string, partPath: string): string {
+export function addWorksheetOverride(contentTypesXml: string, partPath: string, isChartSheet = false): string {
+  const kind = isChartSheet ? 'chartsheet' : 'worksheet'
   const updated = addContentTypeEntry(
-    contentTypesXml, 'Override', `/${partPath}`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
+    contentTypesXml, 'Override', `/${partPath}`, `application/vnd.openxmlformats-officedocument.spreadsheetml.${kind}+xml`,
   )
   if (updated === undefined) throw new SheetEditError('The workbook has no [Content_Types].xml Types element.')
   return updated
@@ -736,9 +739,10 @@ export function addWorksheetRelationship(
   relationshipsXml: string,
   relationshipId: string,
   target: string,
+  type = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet',
 ): string {
   const added = appendRelationshipRecord(
-    relationshipsXml, relationshipId, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet', target,
+    relationshipsXml, relationshipId, type, target,
   )
   if (added === undefined) throw new SheetEditError('The workbook has no relationships part.')
   return added
