@@ -14,7 +14,7 @@ import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {findWorksheetHyperlinkSection,hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
-import {elementText as worksheetElementText,isElement,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import {elementText as worksheetElementText,isElement,lastWorksheetView,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import {inferWorksheetAddresses,readDefinedNameText,readWorksheetTagAttribute,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
@@ -116,7 +116,7 @@ const metadataXmlOptions:X2jOptions={
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
-    'worksheet.cols.col','worksheet.mergeCells.mergeCell','worksheet.sheetViews.sheetView','worksheet.conditionalFormatting',
+    'worksheet.cols.col','worksheet.mergeCells.mergeCell','worksheet.conditionalFormatting',
     'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
     'worksheet.conditionalFormatting.cfRule.colorScale.color',
     'worksheet.conditionalFormatting.cfRule.formula','worksheet.conditionalFormatting.cfRule.dataBar.cfvo',
@@ -521,16 +521,16 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     rows.push({row:rowNumber-1,height,customHeight:(height!==undefined&&enabled(attrs.get('customHeight')))||undefined,
       hidden,styleIndex,outlineLevel:level||undefined,collapsed:collapsed||undefined})
   }
-  const view=worksheet?.sheetViews?.sheetView?.at(-1)
-  const pane=view?.pane
-  const viewKind=attribute(view,'view')
-  const zoomAttribute=(name:string)=>sizeAttribute(view,name)||undefined
+  const view=lastWorksheetView(children.find(child=>child.local==='sheetViews'))
+  const pane=view && scopedChildren(view).find(child=>isElement(child,'pane',view.namespace))
+  const viewKind=view?.attributes.get('view')
+  const zoomAttribute=(name:string)=>sizeValue(view?.attributes.get(name))||undefined
   const savedZoom=viewKind==='pageBreakPreview'||viewKind==='pageLayout'
     ?zoomAttribute('zoomScaleNormal'):zoomAttribute('zoomScale')??zoomAttribute('zoomScaleNormal')
   const zoomScale=savedZoom===undefined?100:Math.max(10,Math.min(400,Math.round(savedZoom)))
-  const split=(name:string,max:number)=>{const n=Number(attribute(pane,name));return Number.isInteger(n)&&n>=0&&n<=max?n:0}
+  const split=(name:string,max:number)=>{const n=Number(pane?.attributes.get(name));return Number.isInteger(n)&&n>=0&&n<=max?n:0}
   const frozenRows=split('ySplit',1_048_576),frozenColumns=split('xSplit',16_384)
-  const frozen=['frozen','frozenSplit'].includes(attribute(pane,'state')??'')
+  const frozen=['frozen','frozenSplit'].includes(pane?.attributes.get('state')??'')
   return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,rowExtent,columnWidths:columns,merges,conditionalRules,hyperlinks,
     ...(dimension?{dimension}:{}),
     dataValidations:readDataValidations(xml),
@@ -540,10 +540,10 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     pageSetup:readPageSetup(children),
     view:{
       tabColor:resolveColor(worksheet?.sheetPr?.tabColor).rgb??null,
-      showGridLines:!disabled(attribute(view,'showGridLines')),
-      showFormulas:enabled(attribute(view,'showFormulas'))||undefined,
-      showRowColHeaders:disabled(attribute(view,'showRowColHeaders'))?false:undefined,
-      rightToLeft:enabled(attribute(view,'rightToLeft'))||undefined,
+      showGridLines:!disabled(view?.attributes.get('showGridLines')),
+      showFormulas:enabled(view?.attributes.get('showFormulas'))||undefined,
+      showRowColHeaders:disabled(view?.attributes.get('showRowColHeaders'))?false:undefined,
+      rightToLeft:enabled(view?.attributes.get('rightToLeft'))||undefined,
       zoomScale:zoomScale===100?undefined:zoomScale,
       outlineLevelRow:outlineLevelRow||undefined,
       outlineLevelCol:outlineLevelCol||undefined,

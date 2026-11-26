@@ -3,8 +3,7 @@
 /// attributes), and maintains the sheet-scoped `_xlnm.Print_Area` defined
 /// name in workbook.xml. Untouched attributes and elements stay verbatim.
 
-import { columnIndex, parseRange } from '../domain/cell-address.ts'
-import { findRootChild } from './xlsx-root-tail.ts'
+import { columnIndex, columnLabel, parseRange } from '../domain/cell-address.ts'
 import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
 import { parseSheetElements, parseWorkbookTabIndex } from './xlsx-sheets.ts'
 import {
@@ -14,7 +13,7 @@ import {
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
-import { isElement, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import { isElement, lastWorksheetView, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PageSetupError extends Error {}
 
@@ -163,13 +162,6 @@ function localName(name: string): string {
   return name.slice(prefix(name).length)
 }
 
-function rootChild(xml: string, root: string, name: string): ChildElement | undefined {
-  const position = findRootChild(xml, root, name)
-  if (!position) return undefined
-  const [element] = childElements(xml.slice(position.start, position.end))
-  return element && { ...element, start: position.start }
-}
-
 function replaceElement(xml: string, element: ChildElement, replacement: string): string {
   return xml.slice(0, element.start) + replacement + xml.slice(element.start + element.xml.length)
 }
@@ -215,78 +207,77 @@ function setFitToPage(xml: string, enabled: boolean): string {
   )
 }
 
-function updateSheetView(
-  xml: string,
-  update: (view: ChildElement) => string,
-  create?: (name: string) => string,
-): string {
-  const views = rootChild(xml, 'worksheet', 'sheetViews')
-  if (views) {
-    const view = childElements(views.inner).reverse().find((child) => /(?:^|:)sheetView$/.test(child.name))
-    const body = view
-      ? replaceElement(views.inner, view, update(view))
-      : views.inner + (create?.(prefix(views.name) + 'sheetView') ?? '')
-    return replaceElement(xml, views, withChildren(views, body))
+function applyWorksheetViewState(xml: string, state: SheetPageSetupState): string {
+  const attributes: Record<string, string | null> = {}
+  if (state.showGridlines !== undefined) attributes.showGridLines = state.showGridlines ? null : '0'
+  if (state.showFormulas !== undefined) attributes.showFormulas = state.showFormulas ? '1' : null
+  if (state.zoomScale !== undefined) {
+    // zoomScaleNormal is used when the workbook opens in a print view.
+    const zoom = state.zoomScale === 100 ? null : String(state.zoomScale)
+    attributes.zoomScale = zoom
+    attributes.zoomScaleNormal = zoom
   }
-  if (!create) return xml
-  const anchor = /<((?:[\w.-]+:)?)(?:sheetFormatPr|cols|sheetData)(?=[\s/>])/.exec(xml)
-  if (!anchor) throw new PageSetupError('Worksheet has no sheetData element.')
-  const qualifier = anchor[1] ?? ''
-  const element = `<${qualifier}sheetViews>${create(qualifier + 'sheetView')}</${qualifier}sheetViews>`
-  return xml.slice(0, anchor.index) + element + xml.slice(anchor.index)
-}
+  if (state.showHeadings !== undefined) attributes.showRowColHeaders = state.showHeadings ? null : '0'
+  if (state.rightToLeft !== undefined) attributes.rightToLeft = state.rightToLeft ? '1' : null
 
-function setSheetViewAttr(xml: string, name: string, value: string | null): string {
-  return updateSheetView(
-    xml,
-    (view) =>
-      updateWorksheetTagAttribute(view.opening, name, value) + view.xml.slice(view.opening.length),
-    value === null ? undefined : (tag) => `<${tag} workbookViewId="0" ${name}="${value}"/>`,
-  )
-}
-
-/// Column index (0-based) → letters, for the pane's topLeftCell.
-function paneColumnLabel(index: number): string {
-  let label = ''
-  for (let i = index; i >= 0; i = Math.floor(i / 26) - 1) {
-    label = String.fromCharCode(65 + (i % 26)) + label
-  }
-  return label
-}
-
-/// Replaces the last sheetView's frozen `<pane>` (both counts 0 removes it).
-/// Pane-scoped `<selection>` elements are dropped too: they reference panes
-/// that may no longer exist, and Excel restores a default selection anyway.
-function setFrozenPane(xml: string, rows: number, columns: number): string {
+  const changes = Object.entries(attributes)
+  const replacePane = state.frozenRows !== undefined || state.frozenColumns !== undefined
+  if (!replacePane && changes.length === 0) return xml
+  const rows = state.frozenRows ?? 0
+  const columns = state.frozenColumns ?? 0
   const hasPane = rows > 0 || columns > 0
   const pane = (name: string) => {
-    const activePane =
-      rows > 0 && columns > 0 ? 'bottomRight' : rows > 0 ? 'bottomLeft' : 'topRight'
-    return (
-      `<${prefix(name)}pane` +
-      (columns > 0 ? ` xSplit="${columns}"` : '') +
-      (rows > 0 ? ` ySplit="${rows}"` : '') +
-      ` topLeftCell="${paneColumnLabel(columns)}${rows + 1}"` +
-      ` activePane="${activePane}" state="frozen"/>`
-    )
+    if (!hasPane) return ''
+    const active = rows > 0 && columns > 0 ? 'bottomRight' : rows > 0 ? 'bottomLeft' : 'topRight'
+    const x = columns > 0 ? ` xSplit="${columns}"` : ''
+    const y = rows > 0 ? ` ySplit="${rows}"` : ''
+    return `<${prefix(name)}pane${x}${y} topLeftCell="${columnLabel(columns)}${rows + 1}" activePane="${active}" state="frozen"/>`
   }
-  return updateSheetView(
-    xml,
-    (view) => {
-      let body = view.inner
-      for (const child of childElements(body).reverse()) {
-        if (
-          /(?:^|:)pane$/.test(child.name) ||
-          (/(?:^|:)selection$/.test(child.name) &&
-            readWorksheetTagAttribute(child.opening, 'pane') !== undefined)
-        ) {
+  const openingWithUpdates = (opening: string) => changes.reduce(
+    (current, [name, value]) => updateWorksheetTagAttribute(current, name, value),
+    opening,
+  )
+
+  const create = hasPane || changes.some(([, value]) => value !== null)
+  const root = worksheetRoot(xml)
+  if (!root) {
+    if (!create) return xml
+    throw new PageSetupError('Worksheet has no root element.')
+  }
+  const children = scopedChildren(root).filter((child) => child.namespace === root.namespace)
+  const views = children.find((child) => child.local === 'sheetViews')
+  const view = lastWorksheetView(views)
+  const offset = root.start + root.opening.length
+  if (views && view) {
+    let body = view.inner
+    if (replacePane) {
+      // Selections attached to removed panes become invalid. Keep ordinary selections.
+      for (const child of scopedChildren(view).reverse()) {
+        if (child.namespace === view.namespace && (child.local === 'pane' ||
+          (child.local === 'selection' && child.attributes.has('pane')))) {
           body = replaceElement(body, child, '')
         }
       }
-      return withChildren(view, (hasPane ? pane(view.name) : '') + body)
-    },
-    hasPane ? (tag) => `<${tag} workbookViewId="0">${pane(tag)}</${tag}>` : undefined,
+      body = pane(view.name) + body
+    }
+    const updated = withChildren(view, body, openingWithUpdates(view.opening))
+    const updatedViews = withChildren(views, replaceElement(views.inner, view, updated))
+    return replaceElement(xml, { ...views, start: offset + views.start }, updatedViews)
+  }
+  if (!create) return xml
+
+  const qualifier = prefix(views?.name ?? root.name)
+  const name = qualifier + 'sheetView'
+  const newView = openingWithUpdates(`<${name} workbookViewId="0">`) + pane(name) + `</${name}>`
+  if (views) {
+    return replaceElement(xml, { ...views, start: offset + views.start }, withChildren(views, views.inner + newView))
+  }
+  const anchor = children.find((child) =>
+    child.local === 'sheetFormatPr' || child.local === 'cols' || child.local === 'sheetData',
   )
+  if (!anchor) throw new PageSetupError('Worksheet has no sheetData element.')
+  const at = offset + anchor.start
+  return xml.slice(0, at) + `<${qualifier}sheetViews>${newView}</${qualifier}sheetViews>` + xml.slice(at)
 }
 
 /// A lone `&` that does not start an Excel code (`&&` literal, section,
@@ -400,38 +391,7 @@ function renderPageBreaks(
 }
 
 export function applyPageSetupState(worksheetXml: string, state: SheetPageSetupState): string {
-  let xml = worksheetXml
-
-  if (state.frozenRows !== undefined || state.frozenColumns !== undefined) {
-    xml = setFrozenPane(xml, state.frozenRows ?? 0, state.frozenColumns ?? 0)
-  }
-
-  if (state.showGridlines !== undefined) {
-    // showGridLines defaults to true; write "0" to hide, drop the attribute
-    // to restore the default.
-    xml = setSheetViewAttr(xml, 'showGridLines', state.showGridlines ? null : '0')
-  }
-
-  if (state.showFormulas !== undefined) {
-    // showFormulas defaults to false; drop the attribute to restore it.
-    xml = setSheetViewAttr(xml, 'showFormulas', state.showFormulas ? '1' : null)
-  }
-  if (state.zoomScale !== undefined) {
-    // 100 is the default — drop the attributes. zoomScaleNormal keeps the
-    // normal-view zoom authoritative for files saved in page-layout /
-    // page-break view (the open path prefers it there).
-    const zoom = state.zoomScale === 100 ? null : String(state.zoomScale)
-    xml = setSheetViewAttr(xml, 'zoomScale', zoom)
-    xml = setSheetViewAttr(xml, 'zoomScaleNormal', zoom)
-  }
-  if (state.showHeadings !== undefined) {
-    // showRowColHeaders defaults to true; write "0" to hide.
-    xml = setSheetViewAttr(xml, 'showRowColHeaders', state.showHeadings ? null : '0')
-  }
-  if (state.rightToLeft !== undefined) {
-    // rightToLeft defaults to false; drop the attribute to restore it.
-    xml = setSheetViewAttr(xml, 'rightToLeft', state.rightToLeft ? '1' : null)
-  }
+  let xml = applyWorksheetViewState(worksheetXml, state)
 
   const edits = new Map<PrintElement, PrintElementEdit>()
   const printOptions: Record<string, string | null> = {}

@@ -72,6 +72,10 @@ export function isElement(
   return element.local === local && element.namespace === namespace
 }
 
+export function lastWorksheetView(views: ScopedElement | undefined): ScopedElement | undefined {
+  return views && scopedChildren(views).reverse().find((child) => isElement(child, 'sheetView', views.namespace))
+}
+
 export function patchElement(element: ChildElement, xml: string): XmlPatch {
   return { start: element.start, length: element.xml.length, xml }
 }

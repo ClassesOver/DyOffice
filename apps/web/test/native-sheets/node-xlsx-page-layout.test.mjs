@@ -146,6 +146,47 @@ test('Web XLSX saves view and print settings without changing other worksheet st
 
   const customView = (contents) =>
     `<customSheetViews><customSheetView guid="{11111111-1111-1111-1111-111111111111}">${contents}</customSheetView></customSheetViews>`
+
+  await t.test('uses only SpreadsheetML views and panes for freeze and zoom', async () => {
+    const foreign = 'xmlns="urn:example:view"'
+    const foreignViews = `<sheetViews ${foreign}><sheetView zoomScale="30"/></sheetViews>`
+    const foreignView = `<sheetView ${foreign} zoomScale="40"/>`
+    const foreignPane = `<pane ${foreign} xSplit="9" state="frozen"/>`
+    const foreignSelection = `<selection ${foreign} pane="topRight" activeCell="D1"/>`
+    const input = await workbook((xml) => xml.replace(
+      '<sheetViews><sheetView workbookViewId="0"/></sheetViews>',
+      foreignViews + `<sheetViews><sheetView workbookViewId="0" zoomScale="125">${foreignPane}` +
+      '<pane xSplit="2" state="frozen"/><selection pane="topRight" activeCell="C1"/>' +
+      `${foreignSelection}</sheetView>${foreignView}</sheetViews>`,
+    ))
+    const readView = async (bytes) => (await native.inspect(bytes)).sheets[0]
+    const initial = await readView(input)
+    assert.equal(initial.zoomScale, 125)
+    assert.deepEqual(initial.freeze, { frozenRows: 0, frozenColumns: 2 })
+    const saved = await save(input, { frozenRows: 2, frozenColumns: 1, zoomScale: 95, showGridlines: false })
+    const cleared = await save(saved, { frozenRows: 0, frozenColumns: 0 })
+    const edited = await readView(saved)
+    assert.equal(edited.zoomScale, 95)
+    assert.equal(edited.showGridLines, false)
+    assert.deepEqual(edited.freeze, { frozenRows: 2, frozenColumns: 1 })
+    assert.equal((await readView(cleared)).freeze, null)
+    for (const output of [saved, cleared]) {
+      const xml = await sheetXml(output)
+      for (const preserved of [foreignViews, foreignView, foreignPane, foreignSelection]) {
+        assert.ok(xml.includes(preserved), preserved)
+      }
+      assert.ok(!xml.includes('<selection pane="topRight" activeCell="C1"/>'))
+    }
+  })
+
+  await t.test('creates a view before real sheet data when a comment contains a decoy', async () => {
+    const comment = '<!-- <sheetData/> -->'
+    const input = await workbook((xml) => xml.replace('<sheetViews><sheetView workbookViewId="0"/></sheetViews>', comment))
+    const saved = await save(input, { zoomScale: 90 })
+    assert.ok((await sheetXml(saved)).includes(comment))
+    assert.equal((await native.inspect(saved)).sheets[0].zoomScale, 90)
+  })
+
   const beforeDrawing = (xml, contents) => xml.replace('<drawing ', contents + '<drawing ')
   const header = (text) => `<headerFooter><oddHeader>&amp;C${text}</oddHeader></headerFooter>`
   const rowBreak = (row) =>
