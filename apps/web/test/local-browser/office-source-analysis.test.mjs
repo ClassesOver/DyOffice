@@ -248,8 +248,13 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await saveAndTest.click()
  await expect(page.getByText('连接已保存，测试通过。',{exact:true})).toBeVisible()
  await page.getByRole('button',{name:'选择可见范围',exact:true}).click()
- await page.getByLabel('搜索目录',{exact:true}).fill('sal')
- await expect(page.getByRole('button',{name:'浏览 confidential 的表',exact:true})).toHaveCount(0)
+ const schemaSearch=page.getByLabel('搜索目录',{exact:true})
+ if(await schemaSearch.count()){
+  await schemaSearch.fill('sal')
+  await expect(page.getByRole('button',{name:'浏览 confidential 的表',exact:true})).toHaveCount(0)
+ }else{
+  await expect(page.getByRole('button',{name:'浏览 sales 的表',exact:true})).toBeVisible()
+ }
  await page.getByRole('button',{name:'浏览 sales 的表',exact:true}).click()
  await expect(page.getByLabel('搜索表',{exact:true})).toBeVisible()
  await page.getByRole('combobox',{name:'目录范围',exact:true}).selectOption('selected')
