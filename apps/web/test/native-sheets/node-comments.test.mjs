@@ -28,6 +28,25 @@ test('Node XLSX keeps existing notes and comment threads when a new note is save
   const plan=await runtime.sheetsWorkbookPlanner(bytes,request)
   return (await native.savePlan(bytes,plan)).bytes
  }
+ await t.test('registers a first legacy note when package XML contains comments and closing-tag whitespace',async()=>{
+  const input=await JSZip.loadAsync(source)
+  const relsPath='xl/worksheets/_rels/sheet1.xml.rels', typesPath='[Content_Types].xml'
+  const relComment='<!-- </Relationships> -->', typeComment='<!-- </Types> -->'
+  input.file(relsPath,(await input.file(relsPath).async('string')).replace('</Relationships>',relComment+'</Relationships >'))
+  input.file(typesPath,(await input.file(typesPath).async('string')).replace('</Types>',typeComment+'</Types >'))
+  const note={row:0,column:0,author:'Audit',text:'First note'}
+  const saved=await saveNotes(await input.generateAsync({type:'nodebuffer'}),[note])
+  const output=await JSZip.loadAsync(saved)
+  const rels=await output.file(relsPath).async('string')
+  const types=await output.file(typesPath).async('string')
+  assert.ok(rels.includes(relComment+'<Relationship'))
+  assert.ok(types.includes(typeComment+'<Override'))
+  assert.ok(rels.includes('Target="../comments1.xml"'))
+  assert.ok(rels.includes('Target="../drawings/vmlDrawing1.vml"'))
+  assert.ok(types.includes('PartName="/xl/comments1.xml"'))
+  assert.ok(types.includes('Extension="vml"'))
+  assert.deepEqual((await native.inspect(saved)).sheets[0].comments,[note])
+ })
  const legacy={row:1,column:0,author:'Audit & review',text:'Existing note <A2>\nSecond line'}
  const reply={id:'{33333333-3333-3333-3333-333333333333}',personId:'{44444444-4444-4444-4444-444444444444}',
   author:'Grace',dT:'2026-09-02T08:30:00',text:'Reply for A4'}
