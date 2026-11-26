@@ -295,6 +295,53 @@ test('uses GenOffice paint colors for gradient and pattern fills in XLSX drawing
   assert.equal(visual.chart.plotAreaFill, '#7F007F')
 })
 
+test('opens XLSX freeform shapes with scaled paths and preserves their original geometry on save', async t => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const pt = (x, y) => `<a:pt x="${x}" y="${y}"/>`
+  const move = (x, y) => `<a:moveTo>${pt(x, y)}</a:moveTo>`
+  const line = (x, y) => `<a:lnTo>${pt(x, y)}</a:lnTo>`
+  const openPath = `<a:path w="200" h="0" fill="none">${move(0, 0)}${line(200, 0)}</a:path>`
+  const filledPath = `<a:path w="100" h="100">${move(0, 0)}${line(40, 0)}
+    <a:quadBezTo>${pt(80, 0)}${pt(80, 40)}</a:quadBezTo>
+    <a:cubicBezTo>${pt(80, 60)}${pt(60, 100)}${pt(0, 100)}</a:cubicBezTo><a:close/></a:path>`
+  const mixedPath = `<a:path w="200" h="50" fill="none">${move(20, 5)}${line(180, 5)}</a:path>`
+  const arcPath = `<a:path w="100" h="100">${move(0, 0)}<a:arcTo wR="10" hR="10" stAng="0" swAng="5400000"/></a:path>`
+  const shape = (id, name, paths, text = '') => `<xdr:oneCellAnchor><xdr:from><xdr:col>${id - 81}</xdr:col>
+    <xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="900000" cy="450000"/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="${id}" name="${name}"/>
+      <xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:custGeom><a:avLst/><a:pathLst>${paths}</a:pathLst></a:custGeom>
+      <a:solidFill><a:srgbClr val="112233"/></a:solidFill></xdr:spPr>${text}</xdr:sp><xdr:clientData/></xdr:oneCellAnchor>`
+  const paragraph = '<xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Arc text</a:t></a:r></a:p></xdr:txBody>'
+  await appendDrawing(zip, shape(81, 'Mixed paths', filledPath + mixedPath) + shape(82, 'Open path', openPath) +
+    shape(83, 'Arc fallback', arcPath, paragraph))
+  const filled = 'M 0 0 L 40 0 Q 80 0 80 40 C 80 60 60 100 0 100 Z'
+  const check = ([chart, mixed, open, arc]) => {
+    assert.equal(chart.kind, 'chart')
+    assert.equal(mixed.name, 'Mixed paths')
+    assert.equal(mixed.drawingIndex, 1)
+    assert.deepEqual(mixed.customPath, { width: 100, height: 100, d: `${filled} M 10 10 L 90 10`, fillD: filled })
+    assert.deepEqual(open.customPath, { width: 200, height: 1, d: 'M 0 0 L 200 0', strokeOnly: true })
+    assert.equal(arc.customPath, undefined)
+    assert.equal(arc.text, 'Arc text')
+  }
+  check(await readWorkbookVisuals(textOf(zip), sourceSheet))
+  const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-native-freeform-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const native = runtime.sheetsNative
+  const request = sheetsSaveRequest('sheet-1', [{ row: 1, column: 0, value: 22, writeValue: true }])
+  const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+  check(workbookFileSchema.shape.visuals.parse((await native.inspect(saved)).visuals))
+  assert.equal(await textOf(await JSZip.loadAsync(saved))(drawingPath), await textOf(zip)(drawingPath))
+})
+
 test('opens a native XLSX text box and edits its paint at the original drawing index', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   await appendDrawing(zip, `<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="10000" cy="10000"/><xdr:sp/></xdr:absoluteAnchor>

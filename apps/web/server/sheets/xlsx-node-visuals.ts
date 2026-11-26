@@ -498,6 +498,55 @@ function drawingHyperlink(nonvisual: XmlElement | undefined, relationships: Map<
   return attribute(rel, 'Type')?.endsWith('/hyperlink') ? attribute(rel, 'Target') || undefined : undefined
 }
 
+const pathCommands = new Map<string, readonly [letter: string, points: number]>([
+  ['moveTo', ['M', 1]], ['lnTo', ['L', 1]], ['cubicBezTo', ['C', 3]],
+  ['quadBezTo', ['Q', 2]], ['close', ['Z', 0]],
+])
+
+function readCustomPath(geometry: XmlElement | undefined): WorkbookVisualObject['customPath'] {
+  const paths = children(child(geometry, 'pathLst')).filter(path => path.tag === 'path')
+  const segments: string[] = []
+  const fillable: string[] = []
+  let width = 0, height = 0
+  const format = (value: number) => Number.isInteger(value) && Math.abs(value) < 1e15 ? String(value) : value.toFixed(2)
+  for (const path of paths) {
+    const pathWidth = Math.max(0, finite(attribute(path, 'w')) ?? 0)
+    const pathHeight = Math.max(0, finite(attribute(path, 'h')) ?? 0)
+    if (!segments.length) {
+      width = pathWidth
+      height = pathHeight
+    }
+    const scaleX = width && pathWidth ? width / pathWidth : 1
+    const scaleY = height && pathHeight ? height / pathHeight : 1
+    const commands: string[] = []
+    for (const node of children(path)) {
+      const command = pathCommands.get(node.tag)
+      if (!command) return undefined
+      const [letter, required] = command
+      const points = children(node).filter(point => point.tag === 'pt').slice(0, required)
+      if (points.length < required) return undefined
+      const tokens = [letter]
+      for (const point of points) {
+        const x = (finite(attribute(point, 'x')) ?? NaN) * scaleX
+        const y = (finite(attribute(point, 'y')) ?? NaN) * scaleY
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
+        tokens.push(format(x), format(y))
+      }
+      commands.push(tokens.join(' '))
+    }
+    if (!commands.length) continue
+    const segment = commands.join(' ')
+    segments.push(segment)
+    if (attribute(path, 'fill') !== 'none') fillable.push(segment)
+  }
+  if (!segments.length) return undefined
+  return {
+    width: Math.max(1, width), height: Math.max(1, height), d: segments.join(' '),
+    ...(!fillable.length ? { strokeOnly: true } : {}),
+    ...(fillable.length && fillable.length < segments.length ? { fillD: fillable.join(' ') } : {}),
+  }
+}
+
 function readShape(
   node: XmlElement, base: VisualBase, theme: readonly string[], references: DrawingReferences,
 ): WorkbookVisualObject | undefined {
@@ -505,11 +554,12 @@ function readShape(
   const body = child(node, 'txBody')
   const bodyProperties = child(body, 'bodyPr')
   const textBox = trueAttribute(child(child(node, 'nvSpPr'), 'cNvSpPr'), 'txBox')
-  const shapeType = attribute(child(properties, 'prstGeom'), 'prst') ??
-    (textBox && !child(properties, 'custGeom') ? 'rect' : undefined)
+  const geometry = child(properties, 'custGeom')
+  const shapeType = attribute(child(properties, 'prstGeom'), 'prst') ?? (textBox && !geometry ? 'rect' : undefined)
+  const customPath = shapeType ? undefined : readCustomPath(geometry)
   const paragraphs = readShapeParagraphs(body, theme)
   const plain = paragraphs.length ? paragraphs.map(paragraph => paragraph.runs.map(run => run.text).join('')).join('\n') : undefined
-  if (!shapeType && !plain) return undefined
+  if (!shapeType && !customPath && !plain) return undefined
 
   const style = child(node, 'style')
   function styleColor(name: string): string | undefined {
@@ -532,6 +582,7 @@ function readShape(
     ...base,
     kind: 'shape',
     shapeType,
+    ...(customPath ? { customPath } : {}),
     fillColor,
     ...(fillMediaPath ? { fillMediaPath, fillMediaType: visualMediaType(fillMediaPath), opacity: blipOpacity(blip) } : {}),
     lineColor: child(line, 'noFill') ? 'none' : color(line, theme) ?? styleColor('lnRef') ?? 'none',
