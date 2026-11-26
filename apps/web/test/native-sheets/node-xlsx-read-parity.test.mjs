@@ -59,6 +59,29 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('opens and saves prefixed workbook and worksheet parts containing comments and CDATA', async () => {
+    const comment = '<!-- <x:c xmlns:x="urn:comment"/> -->'
+    const literal = '<x:row r="97"> sample </x:row>'
+    const bytes = await workbook({
+      [workbookPath]: `<!-- workbook metadata --><x:workbook xmlns:x='${spreadsheet}'
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        <x:sheets><x:sheet name="Acceptance" sheetId="1" r:id="rId1"/></x:sheets>
+        <x:definedNames><x:definedName name="Example"><![CDATA[Acceptance!A1]]></x:definedName></x:definedNames>
+      </x:workbook>`,
+      [sheetPath]: `<x:worksheet xmlns:x='${spreadsheet}'><x:sheetData><x:row r="1">
+        <x:c r="A1" t="inlineStr"><x:is>${comment}<x:t><![CDATA[${literal}]]></x:t></x:is></x:c>
+        <x:c r="B1"><x:v>7</x:v></x:c></x:row></x:sheetData></x:worksheet>`,
+    })
+    const values = async (input) => (await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 }))
+      .cells.map(({ value }) => value)
+    assert.deepEqual(await values(bytes), [literal, 7])
+    const saved = await saveValue(bytes, 1, 42)
+    assert.deepEqual(await values(saved), [literal, 42])
+    assert.deepEqual((await native.inspect(saved)).definedNames, [{ name: 'Example', formula: 'Acceptance!A1' }])
+    const xml = await (await JSZip.loadAsync(saved)).file(sheetPath).async('string')
+    assert.ok(xml.includes(comment))
+  })
+
   await t.test('opens and saves both empty-tag and expanded worksheet declarations with single quotes', async () => {
     const declarations = [
       "<sheet name='Acceptance' sheetId=\"1\" r:id='rId1'/>",

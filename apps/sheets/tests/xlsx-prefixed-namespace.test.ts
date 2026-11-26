@@ -112,6 +112,42 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalized).toContain(`xmlns:x="${MAIN_NS}"`)
     expect(normalized).toContain('<oleObject x:custom="1"/>')
   })
+
+  it('normalizes real tags while leaving literal namespace declarations and tags alone', () => {
+    const prolog = '<!-- <x:worksheet xmlns:x="urn:fake"> -->'
+    const content = '<!-- <x:c xmlns="urn:fake"/> --><![CDATA[<x:c xmlns:x="urn:fake"/>]]>'
+    const xml = `${prolog}<x:worksheet xmlns:x='${MAIN_NS}'>` +
+      `<x:sheetData><x:row><x:c><x:is><x:t>${content}</x:t></x:is></x:c></x:row></x:sheetData></x:worksheet>`
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toContain(`${prolog}<worksheet xmlns="${MAIN_NS}"`)
+    expect(normalized).toContain(`<sheetData><row><c><is><t>${content}</t></is></c></row></sheetData>`)
+  })
+
+  it('keeps a real single-quoted prefix rebinding in its original scope', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><x:ext xmlns:x='urn:other'/></x:worksheet>`
+    expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
+  })
+
+  it('rewrites the namespace declaration without changing identical text inside another attribute', () => {
+    const literal = `custom=" xmlns:x='${MAIN_NS}'"`
+    const xml = `<x:worksheet ${literal} xmlns:x='${MAIN_NS}'/>`
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(`<worksheet ${literal} xmlns="${MAIN_NS}"`)
+  })
+
+  it('leaves unqualified elements in their original namespace', () => {
+    for (const name of ['custom', '扩展']) {
+      const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><x:ext><${name}><x:tag/></${name}></x:ext></x:worksheet>`
+      expect(normalizeOoxmlPartPrefix(xml)).toContain(`<ext><${name} xmlns=""><tag xmlns="${MAIN_NS}"/></${name}></ext>`)
+    }
+  })
+
+  it('keeps a prefix referenced by markup compatibility attributes', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">` +
+      '<mc:AlternateContent><mc:Choice Requires="x"><x:sheetData/></mc:Choice></mc:AlternateContent></x:worksheet>'
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toContain(`xmlns:x="${MAIN_NS}"`)
+    expect(normalized).toContain('<mc:Choice Requires="x"><sheetData/></mc:Choice>')
+  })
 })
 
 describe('non-numeric relationship ids', () => {
