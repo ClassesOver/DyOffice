@@ -100,7 +100,9 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       if (id.length > 512 || !name.length || name.length > 255 || ids.has(id) || names.has(name)) throw new Error('Ambiguous sheets')
       const rels = relationships.filter(rel => relationshipIdsMatch(rel.id, element.relationshipId))
       const rel = rels[0]
-      if (rels.length !== 1 || !rel || rel.external || !rel.type.endsWith('/worksheet')) throw new Error('Invalid worksheet relationship')
+      if (rels.length !== 1 || !rel || rel.external || !/\/(worksheet|chartsheet)$/.test(rel.type)) {
+        throw new Error('Invalid sheet relationship')
+      }
       const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
       if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')
       if (!await source.has(path)) throw new Error('Missing worksheet')

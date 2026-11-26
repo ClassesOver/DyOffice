@@ -27,6 +27,63 @@ async function appendDrawing(zip, markup) {
     .replace('</xdr:wsDr>', markup + '</xdr:wsDr>'))
 }
 
+test('opens a chart sheet and preserves its chart through a Web save', { timeout: 120_000 }, async t => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const text = textOf(zip)
+  const workbook = 'xl/workbook.xml'
+  const workbookRels = 'xl/_rels/workbook.xml.rels'
+  const chartSheet = 'xl/chartsheets/sheet1.xml'
+  const chartSheetRels = 'xl/chartsheets/_rels/sheet1.xml.rels'
+  zip.file(workbook, (await text(workbook))
+    .replace('<workbookView/>', '<workbookView activeTab="1"/>')
+    .replace('</sheets>', '<sheet name="Chart" sheetId="9" r:id="rId9"/></sheets>'))
+  zip.file(workbookRels, (await text(workbookRels)).replace('</Relationships>',
+    `<Relationship Id="rId9" Type="${relationships}chartsheet" Target="chartsheets/sheet1.xml"/></Relationships>`))
+  zip.file('[Content_Types].xml', (await text('[Content_Types].xml')).replace('</Types>',
+    `<Override PartName="/${chartSheet}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>`))
+  zip.file(chartSheet, `<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    xmlns:r="${relationships.slice(0, -1)}"><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/></chartsheet>`)
+  zip.file(chartSheetRels, await text('xl/worksheets/_rels/sheet1.xml.rels'))
+  const worksheet = 'xl/worksheets/sheet1.xml'
+  zip.file(worksheet, (await text(worksheet)).replace(/<drawing\b[^>]*\/>/, ''))
+  zip.file(drawingPath, (await text(drawingPath))
+    .replace(/<xdr:twoCellAnchor><xdr:from>[\s\S]*?<\/xdr:to>/,
+      '<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9304587" cy="6077107"/>')
+    .replace('</xdr:twoCellAnchor>', '</xdr:absoluteAnchor>'))
+  const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-chart-sheet-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const inspect = async (input) => {
+    const metadata = await runtime.sheetsNative.inspect(input)
+    assert.deepEqual(metadata.sheets.map(({ name }) => name), ['Acceptance', 'Chart'])
+    assert.equal(metadata.sheets[metadata.activeTab].id, 'sheet-9')
+    const visual = metadata.visuals.find(({ sheetId }) => sheetId === 'sheet-9')
+    assert.equal(visual?.kind, 'chart')
+    assert.equal(visual.chartPath, chartPath)
+    assert.equal(visual.anchor.toColumnOffset, 9304587)
+    return visual.chart
+  }
+  const original = await inspect(bytes)
+  const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 7, value: 42, writeValue: true }])
+  request.chartEdits = [{ chartPath, title: 'Chart sheet revenue' }]
+  const plan = await runtime.sheetsWorkbookPlanner(bytes, request)
+  const saved = (await runtime.sheetsNative.savePlan(bytes, plan)).bytes
+  const chart = await inspect(saved)
+  assert.equal(chart.title, 'Chart sheet revenue')
+  assert.deepEqual(chart.series, original.series)
+  const range = await runtime.sheetsNative.readRange(saved, 'Acceptance',
+    { startRow: 0, endRow: 0, startColumn: 7, endColumn: 7 })
+  assert.equal(range.cells[0].value, 42)
+})
+
 test('imports the acceptance chart with a usable anchor, series cache, and editable source reference', async () => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const [visual, ...rest] = await readWorkbookVisuals(textOf(zip), sourceSheet)

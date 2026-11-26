@@ -683,9 +683,11 @@ async function readRelationships(read: ZipText, part: string): Promise<Map<strin
   }))
 }
 
-function internalTarget(rels: Map<string, XmlElement>, part: string, id: string | undefined, kind: string) {
+function internalTarget(rels: Map<string, XmlElement>, part: string, id: string | undefined, ...kinds: string[]) {
   const rel = id && rels.get(id)
-  if (!rel || attribute(rel, 'TargetMode') === 'External' || !attribute(rel, 'Type')?.endsWith(`/${kind}`)) return undefined
+  if (!rel || attribute(rel, 'TargetMode') === 'External') return undefined
+  const type = attribute(rel, 'Type')
+  if (!kinds.some(kind => type?.endsWith(`/${kind}`))) return undefined
   const target = attribute(rel, 'Target')
   if (!target) return undefined
   try { return resolveRelTarget(part, target) } catch { return undefined }
@@ -860,14 +862,14 @@ export async function readWorkbookVisuals(
   for (const declaration of parseSheetElements(await read(workbook))) {
     const sheetId = byName.get(declaration.name)
     const relationshipId = declaration.relationshipId === undefined ? undefined : decodeAttribute(declaration.relationshipId)
-    const sheetPath = internalTarget(workbookRels, workbook, relationshipId, 'worksheet')
+    const sheetPath = internalTarget(workbookRels, workbook, relationshipId, 'worksheet', 'chartsheet')
     if (!sheetId || !sheetPath) continue
     const sheetXml = await read(sheetPath)
     if (!sheetXml.includes('drawing') && !sheetXml.includes('oleObjects')) continue
-    const worksheet = roots(sheetXml).find(node => node.tag === 'worksheet')
+    const sheet = roots(sheetXml).find(node => node.tag === 'worksheet' || node.tag === 'chartsheet')
     const sheetRels = await readRelationships(read, sheetPath)
     const captions = await readControlCaptions(read, sheetPath, sheetRels)
-    const oleObjects = await readOleObjects(read, worksheet, sheetPath, sheetRels, hasPart)
+    const oleObjects = await readOleObjects(read, sheet, sheetPath, sheetRels, hasPart)
     const appendOle = (object: OleObject, fallback?: Anchor) => {
       const anchor = object.anchor ?? fallback
       if (!anchor || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&
@@ -876,7 +878,7 @@ export async function readWorkbookVisuals(
         mediaType: object.mediaPath ? visualMediaType(object.mediaPath) : undefined })
     }
     const renderedOle = new Set<number>()
-    for (const node of children(worksheet).filter(node => node.tag === 'drawing')) {
+    for (const node of children(sheet).filter(node => node.tag === 'drawing')) {
       const drawingPath = internalTarget(sheetRels, sheetPath, attribute(node, 'id'), 'drawing')
       if (!drawingPath || !/^xl\/drawings\/[\w./-]+\.xml$/.test(drawingPath)) continue
       const drawing = roots(await read(drawingPath)).find(node => node.tag === 'wsDr')
