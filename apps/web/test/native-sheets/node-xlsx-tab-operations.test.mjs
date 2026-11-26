@@ -92,6 +92,28 @@ test(
       return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request)))
         .bytes
     }
+    await t.test('saves readable cells while preserving dangling worksheet declarations', async () => {
+      const dangling = '<sheet name="No ID" sheetId="8"/><sheet name="No Relation" sheetId="9" r:id="rId9"/><sheet name="No Part" sheetId="10" r:id="rId10"/>'
+      const zip = await JSZip.loadAsync(await fixture({
+        changeWorkbook: (xml) => xml.replace('<sheets>', `<sheets>${dangling}`),
+      }))
+      zip.file(relPath, (await xmlPart(zip, relPath)).replace('</Relationships>',
+        `<Relationship Id="rId10" Type="${r}/worksheet" Target="worksheets/missing.xml"/></Relationships>`))
+      const source = await zip.generateAsync({ type: 'nodebuffer' })
+      const before = await inspect(source)
+      assert.deepEqual(before.sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      const saveValue = async (id) => {
+        const request = sheetsSaveRequest(id, [{ row: 0, column: 0, value: 'Updated', writeValue: true }])
+        return (await native.savePlan(source, await runtime.sheetsWorkbookPlanner(source, request))).bytes
+      }
+      const saved = await saveValue(first)
+      assert.equal((await read(saved, 'Acceptance')).cells[0].value, 'Updated')
+      assert.deepEqual((await inspect(saved)).sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      const after = await JSZip.loadAsync(saved)
+      for (const path of [wbPath, relPath]) assert.equal(await xmlPart(after, path), await xmlPart(zip, path))
+      await assert.rejects(saveValue('sheet-10'), /Invalid workbook input/)
+    })
+
     await t.test('reorders actual worksheets and preserves foreign tab metadata', async () => {
       const foreignViews = '<ext:bookViews><ext:workbookView activeTab="0"/></ext:bookViews>'
       const foreignView = '<ext:workbookView activeTab="1"/>'

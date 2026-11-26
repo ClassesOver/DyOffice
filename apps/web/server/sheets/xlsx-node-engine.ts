@@ -832,6 +832,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
     const rel = workbookRels.find(item => relationshipIdsMatch(item.id, sheet.relationshipId) && !item.external && /\/(worksheet|chartsheet)$/.test(item.type))
     if (!rel) continue
     const path = resolveRelTarget(workbookPath, rel.target)
+    if (!hasPart(path)) continue
     const sheetXml = normalizeOoxmlPartPrefix(await text(path))
     if (rel.type.endsWith('/chartsheet')) {
       const root = spreadsheetSheetRoot(sheetXml)

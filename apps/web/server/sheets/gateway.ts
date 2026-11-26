@@ -92,24 +92,30 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
     const sheets = []
     for (const element of elements) {
       const canonical = canonicalSheetDeclaration(element.xml)
-      if (canonical !== element.xml) {
-        sheetPatches.push({ start: element.start, length: element.xml.length, xml: canonical })
-      }
-      if (!element.sheetId || !element.relationshipId) throw new Error('Missing sheet identity')
+      if (!element.sheetId) throw new Error('Missing sheet identity')
       const id = `sheet-${element.sheetId}`, name = element.name
       if (id.length > 512 || !name.length || name.length > 255 || ids.has(id) || names.has(name)) throw new Error('Ambiguous sheets')
+      ids.add(id)
+      names.add(name)
+      // Keep dangling declarations in the package, outside the editable sheet map.
+      if (!element.relationshipId) continue
       const rels = relationships.filter(rel => relationshipIdsMatch(rel.id, element.relationshipId))
       const rel = rels[0]
-      if (rels.length !== 1 || !rel || rel.external || !/\/(worksheet|chartsheet)$/.test(rel.type)) {
+      if (!rel) continue
+      if (rels.length !== 1 || rel.external || !/\/(worksheet|chartsheet)$/.test(rel.type)) {
         throw new Error('Invalid sheet relationship')
       }
       const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
+      if (!await source.has(path)) continue
       if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')
-      if (!await source.has(path)) throw new Error('Missing worksheet')
+      if (canonical !== element.xml) {
+        sheetPatches.push({ start: element.start, length: element.xml.length, xml: canonical })
+      }
       if (editedSheets.has(id)) await preparePart(path)
       worksheetPaths.add(path)
-      ids.add(id); names.add(name); sheets.push({ id, name })
+      sheets.push({ id, name })
     }
+    if (!sheets.length) throw new Error('Workbook contains no readable worksheets')
     if (sheetPatches.length) preparedEntries.set('xl/workbook.xml', applyPatches(workbook, sheetPatches))
     if (!preparedEntries.size && !touchesCrossSheetReferences) return await planSave(source, sheets, request)
     const plan = await planSave({
