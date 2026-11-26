@@ -10,9 +10,15 @@ import {
   resolveRelTarget,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
-import { rootTail } from './xlsx-root-tail.ts'
-import { tablePartNames } from './xlsx-sheets.ts'
+import {
+  ensureRelationshipNamespace,
+  readRelationshipId,
+  readRootStartTag,
+  relationshipNamespaceOverride,
+} from './xlsx-namespace.ts'
+import { decodeAttribute, parseRelationships, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
+import { readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { isElement, prefixOf, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 /// Persists tables (ListObjects) created in the editor as brand-new OOXML
 /// parts: xl/tables/tableN.xml, the worksheet's <tableParts> element, the
@@ -51,6 +57,47 @@ export interface TableStyleOptions {
   readonly lastColumn?: boolean | undefined
   readonly bandedColumns?: boolean | undefined
   readonly filterButton?: boolean | undefined
+}
+
+export interface LocatedTable {
+  readonly path: string
+  readonly relId: string
+  readonly xml: string
+}
+
+export function worksheetTableParts(root: ScopedElement) {
+  const container = scopedChildren(root).find((entry) => isElement(entry, 'tableParts', root.namespace))
+  if (!container) return undefined
+  const entries = scopedChildren(container)
+    .filter((entry) => isElement(entry, 'tablePart', root.namespace))
+    .map((entry) => ({ entry, id: readRelationshipId(entry.opening, container.opening, root.opening) }))
+  return { container, entries }
+}
+
+/// The table parts referenced by a worksheet, in worksheet order. Shared
+/// with the filter save path, which routes table-overlapping filters into
+/// the table part instead of the worksheet.
+export async function sheetTableParts(
+  pkg: MutablePackage,
+  worksheetPath: string,
+): Promise<readonly LocatedTable[]> {
+  const relsPath = relsPathFor(worksheetPath)
+  if (!(await pkg.has(relsPath))) return []
+  const root = worksheetRoot(await pkg.readText(worksheetPath))
+  const references = root && worksheetTableParts(root)
+  if (!references) return []
+  const relationships = parseRelationships(await pkg.readText(relsPath))
+    .filter((entry) => !entry.external && entry.type.endsWith('/table'))
+  const parts: LocatedTable[] = []
+  for (const { id: relId } of references.entries) {
+    if (!relId) continue
+    const rel = relationships.find(({ id }) => relationshipIdsMatch(id, relId))
+    if (!rel?.target) continue
+    const path = resolveRelTarget(worksheetPath, rel.target)
+    if (!(await pkg.has(path))) continue
+    parts.push({ path, relId, xml: await pkg.readText(path) })
+  }
+  return parts
 }
 
 export const TABLE_REL_TYPE =
@@ -150,9 +197,9 @@ export async function collectExistingTableNames(pkg: MutablePackage): Promise<Se
 async function maxExistingTableId(pkg: MutablePackage): Promise<number> {
   let max = 0
   for (const path of await tablePartPaths(pkg)) {
-    const xml = await pkg.readText(path)
-    const id = Number(/<table\b[^>]*\bid="(\d+)"/.exec(xml)?.[1] ?? 0)
-    if (Number.isFinite(id)) max = Math.max(max, id)
+    const opening = readRootStartTag(await pkg.readText(path))
+    const id = Number(decodeAttribute(readWorksheetTagAttribute(opening, 'id') ?? ''))
+    if (Number.isSafeInteger(id)) max = Math.max(max, id)
   }
   return max
 }
@@ -171,21 +218,13 @@ export async function assertNameNotDefined(pkg: MutablePackage, name: string): P
   }
 }
 
-/// The new table must not overlap any table already on the same worksheet.
-/// Additions earlier in this save already appended their relationships, so
-/// the rels scan covers unsaved tables too.
+/// The new table must not overlap any table already on the same worksheet,
+/// including additions already linked in this save.
 async function assertNoTableOverlap(pkg: MutablePackage, addition: TableAddition): Promise<void> {
-  const relsPath = relsPathFor(addition.worksheetPath)
-  if (!(await pkg.has(relsPath))) return
-  const relsXml = await pkg.readText(relsPath)
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*\/?>/g)) {
-    const tag = match[0]
-    if (!tag.includes(`Type="${TABLE_REL_TYPE}"`)) continue
-    const target = /\bTarget="([^"]+)"/.exec(tag)?.[1]
-    if (!target) continue
-    const tablePath = resolveRelTarget(addition.worksheetPath, target)
-    if (!(await pkg.has(tablePath))) continue
-    const ref = /<table\b[^>]*\bref="([^"]+)"/.exec(await pkg.readText(tablePath))?.[1]
+  for (const table of await sheetTableParts(pkg, addition.worksheetPath)) {
+    const opening = readRootStartTag(table.xml)
+    const rawRef = readWorksheetTagAttribute(opening, 'ref')
+    const ref = rawRef && decodeAttribute(rawRef)
     if (ref && areasOverlap(addition.area, parseRef(ref))) {
       throw new TableAddError(`Table "${addition.name}" overlaps an existing table (${ref}).`)
     }
@@ -197,14 +236,21 @@ export function assertNoSheetConflicts(
   addition: Pick<TableAddition, 'name' | 'area'>,
   worksheetXml: string,
 ): void {
-  const autoFilterRef = /<autoFilter\b[^>]*\bref="([^"]+)"/.exec(worksheetXml)?.[1]
+  const root = worksheetRoot(worksheetXml)
+  if (!root) return
+  const children = scopedChildren(root)
+  const filter = children.find((entry) => isElement(entry, 'autoFilter', root.namespace))
+  const autoFilterRef = filter?.attributes.get('ref')
   if (autoFilterRef && areasOverlap(addition.area, parseRef(autoFilterRef))) {
     throw new TableAddError(
       `Table "${addition.name}" overlaps the sheet auto-filter (${autoFilterRef}) — clear it first.`,
     )
   }
-  for (const match of worksheetXml.matchAll(/<mergeCell\b[^>]*\bref="([^"]+)"/g)) {
-    const ref = match[1]
+  const merges = children.find((entry) => isElement(entry, 'mergeCells', root.namespace))
+  if (!merges) return
+  for (const entry of scopedChildren(merges)) {
+    if (!isElement(entry, 'mergeCell', root.namespace)) continue
+    const ref = entry.attributes.get('ref')
     if (ref && areasOverlap(addition.area, parseRef(ref))) {
       throw new TableAddError(
         `Table "${addition.name}" overlaps merged cells (${ref}) — unmerge them first.`,
@@ -251,45 +297,30 @@ export function autoFilterRef(area: TableArea, totalsRows: number): string {
   return areaToRef({ ...area, endRow: area.endRow - totalsRows })
 }
 
-/// Number of <tablePart> children the sheet already declares. `<tablePart\b`
-/// does not match `<tableParts`, so the container opener is not counted.
-function countTableParts(worksheetXml: string): number {
-  return (worksheetXml.match(/<tablePart\b/g) ?? []).length
-}
-
-/// Appends (or extends) the worksheet's <tableParts> element. Schema order
-/// puts tableParts after every print/drawing element, before extLst.
+/// Schema order puts tableParts after every print/drawing element, before extLst.
 function appendTablePart(worksheetXml: string, relId: string): string {
   const xml = ensureRelationshipNamespace(worksheetXml)
-  const part = `<tablePart r:id="${relId}"/>`
-  const existing = /<tableParts\b[^>]*?(\/?)>/.exec(xml)
-  if (existing) {
-    const [opener, selfClosing] = existing
-    // count is optional in CT_TableParts: when the opener omits it, count the
-    // children instead — matching the attribute alone left the element behind
-    // and a second <tableParts> was written before </worksheet>.
-    const declared = /count="(\d+)"/.exec(opener)?.[1]
-    const count = (declared === undefined ? countTableParts(xml) : Number(declared)) + 1
-    if (selfClosing === '/') {
-      return xml.replace(opener, `<tableParts count="${count}">${part}</tableParts>`)
-    }
-    const reopened =
-      declared === undefined
-        ? opener.replace(/>$/, ` count="${count}">`)
-        : opener.replace(/count="\d+"/, `count="${count}"`)
-    return xml.replace(opener, reopened).replace('</tableParts>', `${part}</tableParts>`)
+  const root = worksheetRoot(xml)
+  if (!root || root.opening.endsWith('/>')) throw new TableAddError('The worksheet part is malformed.')
+  const references = worksheetTableParts(root)
+  const container = references?.container
+  const prefix = prefixOf(container?.name ?? root.name)
+  const binding = relationshipNamespaceOverride(container?.opening ?? '', root.opening)
+  const part = `<${prefix}tablePart${binding} r:id="${escapeAttribute(relId)}"/>`
+  const bodyStart = root.start + root.opening.length
+  if (references) {
+    const { container, entries } = references
+    const opening = updateWorksheetTagAttribute(container.opening, 'count', String(entries.length + 1))
+    const offset = bodyStart + container.start
+    const replacement = opening.endsWith('/>')
+      ? opening.slice(0, -2) + '>' + part + `</${container.name}>`
+      : opening + container.inner + part + container.xml.slice(container.opening.length + container.inner.length)
+    return xml.slice(0, offset) + replacement + xml.slice(offset + container.xml.length)
   }
-  const element = `<tableParts count="1">${part}</tableParts>`
-  const anchor = worksheetTailOffset(xml)
-  return xml.slice(0, anchor) + element + xml.slice(anchor)
-}
-
-/// Locate only the worksheet's own extension list or closing tag. A linked
-/// conditional-formatting rule may carry an earlier, nested extLst.
-function worksheetTailOffset(xml: string): number {
-  const tail = rootTail(xml, 'worksheet')
-  if (tail === null) throw new TableAddError('The worksheet part is malformed.')
-  return tail.extLst === null ? tail.rootClose : tail.extLst.open
+  const element = `<${prefix}tableParts count="1">${part}</${prefix}tableParts>`
+  const ext = scopedChildren(root).find((entry) => isElement(entry, 'extLst', root.namespace))
+  const offset = bodyStart + (ext?.start ?? root.inner.length)
+  return xml.slice(0, offset) + element + xml.slice(offset)
 }
 
 export function areaToRef(area: TableArea): string {

@@ -1,6 +1,6 @@
-import { relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
-import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
-import { decodeAttribute, parseRelationships, relationshipIdsMatch, removePartOverride, removeRelationshipById, tablePartNames } from './xlsx-sheets.ts'
+import { relsPathFor, type MutablePackage } from './xlsx-drawing-add.ts'
+import { readRootStartTag } from './xlsx-namespace.ts'
+import { decodeAttribute, relationshipIdsMatch, removePartOverride, removeRelationshipById, tablePartNames } from './xlsx-sheets.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
 import {
@@ -22,6 +22,9 @@ import {
   collectExistingTableNames,
   escapeAttribute,
   parseRef,
+  sheetTableParts,
+  worksheetTableParts,
+  type LocatedTable,
   type TableArea,
   type TableStyleOptions,
 } from './xlsx-table-add.ts'
@@ -48,12 +51,6 @@ const CONTENT_TYPES_PATH = '[Content_Types].xml'
 const TABLE_NAME_RULE = /^[\p{L}_\\][\p{L}\p{N}_.\\]*$/u
 const CELL_LIKE = /^(\$?[A-Za-z]{1,3}\$?[0-9]+|[rR]\d*[cC]\d*)$/
 
-export interface LocatedTable {
-  readonly path: string
-  readonly relId: string
-  readonly xml: string
-}
-
 export async function applyTableEdits(
   pkg: MutablePackage,
   edits: readonly TableEdit[],
@@ -70,42 +67,6 @@ export async function applyTableEdits(
     pkg.write(located.path, rewritten)
     touchedEntries.add(located.path)
   }
-}
-
-function worksheetTableParts(xml: string) {
-  const root = worksheetRoot(xml)
-  if (!root) return undefined
-  const container = scopedChildren(root).find((entry) => isElement(entry, 'tableParts', root.namespace))
-  if (!container) return undefined
-  const entries = scopedChildren(container)
-    .filter((entry) => isElement(entry, 'tablePart', root.namespace))
-    .map((entry) => ({ entry, id: readRelationshipId(entry.opening, container.opening, root.opening) }))
-  return { root, container, entries }
-}
-
-/// The table parts referenced by a worksheet, in worksheet order. Shared
-/// with the filter save path, which routes table-overlapping filters into
-/// the table part instead of the worksheet.
-export async function sheetTableParts(
-  pkg: MutablePackage,
-  worksheetPath: string,
-): Promise<readonly LocatedTable[]> {
-  const relsPath = relsPathFor(worksheetPath)
-  if (!(await pkg.has(relsPath))) return []
-  const references = worksheetTableParts(await pkg.readText(worksheetPath))
-  if (!references) return []
-  const relationships = parseRelationships(await pkg.readText(relsPath))
-    .filter((entry) => !entry.external && entry.type.endsWith('/table'))
-  const parts: LocatedTable[] = []
-  for (const { id: relId } of references.entries) {
-    if (!relId) continue
-    const rel = relationships.find(({ id }) => relationshipIdsMatch(id, relId))
-    if (!rel?.target) continue
-    const path = resolveRelTarget(worksheetPath, rel.target)
-    if (!(await pkg.has(path))) continue
-    parts.push({ path, relId, xml: await pkg.readText(path) })
-  }
-  return parts
 }
 
 async function locateTable(pkg: MutablePackage, edit: TableEdit): Promise<LocatedTable> {
@@ -146,9 +107,10 @@ async function removeTable(
 
 /// Drops one <tablePart>; an emptied <tableParts> container goes with it.
 export function removeTablePart(worksheetXml: string, relId: string): string {
-  const references = worksheetTableParts(worksheetXml)
-  if (!references) return worksheetXml
-  const { root, container, entries } = references
+  const root = worksheetRoot(worksheetXml)
+  const references = root && worksheetTableParts(root)
+  if (!root || !references) return worksheetXml
+  const { container, entries } = references
   const patches = entries
     .filter(({ id }) => relationshipIdsMatch(id, relId))
     .map(({ entry }) => patchElement(entry, ''))

@@ -51,13 +51,13 @@ import {
   areasOverlap,
   areaToRef,
   parseRef,
+  sheetTableParts,
+  type LocatedTable,
   type TableArea,
   type TableStyleOptions,
 } from './xlsx-table-add.ts'
 import {
   applyTableEdits,
-  sheetTableParts,
-  type LocatedTable,
   type TableEdit,
 } from './xlsx-table-edit.ts'
 import type { PivotFilterDef } from '../domain/pivot-filters.ts'

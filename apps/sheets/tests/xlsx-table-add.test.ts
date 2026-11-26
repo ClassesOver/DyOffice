@@ -6,7 +6,7 @@ import {
   planCellEditsToXlsx,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import type { SheetTableAddition } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
-import { buildEditFixture, buildStructureFixture } from './fixture-builder'
+import { buildEditFixture, buildKitchenSinkFixture, buildStructureFixture } from './fixture-builder'
 
 function tableAddition(overrides: Partial<SheetTableAddition> = {}): SheetTableAddition {
   return {
@@ -45,6 +45,33 @@ async function planWith(
 }
 
 describe('table additions', () => {
+  it('uses the real table references, reserves existing IDs, and scopes the new relationship', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const worksheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const tablePath = 'xl/tables/table1.xml'
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const comment = '<!-- <tableParts count="8"><tablePart r:id="fake"/></tableParts> <mergeCell ref="D1:E4"/> -->'
+    const worksheet = await zip.file(worksheetPath)!.async('text')
+    zip.file(worksheetPath, worksheet.replace(`xmlns:r="${office}"`, 'xmlns:r="urn:example"')
+      .replace('<legacyDrawing r:id="rId3"/>', `<legacyDrawing xmlns:r="${office}" r:id="rId3"/>`)
+      .replace('<tableParts count="1"><tablePart r:id="rId1"/></tableParts>',
+        `${comment}<tableParts xmlns:t="${office}" count='8'><tablePart t:id='rId&#49;'/></tableParts>`))
+    zip.file(relsPath, (await zip.file(relsPath)!.async('text')).replaceAll('"', "'"))
+    zip.file(tablePath, (await zip.file(tablePath)!.async('text')).replace('id="1"', "id='13'").replace('ref="A1:B2"', "ref='A1:B2'"))
+    const fixture = await zip.generateAsync({ type: 'nodebuffer' })
+
+    await expect(planWith([tableAddition()], fixture)).rejects.toThrow('overlaps an existing table (A1:B2)')
+    const plan = await planWith([tableAddition({
+      area: { startRow: 0, startColumn: 3, endRow: 3, endColumn: 4 },
+    })], fixture)
+    expect(plan.added.get('xl/tables/table2.xml')).toContain('id="14"')
+    expect(plan.replaced.get(worksheetPath)).toContain(comment)
+    expect(plan.replaced.get(worksheetPath)).toContain(
+      `<tableParts xmlns:t="${office}" count="2"><tablePart t:id='rId&#49;'/><tablePart xmlns:r="${office}" r:id="rId4"/></tableParts>`,
+    )
+  })
+
   it('creates the table part and registers every hook', async () => {
     const plan = await planWith([tableAddition()])
 
