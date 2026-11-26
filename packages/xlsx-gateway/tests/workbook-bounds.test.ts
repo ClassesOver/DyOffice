@@ -26,4 +26,11 @@ describe('workbook open bounds', () => {
     expect(parseSharedStringsXml(xml)).toEqual(['hello', 'ab'])
     expect(parseSharedStringsXml('<sst/>')).toEqual([])
   })
+
+  it('uses each text node’s XML whitespace policy before decoding spreadsheet escapes', () => {
+    const xml = `<sst><si><t> &#9;label&#10; </t></si><si><t xml:space='preserve'>  padded  </t></si>
+      <si><r><t> First </t></r><r><t xml:space="preserve"> Second </t></r></si>
+      <si><t> _x0020_fixed_x0020_ </t></si><si><t>&#160;nonbreaking&#160;</t></si></sst>`
+    expect(parseSharedStringsXml(xml)).toEqual(['label', '  padded  ', 'First Second ', ' fixed ', '\u00a0nonbreaking\u00a0'])
+  })
 })

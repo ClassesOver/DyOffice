@@ -59,6 +59,25 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('decodes inline and rich text whitespace like GenOffice after save and reopen', async () => {
+    const bytes = await workbook({
+      [sheetPath]: worksheet(`<sheetData><row r="1">
+        <c r="A1" t="inlineStr"><is><t> &#9;Label&#10; </t></is></c>
+        <c r="B1" t="inlineStr"><is><t xml:space='preserve'>  Padded  </t></is></c>
+        <c r="C1" t="inlineStr"><is><r><rPr><b/></rPr><t> First </t></r>
+          <r><t xml:space="preserve"> Second </t></r></is></c>
+        <c r="D1" t="inlineStr"><is><t> _x0020_fixed_x0020_ </t></is></c>
+      </row></sheetData>`),
+    })
+    const check = async (input) => {
+      const { cells } = await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 3 })
+      assert.deepEqual(cells.map(({ value }) => value), ['Label', '  Padded  ', 'First Second ', ' fixed '])
+      assert.deepEqual(cells[2].rich.map(({ text, bold }) => [text, bold]), [['First', true], [' Second ', false]])
+    }
+    await check(bytes)
+    await check(await saveValue(bytes, 4, 42))
+  })
+
   await t.test(
     'empty numeric and invalid string index cells retain blank values and styles',
     async () => {

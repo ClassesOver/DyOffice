@@ -3829,12 +3829,14 @@ function parseCellText(xml: string, readRunStyle?: ReadRunStyle): CellText {
   let styled = false
   // Treat phonetic guides as a single element so their nested text is skipped.
   const contents =
-    /<rPh(?=[\s/>])[^>]*?(?:\/>|>[\s\S]*?<\/rPh>)|<r(?:\s[^>]*)?>([\s\S]*?)<\/r>|<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g
-  for (const [, runXml, plainText] of xml.matchAll(contents)) {
-    if (runXml === undefined && plainText === undefined) continue
-    const runText =
-      runXml === undefined ? undefined : /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/.exec(runXml)?.[1]
-    const text = decodeCellText(plainText ?? runText ?? '')
+    /<rPh(?=[\s/>])[^>]*?(?:\/>|>[\s\S]*?<\/rPh>)|<r(?:\s[^>]*)?>([\s\S]*?)<\/r>|(<t(?:\s[^>]*)?(?<!\/)>)([\s\S]*?)<\/t>/g
+  for (const [, runXml, plainTag, plainText] of xml.matchAll(contents)) {
+    if (runXml === undefined && plainTag === undefined) continue
+    const runText = runXml === undefined ? undefined
+      : /(<t(?:\s[^>]*)?(?<!\/)>)([\s\S]*?)<\/t>/.exec(runXml)
+    const textTag = plainTag ?? runText?.[1] ?? ''
+    const preserveSpace = readWorksheetTagAttribute(textTag, 'xml:space') === 'preserve'
+    const text = decodeCellText(plainText ?? runText?.[2] ?? '', preserveSpace)
     value += text
     if (readRunStyle) {
       const properties =
@@ -3874,8 +3876,10 @@ function escapeCellText(input: string): string {
 
 /// Mirrors the sidecar: raw CRLF folds first so `_x000D_` + LF (Excel's CR LF)
 /// ends up as one line break.
-function decodeCellText(input: string): string {
-  const text = decodeXmlText(input).replace(/\r\n?/g, '\n')
+function decodeCellText(input: string, preserveSpace = true): string {
+  let text = decodeXmlText(input).replace(/\r\n?/g, '\n')
+  // The XML whitespace policy applies before escaped spreadsheet characters.
+  if (!preserveSpace) text = text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')
   return decodeXlsxEscapes(text).replace(/\r\n?/g, '\n')
 }
 
