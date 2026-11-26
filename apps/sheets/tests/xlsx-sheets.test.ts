@@ -461,6 +461,49 @@ describe('sheet remove save', () => {
     ).rejects.toThrow(/source data/)
   })
 
+  it('protects a pivot source sheet referenced by table name from deletion and row insertion', async () => {
+    const zip = await JSZip.loadAsync(await buildSatelliteSheetFixture({ pivotSourceCache: true }))
+    const path = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const cache = await zip.file(path)!.async('text')
+    zip.file(path, cache.replace(/<worksheetSource\b[^>]*\/>/, "<worksheetSource name='decotable'/>"))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+
+    await expect(applyCellEditsToXlsx(bytes, [], [], [], {
+      renames: [], additions: [], removals: ['Deco'], order: ['Keep'],
+    }).then(() => 'saved')).rejects.toThrow(/source data from "Deco"/)
+    await expect(applyCellEditsToXlsx(bytes, [], [{
+      sheetName: 'Deco', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }]).then(() => 'saved')).rejects.toThrow(/source data from "Deco"/)
+    const other = await applyCellEditsToXlsx(bytes, [], [{
+      sheetName: 'Keep', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }])
+    expect(await entryText(other.buffer, path)).toContain("<worksheetSource name='decotable'/>")
+
+    const tablePath = 'xl/tables/table1.xml'
+    const table = await zip.file(tablePath)!.async('text')
+    zip.file(tablePath, table.replace(/\bref="[^"]+"/, 'ref="invalid"'))
+    const unreadable = await zip.generateAsync({ type: 'nodebuffer' })
+    const repaired = await applyCellEditsToXlsx(unreadable, [], [{
+      sheetName: 'Keep', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }])
+    expect(await entryText(repaired.buffer, path)).toContain("<worksheetSource name='decotable'/>")
+  })
+
+  it('protects a fixed defined range used by a pivot from row insertion', async () => {
+    const zip = await JSZip.loadAsync(await buildSatelliteSheetFixture({ pivotSourceCache: true }))
+    const path = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const workbookPath = 'xl/workbook.xml'
+    const cache = await zip.file(path)!.async('text')
+    const workbook = await zip.file(workbookPath)!.async('text')
+    zip.file(path, cache.replace(/<worksheetSource\b[^>]*\/>/, '<worksheetSource name="PivotInput"/>'))
+    zip.file(workbookPath, workbook.replace('</sheets>',
+      '</sheets><definedNames><definedName name="PivotInput">Deco!$A$1:$A$2</definedName></definedNames>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(applyCellEditsToXlsx(bytes, [], [{
+      sheetName: 'Deco', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }]).then(() => 'saved')).rejects.toThrow(/source data from "Deco"/)
+  })
+
   it('rewrites a pivot cache worksheetSource when its source sheet is renamed', async () => {
     const mutation = await applyCellEditsToXlsx(
       await buildSatelliteSheetFixture({ pivotSourceCache: true }),

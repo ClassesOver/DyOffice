@@ -106,7 +106,6 @@ import {
   parseRelationships,
   parseSheetElements,
   partPathForRels,
-  pivotCacheReadsFromSheet,
   prepareClonedSheetRels,
   relationshipIdsMatch,
   removePartOverride,
@@ -157,7 +156,7 @@ import {
   type SlicerStateWrite,
   type SlicerControlWrite,
 } from './xlsx-slicer.ts'
-import { setPivotRefreshOnLoad } from './xlsx-pivot.ts'
+import { readPivotSourceSheetNames, setPivotRefreshOnLoad } from './xlsx-pivot.ts'
 import { applyPivotLayoutExpansions, type PivotRefreshUpdate } from './xlsx-pivot-expand.ts'
 import {
   applyHyperlinkEdits,
@@ -1406,15 +1405,14 @@ export async function planCellEditsToXlsx(
         /^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path),
       )
     : []
+  const structuralPivotSources = await collectPivotSourceSheets(pkg, pivotCacheDefinitionPaths, workbookXml)
   for (const { sheetName, ops } of structuralOps) {
     if (ops.length === 0) continue
-    for (const cachePath of ops.some(isShiftingOp) ? pivotCacheDefinitionPaths : []) {
-      if (pivotCacheReadsFromSheet(await pkg.readText(cachePath), sheetName)) {
-        throw new StructuralShiftError(
-          `A pivot table reads its source data from "${sheetName}" — ` +
-            'row/column changes there cannot be saved.',
-        )
-      }
+    if (ops.some(isShiftingOp) && structuralPivotSources.has(sheetName.toLowerCase())) {
+      throw new StructuralShiftError(
+        `A pivot table reads its source data from "${sheetName}" — ` +
+          'row/column changes there cannot be saved.',
+      )
     }
     worksheetXmls.set(
       sheetName,
@@ -2148,6 +2146,22 @@ async function allocateAddedSheets(
   return allocations
 }
 
+async function collectPivotSourceSheets(
+  pkg: PackageEditor,
+  paths: readonly string[],
+  workbookXml: string,
+): Promise<Set<string>> {
+  const names = new Set<string>()
+  for (const path of paths) {
+    const cache = await pkg.readText(path)
+    for (const name of await readPivotSourceSheetNames(cache, pkg, workbookXml)) {
+      names.add(name.toLowerCase())
+    }
+    pkg.releaseSourceText(path)
+  }
+  return names
+}
+
 async function applySheetPlanToPackage(
   pkg: PackageEditor,
   plan: SheetEditPlan,
@@ -2267,6 +2281,9 @@ async function applySheetPlanToPackage(
   const removedLocalIds = new Set(
     originalNames.flatMap((name, index) => (plan.removals.includes(name) ? [index] : [])),
   )
+  const survivingPivotSources = plan.removals.length > 0
+    ? await collectPivotSourceSheets(pkg, pivotCacheDefinitionPaths.filter((path) => !removedOwnedParts.has(path)), workbookXml)
+    : new Set<string>()
   for (const removal of plan.removals) {
     for (const path of survivingWorksheetPaths) {
       if (!(await pkg.canPatch(path))) {
@@ -2298,16 +2315,10 @@ async function applySheetPlanToPackage(
         `A workbook defined name references "${removal}" — deleting it is not allowed.`,
       )
     }
-    // A pivot hosted on a surviving sheet may read its source rows from the
-    // removed sheet; only the pivotCacheDefinition records that link
-    // (cacheSource/worksheetSource@sheet), so the hosting-sheet pivotTable
-    // fail-close in classifyRemovedSheetRels cannot catch it.
-    for (const cachePath of pivotCacheDefinitionPaths) {
-      if (pivotCacheReadsFromSheet(await pkg.readText(cachePath), removal)) {
-        throw new SheetEditError(
-          `A pivot table reads its source data from "${removal}" — deleting it is not allowed.`,
-        )
-      }
+    if (survivingPivotSources.has(removal.toLowerCase())) {
+      throw new SheetEditError(
+        `A pivot table reads its source data from "${removal}" — deleting it is not allowed.`,
+      )
     }
     // Structured references (DecoTable[Amount]) into a removed table are not
     // sheet-qualified, so the sheet-name checks above cannot catch them.

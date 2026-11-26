@@ -314,6 +314,9 @@ test(
       const source = await editPart(withPivot, before.cachePath, (xml) => xml.replace(
         /<worksheetSource\b[^>]*\/>/, `${comment}<worksheetSource name='SourceData'/>`,
       ))
+      await assert.rejects(() => save(source, [], [first, second], {
+        structuralOps: insertOn(first),
+      }), { statusCode: 400 })
       const saved = await save(source, [], [first, second], {
         tableEdits: [{ sheetId: first, tableName: 'SourceData', name: 'SalesData',
           area: { ...area, endRow: 4 }, totalsRow: true }],

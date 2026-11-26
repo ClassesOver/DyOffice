@@ -204,6 +204,10 @@ export function setPivotRefreshOnLoad(cacheDefinitionXml: string): string {
 
 type PivotWorkbookSource = Pick<MutablePackage, 'has' | 'readText'>
 type PivotSourceRange = Pick<PivotDefinition, 'sourceSheet' | 'sourceRef'>
+interface ResolvedPivotSource {
+  readonly sourceSheet: string
+  readonly sourceRef?: string
+}
 
 export async function readPivotDefinitionWithSource(
   pivotXml: string,
@@ -213,7 +217,21 @@ export async function readPivotDefinitionWithSource(
   const attributes = localPivotWorksheetSource(cacheXml)?.element.attributes
   const name = attributes?.get('name')
   const range = name ? await resolveNamedSource(workbook, name, attributes?.get('sheet')) : undefined
-  return parsePivotDefinition(pivotXml, cacheXml, range)
+  return parsePivotDefinition(pivotXml, cacheXml, range?.sourceRef
+    ? { sourceSheet: range.sourceSheet, sourceRef: range.sourceRef }
+    : undefined)
+}
+
+export async function readPivotSourceSheetNames(
+  cacheXml: string,
+  workbook: PivotWorkbookSource,
+  workbookXml: string,
+): Promise<string[]> {
+  const attributes = localPivotWorksheetSource(cacheXml)?.element.attributes
+  const sheet = attributes?.get('sheet')
+  const name = attributes?.get('name')
+  const resolved = name ? await resolveNamedSource(workbook, name, sheet, workbookXml) : undefined
+  return [sheet, resolved?.sourceSheet].filter((value): value is string => !!value)
 }
 
 interface PivotSourceSheet {
@@ -226,10 +244,11 @@ async function resolveNamedSource(
   workbook: PivotWorkbookSource,
   name: string,
   sheetHint: string | undefined,
-): Promise<PivotSourceRange | undefined> {
+  currentWorkbookXml?: string,
+): Promise<ResolvedPivotSource | undefined> {
   const key = name.toLowerCase()
   const [workbookXml, relsXml] = await Promise.all([
-    workbook.readText('xl/workbook.xml'),
+    currentWorkbookXml ?? workbook.readText('xl/workbook.xml'),
     workbook.readText('xl/_rels/workbook.xml.rels'),
   ])
   const relationships = parseRelationships(relsXml).filter((relationship) =>
@@ -252,22 +271,30 @@ async function resolveTableSource(
   workbook: PivotWorkbookSource,
   key: string,
   sheets: readonly PivotSourceSheet[],
-): Promise<PivotSourceRange | null | undefined> {
-  let found: PivotSourceRange | undefined
+): Promise<ResolvedPivotSource | null | undefined> {
+  let found: ResolvedPivotSource | undefined
   for (const sheet of sheets) {
     const { path } = sheet
     if (!(await workbook.has(path))) continue
     for (const table of await sheetTableParts(workbook, path)) {
       if (!tablePartNames(table.xml).some((candidate) => candidate.toLowerCase() === key)) continue
-      // An ambiguous or headerless table cannot serve as a pivot field source.
+      if (found) return null
+      // Ownership is useful to structural edits even for a table that cannot
+      // supply a valid grid of headers and data to the refresh engine.
+      found = { sourceSheet: sheet.name }
       const opening = readRootStartTag(table.xml)
       const headers = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'headerRowCount') ?? '1'))
       const totals = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'totalsRowCount') ?? '0'))
       const ref = readWorksheetTagAttribute(opening, 'ref')
-      if (found || headers !== 1 || !Number.isSafeInteger(totals) || totals < 0 || !ref) return null
-      const area = parseRef(decodeXmlText(ref))
-      if (area.endRow - totals <= area.startRow) return null
-      found = { sourceSheet: sheet.name, sourceRef: areaToRef({ ...area, endRow: area.endRow - totals }) }
+      if (headers !== 1 || !Number.isSafeInteger(totals) || totals < 0 || !ref) continue
+      try {
+        const area = parseRef(decodeXmlText(ref))
+        if (area.endRow - totals > area.startRow) {
+          found = { sourceSheet: sheet.name, sourceRef: areaToRef({ ...area, endRow: area.endRow - totals }) }
+        }
+      } catch {
+        // An unreadable range still belongs to its named table's worksheet.
+      }
     }
   }
   return found
@@ -279,7 +306,7 @@ async function resolveDefinedNameSource(
   key: string,
   sheets: readonly PivotSourceSheet[],
   sheetIndex: number | undefined,
-): Promise<PivotSourceRange | undefined> {
+): Promise<ResolvedPivotSource | undefined> {
   const matches = workbookDefinedNameElements(workbookXml).filter(
     (entry) => entry.attributes.get('name')?.toLowerCase() === key,
   )
@@ -300,7 +327,7 @@ async function resolveDefinedNameSource(
   if (!sheet || !(await workbook.has(sheet.path))) return undefined
   const area = parseRef(match[3].toUpperCase())
   if (area.endRow <= area.startRow || area.endColumn < area.startColumn ||
-    area.endRow >= MAX_GRID_ROWS || area.endColumn >= MAX_GRID_COLUMNS) return undefined
+    area.endRow >= MAX_GRID_ROWS || area.endColumn >= MAX_GRID_COLUMNS) return { sourceSheet: sheet.name }
   return { sourceSheet: sheet.name, sourceRef: areaToRef(area) }
 }
 
