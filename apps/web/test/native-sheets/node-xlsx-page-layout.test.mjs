@@ -207,6 +207,45 @@ test('Web XLSX saves view and print settings without changing other worksheet st
   )
 
   await t.test(
+    'edits and reads print settings without changing foreign elements',
+    async () => {
+      const foreign = 'xmlns="urn:example:print"'
+      const foreignPr = `<sheetPr ${foreign}><pageSetUpPr fitToPage="0"/></sheetPr>`
+      const foreignFit = `<pageSetUpPr ${foreign} fitToPage="0"/>`
+      const foreignSetup = `<pageSetup ${foreign} orientation="portrait"/>`
+      const foreignOptions = `<printOptions ${foreign} gridLines="0"/>`
+      const foreignHeader = `<oddHeader ${foreign}>&amp;CForeign header</oddHeader>`
+      const foreignBreaks = `<rowBreaks ${foreign}><brk id="20" man="1"/></rowBreaks>`
+      const foreignBreak = `<brk ${foreign} id="30" man="1"/>`
+      const input = await workbook((xml) => beforeDrawing(
+        xml.replace('<dimension ', foreignPr +
+          `<sheetPr>${foreignFit}<pageSetUpPr fitToPage="0"/></sheetPr><dimension `),
+        foreignOptions + '<printOptions gridLines="0"/>' + foreignSetup + '<pageSetup orientation="portrait"/>' +
+          `<headerFooter>${foreignHeader}<oddHeader>&amp;COld header</oddHeader></headerFooter>` +
+          foreignBreaks + `<rowBreaks>${foreignBreak}<brk id="2" man="1"/></rowBreaks>`,
+      ))
+      const saved = await save(input, {
+        orientation: 'landscape', fitToPage: true, printGridlines: true,
+        header: { center: 'New header' }, rowBreaks: [1],
+      })
+      const cleared = await save(saved, { header: null, rowBreaks: [] })
+      for (const output of [saved, cleared]) {
+        const xml = await sheetXml(output)
+        for (const preserved of [foreignPr, foreignFit, foreignSetup, foreignOptions, foreignHeader, foreignBreaks, foreignBreak]) {
+          assert.ok(xml.includes(preserved), preserved)
+        }
+        const result = await pageSetup(output)
+        assert.equal(result.orientation, 'landscape')
+        assert.equal(result.fitToPage, true)
+        assert.equal(result.printGridlines, true)
+      }
+      assert.equal((await pageSetup(saved)).oddHeader, '&CNew header')
+      assert.equal((await pageSetup(cleared)).oddHeader, undefined)
+      assert.deepEqual((await native.readRange(saved, 'Acceptance', range)).rowBreaks, [1])
+      assert.deepEqual((await native.readRange(cleared, 'Acceptance', range)).rowBreaks, [])
+    },
+  )
+  await t.test(
     'replaces and clears quoted print names and preserves the existing title columns',
     async () => {
       const oldArea =

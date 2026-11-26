@@ -14,7 +14,7 @@ import {
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
-import { isElement, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import { isElement, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PageSetupError extends Error {}
 
@@ -92,26 +92,23 @@ type PrintElement = (typeof PRINT_ELEMENT_ORDER)[number]
 const printElementRank = new Map<string, number>(
   PRINT_ELEMENT_ORDER.map((name, rank) => [name, rank]),
 )
-const TAG_BODY = `(?:[^>"']|"[^"]*"|'[^']*')*`
+type PrintElementEdit = (qualifiedName: string, existing?: ScopedElement) => string
 
-type PrintElementEdit = (qualifiedName: string, existing?: ChildElement) => string
-
-/// Uses only worksheet children so the edit cannot target custom views or
-/// insert a worksheet element inside a cell extension.
+/// Limits edits to direct SpreadsheetML worksheet children.
 function editPrintElements(
   xml: string,
   edits: ReadonlyMap<PrintElement, PrintElementEdit>,
 ): string {
   if (edits.size === 0) return xml
-  const [root] = childElements(xml)
-  if (root === undefined || localName(root.name) !== 'worksheet') {
+  const root = worksheetRoot(xml)
+  if (!root) {
     throw new PageSetupError('Worksheet has no root element.')
   }
-  const children = childElements(root.inner)
+  const children = scopedChildren(root).filter((child) => child.namespace === root.namespace)
   const patches: { start: number; end: number; rank: number; text: string }[] = []
   for (const [tag, render] of edits) {
     const rank = printElementRank.get(tag)!
-    const matches = children.filter((child) => localName(child.name) === tag)
+    const matches = children.filter((child) => child.local === tag)
     if (matches.length > 0) {
       matches.forEach((child, index) => {
         const duplicateBreaks = index > 0 && (tag === 'rowBreaks' || tag === 'colBreaks')
@@ -126,7 +123,7 @@ function editPrintElements(
       const text = render(prefix(root.name) + tag)
       if (text === '') continue
       const anchor = children.find(
-        (child) => (printElementRank.get(localName(child.name)) ?? -1) > rank,
+        (child) => (printElementRank.get(child.local) ?? -1) > rank,
       )
       const start = anchor?.start ?? root.inner.length
       patches.push({ start, end: start, rank, text })
@@ -187,10 +184,16 @@ function withChildren(element: ChildElement, body: string, opening = element.ope
 
 /// Fit-to-page lives in the worksheet's sheetPr, after tabColor and outlinePr.
 function setFitToPage(xml: string, enabled: boolean): string {
-  const sheetPr = rootChild(xml, 'worksheet', 'sheetPr')
+  const root = worksheetRoot(xml)
+  if (!root) {
+    if (!enabled) return xml
+    throw new PageSetupError('Worksheet has no root element.')
+  }
+  const sheetPr = scopedChildren(root).find((child) => isElement(child, 'sheetPr', root.namespace))
+  const start = root.start + root.opening.length
   if (sheetPr) {
-    const pageSetUpPr = childElements(sheetPr.inner).find((child) =>
-      /(?:^|:)pageSetUpPr$/.test(child.name),
+    const pageSetUpPr = scopedChildren(sheetPr).find((child) =>
+      isElement(child, 'pageSetUpPr', sheetPr.namespace),
     )
     if (!pageSetUpPr && !enabled) return xml
     const body = pageSetUpPr
@@ -201,17 +204,14 @@ function setFitToPage(xml: string, enabled: boolean): string {
             pageSetUpPr.xml.slice(pageSetUpPr.opening.length),
         )
       : `${sheetPr.inner}<${prefix(sheetPr.name)}pageSetUpPr fitToPage="1"/>`
-    return replaceElement(xml, sheetPr, withChildren(sheetPr, body))
+    return replaceElement(xml, { ...sheetPr, start: start + sheetPr.start }, withChildren(sheetPr, body))
   }
   if (!enabled) return xml
-  const worksheet = new RegExp(`<((?:[\\w.-]+:)?)worksheet(?=[\\s/>])${TAG_BODY}>`).exec(xml)
-  if (!worksheet) throw new PageSetupError('Worksheet has no root element.')
-  const at = worksheet.index + worksheet[0].length
-  const qualifier = worksheet[1] ?? ''
+  const qualifier = prefix(root.name)
   return (
-    xml.slice(0, at) +
+    xml.slice(0, start) +
     `<${qualifier}sheetPr><${qualifier}pageSetUpPr fitToPage="1"/></${qualifier}sheetPr>` +
-    xml.slice(at)
+    xml.slice(start)
   )
 }
 
@@ -338,7 +338,7 @@ export function buildHeaderFooterXml(
 /// Updates the sheet's odd header/footer and retains the even and first-page variants.
 function renderHeaderFooter(
   name: string,
-  existing: ChildElement | undefined,
+  existing: ScopedElement | undefined,
   header: HeaderFooterParts | null | undefined,
   footer: HeaderFooterParts | null | undefined,
 ): string {
@@ -349,7 +349,9 @@ function renderHeaderFooter(
   ) => {
     if (parts === undefined) return
     const text = parts === null ? '' : escapeXml(encodeHeaderFooterSections(parts))
-    const children = childElements(body)
+    const children = existing
+      ? scopedChildren({ ...existing, inner: body }).filter((child) => child.namespace === existing.namespace)
+      : childElements(body)
     const previous = children.find((child) => localName(child.name) === tag)
     if (previous) {
       body = replaceElement(body, previous, text === '' ? '' : withChildren(previous, text))
@@ -376,13 +378,19 @@ function renderHeaderFooter(
 function renderPageBreaks(
   name: string,
   breaks: readonly number[],
-  existing?: ChildElement,
+  existing?: ScopedElement,
 ): string {
   const ids = [...new Set(breaks)].filter((id) => id > 0).sort((a, b) => a - b)
-  if (ids.length === 0) return ''
+  let remaining = existing?.inner ?? ''
+  if (existing) {
+    for (const child of scopedChildren(existing).reverse()) {
+      if (isElement(child, 'brk', existing.namespace)) remaining = replaceElement(remaining, child, '')
+    }
+  }
+  if (ids.length === 0 && remaining.trim() === '') return ''
   const max = localName(name) === 'rowBreaks' ? 16_383 : 1_048_575
   const tag = prefix(name) + 'brk'
-  const body = ids.map((id) => `<${tag} id="${id}" max="${max}" man="1"/>`).join('')
+  const body = ids.map((id) => `<${tag} id="${id}" max="${max}" man="1"/>`).join('') + remaining
   if (existing) {
     const count = updateWorksheetTagAttribute(existing.opening, 'count', String(ids.length))
     const opening = updateWorksheetTagAttribute(count, 'manualBreakCount', String(ids.length))

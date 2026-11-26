@@ -14,7 +14,7 @@ import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {findWorksheetHyperlinkSection,hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
-import {isElement,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import {elementText as worksheetElementText,isElement,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import {inferWorksheetAddresses,readDefinedNameText,readWorksheetTagAttribute,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
@@ -274,41 +274,39 @@ function readDataValidations(xml: string): SheetMetadata['dataValidations'] {
 
 type PageSetup = NonNullable<SheetMetadata['pageSetup']>
 const headerFooterSections = ['oddHeader','oddFooter','evenHeader','evenFooter','firstHeader','firstFooter'] as const
-type SheetPrintElements = {
-  sheetPr?: {pageSetUpPr?: XmlElement}
-  pageSetup?: XmlElement
-  pageMargins?: XmlElement
-  printOptions?: XmlElement
-  headerFooter?: XmlElement & Partial<Record<(typeof headerFooterSections)[number],ElementText>>
-}
-
-function integerAttribute(element: XmlElement | undefined, name: string, min: number, max: number) {
-  const value = sizeAttribute(element,name)
+function printInteger(element: ScopedElement | undefined, name: string, min: number, max: number) {
+  const value = sizeValue(element?.attributes.get(name))
   return value!==undefined && Number.isInteger(value) && value>=min && value<=max ? value : undefined
 }
 
-function readPageSetup(worksheet: SheetPrintElements | undefined): SheetMetadata['pageSetup'] {
-  const setup=worksheet?.pageSetup, options=worksheet?.printOptions, footer=worksheet?.headerFooter
-  const orientation=attribute(setup,'orientation')
+function readPageSetup(children: readonly ScopedElement[]): SheetMetadata['pageSetup'] {
+  const section=(name:string)=>children.find(child=>child.local===name)
+  const setup=section('pageSetup'), options=section('printOptions'), footer=section('headerFooter')
+  const properties=section('sheetPr')
+  const pageProperties=properties && scopedChildren(properties).find(child=>isElement(child,'pageSetUpPr',properties.namespace))
+  const orientation=setup?.attributes.get('orientation')
   const keys=['left','right','top','bottom','header','footer'] as const
-  const margins=keys.map(key=>sizeAttribute(worksheet?.pageMargins,key))
+  const pageMargins=section('pageMargins')
+  const margins=keys.map(key=>sizeValue(pageMargins?.attributes.get(key)))
   const print:PageSetup={
     orientation:orientation==='portrait'||orientation==='landscape'?orientation:undefined,
-    paperSize:integerAttribute(setup,'paperSize',1,256),scale:integerAttribute(setup,'scale',10,400),
-    fitToWidth:integerAttribute(setup,'fitToWidth',0,32_767),fitToHeight:integerAttribute(setup,'fitToHeight',0,32_767),
-    fitToPage:enabled(attribute(worksheet?.sheetPr?.pageSetUpPr,'fitToPage'))||undefined,
-    printGridlines:enabled(attribute(options,'gridLines'))||undefined,
-    printHeadings:enabled(attribute(options,'headings'))||undefined,
-    differentOddEven:enabled(attribute(footer,'differentOddEven'))||undefined,
-    differentFirst:enabled(attribute(footer,'differentFirst'))||undefined,
-    headerFooterFixedSize:disabled(attribute(footer,'scaleWithDoc'))||undefined,
+    paperSize:printInteger(setup,'paperSize',1,256),scale:printInteger(setup,'scale',10,400),
+    fitToWidth:printInteger(setup,'fitToWidth',0,32_767),fitToHeight:printInteger(setup,'fitToHeight',0,32_767),
+    fitToPage:enabled(pageProperties?.attributes.get('fitToPage'))||undefined,
+    printGridlines:enabled(options?.attributes.get('gridLines'))||undefined,
+    printHeadings:enabled(options?.attributes.get('headings'))||undefined,
+    differentOddEven:enabled(footer?.attributes.get('differentOddEven'))||undefined,
+    differentFirst:enabled(footer?.attributes.get('differentFirst'))||undefined,
+    headerFooterFixedSize:disabled(footer?.attributes.get('scaleWithDoc'))||undefined,
   }
   if (margins.every(value=>value!==undefined&&value<=10)) {
     print.margins={left:margins[0]!,right:margins[1]!,top:margins[2]!,bottom:margins[3]!,header:margins[4]!,footer:margins[5]!}
   }
-  for(const section of headerFooterSections){
-    const content=elementText(footer?.[section])
-    if(content.length>0&&content.length<=500)print[section]=content
+  const footerChildren=footer ? scopedChildren(footer) : []
+  for(const name of headerFooterSections){
+    const element=footerChildren.find(child=>isElement(child,name,footer?.namespace))
+    const content=element ? worksheetElementText(element.inner) : ''
+    if(content.length>0&&content.length<=500)print[name]=content
   }
   return Object.values(print).some(value=>value!==undefined)?print:null
 }
@@ -539,7 +537,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     sparklines:readSparklines(worksheet?.extLst?.ext??[],resolveColor),
     rowBreaks:readManualBreaks(children.find(child=>child.local==='rowBreaks'),MAX_GRID_ROWS-1),
     colBreaks:readManualBreaks(children.find(child=>child.local==='colBreaks'),MAX_GRID_COLUMNS-1),
-    pageSetup:readPageSetup(worksheet),
+    pageSetup:readPageSetup(children),
     view:{
       tabColor:resolveColor(worksheet?.sheetPr?.tabColor).rgb??null,
       showGridLines:!disabled(attribute(view,'showGridLines')),
