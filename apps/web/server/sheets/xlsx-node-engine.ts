@@ -128,7 +128,6 @@ const metadataXmlOptions:X2jOptions={
     'worksheet.extLst.ext',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup.sparklines.sparkline',
-    'worksheet.rowBreaks.brk','worksheet.colBreaks.brk',
     'worksheet.protectedRanges.protectedRange','worksheet.autoFilter','worksheet.autoFilter.filterColumn',
     'worksheet.autoFilter.filterColumn.filters.filter','worksheet.autoFilter.filterColumn.customFilters.customFilter',
   ].includes(path),
@@ -314,12 +313,13 @@ function readPageSetup(worksheet: SheetPrintElements | undefined): SheetMetadata
   return Object.values(print).some(value=>value!==undefined)?print:null
 }
 
-function readManualBreaks(items: readonly XmlElement[], max: number): number[] {
+function readManualBreaks(section: ScopedElement | undefined, max: number): number[] {
+  if (!section) return []
   const breaks = new Set<number>()
-  for (const item of items) {
-    if (!enabled(attribute(item,'man'))) continue
-    const id = integerAttribute(item,'id',0,max)
-    if (id!==undefined) breaks.add(id)
+  for (const item of scopedChildren(section)) {
+    if (!isElement(item,'brk',section.namespace)||!enabled(item.attributes.get('man'))) continue
+    const id = sizeValue(item.attributes.get('id'))
+    if (id!==undefined&&Number.isInteger(id)&&id<=max) breaks.add(id)
     if (breaks.size===1_023) break
   }
   return [...breaks].sort((a,b)=>a-b)
@@ -537,8 +537,8 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
     ...(dimension?{dimension}:{}),
     dataValidations:readDataValidations(xml),
     sparklines:readSparklines(worksheet?.extLst?.ext??[],resolveColor),
-    rowBreaks:readManualBreaks(worksheet?.rowBreaks?.brk??[],1_048_575),
-    colBreaks:readManualBreaks(worksheet?.colBreaks?.brk??[],16_383),
+    rowBreaks:readManualBreaks(children.find(child=>child.local==='rowBreaks'),MAX_GRID_ROWS-1),
+    colBreaks:readManualBreaks(children.find(child=>child.local==='colBreaks'),MAX_GRID_COLUMNS-1),
     pageSetup:readPageSetup(worksheet),
     view:{
       tabColor:resolveColor(worksheet?.sheetPr?.tabColor).rgb??null,

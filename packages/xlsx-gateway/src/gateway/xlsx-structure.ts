@@ -14,7 +14,15 @@ import { readRelationshipId, readRootStartTag } from './xlsx-namespace.ts'
 import { findRootChild, rootChildren } from './xlsx-root-tail.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
-import { isElement, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import {
+  applyPatches,
+  isElement,
+  patchElement,
+  scopedChildren,
+  worksheetRoot,
+  type ScopedElement,
+  type XmlPatch,
+} from './xlsx-worksheet-xml.ts'
 
 export type StructuralOp =
   | {
@@ -2010,57 +2018,54 @@ function shiftWorksheetRuleRanges(xml: string, moveRef: (ref: string) => string 
 }
 
 function shiftWorksheetPrintLayout(xml: string, shift: Shift, axis: Axis): string {
-  if (xml.includes('dimension')) {
-    const dimension = findRootChild(xml, 'worksheet', 'dimension')
-    if (dimension) {
-      const [element] = childElements(xml.slice(dimension.start, dimension.end))
-      const rawRef = element && readWorksheetTagAttribute(element.opening, 'ref')
-      if (element && rawRef !== undefined) {
-        const ref = decodeEntities(rawRef)
-        const moved = moveRefRange(ref, shift, axis)
-        if (moved !== null && moved !== ref) {
-          const opening = updateWorksheetTagAttribute(element.opening, 'ref', moved)
-          xml =
-            xml.slice(0, dimension.start) +
-            opening +
-            xml.slice(dimension.start + element.opening.length)
-        }
-      }
+  if (!/dimension|rowBreaks|colBreaks/.test(xml)) return xml
+  const children = worksheetChildren(xml)
+  const patches: XmlPatch[] = []
+  const dimension = children.find((child) => child.local === 'dimension')
+  const ref = dimension?.attributes.get('ref')
+  if (dimension && ref !== undefined) {
+    const moved = moveRefRange(ref, shift, axis)
+    if (moved !== ref) {
+      const replacement = moved === null
+        ? ''
+        : updateWorksheetTagAttribute(dimension.opening, 'ref', moved) +
+          dimension.xml.slice(dimension.opening.length)
+      patches.push(patchElement(dimension, replacement))
     }
   }
-  xml = shiftPageBreaks(xml, 'rowBreaks', shift, axis === 'row', MAX_GRID_ROWS, MAX_GRID_COLUMNS)
-  return shiftPageBreaks(
-    xml,
-    'colBreaks',
-    shift,
-    axis === 'column',
-    MAX_GRID_COLUMNS,
-    MAX_GRID_ROWS,
-  )
+
+  for (const name of ['rowBreaks', 'colBreaks']) {
+    const block = children.find((child) => child.local === name)
+    if (!block) continue
+    const rows = name === 'rowBreaks'
+    const replacement = shiftPageBreaks(
+      block,
+      shift,
+      axis === (rows ? 'row' : 'column'),
+      rows ? MAX_GRID_ROWS : MAX_GRID_COLUMNS,
+      rows ? MAX_GRID_COLUMNS : MAX_GRID_ROWS,
+    )
+    if (replacement !== block.xml) patches.push(patchElement(block, replacement))
+  }
+  return applyPatches(xml, patches)
 }
 
 function shiftPageBreaks(
-  xml: string,
-  name: 'rowBreaks' | 'colBreaks',
+  block: ScopedElement,
   shift: Shift,
   alongAxis: boolean,
   axisLength: number,
   acrossLength: number,
 ): string {
-  if (!xml.includes(name)) return xml
-  const position = findRootChild(xml, 'worksheet', name)
-  if (!position) return xml
-  const [block] = childElements(xml.slice(position.start, position.end))
-  if (!block) return xml
   let body = block.inner
   let count = 0
   let manual = 0
-  for (const child of childElements(block.inner).reverse()) {
-    if (child.name.slice(child.name.lastIndexOf(':') + 1) !== 'brk') continue
-    const opening = shiftBreakOpening(child.opening, shift, alongAxis, axisLength, acrossLength)
+  for (const child of scopedChildren(block).reverse()) {
+    if (!isElement(child, 'brk', block.namespace)) continue
+    const opening = shiftBreakOpening(child, shift, alongAxis, axisLength, acrossLength)
     if (opening !== null) {
       count += 1
-      const flag = readWorksheetTagAttribute(opening, 'man')
+      const flag = child.attributes.get('man')
       if (flag === '1' || flag === 'true') manual += 1
     }
     if (opening !== child.opening) {
@@ -2068,25 +2073,26 @@ function shiftPageBreaks(
       body = body.slice(0, child.start) + replacement + body.slice(child.start + child.xml.length)
     }
   }
-  if (body === block.inner) return xml
+  if (body === block.inner) return block.xml
   let replacement = ''
   if (count > 0 || body.trim() !== '') {
     const countTag = updateWorksheetTagAttribute(block.opening, 'count', String(count))
     const opening = updateWorksheetTagAttribute(countTag, 'manualBreakCount', String(manual))
     replacement = opening + body + block.xml.slice(block.opening.length + block.inner.length)
   }
-  return xml.slice(0, position.start) + replacement + xml.slice(position.end)
+  return replacement
 }
 
 function shiftBreakOpening(
-  opening: string,
+  element: ScopedElement,
   shift: Shift,
   alongAxis: boolean,
   axisLength: number,
   acrossLength: number,
 ): string | null {
+  let opening = element.opening
   const number = (name: string, fallback: number) => {
-    const raw = readWorksheetTagAttribute(opening, name)
+    const raw = element.attributes.get(name)
     return raw === undefined ? fallback : /^\d+$/.test(raw) ? Number(raw) : NaN
   }
   // Break ids are zero-based positions before a row or column.
