@@ -12,6 +12,7 @@ import { DbhubPool } from './dbhub-pool.ts'
 import type { SqlRows } from './sql-types.ts'
 
 const DEFAULT_PACKAGE = '@bytebase/dbhub@2.1.0'
+export const DBHUB_STARTUP_TIMEOUT_MS = 30_000
 
 export function dbhubDsn(kind: SqlSourceKind, target: Awaited<ReturnType<SourceEgressPolicy['sql']>>): string {
   // DBHub supports MySQL, and StarRocks exposes the MySQL wire protocol.
@@ -95,7 +96,7 @@ async function openSession(dsn: string, config: string, kind: SqlSourceKind, tim
       : ['-y', ...(kind === 'starrocks' ? ['--node-options=' + preload] : []), process.env.DYOFFICE_DBHUB_PACKAGE || DEFAULT_PACKAGE]
     const transport = new StdioClientTransport({ command: entry ? process.execPath : process.env.DYOFFICE_DBHUB_COMMAND || 'npx',
       args: [...args, '--transport', 'stdio', '--config', configPath], env: { DYOFFICE_DBHUB_DSN: dsn, DYOFFICE_DBHUB_DIALECT: kind } })
-    await client.connect(transport, { timeout: timeoutMs + 5000 })
+    await client.connect(transport, { timeout: DBHUB_STARTUP_TIMEOUT_MS })
     return { client, close }
   } catch (error) { await close(); throw error }
 }

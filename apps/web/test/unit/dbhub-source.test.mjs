@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { dbhubConfig, dbhubDsn, statementsToRows } from '../../server/src/modules/sources/dbhub.ts'
+import { DBHUB_STARTUP_TIMEOUT_MS, dbhubConfig, dbhubDsn, statementsToRows } from '../../server/src/modules/sources/dbhub.ts'
+
+test('DBHub startup has an independent bounded handshake timeout', () => {
+  assert.equal(DBHUB_STARTUP_TIMEOUT_MS, 30_000)
+})
 
 test('DBHub is configured as the default read-only executor', () => {
   const config = dbhubConfig(100, 5000)

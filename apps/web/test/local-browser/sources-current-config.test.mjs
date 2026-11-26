@@ -63,7 +63,7 @@ test('browser manages PostgreSQL connections and table scope without manual quer
  await expect(panel).not.toContainText(/版本|发布/)
  await expect(page.getByLabel('连接凭据',{exact:true})).toHaveCount(0)
  await page.getByRole('button',{name:'测试连接',exact:true}).click()
- await expect(page.getByText('连接测试通过。',{exact:true})).toBeVisible()
+ await expect(page.getByText('连接测试通过。',{exact:true})).toBeVisible({timeout:45000})
  await expect(page.getByLabel('只读 SQL',{exact:true})).toHaveCount(0)
  await mkdir('test-results/configuration-experience',{recursive:true})
  const scopeInput=await tableScope()

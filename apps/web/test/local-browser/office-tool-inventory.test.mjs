@@ -360,6 +360,10 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  if(creationOnly){
   const word=await probe('docx','chat-only')
   const sourceWord=page.frameLocator(`iframe[data-document-id="${files.docx.fileId}"]`)
+  await sourceWord.locator('.zoom-value').click()
+  const zoomDialog=sourceWord.locator('.zoom-dialog')
+  await zoomDialog.getByRole('radio',{name:'100%'}).check()
+  await zoomDialog.locator('button.primary').click()
   for(const width of [960,1280]){
    await page.setViewportSize({width,height:900})
    await sourceWord.locator('.editor-scroll').evaluate(element=>new Promise(resolve=>{

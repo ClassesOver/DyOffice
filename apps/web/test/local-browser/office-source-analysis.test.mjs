@@ -60,7 +60,7 @@ test('Office reads an allowed PostgreSQL schema and Coding plots the frozen resu
  target.username=reader;target.password=password
  const sourcesCredentialKeys='analysis:'+randomBytes(32).toString('base64')
  await createSourceService({transactions:f.transactions,credentialKeys:sourcesCredentialKeys}).create(f.adminSigned.token,{
-  sourceId:'sales-db',name:'Sales DB',kind:'postgres',config:{database:f.database,allowedSchemas:['sales'],units:{amount:'CNY'}},secret:target.href,
+  sourceId:'sales-db',name:'Sales DB',kind:'postgres',config:{database:f.database,allowedSchemas:['sales'],units:{amount:'CNY'},statementTimeoutMs:30000},secret:target.href,
  })
  const keyring={activeKeyId:'office',keys:{office:new Uint8Array(32).fill(37)}}
  const model=liveConfig ? JSON.parse(await readFile(liveConfig,'utf8')).entry
