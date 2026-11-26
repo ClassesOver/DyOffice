@@ -4,6 +4,10 @@
 
 use super::*;
 
+const OFFICE_RELATIONSHIPS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const STRICT_OFFICE_RELATIONSHIPS: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+
 pub(crate) fn read_sheet_declarations(
     archive: &mut ZipArchive<File>,
 ) -> Result<
@@ -15,65 +19,61 @@ pub(crate) fn read_sheet_declarations(
     ),
     SidecarError,
 > {
-    let xml = read_zip_string(archive, "xl/workbook.xml")?;
-    let mut reader = Reader::from_str(&xml);
+    let path = "xl/workbook.xml";
+    let xml = read_zip_string(archive, path)?;
+    let document = visuals::parse_document(&xml, path)?;
+    let workbook = document.root_element();
+    let in_workbook_namespace = |node: &roxmltree::Node<'_, '_>| {
+        node.is_element() && node.tag_name().namespace() == workbook.tag_name().namespace()
+    };
+    let child = |name| {
+        workbook
+            .children()
+            .filter(in_workbook_namespace)
+            .find(|node| node.has_tag_name(name))
+    };
+    let enabled = |value| matches!(value, Some("1" | "true"));
+    let date_1904 = enabled(child("workbookPr").and_then(|node| node.attribute("date1904")));
+    let protection = child("workbookProtection").map(|node| WorkbookProtectionInfo {
+        lock_structure: enabled(node.attribute("lockStructure")),
+        has_password: node.attribute("workbookPassword").is_some()
+            || node.attribute("workbookHashValue").is_some(),
+    });
+    let active_tab = child("bookViews")
+        .into_iter()
+        .flat_map(|node| node.children())
+        .filter(in_workbook_namespace)
+        .filter(|node| node.has_tag_name("workbookView"))
+        .filter_map(|node| node.attribute("activeTab"))
+        .last()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0);
     let mut sheets = Vec::new();
-    let mut protection = None;
-    let mut active_tab = 0usize;
-    let mut date_1904 = false;
-    loop {
-        match reader.read_event()? {
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"workbookPr" =>
-            {
-                date_1904 = attribute_value(&reader, &element, b"date1904")?
-                    .is_some_and(|value| value == "1" || value == "true");
-            }
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"workbookView" =>
-            {
-                if let Some(value) = attribute_value(&reader, &element, b"activeTab")? {
-                    active_tab = value.parse::<usize>().unwrap_or(0);
-                }
-            }
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"workbookProtection" =>
-            {
-                let lock_structure = attribute_value(&reader, &element, b"lockStructure")?
-                    .is_some_and(|value| value == "1" || value == "true");
-                let has_password = attribute_value(&reader, &element, b"workbookPassword")?
-                    .is_some()
-                    || attribute_value(&reader, &element, b"workbookHashValue")?.is_some();
-                protection = Some(WorkbookProtectionInfo {
-                    lock_structure,
-                    has_password,
-                });
-            }
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"sheet" =>
-            {
-                let name = attribute_value(&reader, &element, b"name")?
-                    .ok_or_else(|| SidecarError::Workbook("Sheet has no name.".into()))?;
-                let sheet_id = attribute_value(&reader, &element, b"sheetId")?
-                    .ok_or_else(|| SidecarError::Workbook("Sheet has no sheetId.".into()))?;
-                let relationship_id =
-                    attribute_value(&reader, &element, b"id")?.ok_or_else(|| {
-                        SidecarError::Workbook("Sheet has no relationship id.".into())
-                    })?;
-                let state = attribute_value(&reader, &element, b"state")?;
-                let very_hidden = state.as_deref() == Some("veryHidden");
-                let hidden = very_hidden || state.as_deref() == Some("hidden");
-                sheets.push(SheetDeclaration {
-                    name,
-                    sheet_id,
-                    relationship_id,
-                    hidden,
-                    very_hidden,
-                });
-            }
-            Event::Eof => break,
-            _ => {}
-        }
+    for sheet in child("sheets")
+        .into_iter()
+        .flat_map(|node| node.children())
+        .filter(in_workbook_namespace)
+        .filter(|node| node.has_tag_name("sheet"))
+    {
+        let name = sheet
+            .attribute("name")
+            .ok_or_else(|| SidecarError::Workbook("Sheet has no name.".into()))?;
+        let sheet_id = sheet
+            .attribute("sheetId")
+            .ok_or_else(|| SidecarError::Workbook("Sheet has no sheetId.".into()))?;
+        let relationship_id = sheet
+            .attribute((OFFICE_RELATIONSHIPS, "id"))
+            .or_else(|| sheet.attribute((STRICT_OFFICE_RELATIONSHIPS, "id")))
+            .or_else(|| sheet.attribute("id"))
+            .ok_or_else(|| SidecarError::Workbook("Sheet has no relationship id.".into()))?;
+        let state = sheet.attribute("state");
+        sheets.push(SheetDeclaration {
+            name: name.to_owned(),
+            sheet_id: sheet_id.to_owned(),
+            relationship_id: relationship_id.to_owned(),
+            hidden: matches!(state, Some("hidden" | "veryHidden")),
+            very_hidden: state == Some("veryHidden"),
+        });
     }
     Ok((sheets, protection, active_tab, date_1904))
 }

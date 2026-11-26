@@ -2033,6 +2033,41 @@ fn parses_workbook_pr_date1904() {
 }
 
 #[test]
+fn workbook_ignores_extension_elements_and_uses_office_relationship_ids() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<s:workbook xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                xmlns:ext="urn:example:workbook-metadata" xmlns="urn:example:workbook-metadata">
+                <s:workbookPr date1904="1"/>
+                <s:workbookProtection lockStructure="1"/>
+                <s:bookViews><s:workbookView activeTab="1"/></s:bookViews>
+                <s:sheets>
+                    <s:sheet name="A" sheetId="1" ext:id="ignored" rel:id="rId1"/>
+                    <s:sheet name="B" sheetId="2" rel:id="rId2"/>
+                </s:sheets>
+                <s:extLst><s:ext uri="urn:example:workbook-metadata">
+                    <workbookPr date1904="0"/><workbookProtection lockStructure="0"/>
+                    <workbookView activeTab="0"/><sheet name="Extra" sheetId="3" ext:id="ignored"/>
+                </s:ext></s:extLst>
+            </s:workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>"#,
+        ),
+        ("xl/worksheets/sheet1.xml", "<worksheet><sheetData/></worksheet>"),
+        ("xl/worksheets/sheet2.xml", "<worksheet><sheetData/></worksheet>"),
+    ]);
+    let metadata = WorkbookSessions::new().open(&path).unwrap();
+    assert_eq!(metadata.sheets.len(), 2);
+    assert_eq!(metadata.active_tab, 1);
+    assert!(metadata.date1904);
+    assert!(metadata.workbook_protection.unwrap().lock_structure);
+}
+
+#[test]
 fn parses_workbook_view_active_tab() {
     let sheet_xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
     let (_dir, path) = open_fixture(&[
