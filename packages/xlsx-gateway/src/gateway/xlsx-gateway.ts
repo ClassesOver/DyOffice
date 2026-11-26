@@ -74,7 +74,8 @@ import {
   FilterEditError,
 } from './xlsx-filter.ts'
 import { normalizeOoxmlPartPrefix } from './xlsx-namespace.ts'
-import { resolvedStyleEntries } from './xlsx-style-entries.ts'
+import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
+import { elementText } from './xlsx-worksheet-xml.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
   SheetAllocation,
@@ -3690,22 +3691,22 @@ function parseWorksheetCells(
   let storedCellCount = 0
   const sharedMasters = new Map<string, SharedFormulaCell & { formula: string }>()
   const sharedFollowers: { address: string; id: string }[] = []
-  const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g
-  let match: RegExpExecArray | null
-  while ((match = cellPattern.exec(worksheetXml)) !== null) {
-    const attributes = match[1] ?? ''
+  for (const [attributes, body] of worksheetCellMarkup(worksheetXml)) {
     const address = /(?:^|\s)r="([^"]*)"/.exec(attributes)?.[1]
     if (!address || !isGridCellAddress(address)) continue
-    const body = match[2] ?? ''
+    const elements = hasLiteralMarkup(body) ? childElements(body) : undefined
     // The inspection budget counts only cells carrying an XML value, formula or style.
-    if (readRunStyle && (/<(?:v|f|is)(?=[\s/>])/.test(body) ||
+    if (readRunStyle && ((elements ? elements.some(({ name }) => name === 'v' || name === 'f' || name === 'is')
+      : /<(?:v|f|is)(?=[\s/>])/.test(body)) ||
       readWorksheetTagAttribute(attributes, 's') !== undefined)) storedCellCount++
-    const formulaNode = /<f(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(body)
-    const formulaAttributes = formulaNode?.[1] ?? ''
+    const formulaElement = elements?.find(({ name }) => name === 'f')
+    const formulaNode = elements ? undefined : /<f(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(body)
+    const formulaAttributes = formulaElement?.opening ?? formulaNode?.[1] ?? ''
     const formulaType =
       formulaAttributes === '' ? undefined : readWorksheetTagAttribute(formulaAttributes, 't')
     const isShared = formulaType === 'shared'
-    let formula = formulaNode?.[2]
+    const rawFormula = formulaElement && !formulaElement.opening.endsWith('/>') ? formulaElement.inner : formulaNode?.[2]
+    let formula = rawFormula === undefined ? undefined : decodeCellMarkup(rawFormula)
     let sharedFormulaMaster: ImportedWorkbookCell['sharedFormulaMaster']
     if (isShared) {
       const id = readWorksheetTagAttribute(formulaAttributes, 'si')
@@ -3720,7 +3721,7 @@ function parseWorksheetCells(
         sharedMasters.set(id, {
           row: startRow,
           column: startColumn,
-          formula: decodeXmlText(formula),
+          formula,
         })
         const si = readRunStyle ? sharedFormulaIndex(id) : undefined
         if (si !== undefined) {
@@ -3730,34 +3731,38 @@ function parseWorksheetCells(
       }
     }
     if (formula !== undefined && !includeFormulaCache) {
-      cells[address] = { value: null, formula: `=${decodeXmlText(formula)}` }
+      cells[address] = { value: null, formula: `=${formula}` }
       continue
     }
     const type = readWorksheetTagAttribute(attributes, 't')
     if (type === 'inlineStr') {
-      const inline = /<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/.exec(body)?.[1] ?? ''
+      const inline = (elements ? elements.find(({ name }) => name === 'is')?.inner
+        : /<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/.exec(body)?.[1]) ?? ''
       cells[address] = parseCellText(inline, readRunStyle)
     } else {
-      const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
+      const valueElement = elements?.find(({ name }) => name === 'v')
+      const rawValue = elements ? (valueElement && !valueElement.opening.endsWith('/>') ? valueElement.inner : undefined)
+        : /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
+      const value = rawValue === undefined ? '' : decodeCellMarkup(rawValue)
       if (
         rawValue === undefined ||
-        ((formula !== undefined || isShared) && rawValue === '' && type !== 'str')
+        ((formula !== undefined || isShared) && value === '' && type !== 'str')
       ) {
         cells[address] = { value: null }
       } else if (type === 's') {
-        const index = rawValue.trim()
+        const index = value.trim()
         const entry = /^\+?\d+$/.test(index) ? sharedStrings[Number(index)] : undefined
         cells[address] = entry ?? { value: null }
       } else if (type === 'b') {
-        cells[address] = { value: rawValue === '1' }
+        cells[address] = { value: value === '1' }
       } else if (type === 'str') {
         cells[address] = { value: decodeCellText(rawValue) }
-      } else if (rawValue.trim() === '') {
+      } else if (value.trim() === '') {
         cells[address] = { value: null }
       } else {
-        const numericValue = Number(rawValue)
+        const numericValue = Number(value)
         cells[address] = {
-          value: Number.isFinite(numericValue) ? numericValue : decodeXmlText(rawValue),
+          value: Number.isFinite(numericValue) ? numericValue : value,
         }
       }
     }
@@ -3766,7 +3771,7 @@ function parseWorksheetCells(
         readRunStyle && formulaType === 'array' ? validatedArrayRef(formulaAttributes) : undefined
       cells[address] = {
         ...cells[address]!,
-        formula: `=${decodeXmlText(formula)}`,
+        formula: `=${formula}`,
         ...(arrayRef === undefined ? {} : { arrayRef }),
         ...(sharedFormulaMaster === undefined ? {} : { sharedFormulaMaster }),
       }
@@ -3794,6 +3799,31 @@ function parseWorksheetCells(
   return { cells, storedCellCount }
 }
 
+function hasLiteralMarkup(xml: string): boolean {
+  return xml.includes('<![CDATA[') || xml.includes('<!--')
+}
+
+function decodeCellMarkup(xml: string): string {
+  return hasLiteralMarkup(xml) ? elementText(xml) : decodeXmlText(xml)
+}
+
+function* worksheetCellMarkup(xml: string): Iterable<[string, string]> {
+  if (!hasLiteralMarkup(xml)) {
+    for (const [, attributes, body] of xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      yield [attributes ?? '', body ?? '']
+    }
+    return
+  }
+  const root = childElements(xml).find(({ name }) => name === 'worksheet')
+  const data = childElements(root?.inner ?? '').find(({ name }) => name === 'sheetData')
+  for (const row of childElements(data?.inner ?? '')) {
+    if (row.name !== 'row') continue
+    for (const cell of childElements(row.inner)) {
+      if (cell.name === 'c') yield [cell.opening, cell.inner]
+    }
+  }
+}
+
 function sharedFormulaIndex(id: string): number | undefined {
   const si = Number(id)
   return /^\d+$/.test(id) && si <= 0xffff_ffff ? si : undefined
@@ -3810,16 +3840,23 @@ async function readSharedTextEntries(
 ): Promise<CellText[]> {
   if (!(await source.has('xl/sharedStrings.xml'))) return []
   const xml = await source.readText('xl/sharedStrings.xml')
-  return Array.from(xml.matchAll(sharedStringPattern), (item) =>
-    parseCellText(item[1] ?? '', readRunStyle),
-  )
+  return Array.from(sharedStringItems(xml), (item) => parseCellText(item, readRunStyle))
 }
 
 export function parseSharedStringsXml(xml: string): string[] {
-  return Array.from(xml.matchAll(sharedStringPattern), (item) => parseCellText(item[1] ?? '').value)
+  return Array.from(sharedStringItems(xml), (item) => parseCellText(item).value)
 }
 
 const sharedStringPattern = /<si(?=[\s/>])[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g
+function* sharedStringItems(xml: string): Iterable<string> {
+  if (!hasLiteralMarkup(xml)) {
+    for (const [, body] of xml.matchAll(sharedStringPattern)) yield body ?? ''
+    return
+  }
+  const sst = childElements(xml).find(({ name }) => name === 'sst')
+  for (const item of childElements(sst?.inner ?? '')) if (item.name === 'si') yield item.inner
+}
+
 type CellText = { readonly value: string; readonly rich?: WorkbookRichRun[] }
 const plainTextRun = { bold: false, italic: false, underline: false, strikethrough: false }
 
@@ -3827,20 +3864,16 @@ function parseCellText(xml: string, readRunStyle?: ReadRunStyle): CellText {
   const runs: WorkbookRichRun[] = []
   let value = ''
   let styled = false
-  // Treat phonetic guides as a single element so their nested text is skipped.
-  const contents =
-    /<rPh(?=[\s/>])[^>]*?(?:\/>|>[\s\S]*?<\/rPh>)|<r(?:\s[^>]*)?>([\s\S]*?)<\/r>|(<t(?:\s[^>]*)?(?<!\/)>)([\s\S]*?)<\/t>/g
-  for (const [, runXml, plainTag, plainText] of xml.matchAll(contents)) {
-    if (runXml === undefined && plainTag === undefined) continue
-    const runText = runXml === undefined ? undefined
-      : /(<t(?:\s[^>]*)?(?<!\/)>)([\s\S]*?)<\/t>/.exec(runXml)
-    const textTag = plainTag ?? runText?.[1] ?? ''
-    const preserveSpace = readWorksheetTagAttribute(textTag, 'xml:space') === 'preserve'
-    const text = decodeCellText(plainText ?? runText?.[2] ?? '', preserveSpace)
+  // Only direct text and rich runs contribute cell content. Phonetic guides do not.
+  for (const item of childElements(xml)) {
+    if (item.name !== 't' && item.name !== 'r') continue
+    const children = item.name === 'r' ? childElements(item.inner) : []
+    const node = item.name === 't' ? item : children.find(({ name }) => name === 't')
+    const preserveSpace = node !== undefined && readWorksheetTagAttribute(node.opening, 'xml:space') === 'preserve'
+    const text = decodeCellText(node?.inner ?? '', preserveSpace)
     value += text
     if (readRunStyle) {
-      const properties =
-        runXml === undefined ? undefined : /<rPr(?:\s[^>]*)?>[\s\S]*?<\/rPr>/.exec(runXml)?.[0]
+      const properties = children.find(({ name }) => name === 'rPr')?.xml
       const style = properties === undefined ? plainTextRun : readRunStyle(properties)
       styled ||= properties !== undefined && Object.values(style).some(Boolean)
       runs.push({ text, ...style })
@@ -3877,7 +3910,7 @@ function escapeCellText(input: string): string {
 /// Mirrors the sidecar: raw CRLF folds first so `_x000D_` + LF (Excel's CR LF)
 /// ends up as one line break.
 function decodeCellText(input: string, preserveSpace = true): string {
-  let text = decodeXmlText(input).replace(/\r\n?/g, '\n')
+  let text = decodeCellMarkup(input).replace(/\r\n?/g, '\n')
   // The XML whitespace policy applies before escaped spreadsheet characters.
   if (!preserveSpace) text = text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')
   return decodeXlsxEscapes(text).replace(/\r\n?/g, '\n')

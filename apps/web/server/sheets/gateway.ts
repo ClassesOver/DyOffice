@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { XMLValidator } from 'fast-xml-parser'
 import { readWorkbookRedactionSource } from '../../../sheets/src/node/workbook-redactions'
 import { parseSlicerState } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connections'
@@ -25,6 +27,20 @@ export async function planWorkbookSave(
   }
 }
 
+const ambiguousXml = (xml: string) => /<!--|<!\[CDATA\[|<!DOCTYPE|<!ENTITY|<\?(?!xml\s)/i.test(xml)
+
+function prepareWorksheetLiterals(xml: string, prefix: string, marker: RegExp, comments: string[]) {
+  const text = xml.replace(/<!--[\s\S]*?-->|<!\[CDATA\[([\s\S]*?)\]\]>/g, (literal, cdata: string | undefined) => {
+    if (cdata !== undefined) return cdata.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    return `${prefix}${comments.push(literal) - 1}-->`
+  })
+  // Keep declarations and other ambiguous constructs outside literal text rejected.
+  if (ambiguousXml(text.replace(marker, '')) || XMLValidator.validate(xml) !== true) {
+    throw new Error('Ambiguous worksheet')
+  }
+  return text
+}
+
 /** Isolated-runner opt-in: derive the native sheet-<sheetId> mapping from the
  * exact entry source being planned. No browser mapping and no second ZIP load. */
 export async function planFromWorkbook(bytes: Buffer, input: unknown) {
@@ -35,18 +51,21 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
     const workbook = await source.readText('xl/workbook.xml')
     // The existing text-based sheet planner cannot safely interpret these XML
     // constructs. Reject ambiguity instead of letting a comment forge a sheet.
-    const ambiguous = (xml: string) => /<!--|<!\[CDATA\[|<!DOCTYPE|<!ENTITY|<\?(?!xml\s)/i.test(xml)
-    if (ambiguous(workbook)) throw new Error('Ambiguous workbook')
+    if (ambiguousXml(workbook)) throw new Error('Ambiguous workbook')
     const elements = parseSheetElements(workbook)
     // Fail closed on declarations outside the shared parser's supported
     // double-quoted, empty-element grammar, rather than silently omitting a
     // sheet or reading an attribute-shaped substring inside another value.
     if ([...workbook.matchAll(/<(?:[\w.-]+:)?sheet(?=[\s/>])/g)].length !== elements.length) throw new Error('Unsupported sheets')
     const relationshipsXml = await source.readText('xl/_rels/workbook.xml.rels')
-    if (ambiguous(relationshipsXml)) throw new Error('Ambiguous relationships')
+    if (ambiguousXml(relationshipsXml)) throw new Error('Ambiguous relationships')
     const relationships = parseRelationships(relationshipsXml)
     const ids = new Set<string>(), names = new Set<string>()
     const worksheetPaths = new Set<string>()
+    const preparedWorksheets = new Map<string, string>()
+    const comments: string[] = []
+    const prefix = `<!--dyoffice-${randomUUID()}-`
+    const marker = new RegExp(`${prefix}(\\d+)-->`, 'g')
     if (elements.length < 1 || elements.length > 256) throw new Error('Invalid sheets')
     const sheets = []
     for (const element of elements) {
@@ -63,11 +82,22 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
       if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')
       if (!await source.has(path)) throw new Error('Missing worksheet')
-      if (editedSheets.has(id) && ambiguous(await source.readText(path))) throw new Error('Ambiguous worksheet')
+      if (editedSheets.has(id)) {
+        const xml = await source.readText(path)
+        if (ambiguousXml(xml)) preparedWorksheets.set(path, prepareWorksheetLiterals(xml, prefix, marker, comments))
+      }
       worksheetPaths.add(path)
       ids.add(id); names.add(name); sheets.push({ id, name })
     }
-    return await planSave(source, sheets, request)
+    if (!preparedWorksheets.size) return await planSave(source, sheets, request)
+    const plan = await planSave({
+      ...source,
+      readText: async (path) => preparedWorksheets.get(path) ?? source.readText(path),
+    }, sheets, request)
+    const restoreComments = (entries: ReadonlyMap<string, string>) => new Map(
+      [...entries].map(([path, text]) => [path, text.replace(marker, (original, index) => comments[Number(index)] ?? original)]),
+    )
+    return comments.length ? { ...plan, replaced: restoreComments(plan.replaced), added: restoreComments(plan.added) } : plan
   } catch {
     throw Object.assign(new Error('Invalid workbook edits'), { statusCode: 400 })
   }

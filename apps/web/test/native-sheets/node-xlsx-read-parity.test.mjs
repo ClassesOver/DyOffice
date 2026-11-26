@@ -59,6 +59,35 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('reads literal CDATA in cell text and preserves it through an adjacent edit', async () => {
+    const bytes = await workbook({
+      [sheetPath]: worksheet(`<sheetData><row r="1">
+        <c r="A1" t="inlineStr"><is><t> Start &amp; <!-- ignored <row r="999"/> -->
+          <![CDATA[&amp; </t> </is> </c>]]> End </t></is></c>
+        <c r="C1" t="inlineStr"><is><r><rPr><b/></rPr><t><![CDATA[</r>]]></t></r>
+          <r><t xml:space="preserve"> Text </t></r></is></c>
+        <c r="D1"><v><![CDATA[12.5]]></v></c>
+        <c r="E1" t="str"><v><![CDATA[&amp; </v>]]></v></c>
+      </row></sheetData>`),
+    })
+    const check = async (input) => {
+      const { cells } = await native.readRange(input, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 4 })
+      assert.equal(cells.find(({ column }) => column === 0).value, 'Start & \n          &amp; </t> </is> </c> End')
+      const rich = cells.find(({ column }) => column === 2)
+      assert.equal(rich.value, '</r> Text ')
+      assert.deepEqual(rich.rich.map(({ text, bold }) => [text, bold]), [['</r>', true], [' Text ', false]])
+      assert.equal(cells.find(({ column }) => column === 3).value, 12.5)
+      assert.equal(cells.find(({ column }) => column === 4).value, '&amp; </v>')
+    }
+    await check(bytes)
+    const saved = await saveValue(bytes, 1, 42)
+    await check(saved)
+    const savedXml = await (await JSZip.loadAsync(saved)).file(sheetPath).async('string')
+    assert.match(savedXml, /<!-- ignored <row r="999"\/> -->/)
+    const declared = await workbook({ [sheetPath]: `<!DOCTYPE worksheet>${savedXml}` })
+    await assert.rejects(() => saveValue(declared, 1, 43), /Invalid workbook input/)
+  })
+
   await t.test('opens a workbook with a broken pivot output reference alongside a usable pivot', async () => {
     const broken = 'xl/pivotTables/pivotTable1.xml'
     const usable = 'xl/pivotTables/pivotTable2.xml'

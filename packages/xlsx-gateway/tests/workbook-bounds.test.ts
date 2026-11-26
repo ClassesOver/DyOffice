@@ -33,4 +33,11 @@ describe('workbook open bounds', () => {
       <si><t> _x0020_fixed_x0020_ </t></si><si><t>&#160;nonbreaking&#160;</t></si></sst>`
     expect(parseSharedStringsXml(xml)).toEqual(['label', '  padded  ', 'First Second ', ' fixed ', '\u00a0nonbreaking\u00a0'])
   })
+
+  it('reads literal CDATA and skips comments in plain and rich shared strings', () => {
+    const xml = '<sst><si><t> Start &amp; <!-- <t>ignored</t> -->' +
+      '<![CDATA[&amp; </t> </si>]]> End </t></si><si><r><t><![CDATA[</r>]]></t></r>' +
+      '<rPh sb="0" eb="1"><t>ignored</t></rPh><r><t>Text</t></r></si></sst>'
+    expect(parseSharedStringsXml(xml)).toEqual(['Start & &amp; </t> </si> End', '</r>Text'])
+  })
 })
