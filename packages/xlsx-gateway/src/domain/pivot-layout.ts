@@ -426,16 +426,20 @@ export function buildPivotLayout(
     const spec = valueSpecs[filter.dataField]
     if (!spec)
       throw new PivotLayoutError('valueFilterFieldMissing', { index: filter.dataField + 1 })
-    const labelRows = dataRows.filter(rowVisible)
+    const rowsByMember = new Map<string, (readonly PivotScalar[])[]>()
+    for (const row of dataRows) {
+      if (!rowVisible(row)) continue
+      const member = dimValue(filter.field, row)
+      const bucket = rowsByMember.get(member)
+      if (bucket) bucket.push(row)
+      else rowsByMember.set(member, [row])
+    }
     const hidden = hiddenByField.get(filter.field) ?? new Set<string>()
     const candidates = membersOfField(filter.field).filter((member) => !hidden.has(member))
-    const totals = candidates.map((member) => ({
-      key: member,
-      total: aggregate(
-        labelRows.filter((row) => dimValue(filter.field, row) === member),
-        spec,
-      ),
-    }))
+    const totals = candidates.map((member) => {
+      const bucket = rowsByMember.get(member)
+      return { key: member, total: bucket ? aggregate(bucket, spec) : null }
+    })
     const kept = allowedByValueFilter(filter, totals)
     for (const member of candidates) {
       if (!kept.has(member)) hidden.add(member)

@@ -79,7 +79,11 @@ function linePredicates(
   return { predicates, dataField }
 }
 
-function aggregate(subtotal: string, values: readonly SourceCell[]): number | null {
+function aggregate(
+  subtotal: string,
+  values: readonly SourceCell[],
+  emptySum: number | null = 0,
+): number | null {
   if (subtotal === 'count') {
     return values.filter((value) => value !== null && value !== undefined && value !== '').length
   }
@@ -93,7 +97,7 @@ function aggregate(subtotal: string, values: readonly SourceCell[]): number | nu
     case 'countNums':
       return numbers.length
     case 'sum':
-      return numbers.reduce((total, value) => total + value, 0)
+      return numbers.length === 0 ? emptySum : numbers.reduce((total, value) => total + value, 0)
     case 'average':
       return numbers.length === 0 ? null : numbers.reduce((t, v) => t + v, 0) / numbers.length
     case 'max':
@@ -805,19 +809,21 @@ function reapplyPivotFilters(
       )
     const allowed = ensureAllowed(filter.field)
     const keys = ensureMemberKeys(filter.field)
-    const baseRows = rows.filter(rowPassesBase)
+    const rowsByMember = new Map<number, (readonly SourceCell[])[]>()
+    for (const row of rows) {
+      if (!rowPassesBase(row)) continue
+      const member = keys.get(sourceKey(definition, filter.field, row[filter.field]))
+      if (member === undefined) continue
+      const bucket = rowsByMember.get(member)
+      if (bucket) bucket.push(row)
+      else rowsByMember.set(member, [row])
+    }
     const totals = [...allowed]
       .sort((a, b) => a - b)
-      .map((member) => ({
-        key: member,
-        total: aggregateDataFieldOverRows(
-          definition,
-          dataField,
-          baseRows.filter(
-            (row) => keys.get(sourceKey(definition, filter.field, row[filter.field])) === member,
-          ),
-        ),
-      }))
+      .map((member) => {
+        const bucket = rowsByMember.get(member)
+        return { key: member, total: bucket ? aggregateDataFieldOverRows(definition, dataField, bucket) : null }
+      })
     const kept = allowedByValueFilter(filter, totals)
     for (const member of [...allowed]) {
       if (!kept.has(member)) allowed.delete(member)
@@ -874,6 +880,7 @@ function aggregateDataFieldOverRows(
   return aggregate(
     dataField.subtotal,
     rows.map((row) => row[dataField.field]),
+    null,
   )
 }
 

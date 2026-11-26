@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import JSZip from 'jszip'
 import { growPivotDefinition, recomputePivotData } from '../../../../packages/xlsx-gateway/src/domain/pivot-engine.ts'
+import { buildPivotLayout } from '../../../../packages/xlsx-gateway/src/domain/pivot-layout.ts'
 
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
@@ -441,6 +442,43 @@ test(
       const refreshedLayout = growPivotDefinition(filteredPivot, dataRows)
       assert.equal(refreshedLayout.grown, false)
       assert.deepEqual(recomputePivotData(refreshedLayout.definition, dataRows).data, [[50], [50]])
+
+      const rankedGrid = [
+        ['Region', 'Amount', 'Page'], ['East', -10, 'A'],
+        ['West', 100, 'B'], ['North', 'unavailable', 'A'],
+      ]
+      const rankedRows = rankedGrid.map((line, index) => {
+        const row = index + 1
+        const cells = line.map((value, column) => {
+          const cell = `${'ABC'[column]}${row}`
+          return typeof value === 'number'
+            ? `<c r="${cell}"><v>${value}</v></c>`
+            : `<c r="${cell}" t="inlineStr"><is><t>${value}</t></is></c>`
+        }).join('')
+        return `<row r="${row}">${cells}</row>`
+      }).join('')
+      const rankedSource = await editPart(base, one, (xml) =>
+        xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData>${rankedRows}</sheetData>`))
+      const ranked = buildPivotLayout(rankedGrid, {
+        rowFields: 'Region', pageFields: [{ field: 'Page', item: 'A' }],
+        values: [{ field: 'Amount', agg: 'sum' }],
+        filters: [{ kind: 'value', field: 'Region', valueIndex: 0, op: 'top', count: 1 }],
+      })
+      assert.deepEqual(ranked.matrix.slice(1), [['East', -10], ['Grand Total', -10]])
+      const rankedWorkbook = await save(rankedSource, [], [first, second], {
+        pivotAdditions: [{
+          ...ranked.definition, sheetId: second, sourceSheetId: first, name: 'RankedSales',
+          sourceArea: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 2 },
+          location: { startRow: 2, startColumn: 5, endRow: 4, endColumn: 6 },
+        }],
+      })
+      const savedRank = (await inspect(rankedWorkbook)).sheets[1].pivotTables[0]
+      const restoredRank = await runtime.sheetsPackageReader(rankedWorkbook, undefined, {
+        path: savedRank.path, cachePath: savedRank.cachePath,
+      })
+      const refreshedRank = growPivotDefinition(restoredRank, rankedGrid)
+      assert.equal(refreshedRank.grown, false)
+      assert.deepEqual(recomputePivotData(refreshedRank.definition, rankedGrid).data, [[-10], [-10]])
       const comment = '<!-- <worksheetSource name="SourceData"/> -->'
       const source = await editPart(withPivot, before.cachePath, (xml) => xml.replace(
         /<worksheetSource\b[^>]*\/>/, `${comment}<worksheetSource name='SourceData'/>`,

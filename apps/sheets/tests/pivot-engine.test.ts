@@ -199,6 +199,28 @@ describe('recomputePivotData', () => {
     expect(result.data).toEqual([[15], [30], [45]])
   })
 
+  it('ranks negative totals ahead of members with no numeric total on the selected page', () => {
+    const paged = PIVOT_XML
+      .replace('<pivotField axis="axisCol"', '<pivotField axis="axisPage"')
+      .replace('<colFields count="1"><field x="1"/></colFields>',
+        '<pageFields count="1"><pageField fld="1" item="0"/></pageFields>')
+      .replace('<colItems count="3"><i><x/></i><i><x v="1"/></i><i t="grand"><x/></i></colItems>', '')
+      .replace('</pivotTableDefinition>', '<filters><filter fld="0" iMeasureFld="0" type="count">' +
+        '<autoFilter ref="A1"><filterColumn colId="0"><top10 val="1"/></filterColumn></autoFilter>' +
+        '</filter></filters></pivotTableDefinition>')
+    const definition = parsePivotDefinition(paged, CACHE_XML)
+    for (const [west, hidden, total] of [
+      [['West', 'B', 100], [false, true], -10],
+      [['West', 'A', 'unavailable'], [false, true], -10],
+      [['West', 'A', 0], [true, false], 0],
+    ] as const) {
+      const source = [['Region', 'Product', 'Sales'], ['East', 'A', -10], west]
+      const grown = growPivotDefinition(definition, source).definition
+      expect(grown.fieldItems[0]?.map((item) => item.hidden)).toEqual(hidden)
+      expect(recomputePivotData(grown, source).data).toEqual([[total], [total]])
+    }
+  })
+
   it('supports average and count aggregations', () => {
     const averaged = PIVOT_XML.replace(
       '<dataField name="Sum of Sales" fld="2"/>',
