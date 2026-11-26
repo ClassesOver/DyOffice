@@ -624,8 +624,9 @@ function zipText(zip:JSZip):ZipText{
 }
 
 async function readPivotMetadata(text:ZipText){
-  const workbookPath='xl/workbook.xml',theme=pivotTheme(await text('xl/theme/theme1.xml'))
-  const workbookRels=parseRelationships(await text(relsPathFor(workbookPath)))
+  const workbookPath='xl/workbook.xml',rels=await text(relsPathFor(workbookPath))
+  const theme=pivotTheme(await text(workbookPartPath(rels,'theme')))
+  const workbookRels=parseRelationships(rels)
   const result=new Map<string,Pick<WorkbookFile['sheets'][number],'pivotTables'|'pivotRanges'>>()
   for(const sheet of parseSheetElements(await text(workbookPath))){
     const rel=workbookRels.find(rel=>relationshipIdsMatch(rel.id,sheet.relationshipId)&&!rel.external&&rel.type.endsWith('/worksheet'))
@@ -671,8 +672,10 @@ function readThemeFonts(xml: string): WorkbookFile['themeFonts'] {
 }
 
 async function readWorkbookStyles(text: ZipText) {
-  const stylesXml = text('xl/_rels/workbook.xml.rels').then((rels) => text(workbookPartPath(rels, 'styles')))
-  const [xml, themeXml] = await Promise.all([stylesXml, text('xl/theme/theme1.xml')])
+  const rels = await text('xl/_rels/workbook.xml.rels')
+  const [xml, themeXml] = await Promise.all([
+    text(workbookPartPath(rels, 'styles')), text(workbookPartPath(rels, 'theme')),
+  ])
   const localName = (name: string) => name.slice(name.lastIndexOf(':') + 1)
   const root = childElements(xml).find(element => localName(element.name) === 'styleSheet')
   const sections = childElements(root?.inner ?? '')

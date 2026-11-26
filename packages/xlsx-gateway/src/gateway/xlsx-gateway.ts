@@ -2009,7 +2009,7 @@ export async function planCellEditsToXlsx(
   }
 
   if (themeState !== null) {
-    const themePath = 'xl/theme/theme1.xml'
+    const themePath = await readWorkbookPartPath(pkg, 'theme')
     if (!(await pkg.has(themePath))) {
       throw new Error('The workbook has no theme part — theme changes cannot be saved.')
     }

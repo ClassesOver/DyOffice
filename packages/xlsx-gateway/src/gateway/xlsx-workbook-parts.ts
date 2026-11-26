@@ -6,6 +6,7 @@ const WORKBOOK_RELS_PATH = 'xl/_rels/workbook.xml.rels'
 const defaultParts = {
   sharedStrings: 'xl/sharedStrings.xml',
   styles: 'xl/styles.xml',
+  theme: 'xl/theme/theme1.xml',
 } as const
 type WorkbookPart = keyof typeof defaultParts
 

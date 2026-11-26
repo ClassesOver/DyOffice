@@ -38,13 +38,27 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
   const zip = await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url)))
   const stylesPath = 'xl/parts/styles one.xml'
   const stringsPath = 'xl/parts/strings.xml'
+  const themePath = 'xl/parts/active theme.xml'
   const workbookRelsPath = 'xl/_rels/workbook.xml.rels'
   const workbookRels = await zip.file(workbookRelsPath).async('string')
   zip.file(workbookRelsPath, workbookRels.replace('Target="styles.xml"', "Target='parts/styles%20one.xml'")
     .replace('</Relationships>',
-      relationship('sst', 'sharedStrings', 'parts/strings.xml') + '</Relationships>'))
+      relationship('sst', 'sharedStrings', 'parts/strings.xml') +
+      relationship('theme', 'theme', 'parts/active%20theme.xml') + '</Relationships>'))
   zip.file(stringsPath, `<sst xmlns="${main}"><si><t>Linked text</t></si></sst>`)
   zip.file('xl/sharedStrings.xml', `<sst xmlns="${main}"><si><t>Unrelated text</t></si></sst>`)
+  const colorSlots = ['dk1', 'lt1', 'dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4',
+    'accent5', 'accent6', 'hlink', 'folHlink']
+  const theme = (color, major, minor) =>
+    '<d:theme xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+    '<d:themeElements><d:clrScheme name="Test">' +
+    colorSlots.map((slot) => `<d:${slot}><d:srgbClr val="${color}"/></d:${slot}>`).join('') +
+    '</d:clrScheme><d:fontScheme name="Test">' +
+    `<d:majorFont><d:latin typeface="${major}"/></d:majorFont>` +
+    `<d:minorFont><d:latin typeface="${minor}"/></d:minorFont>` +
+    '</d:fontScheme></d:themeElements></d:theme>'
+  zip.file(themePath, theme('224466', 'Georgia', 'Arial'))
+  zip.file('xl/theme/theme1.xml', theme('999999', 'Unused Major', 'Unused Minor'))
   const formats = [5, 14, 20, 44, 46, 49, 58, 164]
   zip.file(stylesPath, `<styleSheet xmlns="${main}">
     <numFmts count="1"><numFmt numFmtId="164" formatCode="00.000"/></numFmts>
@@ -98,6 +112,7 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
   zip.file('[Content_Types].xml', contentTypes.replace('</Types>',
     '<Override PartName="/xl/parts/styles%20one.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
     '<Override PartName="/xl/parts/strings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>' +
+    '<Override PartName="/xl/parts/active%20theme.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>' +
     '<Default Extension="png" ContentType="image/png"/><Default Extension="emf" ContentType="image/x-emf"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>'))
   const bytes = await zip.generateAsync({ type: 'nodebuffer' })
   const range = { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }
@@ -127,6 +142,26 @@ test('Web XLSX reads legacy styles and images without changing their saved parts
     assert.equal(await saved.file('xl/styles.xml').async('string'), await zip.file('xl/styles.xml').async('string'))
     assert.notEqual(await saved.file(stylesPath).async('string'), await zip.file(stylesPath).async('string'))
     assert.ok((await native.inspect(result.bytes)).styles.some((style) => style.bold))
+  })
+
+  await t.test('reads and rewrites the linked theme while preserving an orphan theme', async () => {
+    assert.deepEqual(metadata.themeFonts, { major: 'Georgia', minor: 'Arial' })
+    assert.equal(metadata.themeColors[4], '#224466')
+    const request = {
+      ...sheetsSaveRequest('sheet-1', []),
+      themeState: {
+        colors: { name: '2$ Palette', values: Array(12).fill('#123456') },
+        fonts: { name: 'Alternate Fonts', major: 'Verdana', minor: 'Tahoma' },
+      },
+    }
+    const result = await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))
+    const saved = await JSZip.loadAsync(result.bytes)
+    assert.equal(await saved.file('xl/theme/theme1.xml').async('string'),
+      await zip.file('xl/theme/theme1.xml').async('string'))
+    assert.match(await saved.file(themePath).async('string'), /<d:clrScheme name="2\$ Palette">/)
+    const updated = await native.inspect(result.bytes)
+    assert.deepEqual(updated.themeFonts, { major: 'Verdana', minor: 'Tahoma' })
+    assert.equal(updated.themeColors[4], '#123456')
   })
 
   await t.test('loads the internal header image by slot without exposing external relationships', async () => {

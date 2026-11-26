@@ -2367,7 +2367,7 @@ export const workbookSaveRequestSchema = z
       })
       .strict()
       .nullable(),
-    /// Document theme change (null = untouched): rewrites theme1.xml's
+    /// Document theme change (null = untouched): rewrites the active theme's
     /// clrScheme and/or fontScheme. Colors are #RRGGBB in theme index order.
     themeState: z
       .object({

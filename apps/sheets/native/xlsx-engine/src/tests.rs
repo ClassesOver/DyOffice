@@ -1445,6 +1445,16 @@ fn rejects_entries_escaping_the_package() {
 /// still reach the wire — the renderer needs them for the column MDW.
 #[test]
 fn normal_font_name_survives_theme_substitution() {
+    let palette: String = [
+        "dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4",
+        "accent5", "accent6", "hlink", "folHlink",
+    ]
+    .into_iter()
+    .map(|slot| format!(r#"<a:{slot}><a:srgbClr val="224466"/></a:{slot}>"#))
+    .collect();
+    let theme = format!(
+        r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme>{palette}</a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="Yu Gothic"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+    );
     let (_dir, path) = open_fixture(&[
         (
             "xl/workbook.xml",
@@ -1452,15 +1462,19 @@ fn normal_font_name_survives_theme_substitution() {
         ),
         (
             "xl/_rels/workbook.xml.rels",
-            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="theme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="parts/active%20theme.xml"/></Relationships>"#,
         ),
         (
             "xl/worksheets/sheet1.xml",
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
         ),
         (
+            "xl/parts/active theme.xml",
+            &theme,
+        ),
+        (
             "xl/theme/theme1.xml",
-            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="Yu Gothic"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#,
+            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme name="Unused"><a:majorFont><a:latin typeface="Unused Major"/></a:majorFont><a:minorFont><a:latin typeface="Unused Minor"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#,
         ),
         (
             "xl/styles.xml",
@@ -1469,6 +1483,7 @@ fn normal_font_name_survives_theme_substitution() {
     ]);
     let mut sessions = WorkbookSessions::new();
     let metadata = sessions.open(&path).unwrap();
+    assert_eq!(metadata.theme_colors.as_ref().unwrap()[4], "#224466");
     assert_eq!(metadata.styles[0].font_family.as_deref(), Some("Calibri"));
     assert_eq!(
         metadata.normal_font_name.as_deref(),

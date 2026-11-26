@@ -316,10 +316,10 @@ pub fn tint_to_hex(base: (u8, u8, u8), tint: f64) -> String {
 }
 
 pub fn read_theme_palette(archive: &mut ZipArchive<File>) -> Result<ColorContext, SidecarError> {
-    let Some(xml) = read_optional_xml(archive, "xl/theme/theme1.xml")? else {
+    let Some(xml) = read_workbook_theme(archive)? else {
         return Ok(ColorContext::default());
     };
-    let document = parse_document(&xml, "theme1.xml")?;
+    let document = parse_document(&xml, "workbook theme")?;
     let Some(scheme) = document
         .descendants()
         .find(|node| node.has_tag_name("clrScheme"))

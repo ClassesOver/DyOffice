@@ -64,6 +64,23 @@ describe('applyThemeState', () => {
     expect(xml).toContain('<a:accent1><a:srgbClr val="4472C4"/></a:accent1>')
   })
 
+  it('edits active schemes with alternate prefixes and literal dollar signs', () => {
+    const comment = '<!-- <d:accent1><d:srgbClr val="654321"/></d:accent1> -->'
+    const source = THEME.replaceAll('a:', 'd:').replace('xmlns:a=', 'xmlns:d=')
+      .replace('<d:accent1>', comment + '<d:accent1>')
+      .replaceAll('"', "'")
+    const xml = applyThemeState(source, {
+      colors: { name: '2$& Colors', values: PALETTE },
+      fonts: { name: 'Fonts $1', major: 'Example $&', minor: '1Family' },
+    })
+    expect(xml).toContain(comment.replaceAll('"', "'"))
+    expect(xml).toContain('name="2$&amp; Colors"')
+    expect(xml).toContain('<d:accent1><d:srgbClr val="111111"/></d:accent1>')
+    expect(xml).toContain('name="Fonts $1"')
+    expect(xml).toContain('<d:majorFont><d:latin typeface="Example $&amp;"/>')
+    expect(xml).toContain('<d:minorFont><d:latin typeface="1Family"/>')
+  })
+
   it('rejects malformed palettes and themes without the target scheme', () => {
     expect(() =>
       applyThemeState(THEME, { colors: { name: 'X', values: PALETTE.slice(0, 11) } }),
