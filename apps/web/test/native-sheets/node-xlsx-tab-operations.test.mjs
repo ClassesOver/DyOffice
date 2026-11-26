@@ -93,12 +93,15 @@ test(
         .bytes
     }
     await t.test('saves readable cells while preserving dangling worksheet declarations', async () => {
-      const dangling = '<sheet name="No ID" sheetId="8"/><sheet name="No Relation" sheetId="9" r:id="rId9"/><sheet name="No Part" sheetId="10" r:id="rId10"/>'
+      const dangling = '<sheet name="No ID" sheetId="8"/><sheet name="No Relation" sheetId="9" r:id="rId9"/><sheet name="No Part" sheetId="10" r:id="rId10"/>' +
+        '<sheet name="External" sheetId="11" r:id="rId11"/><sheet name="Wrong Type" sheetId="12" r:id="rId12"/>'
       const zip = await JSZip.loadAsync(await fixture({
         changeWorkbook: (xml) => xml.replace('<sheets>', `<sheets>${dangling}`),
       }))
       zip.file(relPath, (await xmlPart(zip, relPath)).replace('</Relationships>',
-        `<Relationship Id="rId10" Type="${r}/worksheet" Target="worksheets/missing.xml"/></Relationships>`))
+        `<Relationship Id="rId10" Type="${r}/worksheet" Target="worksheets/missing.xml"/>` +
+        `<Relationship Id="rId11" Type="${r}/worksheet" Target="https://example.invalid/sheet.xml" TargetMode="&#69;xternal"/>` +
+        `<Relationship Id="rId12" Type="${r}/hyperlink" Target="worksheets/sheet1.xml"/></Relationships>`))
       const source = await zip.generateAsync({ type: 'nodebuffer' })
       const before = await inspect(source)
       assert.deepEqual(before.sheets.map(({ name }) => name), ['Acceptance', 'Other'])
@@ -111,7 +114,9 @@ test(
       assert.deepEqual((await inspect(saved)).sheets.map(({ name }) => name), ['Acceptance', 'Other'])
       const after = await JSZip.loadAsync(saved)
       for (const path of [wbPath, relPath]) assert.equal(await xmlPart(after, path), await xmlPart(zip, path))
-      await assert.rejects(saveValue('sheet-10'), /Invalid workbook input/)
+      for (const id of ['sheet-10', 'sheet-11', 'sheet-12']) {
+        await assert.rejects(saveValue(id), /Invalid workbook input/)
+      }
     })
 
     await t.test('reorders and renames readable tabs around missing worksheets', async () => {

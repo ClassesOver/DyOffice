@@ -84,7 +84,7 @@ import {
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { decodeCellText, elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
-import { readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
+import { isWorkbookSheetRelationship, readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
   SheetAllocation,
@@ -2893,7 +2893,9 @@ async function resolveWorksheetPath(
 
   const relationshipsXml = await reader.readText('xl/_rels/workbook.xml.rels')
   const relationship = parseRelationships(relationshipsXml).find(({ id }) => relationshipIdsMatch(id, relationshipId))
-  if (!relationship?.target) throw new Error(`Relationship ${relationshipId} was not found.`)
+  if (!relationship?.target || !isWorkbookSheetRelationship(relationship)) {
+    throw new Error(`Worksheet relationship ${relationshipId} was not found.`)
+  }
   return resolveWorkbookSheetTarget(relationship.target)
 }
 

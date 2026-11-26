@@ -45,6 +45,18 @@ describe('readBasicWorkbook with a dangling sheet relationship', () => {
     expect(imported.snapshot.sheets.map((sheet) => sheet.name)).toEqual(['Good'])
   })
 
+  it.each([
+    ['worksheet', 'https://example.invalid/sheet.xml', ' TargetMode="&#69;xternal"'],
+    ['hyperlink', 'worksheets/sheet1.xml', ''],
+  ])('skips a sheet linked through an unusable %s relationship', async (kind, target, mode) => {
+    const zip = await JSZip.loadAsync(await fixture(WORKBOOK))
+    zip.file('xl/_rels/workbook.xml.rels', WORKBOOK_RELS.replace('</Relationships>',
+      `<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}" Target="${target}"${mode}/></Relationships>`,
+    ))
+    const imported = await readBasicWorkbook(await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(imported.snapshot.sheets.map((sheet) => sheet.name)).toEqual(['Good'])
+  })
+
   it('still rejects an escaping relationship target', async () => {
     const zip = await JSZip.loadAsync(await fixture(WORKBOOK))
     zip.file(

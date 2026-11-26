@@ -1,5 +1,5 @@
 import { resolveRelTarget } from './xlsx-drawing-add.ts'
-import { parseRelationships } from './xlsx-sheets.ts'
+import { parseRelationships, type ParsedRelationship } from './xlsx-sheets.ts'
 
 const WORKBOOK_PATH = 'xl/workbook.xml'
 const WORKBOOK_RELS_PATH = 'xl/_rels/workbook.xml.rels'
@@ -9,6 +9,10 @@ const defaultParts = {
   theme: 'xl/theme/theme1.xml',
 } as const
 type WorkbookPart = keyof typeof defaultParts
+
+export function isWorkbookSheetRelationship(relationship: ParsedRelationship): boolean {
+  return !relationship.external && /\/(worksheet|chartsheet)$/.test(relationship.type)
+}
 
 /** Some producers write package-relative sheet targets without a leading slash. */
 export function resolveWorkbookSheetTarget(target: string): string {

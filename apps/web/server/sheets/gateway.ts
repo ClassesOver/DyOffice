@@ -11,7 +11,7 @@ import { createBufferEntrySource, type EntrySource } from '../../../../packages/
 import { countRootNamespaceElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace'
 import { parseSheetElements, readAttribute, parseRelationships, relationshipIdsMatch } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
 import { applyPatches } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml'
-import { resolveWorkbookSheetTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts'
+import { isWorkbookSheetRelationship, resolveWorkbookSheetTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts'
 import { planWorkbookMutation } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-package-io'
 import {readWorkbookExternalLinks} from './external-links.ts'
 import type {WorkbookPackageQuery} from '../../worker/src/native/gateway.ts'
@@ -101,10 +101,8 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       if (!element.relationshipId) continue
       const rels = relationships.filter(rel => relationshipIdsMatch(rel.id, element.relationshipId))
       const rel = rels[0]
-      if (!rel) continue
-      if (rels.length !== 1 || rel.external || !/\/(worksheet|chartsheet)$/.test(rel.type)) {
-        throw new Error('Invalid sheet relationship')
-      }
+      if (rels.length > 1) throw new Error('Ambiguous sheet relationship')
+      if (!rel || !isWorkbookSheetRelationship(rel)) continue
       const path = resolveWorkbookSheetTarget(rel.target)
       if (!await source.has(path)) continue
       if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')

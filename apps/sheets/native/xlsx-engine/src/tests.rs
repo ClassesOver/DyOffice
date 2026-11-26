@@ -1607,6 +1607,8 @@ fn workbook_skips_missing_worksheet_links_and_remaps_sheet_metadata() {
                     <sheet name="First" sheetId="1" r:id="rId1"/>
                     <sheet name="NoPart" sheetId="12" r:id="rId12"/>
                     <sheet name="Last" sheetId="2" r:id="rId2"/>
+                    <sheet name="Wrong kind" sheetId="13" r:id="rId13"/>
+                    <sheet name="External" sheetId="14" r:id="rId14"/>
                 </sheets>
                 <definedNames>
                     <definedName name="Missing" localSheetId="3">NoPart!$A$1</definedName>
@@ -1622,6 +1624,8 @@ fn workbook_skips_missing_worksheet_links_and_remaps_sheet_metadata() {
                 <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
                 <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
                 <Relationship Id="rId12" Target="worksheets/missing.xml"/>
+                <Relationship Id="rId13" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="worksheets/sheet1.xml"/>
+                <Relationship Id="rId14" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="https://example.invalid/sheet.xml" TargetMode="External"/>
             </Relationships>"#,
         ),
         (

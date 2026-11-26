@@ -828,7 +828,7 @@ export function parseRelationships(relsXml: string): ParsedRelationship[] {
       id: readWorksheetTagAttribute(opening, 'Id'),
       type: decodeAttribute(type),
       target: decodeAttribute(target),
-      external: readWorksheetTagAttribute(opening, 'TargetMode') === 'External',
+      external: decodeAttribute(readWorksheetTagAttribute(opening, 'TargetMode') ?? '') === 'External',
     })
   }
   return entries

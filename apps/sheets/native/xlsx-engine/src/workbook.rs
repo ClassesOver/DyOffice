@@ -108,6 +108,12 @@ pub(crate) fn read_workbook_relationships(
     };
     Ok(WorkbookRelationships {
         targets: relationships()
+            .filter(|node| {
+                // Preserve compatibility with older parts that omitted Type.
+                node.attribute("Type").is_none_or(|kind| {
+                    kind.ends_with("/worksheet") || kind.ends_with("/chartsheet")
+                })
+            })
             .filter_map(|node| {
                 Some((
                     node.attribute("Id")?.to_owned(),
