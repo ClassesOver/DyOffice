@@ -234,7 +234,7 @@ export function readSheetCellImages(
   return result
 }
 
-export async function readWorkbookImage(file: JSZip.JSZipObject, mediaType: string) {
+export async function readWorkbookImage(file: JSZip.JSZipObject, mediaType: string, maxBytes = maxMediaBytes) {
   const stream = file.nodeStream('nodebuffer')
   const bytes = await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -242,7 +242,7 @@ export async function readWorkbookImage(file: JSZip.JSZipObject, mediaType: stri
     stream
       .on('data', (chunk: Buffer) => {
         size += chunk.length
-        if (size > maxMediaBytes) {
+        if (size > maxBytes) {
           stream.pause()
           reject(new Error('MEDIA_LIMIT'))
         } else chunks.push(chunk)

@@ -104,6 +104,31 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
     },
   )
 
+  await t.test('reads basic values alongside a date group and preserves the group on a different column edit', async () => {
+    const mixed = "<filterColumn colId='0'><filters blank='1'><filter val='Open &amp; ready'/><dateGroupItem year='2026' month='2' dateTimeGrouping='month'/></filters></filterColumn>"
+    const oversized = '<filterColumn colId="2"><filters><filter val="Open"/><filter val="' +
+      'a'.repeat(32_768) + '"/><dateGroupItem year="2026" dateTimeGrouping="year"/></filters></filterColumn>'
+    const zip = await JSZip.loadAsync(source)
+    const original = await zip.file(part).async('string')
+    zip.file(part, original.replace('</sheetData>', '</sheetData><autoFilter ref="A1:C3">' + mixed +
+      '<filterColumn colId="1"><filters><filter val="25"/></filters></filterColumn>' + oversized + '</autoFilter>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const { autoFilterColumns } = await native.readRange(bytes, 'Acceptance', span)
+    assert.deepEqual(autoFilterColumns, [
+      { colId: 0, values: ['Open & ready'], blank: true }, { colId: 1, values: ['25'] },
+    ])
+    const ordinary = await save(bytes, sheetsSaveRequest('sheet-1', [{ row: 1, column: 2, value: 19, writeValue: true }]))
+    assert.ok((await (await JSZip.loadAsync(ordinary)).file(part).async('string')).includes(mixed))
+    const edited = await save(bytes, filterChange([autoFilterColumns[0], { colId: 1, values: ['15'] }]))
+    const editedXml = await (await JSZip.loadAsync(edited)).file(part).async('string')
+    assert.ok(editedXml.includes(mixed))
+    assert.ok(editedXml.includes(oversized))
+    const replaced = await save(edited, filterChange([{ colId: 0, values: ['Closed'] }]))
+    const replacedXml = await (await JSZip.loadAsync(replaced)).file(part).async('string')
+    assert.equal([...replacedXml.matchAll(/<dateGroupItem\b/g)].length, 1)
+    assert.ok(replacedXml.includes(oversized))
+  })
+
   await t.test('keeps opaque criteria in the table part', async () => {
     const add = sheetsSaveRequest('sheet-1', [])
     add.tableAdditions = [

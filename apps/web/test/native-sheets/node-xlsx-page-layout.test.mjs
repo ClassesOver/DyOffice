@@ -113,28 +113,33 @@ test('Web XLSX saves view and print settings without changing other worksheet st
   )
 
   await t.test(
-    'saves and clears the first view pane without changing the second view',
+    'reads, saves and clears the last workbook view without changing the earlier view',
     async () => {
       const first =
-        '<sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+        '<sheetView workbookViewId="0" zoomScale="75"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
         "<selection pane='bottomLeft' activeCell='A2' sqref='A2'/></sheetView>"
       const second =
-        '<sheetView workbookViewId="1"><pane xSplit="2" topLeftCell="C1" activePane="topRight" state="frozen"/>' +
+        '<sheetView workbookViewId="1" zoomScale="130" showGridLines="0"><pane xSplit="2" topLeftCell="C1" activePane="topRight" state="frozen"/>' +
         '<selection pane="topRight" activeCell="D1" sqref="D1"/></sheetView>'
       const bytes = await workbook(
         (xml) => xml.replace('<sheetView workbookViewId="0"/>', first + second),
         (xml) => xml.replace('<workbookView/>', '<workbookView/><workbookView/>'),
       )
-      const frozen = await save(bytes, { frozenRows: 2, frozenColumns: 0 })
+      const initial = (await native.inspect(bytes)).sheets[0]
+      assert.equal(initial.zoomScale, 130)
+      assert.equal(initial.showGridLines, false)
+      assert.deepEqual(initial.freeze, { frozenRows: 0, frozenColumns: 2 })
+      const frozen = await save(bytes, { frozenRows: 2, frozenColumns: 0, zoomScale: 90 })
       const xml = await sheetXml(frozen)
-      assert.ok(xml.includes(second))
-      assert.doesNotMatch(xml, /<selection pane='bottomLeft'/)
+      assert.ok(xml.includes(first))
+      assert.doesNotMatch(xml, /<selection pane="topRight"/)
+      assert.equal((await native.inspect(frozen)).sheets[0].zoomScale, 90)
       assert.deepEqual((await native.inspect(frozen)).sheets[0].freeze, {
         frozenRows: 2,
         frozenColumns: 0,
       })
       const cleared = await save(frozen, { frozenRows: 0, frozenColumns: 0 })
-      assert.ok((await sheetXml(cleared)).includes(second))
+      assert.ok((await sheetXml(cleared)).includes(first))
       assert.equal((await native.inspect(cleared)).sheets[0].freeze, null)
     },
   )

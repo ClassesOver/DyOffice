@@ -93,7 +93,7 @@ test('Node XLSX preserves implicit and quoted coordinates on cell saves', async 
   const styles = (records) =>
     records.filter(({ row }) => row === 6).map(({ column, styleIndex }) => [column, styleIndex])
   assert.deepEqual(styles(before), [
-    [0, undefined],
+    [0, 0],
     [4, 1],
     [5, 1],
   ])

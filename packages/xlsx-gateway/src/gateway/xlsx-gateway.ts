@@ -275,10 +275,13 @@ export interface ImportedXlsx {
 interface ImportedWorkbookCell extends CellState {
   readonly rich?: WorkbookRichRun[]
   readonly arrayRef?: string
+  readonly sharedFormulaMaster?: { si: number; range?: TableArea }
+  readonly sharedFormulaFollower?: number
 }
 
 type ImportedWorksheet = Omit<WorksheetState, 'cells'> & {
   readonly cells: Readonly<Record<string, ImportedWorkbookCell>>
+  readonly storedCellCount?: number
 }
 
 type ImportedWorkbookWithCellDetails = Omit<ImportedXlsx, 'snapshot'> & {
@@ -624,16 +627,10 @@ async function readWorkbookCells(
       if (isMissingPartError(error)) continue
       throw error
     }
-    sheets.push({
-      id,
-      name: decodedName,
-      cells: parseWorksheetCells(
-        inferWorksheetAddresses(worksheetXml),
-        sharedStrings,
-        includeFormulaCache,
-        readRunStyle,
-      ),
-    })
+    const { cells, storedCellCount } = parseWorksheetCells(
+      inferWorksheetAddresses(worksheetXml), sharedStrings, includeFormulaCache, readRunStyle,
+    )
+    sheets.push({ id, name: decodedName, cells, ...(readRunStyle ? { storedCellCount } : {}) })
     sheetNamesById[id] = decodedName
   }
   if (sheets.length === 0) throw new Error('Workbook contains no readable worksheets.')
@@ -3688,8 +3685,9 @@ function parseWorksheetCells(
   sharedStrings: readonly CellText[],
   includeFormulaCache: boolean,
   readRunStyle?: ReadRunStyle,
-): Readonly<Record<string, ImportedWorkbookCell>> {
+) {
   const cells: Record<string, ImportedWorkbookCell> = {}
+  let storedCellCount = 0
   const sharedMasters = new Map<string, SharedFormulaCell & { formula: string }>()
   const sharedFollowers: { address: string; id: string }[] = []
   const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g
@@ -3699,12 +3697,16 @@ function parseWorksheetCells(
     const address = /(?:^|\s)r="([^"]*)"/.exec(attributes)?.[1]
     if (!address || !isGridCellAddress(address)) continue
     const body = match[2] ?? ''
+    // The inspection budget counts only cells carrying an XML value, formula or style.
+    if (readRunStyle && (/<(?:v|f|is)(?=[\s/>])/.test(body) ||
+      readWorksheetTagAttribute(attributes, 's') !== undefined)) storedCellCount++
     const formulaNode = /<f(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(body)
     const formulaAttributes = formulaNode?.[1] ?? ''
     const formulaType =
       formulaAttributes === '' ? undefined : readWorksheetTagAttribute(formulaAttributes, 't')
     const isShared = formulaType === 'shared'
     let formula = formulaNode?.[2]
+    let sharedFormulaMaster: ImportedWorkbookCell['sharedFormulaMaster']
     if (isShared) {
       const id = readWorksheetTagAttribute(formulaAttributes, 'si')
       if (formula === undefined || formula.trim() === '') {
@@ -3720,6 +3722,11 @@ function parseWorksheetCells(
           column: startColumn,
           formula: decodeXmlText(formula),
         })
+        const si = readRunStyle ? sharedFormulaIndex(id) : undefined
+        if (si !== undefined) {
+          const ref = validatedArrayRef(formulaAttributes)
+          sharedFormulaMaster = { si, ...(ref === undefined ? {} : { range: parseRef(ref) }) }
+        }
       }
     }
     if (formula !== undefined && !includeFormulaCache) {
@@ -3761,6 +3768,7 @@ function parseWorksheetCells(
         ...cells[address]!,
         formula: `=${decodeXmlText(formula)}`,
         ...(arrayRef === undefined ? {} : { arrayRef }),
+        ...(sharedFormulaMaster === undefined ? {} : { sharedFormulaMaster }),
       }
     }
   }
@@ -3775,13 +3783,20 @@ function parseWorksheetCells(
       startColumn - master.column,
     )
     if (translated === null) continue
+    const si = readRunStyle ? sharedFormulaIndex(id) : undefined
     cells[address] = {
       ...cells[address]!,
       value: includeFormulaCache ? cells[address]!.value : null,
       formula: `=${translated}`,
+      ...(si === undefined ? {} : { sharedFormulaFollower: si }),
     }
   }
-  return cells
+  return { cells, storedCellCount }
+}
+
+function sharedFormulaIndex(id: string): number | undefined {
+  const si = Number(id)
+  return /^\d+$/.test(id) && si <= 0xffff_ffff ? si : undefined
 }
 
 async function readSharedStrings(source: EntrySource): Promise<readonly string[]> {

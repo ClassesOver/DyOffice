@@ -15,11 +15,11 @@ import {normalizeOoxmlPartPrefix} from '../../../../packages/xlsx-gateway/src/ga
 import {inferWorksheetAddresses} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {pivotBandMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
-import {readCustomTableStyles,readWorksheetTables} from './xlsx-node-tables'
-import {readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
+import {readCustomTableStyles,readWorksheetTables,type TableDxf} from './xlsx-node-tables'
+import {readHeaderFooterPictures,readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
 import {cellImageKey,readCellImageSources,readSheetCellImages,readWorkbookImage} from './xlsx-node-cell-images'
 import {applyTint} from '../../../sheets/src/renderer/table-styles'
-import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult} from '../../../sheets/src/shared/desktop-api.ts'
+import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult,WorkbookSharedFormulaGroup} from '../../../sheets/src/shared/desktop-api.ts'
 import { readWorkbookWithCellDetails } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
 import type { WorkbookRichRun } from '../../../../packages/xlsx-gateway/src/shared/edit-schemas.ts'
 import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/src/shared/grid-bounds.ts'
@@ -29,6 +29,7 @@ import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/
 // 32 MiB input/output caps, and a 30s wall-clock kill timeout.
 const MAX = 32 * 1024 * 1024
 const MAX_FORMULA_CELLS = 100_000
+const MAX_HEADER_FOOTER_PICTURE_BYTES = 2 * 1024 * 1024
 const workDir = process.env.DYOFFICE_WORK_DIR || '/work'
 const resolveWorkPath = (logicalPath: string) =>
   workDir === '/work' || !logicalPath.startsWith('/work/')
@@ -58,9 +59,12 @@ interface ParsedSheet extends SheetMetadata {
   id: string
   name: string
   cells: ParsedCell[]
+  formulaCells: ParsedCell[]
+  sharedGroups: WorkbookSharedFormulaGroup[]
   cellImages: WorkbookFile['sheets'][number]['cellImages']
   rowCount: number
   columnCount: number
+  storedCellCount: number
   valueCellCount: number
   valueRowCount: number
   valueColumnCount: number
@@ -507,7 +511,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
       styleIndex:enabled(attribute(node,'customFormat'))?positiveStyle(attribute(node,'s')):undefined,
       outlineLevel:level||undefined,collapsed:enabled(attribute(node,'collapsed'))||undefined})
   }
-  const view=worksheet?.sheetViews?.sheetView?.[0]
+  const view=worksheet?.sheetViews?.sheetView?.at(-1)
   const pane=view?.pane
   const viewKind=attribute(view,'view')
   const zoomAttribute=(name:string)=>sizeAttribute(view,name)||undefined
@@ -567,12 +571,16 @@ function readAutoFilter(element:AutoFilterXml|undefined):Pick<SheetMetadata,'aut
     if(colId>autoFilter.endColumn-autoFilter.startColumn)continue
     const filters=column.filters
     const custom=column.customFilters
-    if(filters?.dateGroupItem!==undefined||column.top10!==undefined||column.dynamicFilter!==undefined
+    if(column.top10!==undefined||column.dynamicFilter!==undefined
       ||column.colorFilter!==undefined||column.iconFilter!==undefined||column.extLst!==undefined)continue
     const values=filters?.filter?.flatMap(filter=>{
       const val=attribute(filter,'val')
       return val!==undefined&&val.length<=32_767?[val]:[]
     }).slice(0,10_000)
+    const blank=enabled(attribute(filters,'blank'))
+    // Keep a mixed date filter opaque if the editor cannot round-trip its value list.
+    if(filters?.dateGroupItem!==undefined&&((!values?.length&&!blank)
+      ||(values?.length??0)!==(filters.filter?.length??0)))continue
     const comparisonInputs=custom?.customFilter?.flatMap(filter=>{
       const val=attribute(filter,'val')
       return val===undefined?[]:[{val,name:attribute(filter,'operator')}]
@@ -582,7 +590,7 @@ function readAutoFilter(element:AutoFilterXml|undefined):Pick<SheetMetadata,'aut
       val.length<=32_767&&(name===undefined||name==='equal'||operator!==undefined))
       ?comparisons.map(({val,operator})=>({val,...(operator?{operator}:{})})):undefined
     if(filters===undefined&&!validComparisons)continue
-    autoFilterColumns.push({colId,...(filters!==undefined?{values:values??[],...(enabled(attribute(filters,'blank'))?{blank:true}:{})}:{}),
+    autoFilterColumns.push({colId,...(filters!==undefined?{values:values??[],...(blank?{blank:true}:{})}:{}),
       ...(validComparisons?{customs:{filters:validComparisons,...(enabled(attribute(custom,'and'))?{and:true}:{})}}:{})})
     if(autoFilterColumns.length===1_000)break
   }
@@ -618,17 +626,34 @@ async function readPivotMetadata(text:ZipText){
   return result
 }
 
+// The Web worker opens files with locale "en", matching GenOffice's English fallbacks.
 const BUILTIN_NUMBER_FORMATS: Record<number, string> = {
-  0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%',
-  11: '0.00E+00', 12: '# ?/?', 13: '# ??/??', 14: 'mm-dd-yy', 15: 'd-mmm-yy',
-  16: 'd-mmm', 17: 'mmm-yy', 18: 'h:mm AM/PM', 19: 'h:mm:ss AM/PM', 20: 'h:mm',
-  21: 'h:mm:ss', 22: 'm/d/yy h:mm', 37: '#,##0 ;(#,##0)', 38: '#,##0 ;[Red](#,##0)',
+  0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00',
+  5: '"$"#,##0_);("$"#,##0)', 6: '"$"#,##0_);[Red]("$"#,##0)',
+  7: '"$"#,##0.00_);("$"#,##0.00)', 8: '"$"#,##0.00_);[Red]("$"#,##0.00)',
+  9: '0%', 10: '0.00%', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??',
+  14: 'm/d/yyyy', 15: 'd-mmm-yy', 16: 'd-mmm', 17: 'mmm-yy',
+  18: 'h:mm AM/PM', 19: 'h:mm:ss AM/PM', 20: 'hh:mm', 21: 'hh:mm:ss', 22: 'm/d/yy hh:mm',
+  27: 'm/d/yyyy', 28: 'm/d/yyyy', 29: 'm/d/yyyy', 30: 'm/d/yyyy', 31: 'yyyy/m/d',
+  32: 'm/d/yyyy', 33: 'm/d/yyyy', 34: 'm/d/yyyy', 35: 'm/d/yyyy', 36: 'm/d/yyyy',
+  37: '#,##0 ;(#,##0)', 38: '#,##0 ;[Red](#,##0)',
   39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)',
+  41: '_(* #,##0_);_(* \\(#,##0\\);_(* "-"_);_(@_)',
+  42: '_("$"* #,##0_);_("$"* \\(#,##0\\);_("$"* "-"_);_(@_)',
+  43: '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* "-"??_);_(@_)',
+  44: '_("$"* #,##0.00_);_("$"* \\(#,##0.00\\);_("$"* "-"??_);_(@_)',
+  45: 'mm:ss', 46: '[h]:mm:ss', 47: 'mm:ss.0', 48: '##0.0E+0', 49: '@',
+  50: 'm/d/yyyy', 51: 'm/d/yyyy', 52: 'm/d/yyyy', 53: 'm/d/yyyy', 54: 'm/d/yyyy',
+  55: 'm/d/yyyy', 56: 'm/d/yyyy', 57: 'm/d/yyyy', 58: 'm/d/yyyy',
+  59: '0', 60: '0.00', 61: '#,##0', 62: '#,##0.00', 67: '0%', 68: '0.00%',
+  69: '# ?/?', 70: '# ??/??', 71: 'd/m/yyyy', 72: 'd-mmm-yy', 73: 'd-mmm', 74: 'mmm-yy',
+  75: 'h:mm', 76: 'h:mm:ss', 77: 'd/m/yyyy h:mm', 78: 'mm:ss', 79: '[h]:mm:ss', 80: 'mm:ss.0', 81: 'd/m/yy',
 }
 
 type StyleFontXml = Partial<Record<'color' | 'name' | 'rFont' | 'sz' | 'scheme' | 'vertAlign' | 'b' | 'i' | 'u' | 'strike', XmlElement>>
-type BorderSide = 'top' | 'bottom' | 'left' | 'right' | 'diagonal'
-type StyleBorderXml = XmlElement & Partial<Record<BorderSide, XmlElement & { color?: XmlElement }>>
+type BorderSide = 'top' | 'bottom' | 'left' | 'right' | 'diagonal' | 'horizontal' | 'vertical'
+type BorderEdgeXml = XmlElement & { color?: XmlElement }
+type StyleBorderXml = XmlElement & Partial<Record<BorderSide, BorderEdgeXml>>
 type StyleFillXml = {
   patternFill?: XmlElement & { fgColor?: XmlElement; bgColor?: XmlElement }
   gradientFill?: { stop?: (XmlElement & { color?: XmlElement })[] }
@@ -657,9 +682,8 @@ async function readWorkbookStyles(text: ZipText) {
   const localName = (name: string) => name.slice(name.lastIndexOf(':') + 1)
   const root = childElements(xml).find(element => localName(element.name) === 'styleSheet')
   const sections = childElements(root?.inner ?? '')
-  const entries = (section: string, tag: string) => resolvedStyleEntries(
-    sections.find(element => localName(element.name) === section)?.inner ?? '', tag, true,
-  )
+  const section = (name: string, elements = sections) => elements.find(element => localName(element.name) === name)?.inner
+  const entries = (name: string, tag: string) => resolvedStyleEntries(section(name) ?? '', tag, true)
   const formats = new Map<number, string>()
   for (const id of Object.keys(BUILTIN_NUMBER_FORMATS)) formats.set(Number(id), BUILTIN_NUMBER_FORMATS[Number(id)]!)
   for (const entry of entries('numFmts', 'numFmt')) {
@@ -672,7 +696,9 @@ async function readWorkbookStyles(text: ZipText) {
   const theme=pivotTheme(themeXml)
   const themeFonts = readThemeFonts(themeXml)
   const hex=(value:string|undefined)=>/^(?:[0-9a-f]{2})?[0-9a-f]{6}$/i.test(value??'')?'#'+value!.slice(-6).toUpperCase():undefined
-  const indexed=parseEntries('indexedColors','rgbColor').map(color=>hex(attribute(color,'rgb')))
+  const colors = childElements(section('colors') ?? '')
+  const indexed = resolvedStyleEntries(section('indexedColors', colors) ?? section('indexedColors') ?? '', 'rgbColor', true)
+    .map(entry => hex(attribute(metadataXml.parse(entry).rgbColor, 'rgb')))
   // ECMA-376 default indexed palette, followed by system text/background.
   const palette='000000 FFFFFF FF0000 00FF00 0000FF FFFF00 FF00FF 00FFFF 000000 FFFFFF FF0000 00FF00 0000FF FFFF00 FF00FF 00FFFF 800000 008000 000080 808000 800080 008080 C0C0C0 808080 9999FF 993366 FFFFCC CCFFFF 660066 FF8080 0066CC CCCCFF 000080 FF00FF FFFF00 00FFFF 800080 800000 008080 0000FF 00CCFF CCFFFF CCFFCC FFFF99 99CCFF FF99CC CC99FF FFCC99 3366FF 33CCCC 99CC00 FFCC00 FF9900 FF6600 666699 969696 003366 339966 003300 333300 993300 993366 333399 333333 000000 FFFFFF'.split(' ')
   const index=(value:string|undefined)=>value!==undefined&&/^\d+$/.test(value)?Number(value):-1
@@ -728,15 +754,15 @@ async function readWorkbookStyles(text: ZipText) {
       ...(vertAlign === 'subscript' || vertAlign === 'superscript' ? { vertAlign } : {}),
     }
   }
+  const borderEdge = (node: BorderEdgeXml | undefined) => {
+    const style = attribute(node, 'style')
+    return style && style !== 'none' ? { style, color: color(node?.color).rgb } : undefined
+  }
   const fontAndBorder = (font: StyleFontXml | undefined, border: StyleBorderXml | undefined) => {
     const fontColor = color(font?.color)
     const fontSize = Number(attribute(font?.sz, 'val'))
     const fontScheme = attribute(font?.scheme, 'val')
     const vertAlign = attribute(font?.vertAlign, 'val')
-    const edge = (name: BorderSide) => {
-      const node = border?.[name], style = attribute(node, 'style')
-      return style && style !== 'none' ? { style, color: color(node?.color).rgb } : undefined
-    }
     return {
       fontFamily: attribute(font?.name, 'val'),
       fontSize: Number.isFinite(fontSize) && fontSize > 0 ? fontSize : undefined,
@@ -745,8 +771,9 @@ async function readWorkbookStyles(text: ZipText) {
       vertAlign: vertAlign === 'superscript' || vertAlign === 'subscript' ? vertAlign : undefined,
       fontScheme: fontScheme === 'major' || fontScheme === 'minor' ? fontScheme : undefined,
       fontColor: fontColor.rgb, fontColorTheme: fontColor.slot, fontColorTint: fontColor.tint,
-      borderTop: edge('top'), borderBottom: edge('bottom'), borderLeft: edge('left'), borderRight: edge('right'),
-      borderDiagonal: edge('diagonal'), diagonalUp: enabled(attribute(border, 'diagonalUp')),
+      borderTop: borderEdge(border?.top), borderBottom: borderEdge(border?.bottom),
+      borderLeft: borderEdge(border?.left), borderRight: borderEdge(border?.right),
+      borderDiagonal: borderEdge(border?.diagonal), diagonalUp: enabled(attribute(border, 'diagonalUp')),
       diagonalDown: enabled(attribute(border, 'diagonalDown')),
     } satisfies Partial<WorkbookCellStyle>
   }
@@ -757,9 +784,9 @@ async function readWorkbookStyles(text: ZipText) {
   const normalFontName = attribute(fonts[index(attribute(cellXfs[0], 'fontId'))]?.name, 'val')
   const styles:WorkbookCellStyle[] = cellXfs.map(xf => {
     const id=Number(attribute(xf,'numFmtId')??0)
-    const font=fonts[Number(attribute(xf,'fontId')??0)]
-    const fillColor = cellFillColor(fills[Number(attribute(xf, 'fillId') ?? 0)])
-    const border=borders[Number(attribute(xf,'borderId')??0)]
+    const font=fonts[index(attribute(xf,'fontId'))]
+    const fillColor = cellFillColor(fills[index(attribute(xf, 'fillId'))])
+    const border=borders[index(attribute(xf,'borderId'))]
     const alignment=xf?.alignment
     const protection=enabled(attribute(xf,'applyProtection'))?xf?.protection:namedProtection[Number(attribute(xf,'xfId')??0)]
     const indent=index(attribute(alignment,'indent')),textRotation=index(attribute(alignment,'textRotation'))
@@ -777,32 +804,36 @@ async function readWorkbookStyles(text: ZipText) {
     }
   })
   if(styles[0]?.locked===false)for(const style of styles.slice(1))style.locked??=true
-  const dxfStyles: WorkbookCellStyle[] = parseEntries('dxfs', 'dxf').map(dxf => {
+  const dxfs: TableDxf[] = parseEntries('dxfs', 'dxf').map(dxf => {
     const fill = dxf?.fill as StyleFillXml | undefined
     const pattern = fill?.patternFill
     const fillColor = color(pattern?.bgColor ?? pattern?.fgColor)
     const format = attribute(dxf?.numFmt, 'formatCode')
-    return {
-      ...fontAndBorder(dxf?.font, dxf?.border),
+    const border = dxf?.border as StyleBorderXml | undefined
+    const style: WorkbookCellStyle = {
+      ...fontAndBorder(dxf?.font, border),
       wrapText: false,
       fillColor: pattern === undefined ? gradientColor(fill?.gradientFill) : fillColor.rgb,
       fillColorTheme: fillColor.slot,
       fillColorTint: fillColor.tint,
       numberFormat: format && format !== 'General' ? format : undefined,
     }
+    return { style, horizontal: borderEdge(border?.horizontal), vertical: borderEdge(border?.vertical) }
   })
-  return {styles,theme,themeFonts,normalFontName,color,dxfStyles,readRunStyle}
+  const dxfStyles = dxfs.map(({style}) => style)
+  const customTableStyles = readCustomTableStyles(section('tableStyles'), dxfs)
+  return {styles,theme,themeFonts,normalFontName,color,dxfStyles,readRunStyle,customTableStyles}
 }
 
 async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:readonly string[],
-  imageSources:Awaited<ReturnType<typeof readCellImageSources>>) {
-  const customTableStyles=readCustomTableStyles(await text('xl/styles.xml'),resolveColor)
+  imageSources:Awaited<ReturnType<typeof readCellImageSources>>,hasPart:(path:string)=>boolean,
+  customTableStyles:ReturnType<typeof readCustomTableStyles>) {
   const workbookPath = 'xl/workbook.xml'
   const workbookRels = parseRelationships(await text(relsPathFor(workbookPath)))
   const sheets = new Map<string, SheetMetadata & {
-    styleIndexes:Map<string,number>; imageCells:ReturnType<typeof readSheetCellImages>
+    styleIndexes:Map<string,number>; imageCells:ReturnType<typeof readSheetCellImages>; headerFooterMedia:Map<string,string>
   }>()
-  for (const sheet of parseSheetElements(await text(workbookPath))) {
+  for (const [sheetIndex,sheet] of parseSheetElements(await text(workbookPath)).entries()) {
     const rel = workbookRels.find(item => item.id === sheet.relationshipId && !item.external && item.type.endsWith('/worksheet'))
     if (!rel) continue
     const path = resolveRelTarget(workbookPath, rel.target)
@@ -823,11 +854,21 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
       const style = readAttribute(match[1]!, 's')
       if (address && style !== undefined && /^\d+$/.test(style)) cells.set(decodeAttribute(address), Number(style))
     }
-    const [comments,tables]=await Promise.all([
+    const [comments,tables,headerPictures]=await Promise.all([
       readNodeSheetComments(text,path),
       readWorksheetTables(text,path,xml,theme,customTableStyles),
+      xml.includes('legacyDrawingHF') ? readHeaderFooterPictures(text,path,sheetIndex,hasPart) : [],
     ])
-    sheets.set(sheet.name,{styleIndexes:cells,...readWorksheetMetadata(xml,resolveColor,linkTargets),comments,tables,
+    const metadata=readWorksheetMetadata(xml,resolveColor,linkTargets)
+    const headerFooterMedia=new Map<string,string>()
+    if(headerPictures.length) {
+      const headerFooterPictures=headerPictures.map(({mediaPath,...picture})=>{
+        headerFooterMedia.set(picture.id,mediaPath)
+        return picture
+      })
+      metadata.pageSetup={...metadata.pageSetup,headerFooterPictures}
+    }
+    sheets.set(sheet.name,{styleIndexes:cells,...metadata,comments,tables,headerFooterMedia,
       imageCells:readSheetCellImages(xml,imageSources)})
   }
   return sheets
@@ -873,6 +914,23 @@ async function entryDigests(zip: JSZip) {
 }
 
 type Bounds = {startRow: number; endRow: number; startColumn: number; endColumn: number}
+const compareCellPosition = (a: ParsedCell, b: ParsedCell) => a.row - b.row || a.column - b.column
+
+function sharedFormulaGroup(
+  si: number,
+  master: ParsedCell & { formula: string },
+  followers: ParsedCell[],
+  range: Bounds | undefined,
+): WorkbookSharedFormulaGroup {
+  const { row, column, formula } = master
+  if (range && (range.endRow - range.startRow + 1) * (range.endColumn - range.startColumn + 1) === followers.length + 1) {
+    const inside = (cell: ParsedCell) => cell.row >= range.startRow && cell.row <= range.endRow
+      && cell.column >= range.startColumn && cell.column <= range.endColumn
+    if (inside(master) && followers.every(inside)) return { si, row, column, formula, range }
+  }
+  return { si, row, column, formula, cells: followers.map(({ row, column }) => [row, column]) }
+}
+
 function readRange(sheet: ParsedSheet,r: Bounds) {
   const cells = sheet.cells.filter(
     c => c.row >= r.startRow && c.row <= r.endRow && c.column >= r.startColumn && c.column <= r.endColumn,
@@ -931,7 +989,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const imageSources=readCellImageSources(text,hasPart)
     const [imported, pivots, {styles,theme,themeFonts,normalFontName,dxfStyles}, metadata, workbookXml] = await Promise.all([
       styling.then(({readRunStyle})=>readWorkbookWithCellDetails(bytes,readRunStyle)),
-      readPivotMetadata(text), styling, Promise.all([styling,imageSources]).then(([{color,theme},images])=>readSheetMetadata(text,color,theme,images)),
+      readPivotMetadata(text), styling, Promise.all([styling,imageSources]).then(([{color,theme,customTableStyles},images])=>readSheetMetadata(text,color,theme,images,hasPart,customTableStyles)),
       text('xl/workbook.xml'),
     ])
     let entryCount = 0
@@ -939,8 +997,12 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const mediaById = new Map<string,string>()
     let imageCount=0
     const parsedSheets: ParsedSheet[] = imported.snapshot.sheets.map(s => {
-      const {styleIndexes,imageCells,dimension,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,styleIndexes:undefined,imageCells:undefined}
+      const {styleIndexes,imageCells,headerFooterMedia,dimension,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,styleIndexes:undefined,imageCells:undefined,headerFooterMedia:undefined}
+      for(const [id,mediaPath] of headerFooterMedia??[])mediaById.set(id,mediaPath)
       const cells: ParsedCell[] = []
+      const formulaCells: ParsedCell[] = []
+      const masters = new Map<number, { cell: ParsedCell & { formula: string }; range?: Bounds }>()
+      const followers = new Map<number, ParsedCell[]>()
       const cellImages: ParsedSheet['cellImages'] = []
       let rowCount=1,columnCount=1,valueCellCount=0,valueRowCount=0,valueColumnCount=0
       if(dimension){
@@ -953,7 +1015,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
         if (!pos) continue
         const isCellImage = imageCells?.has(cellImageKey(pos.row,pos.column)) === true
         const value = isCellImage ? null : cell.rawValue !== undefined ? cell.rawValue : cell.value
-        const formula = isCellImage ? undefined : cell.formula
+        const formula = isCellImage || !cell.formula ? undefined : withoutFutureFunctionMarkers(cell.formula)
         rowCount=Math.max(rowCount,pos.row+1)
         columnCount=Math.max(columnCount,pos.column+1)
         if(value!==null||formula){
@@ -961,8 +1023,8 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           valueRowCount=Math.max(valueRowCount,pos.row+1)
           valueColumnCount=Math.max(valueColumnCount,pos.column+1)
         }
-        const styleIndex=styleIndexes?.get(addr)
-        cells.push({
+        const styleIndex = styleIndexes?.get(addr) ?? (value !== null || formula ? 0 : undefined)
+        const parsedCell: ParsedCell = {
           row: pos.row,
           column: pos.column,
           value,
@@ -970,8 +1032,29 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           ...(formula ? { formula } : {}),
           ...(isCellImage || cell.arrayRef === undefined ? {} : { arrayRef: cell.arrayRef }),
           ...(isCellImage || cell.rich === undefined ? {} : { rich: cell.rich }),
-        })
+        }
+        cells.push(parsedCell)
+        if (!formula) continue
+        if (cell.sharedFormulaMaster) {
+          const { si, range } = cell.sharedFormulaMaster
+          masters.set(si, { cell: { ...parsedCell, formula }, range })
+        }
+        if (cell.sharedFormulaFollower !== undefined) {
+          const si = cell.sharedFormulaFollower
+          const group = followers.get(si)
+          if (group) group.push(parsedCell)
+          else followers.set(si, [parsedCell])
+        } else {
+          formulaCells.push(parsedCell)
+        }
       }
+      const sharedGroups: WorkbookSharedFormulaGroup[] = []
+      for (const [si, group] of followers) {
+        const master = masters.get(si)
+        if (master) sharedGroups.push(sharedFormulaGroup(si, master.cell, group, master.range))
+        else for (const follower of group) formulaCells.push(follower)
+      }
+      sharedGroups.sort((a, b) => a.si - b.si)
       if (imageCells) for (const {row,column,mediaPath} of imageCells.values()) {
         const id=`cell-image-${imageCount++}`
         mediaById.set(id,mediaPath)
@@ -989,12 +1072,26 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       }
       for(const col of sheetMetadata.columnWidths)columnCount=Math.max(columnCount,col.endColumn+1)
       for(const row of sheetMetadata.rows)rowCount=Math.max(rowCount,row.row+1)
-      cells.sort((a,b)=>a.row-b.row||a.column-b.column)
-      return { id: s.id, name: s.name, cells, cellImages, rowCount, columnCount, valueCellCount, valueRowCount, valueColumnCount,
+      cells.sort(compareCellPosition)
+      formulaCells.sort(compareCellPosition)
+      return { id: s.id, name: s.name, cells, formulaCells, sharedGroups, cellImages, rowCount, columnCount,
+        storedCellCount: s.storedCellCount ?? cells.length, valueCellCount, valueRowCount, valueColumnCount,
         ...sheetMetadata }
     })
     const {activeTab,visibility,definedNames,scopedSheets,printNames,workbookProtection,date1904}=readWorkbookMetadata(workbookXml,parsedSheets)
-    const visuals=await readWorkbookVisuals(text,parsedSheets,theme,hasPart)
+    const sourceSheets = new Map(imported.snapshot.sheets.map(sheet => [sheet.name.toLowerCase(), sheet]))
+    const visuals=await readWorkbookVisuals(text,parsedSheets,theme,hasPart,reference=>{
+      const separator = reference.lastIndexOf('!')
+      if (separator < 1) return undefined
+      const name = reference.slice(0, separator)
+      const sheet = sourceSheets.get((name.startsWith("'") && name.endsWith("'")
+        ? name.slice(1, -1).replaceAll("''", "'") : name).toLowerCase())
+      const address = reference.slice(separator + 1).split(':', 1)[0]?.replaceAll('$', '').toUpperCase()
+      if (!sheet || !address || !parseA1(address) || !sheet.cells[address]) return undefined
+      const index = metadata.get(sheet.name)?.styleIndexes.get(address) ?? 0
+      const format = styles[index]?.numberFormat
+      return format && format !== 'General' && format !== '@' ? format : undefined
+    })
     for (const {id,mediaPath,fillMediaPath} of visuals) {
       const path=mediaPath??fillMediaPath
       if(path)mediaById.set(id,path)
@@ -1014,7 +1111,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           name: s.name,
           rowCount:s.rowCount,
           columnCount:s.columnCount,
-          storedCellCount:s.cells.length,
+          storedCellCount:s.storedCellCount,
           valueCellCount:s.valueCellCount,
           valueRowCount:s.valueRowCount,
           valueColumnCount:s.valueColumnCount,
@@ -1095,7 +1192,8 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const cells: ParsedCell[] = []
     let bytes = 0
     let truncated = false
-    for (const cell of sheet.cells) {
+    const expanded = packet.expandSharedFormulas === true
+    for (const cell of expanded ? sheet.cells : sheet.formulaCells) {
       if (!cell.formula) continue
       bytes += Buffer.byteLength(JSON.stringify(cell)) + 1
       // Leave room for the reply envelope around the cells.
@@ -1105,9 +1203,18 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       }
       cells.push(cell)
     }
+    if (!expanded && !truncated) {
+      for (const group of sheet.sharedGroups) {
+        bytes += Buffer.byteLength(JSON.stringify(group)) + 1
+        if (bytes > MAX - 1024) {
+          truncated = true
+          break
+        }
+      }
+    }
     return {
       cells,
-      sharedGroups: [],
+      sharedGroups: expanded || truncated ? [] : sheet.sharedGroups,
       indexingComplete: true,
       truncated,
     }
@@ -1128,7 +1235,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const mediaType = path && visualMediaType(path)
     const file = path && session?.zip.file(path)
     if (!file || !mediaType) throw new Error('MEDIA_NOT_FOUND')
-    return readWorkbookImage(file,mediaType)
+    return readWorkbookImage(file,mediaType,visualId.startsWith('hf-picture-') ? MAX_HEADER_FOOTER_PICTURE_BYTES : undefined)
   }
   if (cmd === 'recalc_cells') {
     const reads = (packet.reads ?? []) as {

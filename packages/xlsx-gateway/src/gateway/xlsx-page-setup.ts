@@ -213,14 +213,14 @@ function setFitToPage(xml: string, enabled: boolean): string {
   )
 }
 
-function updateFirstSheetView(
+function updateSheetView(
   xml: string,
   update: (view: ChildElement) => string,
   create?: (name: string) => string,
 ): string {
   const views = rootChild(xml, 'worksheet', 'sheetViews')
   if (views) {
-    const view = childElements(views.inner).find((child) => /(?:^|:)sheetView$/.test(child.name))
+    const view = childElements(views.inner).reverse().find((child) => /(?:^|:)sheetView$/.test(child.name))
     const body = view
       ? replaceElement(views.inner, view, update(view))
       : views.inner + (create?.(prefix(views.name) + 'sheetView') ?? '')
@@ -235,7 +235,7 @@ function updateFirstSheetView(
 }
 
 function setSheetViewAttr(xml: string, name: string, value: string | null): string {
-  return updateFirstSheetView(
+  return updateSheetView(
     xml,
     (view) =>
       updateWorksheetTagAttribute(view.opening, name, value) + view.xml.slice(view.opening.length),
@@ -252,7 +252,7 @@ function paneColumnLabel(index: number): string {
   return label
 }
 
-/// Replaces the first sheetView's frozen `<pane>` (both counts 0 removes it).
+/// Replaces the last sheetView's frozen `<pane>` (both counts 0 removes it).
 /// Pane-scoped `<selection>` elements are dropped too: they reference panes
 /// that may no longer exist, and Excel restores a default selection anyway.
 function setFrozenPane(xml: string, rows: number, columns: number): string {
@@ -268,7 +268,7 @@ function setFrozenPane(xml: string, rows: number, columns: number): string {
       ` activePane="${activePane}" state="frozen"/>`
     )
   }
-  return updateFirstSheetView(
+  return updateSheetView(
     xml,
     (view) => {
       let body = view.inner

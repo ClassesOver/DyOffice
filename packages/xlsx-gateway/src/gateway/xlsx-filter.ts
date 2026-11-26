@@ -6,6 +6,9 @@
 /// see `applyTableFilterState` and `applyRowVisibilityState`.
 
 import { findRootChild } from './xlsx-root-tail'
+import { decodeAttribute } from './xlsx-sheets'
+import { childElements } from './xlsx-style-entries'
+import { readWorksheetTagAttribute } from './xlsx-structure'
 
 export class FilterEditError extends Error {}
 
@@ -164,6 +167,24 @@ export function applyTableFilterState(
   return tableXml.replace(/<table\b[^>]*>/, (open) => `${open}${element}`)
 }
 
+function matchesMixedDateFilter(xml: string, column: FilterColumnState): boolean {
+  if (column.customs || (column.values === undefined && !column.blank)) return false
+  const [element] = childElements(xml)
+  const filters = childElements(element?.inner ?? '').find(child => /(?:^|:)filters$/.test(child.name))
+  if (!filters) return false
+  const items = childElements(filters.inner)
+  if (!items.some(child => /(?:^|:)dateGroupItem$/.test(child.name))) return false
+  const blank = readWorksheetTagAttribute(filters.opening, 'blank')
+  if ((blank === '1' || blank === 'true') !== Boolean(column.blank)) return false
+  const saved = new Set(items.flatMap(child => {
+    if (!/(?:^|:)filter$/.test(child.name)) return []
+    const value = readWorksheetTagAttribute(child.opening, 'val')
+    return value === undefined ? [] : [decodeAttribute(value)]
+  }))
+  const values = new Set(column.values ?? [])
+  return values.size === saved.size && [...values].every(value => saved.has(value))
+}
+
 function serializeAutoFilter(
   ref: string,
   columns: readonly FilterColumnState[],
@@ -176,26 +197,26 @@ function serializeAutoFilter(
   const opening = /^<[^>]+>/.exec(raw)?.[0] ?? ''
   const refAttribute = /\sref\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(opening)
   const fileRef = refAttribute?.[1] ?? refAttribute?.[2]
-  const snapshot = new Set(columns.map((column) => column.colId + offset))
-  const entries = columns.map((column) => ({
-    colId: column.colId + offset,
-    xml: serializeFilterColumn(column, offset, prefix),
-  }))
+  const snapshot = new Map(columns.map(column => [column.colId + offset, column]))
+  const entries = new Map(columns.map(column => [column.colId + offset, serializeFilterColumn(column, offset, prefix)]))
   for (const [part, , attrs] of raw.matchAll(FILTER_COLUMN)) {
     if (!OPAQUE_CRITERIA.test(part)) continue
     const id = /(?:^|\s)colId\s*=\s*(?:"(\d+)"|'(\d+)')/.exec(attrs ?? '')
     const colId = Number(id?.[1] ?? id?.[2])
     if (!Number.isSafeInteger(colId))
       throw new FilterEditError('The existing filter column has no valid index.')
-    if (snapshot.has(colId)) continue
+    const incoming = snapshot.get(colId)
+    // A mixed date filter restores its editable values into the Web snapshot.
+    // If those values are unchanged, keep the original column and its dates.
+    if (incoming && !matchesMixedDateFilter(part, incoming)) continue
     if (fileRef?.replaceAll('$', '').toUpperCase() !== ref) {
       throw new FilterEditError('Clear the existing advanced filter before changing its range.')
     }
-    entries.push({ colId, xml: part })
+    entries.set(colId, part)
   }
-  const body = entries
-    .sort((left, right) => left.colId - right.colId)
-    .map((entry) => entry.xml)
+  const body = [...entries]
+    .sort(([left], [right]) => left - right)
+    .map(([, xml]) => xml)
     .join('')
   // Keep attributes and local namespace declarations from the original wrapper.
   const header = refAttribute

@@ -91,13 +91,13 @@ test('Web XLSX workbook inspection and reading', async (t) => {
         [0, null, 1],
         [1, null, 1],
         [2, null, 1],
-        [3, 'First label', undefined],
-        [4, '', undefined],
+        [3, 'First label', 0],
+        [4, '', 0],
       ]
-      assert.deepEqual(await values(bytes), [...expected, [5, 12, undefined]])
+      assert.deepEqual(await values(bytes), [...expected, [5, 12, 0]])
       assert.deepEqual(await values(await saveValue(bytes, 5, 27)), [
         ...expected,
-        [5, 27, undefined],
+        [5, 27, 0],
       ])
     },
   )
@@ -222,5 +222,75 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     const { baseColumnWidth, defaultColumnWidth, defaultRowHeight } = (await native.inspect(bytes))
       .sheets[0]
     assert.deepEqual([baseColumnWidth, defaultColumnWidth, defaultRowHeight], [null, null, 15])
+  })
+
+  await t.test('does not spend the stored cell budget on bare empty cells', async () => {
+    const blankRows = Array.from({ length: 50_000 }, (_, i) => {
+      const row = i + 2
+      return `<row r="${row}"><c r="A${row}"/></row>`
+    }).join('')
+    const bytes = await workbook({
+      [sheetPath]: worksheet(`<sheetData><row r="1"><c r="A1"><v>42</v></c><c r="B1" s="1"/><c r="C1"/></row>${blankRows}</sheetData>`),
+    })
+    const [{ storedCellCount, valueCellCount, rowCount }] = (await native.inspect(bytes)).sheets
+    assert.deepEqual([storedCellCount, valueCellCount, rowCount], [2, 1, 50_001])
+  })
+
+  await t.test('applies the Normal cell style with or without an explicit zero style index', async () => {
+    const bytes = await workbook({
+      [stylesPath]: `<styleSheet xmlns="${spreadsheet}">
+        <fonts count="1"><font><name val="Example Sans"/><b/></font></fonts>
+        <cellXfs count="1"><xf fontId="0" numFmtId="2"/></cellXfs>
+      </styleSheet>`,
+      [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><v>1.25</v></c><c r="B1" s="0"><v>1.25</v></c></row></sheetData>'),
+    })
+    const range = { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 }
+    const cells = (await native.readRange(bytes, sheetName, range)).cells
+    assert.deepEqual(cells.map(({ styleIndex }) => styleIndex), [0, 0])
+  })
+
+  await t.test('reads and finds future functions by their unprefixed formula text', async () => {
+    const formula = '=XLOOKUP(B1,C1,C1,"_xlfn.literal")'
+    const bytes = await workbook({
+      [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><f>_xlfn.XLOOKUP(B1,C1,C1,"_xlfn.literal")</f><v>2</v></c></row></sheetData>'),
+    })
+    const found = await native.findCells(bytes, sheetName, {
+      query: formula, matchEntireCell: true, lookIn: 'formulas_only', limit: 10,
+    })
+    assert.deepEqual(found.matches.map(({ formulaText }) => formulaText), [formula])
+    assert.equal((await native.readSheet(bytes, sheetName, 'formulas')).cells[0].formula, formula)
+  })
+
+  await t.test('compacts a large shared formula range without truncating the index', async () => {
+    const count = 100_001
+    const rows = Array.from({ length: count }, (_, index) => {
+      const row = index + 1
+      const formula = index === 0
+        ? `<f t="shared" si="0" ref="A1:A${count}">B1+1</f>`
+        : '<f t="shared" si="0"/>'
+      return `<row r="${row}"><c r="A${row}">${formula}<v>${row}</v></c></row>`
+    }).join('')
+    const bytes = await workbook({ [sheetPath]: worksheet(`<sheetData>${rows}</sheetData>`) })
+    const { cells, sharedGroups, truncated } = await native.readSheet(bytes, sheetName, 'formulas')
+    assert.equal(truncated, false)
+    assert.deepEqual(cells.map(({ formula }) => formula), ['=B1+1'])
+    assert.deepEqual(sharedGroups, [{
+      si: 0, row: 0, column: 0, formula: '=B1+1',
+      range: { startRow: 0, endRow: count - 1, startColumn: 0, endColumn: 0 },
+    }])
+  })
+
+  await t.test('lists sparse shared formula followers and keeps the expanded index available', async () => {
+    const bytes = await workbook({
+      [sheetPath]: worksheet('<sheetData>' +
+        '<row r="1"><c r="A1"><f t="shared" si="1" ref="A1:A3">B1+1</f><v>4</v></c></row>' +
+        '<row r="3"><c r="A3"><f t="shared" si="1"/><v>6</v></c></row>' +
+        '</sheetData>'),
+    })
+    const compact = await native.readSheet(bytes, sheetName, 'formulas')
+    assert.deepEqual(compact.cells.map(({ formula }) => formula), ['=B1+1'])
+    assert.deepEqual(compact.sharedGroups, [{ si: 1, row: 0, column: 0, formula: '=B1+1', cells: [[2, 0]] }])
+    const [expanded] = await native.readFormulaIndex(bytes)
+    assert.deepEqual(expanded.cells.map(({ formula }) => formula), ['=B1+1', '=B3+1'])
   })
 })

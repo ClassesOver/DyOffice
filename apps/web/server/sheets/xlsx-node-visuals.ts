@@ -1,5 +1,5 @@
 import { XMLParser } from 'fast-xml-parser'
-import type { WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
+import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import { relsPathFor, resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import { decodeAttribute, parseSheetElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
@@ -8,6 +8,8 @@ type ZipText = (path: string) => Promise<string>
 type Chart = NonNullable<WorkbookVisualObject['chart']>
 type ChartSeries = Chart['series'][number]
 type Axis = NonNullable<Chart['xAxis']>
+type SourceNumberFormat = (reference: string) => string | undefined
+type LinkedFormats = { value: string | undefined; category: string | undefined }
 type Anchor = WorkbookVisualObject['anchor']
 type ShapeParagraph = NonNullable<WorkbookVisualObject['paragraphs']>[number]
 type XmlToken = Record<string, unknown> & { ':@'?: Record<string, string>; '#text'?: string }
@@ -179,11 +181,15 @@ function labelMode(labels?: XmlElement): Chart['dataLabels'] {
   return value ? 'value' : 'none'
 }
 
-function parseSeries(series: XmlElement, plot: XmlElement, index: number, theme: readonly string[]): ChartSeries {
+function parseSeries(series: XmlElement, plot: XmlElement, index: number, theme: readonly string[], lookup: SourceNumberFormat) {
   const tx = child(series, 'tx')
   const cachedName = text(first(tx, 'v'))
   const category = child(series, 'cat') ?? child(series, 'xVal')
   const value = child(series, 'val') ?? child(series, 'yVal')
+  const categoriesRef = formula(category), valuesRef = formula(value)
+  const categorySource = categoriesRef && first(category, 'numRef') ? lookup(categoriesRef) : undefined
+  const valueSource = valuesRef ? lookup(valuesRef) : undefined
+  const categoryCacheFormat = format(category), valueCacheFormat = format(value)
   const categoryCache = cachePoints(category)
   const groups = categoryGroups(category, categoryCache)
   const blanks: number[] = []
@@ -209,15 +215,15 @@ function parseSeries(series: XmlElement, plot: XmlElement, index: number, theme:
     return [{ index, showVal: flag(child(node, 'delete')) ? false : flag(child(node, 'showVal')),
       offsetX: finite(val(layout, 'x')), offsetY: finite(val(layout, 'y')) }]
   })
-  return {
+  const entry: ChartSeries = {
     name: cachedName ?? `Series${index + 1}`, nameRef: cachedName === undefined ? formula(tx) : undefined,
     categories: categoryCache.values.map(point => point ?? ''), values,
     ...(groups ? { categoryGroups: groups } : {}),
     ...(blanks.length ? { blanks } : {}),
-    numberFormat: format(value), categoryFormat: format(category),
+    numberFormat: valueCacheFormat ?? valueSource, categoryFormat: categoryCacheFormat ?? categorySource,
     color: color(sp, theme) ?? theme[4 + (nonnegative(val(series, 'idx')) ?? index) % 6],
     trendline: val(child(series, 'trendline'), 'trendlineType'),
-    valuesRef: formula(value), categoriesRef: formula(category),
+    valuesRef, categoriesRef,
     ...(pointColors.length ? { pointColors } : {}),
     explosionPct: nonnegative(val(series, 'explosion')),
     ...(pointExplosions.length ? { pointExplosions } : {}),
@@ -227,6 +233,11 @@ function parseSeries(series: XmlElement, plot: XmlElement, index: number, theme:
     plot: flatPlot(plot.tag), dataLabels: labelMode(labels ?? child(plot, 'dLbls')),
     ...(pointLabels.length ? { pointLabels } : {}),
   }
+  // Series describe the stored cache. Linked axes and labels prefer live cell formatting.
+  const linked: LinkedFormats = {
+    value: valueSource ?? valueCacheFormat, category: categorySource ?? categoryCacheFormat,
+  }
+  return { entry, linked }
 }
 
 function textStyle(node: XmlElement | undefined, theme: readonly string[]): Chart['titleStyle'] {
@@ -237,12 +248,28 @@ function textStyle(node: XmlElement | undefined, theme: readonly string[]): Char
   return { size: size === undefined ? undefined : size / 100, bold: bold === undefined ? undefined : bold === '1' || bold === 'true', color: color(props, theme) }
 }
 
-function axisInfo(node: XmlElement, series: ChartSeries | undefined, isCategory: boolean, theme: readonly string[]): Axis {
+function resolveNumberFormat(node: XmlElement | undefined, source: string | undefined) {
+  const literal = attribute(node, 'formatCode')
+  return trueAttribute(node, 'sourceLinked') ? source ?? literal : literal
+}
+
+const builtInDisplayUnits = new Map<string, readonly [number, string]>([
+  ['hundreds', [1e2, 'Hundreds']], ['thousands', [1e3, 'Thousands']],
+  ['tenThousands', [1e4, 'x 10000']], ['hundredThousands', [1e5, 'x 100000']],
+  ['millions', [1e6, 'Millions']], ['tenMillions', [1e7, 'x 10000000']],
+  ['hundredMillions', [1e8, 'x 100000000']], ['billions', [1e9, 'Billions']],
+  ['trillions', [1e12, 'Trillions']],
+])
+
+function axisInfo(node: XmlElement, linkedFormat: string | undefined, theme: readonly string[]): Axis {
   const scaling = child(node, 'scaling')
   const title = child(node, 'title')
-  const fmt = child(node, 'numFmt')
-  const linked = ['1', 'true'].includes(attribute(fmt, 'sourceLinked') ?? '')
-  const fmtCode = (linked ? isCategory ? series?.categoryFormat : series?.numberFormat : undefined) ?? attribute(fmt, 'formatCode')
+  const fmtCode = resolveNumberFormat(child(node, 'numFmt'), linkedFormat)
+  const units = child(node, 'dispUnits')
+  const builtIn = builtInDisplayUnits.get(val(units, 'builtInUnit') ?? '')
+  const custom = finite(val(units, 'custUnit'))
+  const displayUnit = builtIn?.[0] ?? (custom !== undefined && custom > 0 ? custom : undefined)
+  const unitLabel = child(units, 'dispUnitsLbl')
   const labelStyle = textStyle(node, theme)
   const titleStyle = textStyle(title, theme)
   return {
@@ -256,10 +283,12 @@ function axisInfo(node: XmlElement, series: ChartSeries | undefined, isCategory:
     labelColor: labelStyle?.color,
     titleSize: titleStyle?.size && titleStyle.size > 0 ? titleStyle.size : undefined,
     titleColor: titleStyle?.color,
+    displayUnit,
+    displayUnitLabel: displayUnit !== undefined && unitLabel ? richText(unitLabel) || builtIn?.[1] : undefined,
   }
 }
 
-function readChart(xml: string, theme: readonly string[]): Chart | undefined {
+function readChart(xml: string, theme: readonly string[], lookup: SourceNumberFormat): Chart | undefined {
   const space = roots(xml).find(node => node.tag === 'chartSpace')
   const chart = child(space, 'chart')
   const plotArea = child(chart, 'plotArea')
@@ -269,27 +298,30 @@ function readChart(xml: string, theme: readonly string[]): Chart | undefined {
   const combo = chartTypes.length === 2 && chartTypes.includes('barChart') && chartTypes.includes('lineChart')
   if ((!combo && chartTypes.length !== 1) || areaChildren.some(node => /Chart$/.test(node.tag) && !flatPlot(node.tag))) return undefined
   const series: ChartSeries[] = []
-  const firstSeriesByAxis = new Map<string, ChartSeries>()
+  let firstLinkedFormats: LinkedFormats | undefined
+  const linkedFormatsByAxis = new Map<string, LinkedFormats>()
   let points = 0
   for (const plot of plots) {
-    let firstSeries: ChartSeries | undefined
+    let plotLinkedFormats: LinkedFormats | undefined
     for (const node of children(plot)) {
       if (node.tag !== 'ser') continue
-      const entry = parseSeries(node, plot, series.length, theme)
+      const { entry, linked } = parseSeries(node, plot, series.length, theme, lookup)
       points += entry.values.length + entry.categories.length
       if (points > 50_000 || series.length >= 256) return undefined
-      firstSeries ??= entry
+      firstLinkedFormats ??= linked
+      plotLinkedFormats ??= linked
       series.push(entry)
     }
-    if (firstSeries) for (const axis of children(plot).filter(node => node.tag === 'axId')) {
+    if (plotLinkedFormats) for (const axis of children(plot).filter(node => node.tag === 'axId')) {
       const id = attribute(axis, 'val')
-      if (id && !firstSeriesByAxis.has(id)) firstSeriesByAxis.set(id, firstSeries)
+      if (id && !linkedFormatsByAxis.has(id)) linkedFormatsByAxis.set(id, plotLinkedFormats)
     }
   }
   const axes = areaChildren.filter(node => ['catAx', 'dateAx', 'valAx'].includes(node.tag)).map(node => {
     const position = val(node, 'axPos')
     const isCategory = node.tag !== 'valAx' || (chartTypes.includes('scatterChart') && (position === 'b' || position === 't'))
-    return { isCategory, info: axisInfo(node, firstSeriesByAxis.get(val(node, 'axId') ?? '') ?? series[0], isCategory, theme) }
+    const linked = linkedFormatsByAxis.get(val(node, 'axId') ?? '') ?? firstLinkedFormats
+    return { isCategory, info: axisInfo(node, isCategory ? linked?.category : linked?.value, theme) }
   })
   const xAxis = axes.find(({ info }) => info.position === 'b' || info.position === 't')?.info
   const yAxis = (axes.find(({ info }) => info.position === 'l') ?? axes.find(({ info, isCategory }) => info.position === 'r' && !isCategory))?.info
@@ -319,7 +351,7 @@ function readChart(xml: string, theme: readonly string[]): Chart | undefined {
     title: titleText,
     legend: legend ? legendSide ? legendPositions[legendSide] : 'right' : 'none',
     dataLabels: labelMode(activeLabels), dataLabelPosition: position ? positions[position] : undefined,
-    dataLabelFormat: attribute(child(activeLabels, 'numFmt'), 'formatCode'),
+    dataLabelFormat: resolveNumberFormat(child(activeLabels, 'numFmt'), firstLinkedFormats?.value),
     axisTitles, grouping: member(val(bar ?? plots[0], 'grouping'), ['clustered', 'stacked', 'percentStacked', 'standard'] as const),
     gridlines: value?.majorGridlines, valueAxis, categoryAxisFormat: category?.numFmt,
     gapWidthPct: nonnegative(val(bar, 'gapWidth')), holeSizePct: nonnegative(val(doughnut, 'holeSize')),
@@ -363,6 +395,11 @@ export function visualMediaType(path: string): string | undefined {
     case 'gif': return 'image/gif'
     case 'webp': return 'image/webp'
     case 'bmp': return 'image/bmp'
+    case 'svg': return 'image/svg+xml'
+    case 'emf': return 'image/x-emf'
+    case 'wmf': return 'image/x-wmf'
+    case 'emz': return 'image/x-emz'
+    case 'wmz': return 'image/x-wmz'
   }
 }
 
@@ -547,27 +584,190 @@ function internalTarget(rels: Map<string, XmlElement>, part: string, id: string 
   try { return resolveRelTarget(part, target) } catch { return undefined }
 }
 
+async function readVmlDrawing(
+  read: ZipText,
+  sheetPath: string,
+  sheetRels: Map<string, XmlElement>,
+  id: string | undefined,
+) {
+  const path = internalTarget(sheetRels, sheetPath, id, 'vmlDrawing')
+  if (!path) return undefined
+  const root = roots(await read(path))[0]
+  if (!root) return undefined
+  return { path, elements: [root, ...descendants(root)], relationships: await readRelationships(read, path) }
+}
+
+function previewPath(
+  rels: Map<string, XmlElement>, part: string, id: string | undefined, hasPart: (path: string) => boolean,
+) {
+  const path = internalTarget(rels, part, id, 'image')
+  return path && visualMediaType(path) && hasPart(path) ? path : undefined
+}
+
+function vmlImageId(node: XmlElement | undefined) {
+  return attribute(node, 'relid') ?? attribute(node, 'id')
+}
+
+function vmlSize(style: string | undefined) {
+  const lengths = new Map<string, number>()
+  const factors: Record<string, number> = { '': 1, pt: 1, in: 72, cm: 72 / 2.54, mm: 72 / 25.4, px: 0.75, pc: 12 }
+  for (const declaration of style?.split(';') ?? []) {
+    const [key, value] = declaration.split(':')
+    const dimension = key?.trim().toLowerCase()
+    if (dimension !== 'width' && dimension !== 'height') continue
+    const match = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(pt|in|cm|mm|px|pc)?$/i.exec(value?.trim() ?? '')
+    if (!match) continue
+    const points = Number(match[1]) * factors[(match[2] ?? '').toLowerCase()]!
+    if (points > 0 && points <= 2_000) lengths.set(dimension, points)
+  }
+  const widthPt = lengths.get('width'), heightPt = lengths.get('height')
+  return widthPt && heightPt ? { widthPt, heightPt } : undefined
+}
+
+type HeaderFooterPicture = NonNullable<WorkbookPagePrintSettings['headerFooterPictures']>[number]
+
+export async function readHeaderFooterPictures(
+  read: ZipText, sheetPath: string, sheetIndex: number, hasPart: (path: string) => boolean,
+): Promise<(HeaderFooterPicture & { mediaPath: string })[]> {
+  const worksheet = roots(await read(sheetPath)).find(node => node.tag === 'worksheet')
+  const relationshipId = attribute(child(worksheet, 'legacyDrawingHF'), 'id')
+  if (!relationshipId) return []
+  const vml = await readVmlDrawing(read, sheetPath, await readRelationships(read, sheetPath), relationshipId)
+  const pictures = new Map<string, HeaderFooterPicture & { mediaPath: string }>()
+  if (!vml) return []
+  for (const node of vml.elements) {
+    if (node.tag !== 'shape') continue
+    const position = attribute(node, 'id')?.trim().toUpperCase()
+    if (!position || !/^[LCR][HF](?:EVEN|FIRST)?$/.test(position) || pictures.has(position)) continue
+    const size = vmlSize(attribute(node, 'style'))
+    const mediaPath = previewPath(vml.relationships, vml.path, vmlImageId(child(node, 'imagedata')), hasPart)
+    const mediaType = mediaPath && visualMediaType(mediaPath)
+    if (!size || !mediaPath || !mediaType) continue
+    pictures.set(position, { id: 'hf-picture-' + sheetIndex + '-' + position.toLowerCase(), position, ...size, mediaPath, mediaType })
+  }
+  return [...pictures.values()]
+}
+
+function vmlAnchor(value: string | undefined): Anchor | undefined {
+  const coordinates = value?.split(',').map(integer)
+  if (coordinates?.length !== 8 || coordinates.some(coordinate => coordinate === undefined)) return undefined
+  const [fromColumn, fromColumnPx, fromRow, fromRowPx, toColumn, toColumnPx, toRow, toRowPx] = coordinates as [
+    number, number, number, number, number, number, number, number,
+  ]
+  if (Math.min(fromColumn, fromRow, toColumn, toRow) < 0 || Math.max(fromRow, toRow) >= 1_048_576 ||
+      Math.max(fromColumn, toColumn) >= 16_384) return undefined
+  const offsets = [fromColumnPx, fromRowPx, toColumnPx, toRowPx].map(value => value * 9525)
+  if (!offsets.every(Number.isSafeInteger)) return undefined
+  return { fromColumn, fromRow, toColumn, toRow, fromColumnOffset: offsets[0]!, fromRowOffset: offsets[1]!,
+    toColumnOffset: offsets[2]!, toRowOffset: offsets[3]!, explicitTo: true }
+}
+
+function vmlPaint(node: XmlElement, inherited: XmlElement | undefined, flag: string, attr: string, fallback: string) {
+  const value = attribute(node, flag) ?? attribute(inherited, flag)
+  if (value === 'f' || value === 'false' || value === '0') return undefined
+  const color = attribute(node, attr)?.trim().split(/\s/, 1)[0]
+  return color && /^#[a-f0-9]{6}$/i.test(color) ? color.toUpperCase() : fallback
+}
+
+type OleObject = Pick<WorkbookVisualObject, 'progId' | 'mediaPath' | 'lineColor' | 'fillColor'> & { anchor?: Anchor | undefined }
+
+async function readOleObjects(
+  read: ZipText, worksheet: XmlElement | undefined, sheetPath: string, sheetRels: Map<string, XmlElement>,
+  hasPart: (path: string) => boolean,
+): Promise<Map<number, OleObject>> {
+  const objects = new Map<number, OleObject>()
+  for (const node of descendants(child(worksheet, 'oleObjects'))) {
+    if (node.tag !== 'oleObject') continue
+    const shapeId = nonnegative(attribute(node, 'shapeId'))
+    const progId = attribute(node, 'progId')
+    if (shapeId === undefined || !progId) continue
+    const properties = child(node, 'objectPr')
+    const anchor = child(properties, 'anchor')
+    const existing = objects.get(shapeId)
+    objects.set(shapeId, {
+      progId: existing?.progId ?? progId,
+      anchor: existing?.anchor ?? (anchor && readAnchor(anchor)),
+      mediaPath: existing?.mediaPath ?? previewPath(sheetRels, sheetPath, attribute(properties, 'id'), hasPart),
+    })
+  }
+  if (!objects.size) return objects
+  const vml = await readVmlDrawing(read, sheetPath, sheetRels, attribute(child(worksheet, 'legacyDrawing'), 'id'))
+  if (!vml) return objects
+  const types = new Map(vml.elements.filter(node => node.tag === 'shapetype').map(node => ['#' + attribute(node, 'id'), node]))
+  for (const node of vml.elements) {
+    if (node.tag !== 'shape') continue
+    const id = /_s(\d+)$/.exec(attribute(node, 'id') ?? '')?.[1]
+    const object = id === undefined ? undefined : objects.get(Number(id))
+    if (!object) continue
+    const inherited = types.get(attribute(node, 'type') ?? '')
+    object.anchor ??= vmlAnchor(text(first(node, 'Anchor')))
+    object.mediaPath ??= previewPath(vml.relationships, vml.path, vmlImageId(first(node, 'imagedata')), hasPart)
+    object.lineColor = vmlPaint(node, inherited, 'stroked', 'strokecolor', '#000000')
+    object.fillColor = vmlPaint(node, inherited, 'filled', 'fillcolor', '#FFFFFF')
+  }
+  return objects
+}
+
 const anchorTags = new Set(['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor'])
+
+async function readControlCaptions(read: ZipText, sheetPath: string, relationships: Map<string, XmlElement>) {
+  const captions = new Map<string, string>()
+  for (const [id, relation] of relationships) {
+    const kind = attribute(relation, 'Type')?.split('/').at(-1)
+    if (kind !== 'slicer' && kind !== 'timeline') continue
+    const path = internalTarget(relationships, sheetPath, id, kind)
+    if (!path) continue
+    for (const root of roots(await read(path))) {
+      for (const node of [root, ...descendants(root)]) {
+        if (node.tag !== kind) continue
+        const name = attribute(node, 'name'), caption = attribute(node, 'caption')
+        if (name && caption !== undefined) captions.set(name, caption)
+      }
+    }
+  }
+  return captions
+}
+
+function controlName(anchor: XmlElement) {
+  for (const node of descendants(anchor)) {
+    if (node.tag === 'graphicData' && /\/(?:slicer|timeslicer)$/.test(attribute(node, 'uri') ?? '')) {
+      const name = attribute(children(node)[0], 'name')
+      if (name) return name
+    }
+  }
+}
 
 export async function readWorkbookVisuals(
   read: ZipText,
   sheets: readonly { id: string; name: string }[],
   theme: readonly string[] = [],
   hasPart: (path: string) => boolean = () => true,
+  lookup: SourceNumberFormat = () => undefined,
 ): Promise<WorkbookVisualObject[]> {
   const workbook = 'xl/workbook.xml'
   const byName = new Map(sheets.map(sheet => [sheet.name, sheet.id]))
   const workbookRels = await readRelationships(read, workbook)
   const result: WorkbookVisualObject[] = []
   let ordinal = 0
+  let oleOrdinal = 0
   for (const declaration of parseSheetElements(await read(workbook))) {
     const sheetId = byName.get(declaration.name)
     const sheetPath = internalTarget(workbookRels, workbook, declaration.relationshipId, 'worksheet')
     if (!sheetId || !sheetPath) continue
     const sheetXml = await read(sheetPath)
-    if (!sheetXml.includes('drawing')) continue
+    if (!sheetXml.includes('drawing') && !sheetXml.includes('oleObjects')) continue
     const worksheet = roots(sheetXml).find(node => node.tag === 'worksheet')
     const sheetRels = await readRelationships(read, sheetPath)
+    const captions = await readControlCaptions(read, sheetPath, sheetRels)
+    const oleObjects = await readOleObjects(read, worksheet, sheetPath, sheetRels, hasPart)
+    const appendOle = (object: OleObject, fallback?: Anchor) => {
+      const anchor = object.anchor ?? fallback
+      if (!anchor || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&
+        anchor.fromRowOffset === anchor.toRowOffset && anchor.fromColumnOffset === anchor.toColumnOffset)) return
+      result.push({ ...object, id: 'ole-' + ++oleOrdinal, sheetId, kind: 'ole', anchor,
+        mediaType: object.mediaPath ? visualMediaType(object.mediaPath) : undefined })
+    }
+    const renderedOle = new Set<number>()
     for (const node of children(worksheet).filter(node => node.tag === 'drawing')) {
       const drawingPath = internalTarget(sheetRels, sheetPath, attribute(node, 'id'), 'drawing')
       if (!drawingPath || !/^xl\/drawings\/[\w./-]+\.xml$/.test(drawingPath)) continue
@@ -583,7 +783,20 @@ export async function readWorkbookVisuals(
         if (!directAnchors.has(entry.tokens)) continue
         const anchor = readAnchor(entry)
         const nonvisual = first(entry, 'cNvPr')
+        const shapeNode = child(entry, 'sp') ?? child(entry, 'cxnSp')
+        const shapeId = shapeNode && nonnegative(attribute(nonvisual, 'id'))
+        const ole = shapeId === undefined ? undefined : oleObjects.get(shapeId)
+        if (ole && shapeId !== undefined) {
+          if (!renderedOle.has(shapeId)) appendOle(ole, anchor)
+          renderedOle.add(shapeId)
+          continue
+        }
         if (!anchor || trueAttribute(nonvisual, 'hidden')) continue
+        const control = controlName(entry)
+        if (control) {
+          result.push({ id, sheetId, kind: 'slicer', anchor, name: control, text: captions.get(control) ?? control })
+          continue
+        }
         const name = attribute(nonvisual, 'name')
         const editAs = entry.tag === 'twoCellAnchor'
           ? member(attribute(entry, 'editAs'), ['twoCell', 'oneCell', 'absolute'] as const) ?? 'twoCell' : undefined
@@ -598,11 +811,10 @@ export async function readWorkbookVisuals(
         if (chartNode) {
           const chartPath = internalTarget(drawingRels, drawingPath, attribute(chartNode, 'id'), 'chart')
           if (!chartPath || !/^xl\/charts\/.+\.xml$/.test(chartPath) || !hasPart(chartPath)) continue
-          const chart = readChart(await read(chartPath), theme)
+          const chart = readChart(await read(chartPath), theme, lookup)
           if (chart) result.push({ ...base, kind: 'chart', chartPath, chart })
           continue
         }
-        const shapeNode = child(entry, 'sp') ?? child(entry, 'cxnSp')
         if (shapeNode) {
           const shape = readShape(shapeNode, base, theme)
           if (shape) result.push(shape)
@@ -630,6 +842,9 @@ export async function readWorkbookVisuals(
           frameHeight: frameHeight && frameHeight > 0 ? frameHeight : undefined,
         })
       }
+    }
+    for (const [shapeId, object] of oleObjects) {
+      if (!renderedOle.has(shapeId)) appendOle(object)
     }
   }
   return result
