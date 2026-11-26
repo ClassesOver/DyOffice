@@ -381,14 +381,40 @@ export function parseSheetElements(workbookXml: string): SheetElement[] {
   return elements
 }
 
-export function maxSheetIdInWorkbook(workbookXml: string): number {
-  let max = 0
+function* sheetIdsInWorkbook(workbookXml: string): Iterable<number> {
   for (const { sheetId } of parseSheetElements(workbookXml)) {
     if (sheetId === undefined || !/^[0-9]+$/.test(sheetId)) continue
     const id = Number(sheetId)
-    if (Number.isSafeInteger(id)) max = Math.max(max, id)
+    if (Number.isSafeInteger(id)) yield id
   }
+}
+
+export function maxSheetIdInWorkbook(workbookXml: string): number {
+  let max = 0
+  for (const id of sheetIdsInWorkbook(workbookXml)) max = Math.max(max, id)
   return max
+}
+
+// Excel requires sheet IDs in 1..65534 (MS-OI29500 2.1.578).
+const MAX_EXCEL_SHEET_ID = 65_534
+
+export function nextWorkbookSheetIds(workbookXml: string, count: number): number[] {
+  const first = maxSheetIdInWorkbook(workbookXml) + 1
+  if (first + count - 1 <= MAX_EXCEL_SHEET_ID) {
+    return Array.from({ length: count }, (_, index) => first + index)
+  }
+
+  const used = new Set(sheetIdsInWorkbook(workbookXml))
+  const ids: number[] = []
+  let next = first
+  while (ids.length < count) {
+    if (next > MAX_EXCEL_SHEET_ID) next = 1
+    while (next <= MAX_EXCEL_SHEET_ID && used.has(next)) next += 1
+    if (next > MAX_EXCEL_SHEET_ID) throw new SheetEditError('No unused worksheet IDs remain.')
+    used.add(next)
+    ids.push(next++)
+  }
+  return ids
 }
 
 export function maxRelationshipId(relationshipsXml: string): number {

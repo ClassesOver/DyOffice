@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCellEditsToXlsx } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import {
   maxSheetIdInWorkbook,
+  nextWorkbookSheetIds,
   parseSheetElements,
   pivotCacheReadsFromSheet,
   renameSheetInPivotCacheSource,
@@ -83,6 +84,12 @@ describe('element scans with ">" inside attribute values', () => {
       '<sheet name="One" sheetId = \'&#x39;\'/><sheet name="Two" ext:sheetId="82" sheetId="3"/>' +
       '</sheets></workbook>'
     expect(maxSheetIdInWorkbook(xml)).toBe(9)
+  })
+
+  it('skips occupied worksheet IDs after reaching the Excel limit', () => {
+    const xml = '<workbook><sheets><sheet name="One" sheetId="1"/><sheet name="Three" sheetId="3"/>' +
+      '<sheet name="Highest" sheetId="65534"/></sheets></workbook>'
+    expect(nextWorkbookSheetIds(xml, 2)).toEqual([2, 4])
   })
 
   it('worksheetSource scans survive a ">" sheet name', () => {

@@ -59,6 +59,24 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('reuses free worksheet IDs when new tabs reach the Excel sheet ID limit', async () => {
+    const bytes = await workbook({ [workbookPath]: (xml) => xml.replace('sheetId="1"', 'sheetId="65533"') })
+    const request = {
+      ...sheetsSaveRequest('local-added-1', [{ row: 0, column: 0, value: 'Added first', writeValue: true }]),
+      sheetOps: [
+        { kind: 'add-sheet', sheetId: 'local-added-1', name: 'First' },
+        { kind: 'add-sheet', sheetId: 'local-added-2', name: 'Second' },
+      ],
+      sheetOrder: ['sheet-65533', 'local-added-1', 'local-added-2'],
+    }
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    const { sheets } = await native.inspect(saved)
+    assert.deepEqual(sheets.map(({ id }) => id), ['sheet-65533', 'sheet-65534', 'sheet-1'])
+    const range = { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }
+    assert.equal((await native.readRange(saved, 'Acceptance', range)).cells[0]?.value, 'Revenue')
+    assert.equal((await native.readRange(saved, 'First', range)).cells[0]?.value, 'Added first')
+  })
+
   await t.test('assigns a distinct ID when adding a sheet after an encoded sheet ID', async () => {
     const bytes = await workbook({
       [workbookPath]: (xml) => xml.replace('sheetId="1"', "sheetId = '&#49;'"),

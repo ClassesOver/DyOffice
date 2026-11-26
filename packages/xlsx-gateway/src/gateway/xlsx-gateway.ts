@@ -97,7 +97,7 @@ import {
   definedNamesUseToken,
   nextFreeRelationshipId,
   nextFreeRelationshipIds,
-  maxSheetIdInWorkbook,
+  nextWorkbookSheetIds,
   parseRelationships,
   parseSheetElements,
   partPathForRels,
@@ -2094,12 +2094,12 @@ async function allocateAddedSheets(
     const match = /^xl\/worksheets\/sheet([0-9]+)\.xml$/.exec(path)
     if (match) nextPartNumber = Math.max(nextPartNumber, Number(match[1]) + 1)
   }
-  const nextSheetId = maxSheetIdInWorkbook(workbookXml) + 1
+  const sheetIds = nextWorkbookSheetIds(workbookXml, names.length)
   const relationshipIds = nextFreeRelationshipIds(relationshipsXml, names.length)
   const allocations = names.map((name, index) => ({
     name,
     path: `xl/worksheets/sheet${nextPartNumber + index}.xml`,
-    sheetId: nextSheetId + index,
+    sheetId: sheetIds[index]!,
     relationshipId: relationshipIds[index]!,
   }))
   // Written now rather than in applySheetPlanToPackage so later allocators
