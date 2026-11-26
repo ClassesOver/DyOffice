@@ -18,6 +18,22 @@ const RELS =
   '</Relationships>'
 
 describe('applyHyperlinkEdits', () => {
+  it('reserves an existing encoded relationship ID when allocating a new hyperlink', () => {
+    const rels = RELS.replace('Id="rId3"', 'Id="rId&#49;"')
+    const patch = applyHyperlinkEdits(WORKSHEET, rels, [{ row: 0, column: 1, target: 'https://new.example' }])
+    expect(patch.worksheetXml).toContain('<hyperlink ref="B1" r:id="rId2"/>')
+    expect(patch.relsXml).toContain('Id="rId&#49;"')
+  })
+
+  it('retains a shared relationship when the surviving reference encodes part of its ID', () => {
+    const xml = WORKSHEET.replace('<pageMargins',
+      '<hyperlinks><hyperlink ref="A1" r:id="rId3"/><hyperlink ref="B1" r:id="rId&#51;"/></hyperlinks><pageMargins',
+    )
+    const patch = applyHyperlinkEdits(xml, RELS, [{ row: 0, column: 0, target: null }])
+    expect(patch.relsXml).toBe(RELS)
+    expect(patch.worksheetXml).toContain('<hyperlink ref="B1" r:id="rId&#51;"/>')
+  })
+
   it('edits the actual relationship records and preserves comments and foreign Id attributes', () => {
     const comment = '<!-- </Relationships> -->'
     const drawing = '<Relationship xmlns:ext="urn:extension" ext:Id="rId3" Id="rId1" Type="drawing" Target="../drawings/drawing1.xml"/>'

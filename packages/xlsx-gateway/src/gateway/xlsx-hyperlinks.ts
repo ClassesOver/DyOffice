@@ -80,7 +80,7 @@ export function applyHyperlinkEdits(
     const entry = childElements(root.inner).find((child) => {
       if (child.name !== name || !readWorksheetTagAttribute(child.opening, 'Type')?.endsWith('/hyperlink')) return false
       const id = readWorksheetTagAttribute(child.opening, 'Id')
-      return id !== undefined && decodeAttribute(id) === decodeAttribute(relId)
+      return id !== undefined && decodeAttribute(id) === relId
     })
     if (!entry) return
     const start = root.start + root.opening.length + entry.start
@@ -121,11 +121,16 @@ export function applyHyperlinkEdits(
     }
     if (matches.size > 0) {
       const activeIds = new Set(links.filter((link) => !matches.has(link))
-        .map((link) => readRelationshipId(link.opening, parent, root)))
+        .flatMap((link) => {
+          const id = readRelationshipId(link.opening, parent, root)
+          return id === undefined ? [] : [decodeAttribute(id)]
+        }))
       for (const link of [...matches.keys()].reverse()) {
         body = body.slice(0, link.start) + body.slice(link.start + link.xml.length)
-        const id = readRelationshipId(link.opening, parent, root)
-        if (id !== undefined && !activeIds.has(id)) dropRel(id)
+        const rawId = readRelationshipId(link.opening, parent, root)
+        if (rawId === undefined) continue
+        const id = decodeAttribute(rawId)
+        if (!activeIds.has(id)) dropRel(id)
       }
     }
     if (edit.target === null) continue

@@ -59,6 +59,22 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('allocates unique hyperlink relationship IDs when existing IDs use XML character references', async () => {
+    const namespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const oldTarget = 'https://example.com/original'
+    const target = 'https://example.com/new'
+    const bytes = await workbook({
+      [sheetPath]: worksheet('<sheetData><row r="1"><c r="A1"><v>7</v></c><c r="B1"><v>8</v></c></row></sheetData>' +
+        `<hyperlinks xmlns:r="${namespace}"><hyperlink ref="A1" r:id="rId&#49;"/></hyperlinks>`),
+      'xl/worksheets/_rels/sheet1.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        `<Relationship Id="rId&#49;" Type="${namespace}/hyperlink" Target="${oldTarget}" TargetMode="External"/></Relationships>`,
+    })
+    const request = { ...sheetsSaveRequest('sheet-1', []), hyperlinkEdits: [{ sheetId: 'sheet-1', row: 0, column: 1, target }] }
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    const { hyperlinks } = await native.readRange(saved, sheetName, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 })
+    assert.deepEqual(hyperlinks, [{ row: 0, column: 0, target: oldTarget }, { row: 0, column: 1, target }])
+  })
+
   await t.test('replaces an expanded hyperlink relationship without deleting a drawing relationship', async () => {
     const namespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
     const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'

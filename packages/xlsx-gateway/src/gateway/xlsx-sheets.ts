@@ -391,21 +391,25 @@ export function maxSheetIdInWorkbook(workbookXml: string): number {
   return max
 }
 
-/// Relationship ids are read quote-agnostically, for the same reason as
-/// pptx-engine's maxRelationshipIdNumber: a .rels part that spells its ids
-/// with single quotes still holds them, so no id may be handed out twice.
-const RELATIONSHIP_ID = /\bId\s*=\s*(["'])rId(\d+)\1/g
-
 export function maxRelationshipId(relationshipsXml: string): number {
   let max = 0
-  for (const match of relationshipsXml.matchAll(RELATIONSHIP_ID)) {
-    max = Math.max(max, Number(match[2]))
+  for (const id of relationshipIds(relationshipsXml)) {
+    const match = /^rId(\d+)$/.exec(id)
+    if (match) max = Math.max(max, Number(match[1]))
   }
   return max
 }
 
 function relationshipIds(relationshipsXml: string): Set<string> {
-  return new Set([...relationshipsXml.matchAll(RELATIONSHIP_ID)].map((match) => `rId${match[2]}`))
+  const elements = childElements(relationshipsXml)
+  const root = elements.find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+  const used = new Set<string>()
+  for (const { name, opening } of root ? childElements(root.inner) : elements) {
+    if (name.slice(name.lastIndexOf(':') + 1) !== 'Relationship') continue
+    const id = readWorksheetTagAttribute(opening, 'Id')
+    if (id !== undefined) used.add(decodeAttribute(id))
+  }
+  return used
 }
 
 function firstFreeRelationshipId(used: ReadonlySet<string>): string {
