@@ -4,7 +4,7 @@
 
 import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart.ts'
 import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
-import { nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { appendRelationshipRecord, nextFreeRelationshipId } from './xlsx-sheets.ts'
 
 export class VisualAddError extends Error {}
 
@@ -1007,12 +1007,8 @@ export async function appendRelationship(
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
       '</Relationships>'
   const id = nextFreeRelationshipId(xml)
-  const element =
-    `<Relationship Id="${id}" Type="${escapeXmlAttribute(type)}" ` +
-    `Target="${escapeXmlAttribute(target)}"${targetMode ? ` TargetMode="${targetMode}"` : ''}/>`
-  const closeAt = xml.lastIndexOf('</Relationships>')
-  if (closeAt < 0) throw new VisualAddError(`${relsPath} is not a relationships part.`)
-  const patched = xml.slice(0, closeAt) + element + xml.slice(closeAt)
+  const patched = appendRelationshipRecord(xml, id, type, target, targetMode)
+  if (patched === undefined) throw new VisualAddError(`${relsPath} is not a relationships part.`)
   if (exists) pkg.write(relsPath, patched)
   else pkg.add(relsPath, patched)
   return id

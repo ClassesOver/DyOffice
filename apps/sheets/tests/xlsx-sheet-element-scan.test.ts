@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import { applyCellEditsToXlsx } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import {
+  addWorksheetRelationship,
   maxSheetIdInWorkbook,
   nextWorkbookSheetIds,
   parseSheetElements,
@@ -90,6 +91,16 @@ describe('element scans with ">" inside attribute values', () => {
     const xml = '<workbook><sheets><sheet name="One" sheetId="1"/><sheet name="Three" sheetId="3"/>' +
       '<sheet name="Highest" sheetId="65534"/></sheets></workbook>'
     expect(nextWorkbookSheetIds(xml, 2)).toEqual([2, 4])
+  })
+
+  it('appends worksheet relationships to the actual XML root', () => {
+    const comment = '<!-- </p:Relationships> -->'
+    const opening = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">'
+    const xml = opening + comment + '</p:Relationships >'
+    const added = addWorksheetRelationship(xml, 'rId1', 'worksheets/sheet2.xml')
+    expect(added).toBe(opening + comment + '<p:Relationship Id="rId1" ' +
+      'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" ' +
+      'Target="worksheets/sheet2.xml"/></p:Relationships >')
   })
 
   it('worksheetSource scans survive a ">" sheet name', () => {

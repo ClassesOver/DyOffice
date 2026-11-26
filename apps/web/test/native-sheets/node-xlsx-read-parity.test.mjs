@@ -59,6 +59,26 @@ test('Web XLSX workbook inspection and reading', async (t) => {
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
 
+  await t.test('adds a worksheet when the relationships closing tag contains XML whitespace', async () => {
+    const relsPath = 'xl/_rels/workbook.xml.rels'
+    const comment = '<!-- </Relationships> -->'
+    const bytes = await workbook({
+      [relsPath]: (xml) => xml.replace('</Relationships>', comment + '</Relationships >'),
+    })
+    const newSheetId = 'local-tab'
+    const request = {
+      ...sheetsSaveRequest(newSheetId, [{ row: 0, column: 0, value: 42, writeValue: true }]),
+      sheetOps: [{ kind: 'add-sheet', sheetId: newSheetId, name: 'Added' }],
+      sheetOrder: ['sheet-1', newSheetId],
+    }
+    const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+    const rels = await (await JSZip.loadAsync(saved)).file(relsPath).async('string')
+    assert.ok(rels.includes(comment))
+    assert.ok(rels.includes('Target="worksheets/sheet2.xml"/></Relationships >'))
+    const { cells } = await native.readRange(saved, 'Added', { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    assert.equal(cells[0]?.value, 42)
+  })
+
   await t.test('reuses free worksheet IDs when new tabs reach the Excel sheet ID limit', async () => {
     const bytes = await workbook({ [workbookPath]: (xml) => xml.replace('sheetId="1"', 'sheetId="65533"') })
     const request = {

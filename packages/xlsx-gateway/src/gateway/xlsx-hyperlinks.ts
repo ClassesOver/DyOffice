@@ -2,7 +2,7 @@
 /// External targets live as TargetMode="External" relationships referenced by
 /// r:id; internal anchors use the `location` attribute and need no rel.
 
-import { decodeAttribute, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { appendRelationshipRecord, decodeAttribute, findRelationshipsRoot, nextFreeRelationshipId } from './xlsx-sheets.ts'
 import {
   OFFICE_RELATIONSHIPS_NAMESPACE,
   isOfficeRelationshipNamespace,
@@ -39,10 +39,6 @@ const EMPTY_RELS =
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   '</Relationships>'
-
-function findRelationshipsRoot(xml: string) {
-  return childElements(xml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
-}
 
 export function findWorksheetHyperlinkSection(worksheetXml: string) {
   const span = findRootChild(worksheetXml, 'worksheet', 'hyperlinks')
@@ -92,19 +88,10 @@ export function applyHyperlinkEdits(
       rels = EMPTY_RELS
       relsChanged = true
     }
-    const root = findRelationshipsRoot(rels)
-    if (!root) throw new HyperlinkEditError('Worksheet has no relationships root element.')
     const relId = nextFreeRelationshipId(rels)
-    const element =
-      `<${root.name.slice(0, -1)} Id="${relId}" Type="${HYPERLINK_REL_TYPE}" ` +
-      `Target="${escapeXmlAttribute(target)}" TargetMode="External"/>`
-    const endOfOpening = root.start + root.opening.length
-    if (root.opening.endsWith('/>')) {
-      rels = rels.slice(0, endOfOpening - 2) + `>${element}</${root.name}>` + rels.slice(endOfOpening)
-    } else {
-      const close = endOfOpening + root.inner.length
-      rels = rels.slice(0, close) + element + rels.slice(close)
-    }
+    const added = appendRelationshipRecord(rels, relId, HYPERLINK_REL_TYPE, target, 'External')
+    if (added === undefined) throw new HyperlinkEditError('Worksheet has no relationships root element.')
+    rels = added
     relsChanged = true
     return relId
   }

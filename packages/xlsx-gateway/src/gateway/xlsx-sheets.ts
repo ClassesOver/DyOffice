@@ -658,11 +658,35 @@ export function addWorksheetRelationship(
   relationshipId: string,
   target: string,
 ): string {
-  const relationship = `<Relationship Id="${relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${target}"/>`
-  if (!relationshipsXml.includes('</Relationships>')) {
-    throw new SheetEditError('The workbook has no relationships part.')
+  const added = appendRelationshipRecord(
+    relationshipsXml, relationshipId, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet', target,
+  )
+  if (added === undefined) throw new SheetEditError('The workbook has no relationships part.')
+  return added
+}
+
+export function findRelationshipsRoot(xml: string) {
+  return childElements(xml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+}
+
+export function appendRelationshipRecord(
+  xml: string,
+  id: string,
+  type: string,
+  target: string,
+  targetMode?: 'External',
+): string | undefined {
+  const root = findRelationshipsRoot(xml)
+  if (!root) return undefined
+  const name = root.name.slice(0, -1)
+  const element = `<${name} Id="${escapeXmlAttribute(id)}" Type="${escapeXmlAttribute(type)}" ` +
+    `Target="${escapeXmlAttribute(target)}"${targetMode ? ` TargetMode="${targetMode}"` : ''}/>`
+  const endOfOpening = root.start + root.opening.length
+  if (root.opening.endsWith('/>')) {
+    return xml.slice(0, endOfOpening - 2) + `>${element}</${root.name}>` + xml.slice(endOfOpening)
   }
-  return relationshipsXml.replace('</Relationships>', () => `${relationship}</Relationships>`)
+  const close = endOfOpening + root.inner.length
+  return xml.slice(0, close) + element + xml.slice(close)
 }
 
 export function relationshipIdsMatch(id: string | undefined, reference: string | undefined): boolean {
@@ -670,7 +694,7 @@ export function relationshipIdsMatch(id: string | undefined, reference: string |
 }
 
 export function removeRelationshipById(relationshipsXml: string, relationshipId: string): string {
-  const root = childElements(relationshipsXml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+  const root = findRelationshipsRoot(relationshipsXml)
   if (!root) return relationshipsXml
   const entry = childElements(root.inner).find(({ name, opening }) =>
     name.slice(name.lastIndexOf(':') + 1) === 'Relationship' &&
@@ -702,7 +726,7 @@ export interface ParsedRelationship {
 
 export function parseRelationships(relsXml: string): ParsedRelationship[] {
   const entries: ParsedRelationship[] = []
-  const root = childElements(relsXml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+  const root = findRelationshipsRoot(relsXml)
   for (const { name, opening } of childElements(root?.inner ?? '')) {
     if (name.slice(name.lastIndexOf(':') + 1) !== 'Relationship') continue
     const type = readWorksheetTagAttribute(opening, 'Type')
