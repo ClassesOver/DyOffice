@@ -33,6 +33,7 @@ import {
   isElement,
   prefixOf,
   scopedChildren,
+  sharedStringAt,
   withBody,
   withNamespaces,
   worksheetRoot,
@@ -494,7 +495,7 @@ function extractCellValue(cell: ScopedElement, sharedStrings: readonly string[])
   if (type === 'str') return decodeCellText(value.inner)
   const raw = elementText(value.inner).trim()
   if (raw === '') return null
-  if (type === 's') return sharedStrings[Number(raw)] ?? null
+  if (type === 's') return sharedStringAt(sharedStrings, raw) ?? null
   if (type === 'b') return raw === '1' || raw === 'true'
   const n = Number(raw)
   return Number.isFinite(n) ? n : raw

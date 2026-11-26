@@ -26,7 +26,9 @@ async function sharedStringWorkbook(): Promise<Buffer> {
   )
   zip.file(
     'xl/worksheets/sheet1.xml',
-    '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c></row></sheetData></worksheet>',
+    '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row>' +
+      '<row r="2"><c r="A2" t="s"><v> +&#49; </v></c><c r="B2" t="s"><v> </v></c><c r="C2" t="s"><v>0x1</v></c><c r="D2" t="s"><v>1e0</v></c><c r="E2" t="s"><v>0</v></c></row>' +
+      '</sheetData></worksheet>',
   )
   return zip.generateAsync({ type: 'nodebuffer' })
 }
@@ -75,8 +77,11 @@ describe('readSheetRows', () => {
     ])
   })
 
-  it('reads a cell that lives in the shared string table', async () => {
-    expect(await readSheetRows(await sharedStringWorkbook())).toEqual([['Name'], ['Ada']])
+  it('reads decimal shared string indices and leaves invalid indices blank', async () => {
+    expect(await readSheetRows(await sharedStringWorkbook())).toEqual([
+      ['Name'],
+      ['Ada', '', '', '', 'Name'],
+    ])
   })
 
   it('keeps a cell that holds a comma inside a quoted field', async () => {

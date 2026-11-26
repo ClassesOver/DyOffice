@@ -105,6 +105,11 @@ export function elementText(inner: string): string {
     .join('')
 }
 
+export function sharedStringAt<T>(entries: readonly T[], indexText: string): T | undefined {
+  const index = indexText.trim()
+  return /^\+?\d+$/.test(index) ? entries[Number(index)] : undefined
+}
+
 /// Mirrors the sidecar: raw CRLF folds first so `_x000D_` + LF (Excel's CR LF)
 /// ends up as one line break.
 export function decodeCellText(input: string, preserveSpace = true): string {

@@ -83,7 +83,7 @@ import {
 } from './xlsx-filter.ts'
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
-import { decodeCellText, elementText, isElement, isSpreadsheetNamespace, scopedChildren, withNamespaces, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import { decodeCellText, elementText, isElement, isSpreadsheetNamespace, scopedChildren, sharedStringAt, withNamespaces, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 import { isWorkbookSheetRelationship, readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
@@ -747,7 +747,7 @@ function cellText(
   }
   const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
   if (rawValue === undefined) return ''
-  if (type === 's') return sharedStrings[Number(rawValue)] ?? ''
+  if (type === 's') return sharedStringAt(sharedStrings, decodeCellMarkup(rawValue)) ?? ''
   if (type === 'str') return decodeCellText(rawValue)
   if (type === 'b') return booleanCellText(decodeCellMarkup(rawValue))
   // a number keeps the file's own spelling, except that a date-formatted
@@ -2976,7 +2976,7 @@ function readHeaderCellText(
   const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
   if (rawValue === undefined) return { kind: 'blank' }
   if (type === 's') {
-    const text = sharedStrings[Number(rawValue)] ?? ''
+    const text = sharedStringAt(sharedStrings, decodeCellMarkup(rawValue)) ?? ''
     return text === '' ? { kind: 'blank' } : { kind: 'text', text, plain: true }
   }
   if (type === 'b') {
@@ -3897,9 +3897,7 @@ function parseWorksheetCells(
       ) {
         cells[address] = { value: null }
       } else if (type === 's') {
-        const index = value.trim()
-        const entry = /^\+?\d+$/.test(index) ? sharedStrings[Number(index)] : undefined
-        cells[address] = entry ?? { value: null }
+        cells[address] = sharedStringAt(sharedStrings, value) ?? { value: null }
       } else if (type === 'b') {
         cells[address] = { value: booleanCellValue(value) }
       } else if (type === 'str') {

@@ -1454,6 +1454,7 @@ impl CellBuilder {
             // erroring here used to blank the whole sheet.
             Some("s") => match self
                 .raw_value
+                .trim()
                 .parse::<usize>()
                 .ok()
                 .and_then(|index| shared_strings.get(index))
