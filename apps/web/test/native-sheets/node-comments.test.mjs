@@ -28,6 +28,22 @@ test('Node XLSX keeps existing notes and comment threads when a new note is save
   const plan=await runtime.sheetsWorkbookPlanner(bytes,request)
   return (await native.savePlan(bytes,plan)).bytes
  }
+ await t.test('binds the VML relationship when the worksheet uses r for an extension',async()=>{
+  const input=await JSZip.loadAsync(source), path='xl/worksheets/sheet1.xml'
+  const ns='http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const comment='<!-- <legacyDrawing r:id="fake"/> -->'
+  input.file(path,(await input.file(path).async('string'))
+    .replace('xmlns:r="'+ns+'"','xmlns:r="urn:example:extension"')
+    .replace('<drawing ','<drawing xmlns:r="'+ns+'" ')
+    .replace('</worksheet>',comment+'</worksheet >'))
+  const note={row:0,column:0,author:'Audit',text:'A note'}
+  const saved=await saveNotes(await input.generateAsync({type:'nodebuffer'}),[note])
+  const xml=await (await JSZip.loadAsync(saved)).file(path).async('string')
+  assert.ok(xml.includes(comment))
+  assert.ok(xml.includes('xmlns:r="urn:example:extension"'))
+  assert.ok(xml.includes('<legacyDrawing xmlns:r="'+ns+'" r:id='))
+  assert.deepEqual((await native.inspect(saved)).sheets[0].comments,[note])
+ })
  await t.test('registers a first legacy note when package XML contains comments and closing-tag whitespace',async()=>{
   const input=await JSZip.loadAsync(source)
   const relsPath='xl/worksheets/_rels/sheet1.xml.rels', typesPath='[Content_Types].xml'

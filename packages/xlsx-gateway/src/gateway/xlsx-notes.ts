@@ -15,7 +15,7 @@ import {
   resolveRelTarget,
 } from './xlsx-drawing-add.ts'
 import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { ensureRelationshipNamespace, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { appendRelationshipRecord, nextFreeRelationshipId, removePartOverride } from './xlsx-sheets.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { shiftCellArea, StructuralShiftError, type StructuralOp } from './xlsx-structure.ts'
@@ -758,20 +758,23 @@ const EMPTY_RELS =
   '</Relationships>'
 
 /// CT_Worksheet order: legacyDrawing follows drawing and precedes these.
-const AFTER_LEGACY_DRAWING =
-  /<legacyDrawingHF\b|<picture\b|<oleObjects\b|<controls\b|<webPublishItems\b|<tableParts\b|<extLst\b/
+const AFTER_LEGACY_DRAWING = new Set([
+  'legacyDrawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst',
+])
 
 function ensureLegacyDrawingElement(worksheetXml: string, rid: string): string {
-  if (/<legacyDrawing\b/.test(worksheetXml)) return worksheetXml
+  if (legacyDrawing(worksheetXml)) return worksheetXml
   worksheetXml = ensureRelationshipNamespace(worksheetXml)
-  const element = `<legacyDrawing r:id="${rid}"/>`
-  const anchor = AFTER_LEGACY_DRAWING.exec(worksheetXml)
-  if (anchor) {
-    return worksheetXml.slice(0, anchor.index) + element + worksheetXml.slice(anchor.index)
-  }
-  const end = worksheetXml.lastIndexOf('</worksheet>')
-  if (end === -1) throw new NoteEditError('Worksheet has no closing element.')
-  return worksheetXml.slice(0, end) + element + worksheetXml.slice(end)
+  const root = worksheetRoot(worksheetXml)
+  if (!root || root.opening.endsWith('/>')) throw new NoteEditError('Worksheet has no closing element.')
+  const prefix = root.name.slice(0, -root.local.length)
+  const binding = relationshipNamespaceOverride('', root.opening)
+  const element = `<${prefix}legacyDrawing${binding} r:id="${rid}"/>`
+  const anchor = scopedChildren(root).find(({ local, namespace }) =>
+    namespace === root.namespace && AFTER_LEGACY_DRAWING.has(local),
+  )
+  const offset = root.start + root.opening.length + (anchor?.start ?? root.inner.length)
+  return worksheetXml.slice(0, offset) + element + worksheetXml.slice(offset)
 }
 
 /// Replaces the worksheet's whole comment set (empty list removes it).
