@@ -1,7 +1,10 @@
 import { relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
-import { escapeRegExp, removeRelationshipById } from './xlsx-sheets.ts'
+import { readRelationshipId } from './xlsx-namespace.ts'
+import { parseRelationships, relationshipIdsMatch, removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { applyPatches, isElement, patchElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
 import {
-  TABLE_REL_TYPE,
   areaToRef,
   areasOverlap,
   assertNameNotDefined,
@@ -59,7 +62,18 @@ export async function applyTableEdits(
   }
 }
 
-/// The table parts related from a worksheet, in relationship order. Shared
+function worksheetTableParts(xml: string) {
+  const root = worksheetRoot(xml)
+  if (!root) return undefined
+  const container = scopedChildren(root).find((entry) => isElement(entry, 'tableParts', root.namespace))
+  if (!container) return undefined
+  const entries = scopedChildren(container)
+    .filter((entry) => isElement(entry, 'tablePart', root.namespace))
+    .map((entry) => ({ entry, id: readRelationshipId(entry.opening, container.opening, root.opening) }))
+  return { root, container, entries }
+}
+
+/// The table parts referenced by a worksheet, in worksheet order. Shared
 /// with the filter save path, which routes table-overlapping filters into
 /// the table part instead of the worksheet.
 export async function sheetTableParts(
@@ -68,15 +82,16 @@ export async function sheetTableParts(
 ): Promise<readonly LocatedTable[]> {
   const relsPath = relsPathFor(worksheetPath)
   if (!(await pkg.has(relsPath))) return []
-  const relsXml = await pkg.readText(relsPath)
+  const references = worksheetTableParts(await pkg.readText(worksheetPath))
+  if (!references) return []
+  const relationships = parseRelationships(await pkg.readText(relsPath))
+    .filter((entry) => !entry.external && entry.type.endsWith('/table'))
   const parts: LocatedTable[] = []
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*\/?>/g)) {
-    const tag = match[0]
-    if (!tag.includes(`Type="${TABLE_REL_TYPE}"`)) continue
-    const target = /\bTarget="([^"]+)"/.exec(tag)?.[1]
-    const relId = /\bId="([^"]+)"/.exec(tag)?.[1]
-    if (!target || !relId) continue
-    const path = resolveRelTarget(worksheetPath, target)
+  for (const { id: relId } of references.entries) {
+    if (!relId) continue
+    const rel = relationships.find(({ id }) => relationshipIdsMatch(id, relId))
+    if (!rel?.target) continue
+    const path = resolveRelTarget(worksheetPath, rel.target)
     if (!(await pkg.has(path))) continue
     parts.push({ path, relId, xml: await pkg.readText(path) })
   }
@@ -108,17 +123,21 @@ async function removeTable(
   touchedEntries: Set<string>,
 ): Promise<void> {
   const relsPath = relsPathFor(worksheetPath)
-  pkg.write(relsPath, removeRelationshipById(await pkg.readText(relsPath), table.relId))
+  const rels = await pkg.readText(relsPath)
+  const worksheet = await pkg.readText(worksheetPath)
+  const withoutRelationship = removeRelationshipById(rels, table.relId)
+  const withoutTable = removeTablePart(worksheet, table.relId)
+  if (withoutRelationship === rels || withoutTable === worksheet) {
+    throw new TableEditError('The table reference could not be removed safely.')
+  }
+  pkg.write(relsPath, withoutRelationship)
   touchedEntries.add(relsPath)
-  pkg.write(worksheetPath, removeTablePart(await pkg.readText(worksheetPath), table.relId))
+  pkg.write(worksheetPath, withoutTable)
   touchedEntries.add(worksheetPath)
   pkg.remove(table.path)
   touchedEntries.add(table.path)
   const contentTypes = await pkg.readText(CONTENT_TYPES_PATH)
-  const stripped = contentTypes.replace(
-    new RegExp(`<Override\\b[^>]*PartName="/${escapeRegExp(table.path)}"[^>]*/>`),
-    '',
-  )
+  const stripped = removePartOverride(contentTypes, table.path)
   if (stripped !== contentTypes) {
     pkg.write(CONTENT_TYPES_PATH, stripped)
     touchedEntries.add(CONTENT_TYPES_PATH)
@@ -127,23 +146,24 @@ async function removeTable(
 
 /// Drops one <tablePart>; an emptied <tableParts> container goes with it.
 export function removeTablePart(worksheetXml: string, relId: string): string {
-  const without = worksheetXml.replace(
-    new RegExp(`<tablePart\\b[^>]*\\br:id="${escapeRegExp(relId)}"[^>]*/>\\s*`),
-    '',
-  )
-  const container = /<tableParts\b([^>]*?)(\/?)>/.exec(without)
-  if (!container) return without
-  const remaining = (without.match(/<tablePart\b/g) ?? []).length
-  if (remaining === 0) {
-    return without.replace(/<tableParts\b[^>]*?(?:\/>|>\s*<\/tableParts>)/, '')
-  }
-  if (/count="\d+"/.test(container[1] ?? '')) {
-    return without.replace(
-      container[0],
-      container[0].replace(/count="\d+"/, `count="${remaining}"`),
-    )
-  }
-  return without
+  const references = worksheetTableParts(worksheetXml)
+  if (!references) return worksheetXml
+  const { root, container, entries } = references
+  const patches = entries
+    .filter(({ id }) => relationshipIdsMatch(id, relId))
+    .map(({ entry }) => patchElement(entry, ''))
+  if (!patches.length) return worksheetXml
+  const inner = applyPatches(container.inner, patches)
+  const remaining = entries.length - patches.length
+  const keepContainer = remaining > 0 || childElements(inner).length > 0
+  const opening = container.attributes.has('count')
+    ? updateWorksheetTagAttribute(container.opening, 'count', String(remaining))
+    : container.opening
+  const replacement = keepContainer
+    ? opening + inner + container.xml.slice(container.opening.length + container.inner.length)
+    : inner
+  const offset = root.start + root.opening.length + container.start
+  return worksheetXml.slice(0, offset) + replacement + worksheetXml.slice(offset + container.xml.length)
 }
 
 async function rewriteTable(

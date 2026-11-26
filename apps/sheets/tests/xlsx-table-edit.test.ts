@@ -1,3 +1,4 @@
+import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -5,14 +6,16 @@ import {
   planCellEditsToXlsx,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import type { SheetTableEdit } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
+import { removeTablePart } from '@genoffice/xlsx-gateway/gateway/xlsx-table-edit'
 import { buildKitchenSinkFixture } from './fixture-builder'
 
 // The kitchen-sink fixture carries Table1 (A1:B2, columns A / hdr) on sheet Data.
 async function planWith(
   edits: SheetTableEdit[],
   structuralOps: Parameters<typeof planCellEditsToXlsx>[2] = [],
+  fixture?: Buffer,
 ) {
-  const source = await createBufferEntrySource(await buildKitchenSinkFixture())
+  const source = await createBufferEntrySource(fixture ?? await buildKitchenSinkFixture())
   const args: unknown[] = [source, [], structuralOps]
   while (args.length < 27) args.push(args.length === 10 ? null : [])
   args[4] = undefined
@@ -140,6 +143,57 @@ describe('table edits', () => {
       'tables/table1.xml',
     )
     expect(plan.replaced.get('[Content_Types].xml')).not.toContain('/xl/tables/table1.xml')
+  })
+
+  it('edits the table referenced by the worksheet instead of an orphan with the same name', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const tablePath = 'xl/tables/table1.xml'
+    const orphanPath = 'xl/tables/table2.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const rels = await zip.file(relsPath)!.async('text')
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    zip.file(orphanPath, await zip.file(tablePath)!.async('text'))
+    zip.file(relsPath, rels.replace('<Relationship Id="rId1"',
+      `<Relationship Id="orphan" Type="${office}/table" Target="../tables/table2.xml"/>` +
+      '<Relationship Id="rId1"'))
+
+    const plan = await planWith([edit({ bandedRows: true })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.has(tablePath)).toBe(true)
+    expect(plan.replaced.has(orphanPath)).toBe(false)
+  })
+
+  it('converts an aliased table reference to a range without changing XML comments', async () => {
+    const zip = await JSZip.loadAsync(await buildKitchenSinkFixture())
+    const worksheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const worksheet = await zip.file(worksheetPath)!.async('text')
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const comment = '<!-- <tablePart r:id="rId1"/> -->'
+    zip.file(worksheetPath, worksheet.replace('<tableParts count="1"><tablePart r:id="rId1"/></tableParts>',
+      `${comment}<tableParts count='1' xmlns:t="${office}"><tablePart t:id='rId&#49;'></tablePart></tableParts>`))
+    const rels = await zip.file(relsPath)!.async('text')
+    zip.file(relsPath, rels.replaceAll('"', "'"))
+    const typesPath = '[Content_Types].xml'
+    const types = await zip.file(typesPath)!.async('text')
+    zip.file(typesPath, types.replace('PartName="/xl/tables/table1.xml"', "PartName='/xl/tables/table1.xml'"))
+
+    const plan = await planWith([edit({ remove: true })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get(worksheetPath)).toContain(comment)
+    expect(plan.replaced.get(worksheetPath)).not.toContain('<tableParts')
+    expect(plan.replaced.get(relsPath)).not.toContain('tables/table1.xml')
+    expect(plan.removedEntries).toContain('xl/tables/table1.xml')
+    expect(plan.replaced.get(typesPath)).not.toContain('/xl/tables/table1.xml')
+  })
+
+  it('updates the remaining count using only actual sibling table references', () => {
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const comment = '<!-- <tablePart t:id="rId1"/> -->'
+    const keeper = '<tablePart t:id="rId2"/>'
+    const worksheet = `<worksheet><tableParts xmlns:t="${office}" count='2'>${comment}` +
+      `<tablePart t:id='rId&#49;'/>${keeper}</tableParts></worksheet>`
+    expect(removeTablePart(worksheet, 'rId1')).toBe(
+      `<worksheet><tableParts xmlns:t="${office}" count="1">${comment}${keeper}</tableParts></worksheet>`,
+    )
   })
 
   it('applies edits before additions so a converted table frees its cells and name', async () => {
