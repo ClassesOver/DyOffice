@@ -933,7 +933,7 @@ function rewritePivotWorksheetSource(
   return xml.slice(0, start) + opening + xml.slice(start + element.opening.length)
 }
 
-function localPivotWorksheetSource(xml: string) {
+export function localPivotWorksheetSource(xml: string) {
   if (!xml.includes('worksheetSource')) return undefined
   const [element] = childElements(xml)
   if (!element) return undefined

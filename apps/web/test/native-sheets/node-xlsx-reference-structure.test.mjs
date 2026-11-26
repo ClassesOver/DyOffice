@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import JSZip from 'jszip'
+import { recomputePivotData } from '../../../../packages/xlsx-gateway/src/domain/pivot-engine.ts'
 
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
@@ -291,12 +292,21 @@ test(
 
     await t.test('keeps a pivot cache attached to a renamed source table', async () => {
       const area = { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 }
-      const withPivot = await save(await fixture(), [], [first, second], {
+      const grid = [['Region', 'Amount'], ['East', 100], ['West', 50], ['East', 50], ['Total', 200]]
+      const rows = grid.map(([region, amount], index) => {
+        const row = index + 1
+        const value = typeof amount === 'number' ? `<v>${amount}</v>` : `<is><t>${amount}</t></is>`
+        return `<row r="${row}"><c r="A${row}" t="inlineStr"><is><t>${region}</t></is></c>` +
+          `<c r="B${row}"${typeof amount === 'string' ? ' t="inlineStr"' : ''}>${value}</c></row>`
+      }).join('')
+      const base = await fixture({ changeOne: xml => xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/,
+        `<sheetData>${rows}</sheetData>`) })
+      const withPivot = await save(base, [], [first, second], {
         tableAdditions: [{ sheetId: first, name: 'SourceData', area,
-          columnNames: ['Revenue', 'Formula'], bandedRows: true }],
+          columnNames: ['Region', 'Amount'], bandedRows: true }],
         pivotAdditions: [{ sheetId: second, sourceSheetId: first, sourceArea: area,
           location: { startRow: 0, startColumn: 5, endRow: 3, endColumn: 6 },
-          name: 'Sales', fieldNames: ['Revenue', 'Formula'], rowFieldIndices: [0],
+          name: 'Sales', fieldNames: ['Region', 'Amount'], rowFieldIndices: [0],
           rowItems: ['East', 'West'], values: [{ fieldIndex: 1, agg: 'sum' }] }],
       })
       const before = (await inspect(withPivot)).sheets[1].pivotTables[0]
@@ -305,7 +315,8 @@ test(
         /<worksheetSource\b[^>]*\/>/, `${comment}<worksheetSource name='SourceData'/>`,
       ))
       const saved = await save(source, [], [first, second], {
-        tableEdits: [{ sheetId: first, tableName: 'SourceData', name: 'SalesData' }],
+        tableEdits: [{ sheetId: first, tableName: 'SourceData', name: 'SalesData',
+          area: { ...area, endRow: 4 }, totalsRow: true }],
       })
       const metadata = await inspect(saved)
       assert.equal(metadata.sheets[0].tables[0].name, 'SalesData')
@@ -314,6 +325,18 @@ test(
       assert.equal(after.outputRef, before.outputRef)
       const cache = await xmlPart(await JSZip.loadAsync(saved), after.cachePath)
       assert.ok(cache.includes(`${comment}<worksheetSource name="SalesData"/>`))
+      const definition = await runtime.sheetsPackageReader(saved, undefined, {
+        path: after.path, cachePath: after.cachePath,
+      })
+      assert.equal(definition.sourceSheet, 'Acceptance')
+      assert.equal(definition.sourceRef, 'A1:B4')
+      assert.deepEqual(definition.unsupported, [])
+      const sourceRange = await native.readRange(saved, definition.sourceSheet,
+        { startRow: 0, endRow: 3, startColumn: 0, endColumn: 1 })
+      const values = Array.from({ length: 4 }, () => [null, null])
+      for (const cell of sourceRange.cells) values[cell.row][cell.column] = cell.value
+      const { data } = recomputePivotData(definition, values)
+      assert.deepEqual(data, [[150], [50], [200]])
     })
 
     await t.test('preserves pending references to a new tab that takes an old name', async () => {

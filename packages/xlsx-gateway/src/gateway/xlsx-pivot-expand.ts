@@ -13,6 +13,7 @@ import {
 } from '../domain/pivot-value-modes.ts'
 import { resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
 import { buildCacheDefinitionXml, buildPivotTableXml, type PivotAddition } from './xlsx-pivot-add.ts'
+import { localPivotWorksheetSource } from './xlsx-sheets.ts'
 
 export class PivotExpandError extends Error {}
 
@@ -299,7 +300,11 @@ async function applyPivotRelayout(
   if (!recordsRelId) {
     throw new PivotExpandError('The pivot cache definition is missing its records relationship.')
   }
-  pkg.write(update.cachePath, buildCacheDefinitionXml(recordsRelId, addition, 0))
+  const source = localPivotWorksheetSource(cacheXml)?.element
+  const rebuiltCache = buildCacheDefinitionXml(recordsRelId, addition, 0)
+  const namedSource = source?.attributes.has('name') ? source.xml : undefined
+  pkg.write(update.cachePath, namedSource === undefined ? rebuiltCache
+    : rebuiltCache.replace(/<worksheetSource\b[^>]*\/>/, () => namedSource))
   touchedEntries.add(update.cachePath)
 
   // Empty the records part (found through the cache's rels); Excel rebuilds
@@ -393,7 +398,7 @@ const MODELLED_ELEMENTS: Readonly<Record<string, { attrs: string; children: stri
     children: 'cacheSource cacheFields',
   },
   cacheSource: { attrs: 'type', children: 'worksheetSource' },
-  worksheetSource: { attrs: 'ref sheet', children: '' },
+  worksheetSource: { attrs: 'ref sheet name', children: '' },
   cacheFields: { attrs: 'count', children: 'cacheField' },
   cacheField: { attrs: 'name numFmtId formula databaseField', children: 'sharedItems' },
   sharedItems: { attrs: 'count', children: 's' },

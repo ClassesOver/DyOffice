@@ -448,6 +448,17 @@ describe('pivot layout edits (relayout)', () => {
     expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('name="PivotData"')
   })
 
+  it('preserves a table-backed source when rebuilding the pivot layout', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const path = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const cache = await zip.file(path)!.async('string')
+    const source = '<worksheetSource name="DataTable"/>'
+    zip.file(path, cache.replace(/<worksheetSource\b[^>]*\/>/, source))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [relayoutUpdate()])
+    expect(plan.replaced.get(path)).toContain(source)
+    expect(plan.replaced.get(path)).toContain('refreshOnLoad="1"')
+  })
+
   it.each([
     [
       'an unmodelled formats section',

@@ -78,7 +78,7 @@ export function worksheetTableParts(root: ScopedElement) {
 /// with the filter save path, which routes table-overlapping filters into
 /// the table part instead of the worksheet.
 export async function sheetTableParts(
-  pkg: MutablePackage,
+  pkg: Pick<MutablePackage, 'has' | 'readText'>,
   worksheetPath: string,
 ): Promise<readonly LocatedTable[]> {
   const relsPath = relsPathFor(worksheetPath)

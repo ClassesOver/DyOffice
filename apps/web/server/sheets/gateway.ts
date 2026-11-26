@@ -4,7 +4,7 @@ import { readWorkbookRedactionSource } from '../../../sheets/src/node/workbook-r
 import { parseSlicerState } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connections'
 import { refreshableQueriesOf } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connection-refresh'
-import { parsePivotDefinition } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-pivot'
+import { readPivotDefinitionWithSource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-pivot'
 import { workbookPivotDefinitionSchema, workbookSaveRequestSchema } from '../../../sheets/src/shared/desktop-api'
 import { mapWorkbookSaveRequest } from '../../../sheets/src/shared/workbook-save-plan'
 import { createBufferEntrySource, type EntrySource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway'
@@ -164,7 +164,7 @@ export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, 
     if (!/^xl\/pivotTables\/[A-Za-z0-9._-]+\.xml$/.test(pivot.path) || !/^xl\/pivotCache\/[A-Za-z0-9._-]+\.xml$/.test(pivot.cachePath)) throw Object.assign(new Error('Invalid pivot parts'), {statusCode:400})
     try {
       const [pivotXml,cacheXml] = await Promise.all([source.readText(pivot.path),source.readText(pivot.cachePath)])
-      return workbookPivotDefinitionSchema.parse(parsePivotDefinition(pivotXml,cacheXml))
+      return workbookPivotDefinitionSchema.parse(await readPivotDefinitionWithSource(pivotXml,cacheXml,source))
     } catch {
       throw Object.assign(new Error('Invalid pivot definition'), {statusCode:400})
     }

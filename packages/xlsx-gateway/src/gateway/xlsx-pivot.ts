@@ -16,6 +16,13 @@ import {
   type PivotShowDataAs,
 } from '../domain/pivot-value-modes.ts'
 
+import { resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
+import { decodeXmlText } from './xlsx-escapes.ts'
+import { readRootStartTag } from './xlsx-namespace.ts'
+import { localPivotWorksheetSource, parseRelationships, parseSheetElements, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
+import { readWorksheetTagAttribute } from './xlsx-structure.ts'
+import { areaToRef, parseRef, sheetTableParts } from './xlsx-table-add.ts'
+
 export class PivotParseError extends Error {}
 
 export type { PivotFieldGrouping } from '../domain/pivot-grouping.ts'
@@ -193,9 +200,60 @@ export function setPivotRefreshOnLoad(cacheDefinitionXml: string): string {
   )
 }
 
+type PivotWorkbookSource = Pick<MutablePackage, 'has' | 'readText'>
+type PivotSourceRange = Pick<PivotDefinition, 'sourceSheet' | 'sourceRef'>
+
+export async function readPivotDefinitionWithSource(
+  pivotXml: string,
+  cacheXml: string,
+  workbook: PivotWorkbookSource,
+): Promise<PivotDefinition> {
+  const attributes = localPivotWorksheetSource(cacheXml)?.element.attributes
+  const name = attributes?.get('name')
+  const range = name ? await resolveTableSource(workbook, name, attributes?.get('sheet')) : undefined
+  return parsePivotDefinition(pivotXml, cacheXml, range)
+}
+
+async function resolveTableSource(
+  workbook: PivotWorkbookSource,
+  name: string,
+  sheetHint: string | undefined,
+): Promise<PivotSourceRange | undefined> {
+  const key = name.toLowerCase()
+  const [workbookXml, relsXml] = await Promise.all([
+    workbook.readText('xl/workbook.xml'),
+    workbook.readText('xl/_rels/workbook.xml.rels'),
+  ])
+  const relationships = parseRelationships(relsXml).filter((relationship) =>
+    !relationship.external && relationship.type.endsWith('/worksheet'),
+  )
+  let found: PivotSourceRange | undefined
+  for (const sheet of parseSheetElements(workbookXml)) {
+    if (sheetHint && sheet.name.toLowerCase() !== sheetHint.toLowerCase()) continue
+    const relationship = relationships.find(({ id }) => relationshipIdsMatch(id, sheet.relationshipId))
+    if (!relationship) continue
+    const path = resolveRelTarget('xl/workbook.xml', relationship.target)
+    if (!(await workbook.has(path))) continue
+    for (const table of await sheetTableParts(workbook, path)) {
+      if (!tablePartNames(table.xml).some((candidate) => candidate.toLowerCase() === key)) continue
+      // An ambiguous or headerless table cannot serve as a pivot field source.
+      const opening = readRootStartTag(table.xml)
+      const headers = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'headerRowCount') ?? '1'))
+      const totals = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'totalsRowCount') ?? '0'))
+      const ref = readWorksheetTagAttribute(opening, 'ref')
+      if (found || headers !== 1 || !Number.isSafeInteger(totals) || totals < 0 || !ref) return undefined
+      const area = parseRef(decodeXmlText(ref))
+      if (area.endRow - totals <= area.startRow) return undefined
+      found = { sourceSheet: sheet.name, sourceRef: areaToRef({ ...area, endRow: area.endRow - totals }) }
+    }
+  }
+  return found
+}
+
 export function parsePivotDefinition(
   pivotTableXml: string,
   cacheDefinitionXml: string,
+  resolvedSource?: PivotSourceRange,
 ): PivotDefinition {
   const unsupported: string[] = []
 
@@ -206,14 +264,14 @@ export function parsePivotDefinition(
   const firstDataRow = Number(attr(location, 'firstDataRow') ?? '1')
   const firstDataCol = Number(attr(location, 'firstDataCol') ?? '1')
 
-  const worksheetSource = firstElement(cacheDefinitionXml, 'worksheetSource')
-  if (!worksheetSource) {
+  const source = localPivotWorksheetSource(cacheDefinitionXml)?.element.attributes
+  const named = !!source?.get('name')
+  const sourceSheet = resolvedSource?.sourceSheet ?? (named ? '' : source?.get('sheet') ?? '')
+  const sourceRef = resolvedSource?.sourceRef ?? (named ? '' : source?.get('ref') ?? '')
+  if (!source) {
     unsupported.push('the data source is not a worksheet range (external/consolidated source)')
-  }
-  const sourceSheet = decodeEntities(attr(worksheetSource ?? '', 'sheet') ?? '')
-  const sourceRef = attr(worksheetSource ?? '', 'ref') ?? ''
-  if (worksheetSource && (!sourceSheet || !sourceRef)) {
-    unsupported.push('the data source uses a defined name, recompute not supported yet')
+  } else if (!sourceSheet || !sourceRef) {
+    unsupported.push('the named data source could not be resolved to a local table with headers')
   }
 
   // Our own grouped-field metadata: stored in a private pivotTable extLst
