@@ -1566,7 +1566,7 @@ fn workbook_uses_linked_styles_and_shared_strings() {
 }
 
 #[test]
-fn empty_shared_string_value_keeps_sheet_readable() {
+fn empty_typed_values_keep_sheet_readable() {
     let (_dir, path) = open_fixture(&[
         (
             "xl/workbook.xml",
@@ -1582,7 +1582,11 @@ fn empty_shared_string_value_keeps_sheet_readable() {
         ),
         (
             "xl/worksheets/sheet1.xml",
-            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v/></c><c r="C1" t="s"><v>99</v></c></row></sheetData></worksheet>"#,
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v/></c><c r="C1" t="s"><v>99</v></c>
+                <c r="D1" t="b"><v/></c><c r="E1" t="b"><v> </v></c><c r="F1" t="b"><v>0</v></c>
+                <c r="G1" t="b"><v>true</v></c><c r="H1" t="e"><v/></c>
+                <c r="I1" t="e"><v>_x0023_REF!</v></c><c r="J1" t="str"><v/></c>
+                <c r="K1" t="str"><v></v></c></row></sheetData></worksheet>"#,
         ),
     ]);
     let mut sessions = WorkbookSessions::new();
@@ -1592,7 +1596,7 @@ fn empty_shared_string_value_keeps_sheet_readable() {
         start_row: 0,
         end_row: 0,
         start_column: 0,
-        end_column: 2,
+        end_column: 10,
     };
     let result = loop {
         let result = sessions
@@ -1603,10 +1607,15 @@ fn empty_shared_string_value_keeps_sheet_readable() {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
-    assert_eq!(result.cells.len(), 1);
+    let columns: Vec<_> = result.cells.iter().map(|cell| cell.column).collect();
+    assert_eq!(columns, [0, 5, 6, 8, 10]);
     assert!(
         matches!(&result.cells[0].value, Some(CellValue::String(text)) if text == "Partner ID")
     );
+    assert!(matches!(result.cells[1].value, Some(CellValue::Boolean(false))));
+    assert!(matches!(result.cells[2].value, Some(CellValue::Boolean(true))));
+    assert!(matches!(&result.cells[3].value, Some(CellValue::String(text)) if text == "#REF!"));
+    assert!(matches!(&result.cells[4].value, Some(CellValue::String(text)) if text.is_empty()));
 }
 
 #[test]

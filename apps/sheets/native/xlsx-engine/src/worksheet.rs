@@ -233,7 +233,12 @@ pub(crate) fn index_worksheet(
                     }
                 }
             }
-            Event::Start(element) if element.local_name().as_ref() == b"v" => in_value = true,
+            Event::Start(element) if element.local_name().as_ref() == b"v" => {
+                in_value = true;
+                if let Some(builder) = cell_builder.as_mut() {
+                    builder.has_value = true;
+                }
+            }
             // Inline strings can carry <rPh> ruby annotations too.
             Event::Start(element) if element.local_name().as_ref() == b"rPh" => {
                 in_phonetic = true;
@@ -1388,6 +1393,7 @@ pub(crate) struct CellBuilder {
     style_index: Option<usize>,
     cell_type: Option<String>,
     raw_value: String,
+    has_value: bool,
     formula: String,
     array_ref: Option<String>,
     /// Formula inherited from a shared-formula master (`<f t="shared" si/>`).
@@ -1417,6 +1423,7 @@ impl CellBuilder {
                 .and_then(|value| value.parse::<usize>().ok()),
             cell_type: attribute_value(reader, element, b"t")?,
             raw_value: String::new(),
+            has_value: false,
             formula: String::new(),
             array_ref: None,
             shared_follower: false,
@@ -1467,12 +1474,18 @@ impl CellBuilder {
                 normalize_cell_text(&mut inline_text);
                 Some(CellValue::String(inline_text))
             }
-            Some("str") | Some("e") => {
+            Some(kind @ ("str" | "e"))
+                if self.has_value && (kind == "str" || !self.raw_value.trim().is_empty()) =>
+            {
                 let mut raw_value = self.raw_value;
                 normalize_cell_text(&mut raw_value);
                 Some(CellValue::String(raw_value))
             }
-            Some("b") => Some(CellValue::Boolean(self.raw_value == "1")),
+            Some("b") => match self.raw_value.trim() {
+                "1" | "true" => Some(CellValue::Boolean(true)),
+                "0" | "false" => Some(CellValue::Boolean(false)),
+                _ => None,
+            },
             _ if self.raw_value.trim().is_empty() => None,
             // Real-world exporters write stray non-numeric values without a
             // type attribute (or pad them with whitespace — Excel still

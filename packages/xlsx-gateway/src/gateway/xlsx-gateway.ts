@@ -749,7 +749,7 @@ function cellText(
   if (rawValue === undefined) return ''
   if (type === 's') return sharedStrings[Number(rawValue)] ?? ''
   if (type === 'str') return decodeCellText(rawValue)
-  if (type === 'b') return rawValue === '1' ? 'TRUE' : 'FALSE'
+  if (type === 'b') return booleanCellText(decodeCellMarkup(rawValue))
   // a number keeps the file's own spelling, except that a date-formatted
   // cell reads as a date, not as the serial the file holds
   const text = decodeCellText(rawValue)
@@ -2979,7 +2979,10 @@ function readHeaderCellText(
     const text = sharedStrings[Number(rawValue)] ?? ''
     return text === '' ? { kind: 'blank' } : { kind: 'text', text, plain: true }
   }
-  if (type === 'b') return { kind: 'text', text: rawValue === '1' ? 'TRUE' : 'FALSE', plain: false }
+  if (type === 'b') {
+    const text = booleanCellText(decodeCellMarkup(rawValue))
+    return text ? { kind: 'text', text, plain: false } : { kind: 'blank' }
+  }
   const text = type === 'str' ? decodeCellText(rawValue) : decodeXmlText(rawValue)
   if (text === '') return { kind: 'blank' }
   return { kind: 'text', text, plain: type === 'str' }
@@ -3818,7 +3821,7 @@ function parseCell(worksheetXml: string, address: string): CellState {
   }
   const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
   if (rawValue === undefined) return { value: null }
-  if (type === 'b') return { value: rawValue === '1' }
+  if (type === 'b') return { value: booleanCellValue(decodeCellMarkup(rawValue)) }
   const numericValue = Number(rawValue)
   if (!Number.isFinite(numericValue))
     throw new Error(`Cell ${address} has an unsupported numeric value.`)
@@ -3898,11 +3901,13 @@ function parseWorksheetCells(
         const entry = /^\+?\d+$/.test(index) ? sharedStrings[Number(index)] : undefined
         cells[address] = entry ?? { value: null }
       } else if (type === 'b') {
-        cells[address] = { value: value === '1' }
+        cells[address] = { value: booleanCellValue(value) }
       } else if (type === 'str') {
         cells[address] = { value: decodeCellText(rawValue) }
       } else if (value.trim() === '') {
         cells[address] = { value: null }
+      } else if (type === 'e') {
+        cells[address] = { value: decodeCellText(rawValue) }
       } else {
         const numericValue = Number(value)
         cells[address] = {
@@ -3941,6 +3946,24 @@ function parseWorksheetCells(
     }
   }
   return { cells, storedCellCount }
+}
+
+function booleanCellValue(value: string): boolean | null {
+  switch (value.trim()) {
+    case '1':
+    case 'true':
+      return true
+    case '0':
+    case 'false':
+      return false
+    default:
+      return null
+  }
+}
+
+function booleanCellText(value: string): string {
+  const decoded = booleanCellValue(value)
+  return decoded === null ? '' : decoded ? 'TRUE' : 'FALSE'
 }
 
 function hasLiteralMarkup(xml: string): boolean {

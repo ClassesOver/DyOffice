@@ -60,6 +60,18 @@ test(
         )
       ).bytes
     const read = (bytes, name = 'Acceptance') => native.readRange(bytes, name, bounds)
+    await t.test('keeps blank typed values and decoded spreadsheet errors through a save', async () => {
+      const source = await book(xml => xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/,
+        '<sheetData><row r="1"><c r="A1" t="b" s="1"><v> </v></c><c r="B1" t="b"><v>0</v></c>' +
+        '<c r="C1" t="b"><v>true</v></c><c r="D1" t="e"><v>_x0023_REF!</v></c>' +
+        '<c r="E1" t="str"><v></v></c></row></sheetData>'))
+      const expected = [null, false, true, '#REF!', '']
+      assert.deepEqual((await read(source)).cells.map(({ value }) => value), expected)
+      const saved = await save(source, { structuralOps: [insert[0]] })
+      assert.deepEqual((await read(saved)).cells.map(({ row, value }) => [row, value]),
+        expected.map(value => [1, value]))
+    })
+
     await t.test('keeps mixed encoded and implicit addresses through a structural save', async () => {
       const encoded = await book(xml => xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/,
         '<sheetData><row r="&#51;"><c r="&#x43;3" s="1"><v>101</v></c><c><v>102</v></c></row>' +
