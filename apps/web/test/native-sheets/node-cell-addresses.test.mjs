@@ -156,4 +156,28 @@ test('Node XLSX preserves implicit and quoted coordinates on cell saves', async 
       assert.deepEqual([rowCount, columnCount], [2, 3])
     }
   })
+
+  await t.test('reads dimensions, row layout and styles from the worksheet grid', async () => {
+    const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    zip.file(path, `<worksheet xmlns="${spreadsheet}">
+      <dimension xmlns="urn:example:extension" ref="A1:K500"/><dimension ref="A1:D6"/>
+      <sheetData>
+        <row r="2"><c r="A2" s="1"><v>10</v></c></row>
+        <row xmlns="urn:example:extension" r="900" ht="50"/>
+        <row ht="22" customHeight="1"><c s="1"><v>11</v></c></row>
+      </sheetData>
+      <extLst><ext uri="urn:example:extension"><payload xmlns="urn:example:extension">
+        <c r="A2" s="7"/>
+      </payload></ext></extLst>
+    </worksheet>`)
+    const input = await zip.generateAsync({ type: 'nodebuffer' })
+    const [{ rowCount, columnCount }] = (await native.inspect(input)).sheets
+    assert.deepEqual([rowCount, columnCount], [6, 4])
+    const { rows, cells } = await native.readRange(input, 'Acceptance', range)
+    assert.deepEqual(rows.map(({ row, height }) => [row, height]), [[2, 22]])
+    assert.deepEqual(cells.map(({ row, column, value, styleIndex }) => [row, column, value, styleIndex]), [
+      [1, 0, 10, 1],
+      [2, 0, 11, 1],
+    ])
+  })
 })

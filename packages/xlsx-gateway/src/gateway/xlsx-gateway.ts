@@ -305,6 +305,7 @@ export interface ImportedXlsx {
 }
 
 interface ImportedWorkbookCell extends CellState {
+  readonly styleIndex?: number
   readonly rich?: WorkbookRichRun[]
   readonly arrayRef?: string
   readonly sharedFormulaMaster?: { si: number; range?: TableArea }
@@ -3836,6 +3837,10 @@ function parseWorksheetCells(
           value: finiteDecimalCellValue(value) ?? decodeCellText(rawValue),
         }
       }
+    }
+    const style = cell.attributes.get('s')
+    if (readRunStyle && style !== undefined && /^\d+$/.test(style)) {
+      cells[address] = { ...cells[address]!, styleIndex: Number(style) }
     }
     if (formula !== undefined) {
       const arrayRef =

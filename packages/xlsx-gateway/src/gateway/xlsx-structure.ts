@@ -111,7 +111,7 @@ export function inferWorksheetAddresses(worksheetXml: string): string {
     parts.push(addTagAttribute(opening, 'r', encoded))
   }
   const dataOffset = sheetData.start + sheetData.opening.length
-  for (const { row, rowNumber } of worksheetRows(sheetData)) {
+  for (const { row, rowNumber } of worksheetRowPositions(sheetData)) {
     const rowOffset = dataOffset + row.start
     normalizeAddress(row, rowOffset, String(rowNumber))
     const cellOffset = rowOffset + row.opening.length
@@ -212,7 +212,7 @@ export function worksheetData(xml: string): ScopedElement | undefined {
   return worksheetChildren(xml).find((child) => child.local === 'sheetData')
 }
 
-function* worksheetRows(sheetData: ScopedElement) {
+export function* worksheetRowPositions(sheetData: ScopedElement) {
   let rowNumber = 0
   for (const row of scopedChildren(sheetData)) {
     if (!isElement(row, 'row', sheetData.namespace)) continue
@@ -222,7 +222,7 @@ function* worksheetRows(sheetData: ScopedElement) {
 }
 
 export function* worksheetCellPositions(sheetData: ScopedElement) {
-  for (const { row, rowNumber } of worksheetRows(sheetData)) {
+  for (const { row, rowNumber } of worksheetRowPositions(sheetData)) {
     let nextColumn = 0
     for (const cell of scopedChildren(row)) {
       if (!isElement(cell, 'c', row.namespace)) continue

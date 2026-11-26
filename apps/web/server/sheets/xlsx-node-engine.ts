@@ -15,7 +15,7 @@ import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/sr
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {findWorksheetHyperlinkSection,hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
 import {isElement,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
-import {inferWorksheetAddresses,readDefinedNameText,readWorksheetTagAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
+import {inferWorksheetAddresses,readDefinedNameText,readWorksheetTagAttribute,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
 import {readCustomTableStyles,readWorksheetTables,type TableDxf} from './xlsx-node-tables'
@@ -111,12 +111,11 @@ type XmlElement={ [name: `@_${string}`]: string|undefined }
 const metadataXmlOptions:X2jOptions={
   ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
   cdataPropName:'#cdata',
-  // The basic workbook reader already imports cell values. Keep only row headers with layout here.
-  stopNodes:['worksheet.sheetData.row'],
+  // The scoped worksheet reader handles the grid and its row metadata.
+  stopNodes:['worksheet.sheetData'],
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
-    'worksheet.sheetData.row',
     'worksheet.cols.col','worksheet.mergeCells.mergeCell','worksheet.sheetViews.sheetView','worksheet.conditionalFormatting',
     'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
     'worksheet.conditionalFormatting.cfRule.colorScale.color',
@@ -206,7 +205,10 @@ function sheetArea(ref:string|undefined){
 }
 
 function sizeAttribute(element:XmlElement|undefined,name:string){
-  const raw=attribute(element,name)
+  return sizeValue(attribute(element,name))
+}
+
+function sizeValue(raw:string|undefined){
   const n=Number(raw)
   return raw?.trim()&&Number.isFinite(n)&&n>=0?n:undefined
 }
@@ -452,19 +454,10 @@ function readConditionalRules(
 }
 function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:ReadonlyMap<string,string>):Omit<SheetMetadata,'comments'|'tables'>{
   let rowExtent=0
-  const worksheet=new XMLParser({
-    ...metadataXmlOptions,
-    updateTag:(name,path,attrs)=>{
-      // For stopped nodes the parser reports the parent path.
-      if(name!=='row'||path!=='worksheet.sheetData')return name
-      const row=Number(attribute(attrs,'r'))
-      if(Number.isInteger(row)&&row>=1&&row<=MAX_GRID_ROWS)rowExtent=Math.max(rowExtent,row)
-      // Plain rows contribute to the extent without needing a layout record.
-      return attrs?.['@_ht']!==undefined||attrs?.['@_hidden']!==undefined||attrs?.['@_collapsed']!==undefined
-        ||attrs?.['@_outlineLevel']!==undefined||attrs?.['@_s']!==undefined?name:false
-    },
-  }).parse(xml).worksheet
-  const dimension=sheetArea(attribute(worksheet?.dimension,'ref'))
+  const worksheet=metadataXml.parse(xml).worksheet
+  const children=worksheetChildren(xml)
+  const dimension=sheetArea(children.find(child=>child.local==='dimension')?.attributes.get('ref'))
+  const sheetData=children.find(child=>child.local==='sheetData')
   const element=worksheet?.sheetProtection
   const parsed=element===undefined?null:parseSheetProtectionAttributes(name=>attribute(element,name))
   const protectedRanges:SheetMetadata['protectedRanges']=[]
@@ -518,15 +511,16 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   }
   const conditionalRules = readConditionalRules(worksheet?.conditionalFormatting ?? [], worksheet?.extLst?.ext ?? [], resolveColor)
   const rows:SheetMetadata['rows']=[]
-  for(const node of worksheet?.sheetData?.row??[]){
-    const r=Number(attribute(node,'r'))
-    if(!Number.isInteger(r)||r<1||r>MAX_GRID_ROWS)continue
-    const level=outlineLevel(attribute(node,'outlineLevel')),height=sizeAttribute(node,'ht')
-    const hidden=enabled(attribute(node,'hidden')),collapsed=enabled(attribute(node,'collapsed'))
-    const styleIndex=enabled(attribute(node,'customFormat'))?positiveStyle(attribute(node,'s')):undefined
+  for(const {row,rowNumber} of sheetData ? worksheetRowPositions(sheetData) : []){
+    if(rowNumber>MAX_GRID_ROWS)continue
+    rowExtent=Math.max(rowExtent,rowNumber)
+    const attrs=row.attributes
+    const level=outlineLevel(attrs.get('outlineLevel')),height=sizeValue(attrs.get('ht'))
+    const hidden=enabled(attrs.get('hidden')),collapsed=enabled(attrs.get('collapsed'))
+    const styleIndex=enabled(attrs.get('customFormat'))?positiveStyle(attrs.get('s')):undefined
     if(height===undefined&&!hidden&&!collapsed&&!level&&styleIndex===undefined)continue
     outlineLevelRow=Math.max(outlineLevelRow,level)
-    rows.push({row:r-1,height,customHeight:(height!==undefined&&enabled(attribute(node,'customHeight')))||undefined,
+    rows.push({row:rowNumber-1,height,customHeight:(height!==undefined&&enabled(attrs.get('customHeight')))||undefined,
       hidden,styleIndex,outlineLevel:level||undefined,collapsed:collapsed||undefined})
   }
   const view=worksheet?.sheetViews?.sheetView?.at(-1)
@@ -826,7 +820,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
   const workbookPath = 'xl/workbook.xml'
   const workbookRels = parseRelationships(await text(relsPathFor(workbookPath)))
   const sheets = new Map<string, SheetMetadata & {
-    styleIndexes:Map<string,number>; imageCells:ReturnType<typeof readSheetCellImages>; headerFooterMedia:Map<string,string>
+    imageCells:ReturnType<typeof readSheetCellImages>; headerFooterMedia:Map<string,string>
   }>()
   for (const [sheetIndex,sheet] of parseSheetElements(await text(workbookPath)).entries()) {
     const rel = workbookRels.find(item => relationshipIdsMatch(item.id, sheet.relationshipId) && !item.external && /\/(worksheet|chartsheet)$/.test(item.type))
@@ -839,7 +833,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
       const properties = root && scopedChildren(root).find(node => isElement(node,'sheetPr',root.namespace))
       const tab = properties && scopedChildren(properties).find(node => isElement(node,'tabColor',properties.namespace))
       const color = tab && Object.fromEntries([...tab.attributes].map(([name,value]) => [`@_${name}`,value]))
-      sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,styleIndexes:new Map(),imageCells:undefined,
+      sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,
         headerFooterMedia:new Map(),view:{...EMPTY_SHEET_METADATA.view,tabColor:resolveColor(color).rgb??null}})
       continue
     }
@@ -853,12 +847,6 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
           linkTargets.set(id,target)
         }
       }
-    }
-    const cells = new Map<string, number>()
-    for (const match of xml.matchAll(/<(?:[\w.-]+:)?c\b([^>]*)>/g)) {
-      const address = readAttribute(match[1]!, 'r')
-      const style = readAttribute(match[1]!, 's')
-      if (address && style !== undefined && /^\d+$/.test(style)) cells.set(decodeAttribute(address), Number(style))
     }
     const [comments,tables,headerPictures]=await Promise.all([
       readNodeSheetComments(text,path),
@@ -874,7 +862,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
       })
       metadata.pageSetup={...metadata.pageSetup,headerFooterPictures}
     }
-    sheets.set(sheet.name,{styleIndexes:cells,...metadata,comments,tables,headerFooterMedia,
+    sheets.set(sheet.name,{...metadata,comments,tables,headerFooterMedia,
       imageCells:readSheetCellImages(xml,imageSources)})
   }
   return sheets
@@ -1003,7 +991,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const mediaById = new Map<string,string>()
     let imageCount=0
     const parsedSheets: ParsedSheet[] = imported.snapshot.sheets.map(s => {
-      const {styleIndexes,imageCells,headerFooterMedia,dimension,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,styleIndexes:undefined,imageCells:undefined,headerFooterMedia:undefined}
+      const {imageCells,headerFooterMedia,dimension,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,imageCells:undefined,headerFooterMedia:undefined}
       for(const [id,mediaPath] of headerFooterMedia??[])mediaById.set(id,mediaPath)
       const cells: ParsedCell[] = []
       const formulaCells: ParsedCell[] = []
@@ -1030,7 +1018,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           valueRowCount=Math.max(valueRowCount,pos.row+1)
           valueColumnCount=Math.max(valueColumnCount,pos.column+1)
         }
-        const styleIndex = styleIndexes?.get(addr) ?? (value !== null || formula ? 0 : undefined)
+        const styleIndex = cell.styleIndex ?? (value !== null || formula ? 0 : undefined)
         const parsedCell: ParsedCell = {
           row: pos.row,
           column: pos.column,
@@ -1092,9 +1080,9 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       const sheet = sourceSheets.get((name.startsWith("'") && name.endsWith("'")
         ? name.slice(1, -1).replaceAll("''", "'") : name).toLowerCase())
       const address = reference.slice(separator + 1).split(':', 1)[0]?.replaceAll('$', '').toUpperCase()
-      if (!sheet || !address || !parseA1(address) || !sheet.cells[address]) return undefined
-      const index = metadata.get(sheet.name)?.styleIndexes.get(address) ?? 0
-      const format = styles[index]?.numberFormat
+      const sourceCell = address && parseA1(address) ? sheet?.cells[address] : undefined
+      if (!sourceCell) return undefined
+      const format = styles[sourceCell.styleIndex ?? 0]?.numberFormat
       return format && format !== 'General' && format !== '@' ? format : undefined
     })
     for (const {id,mediaPath,fillMediaPath} of visuals) {
