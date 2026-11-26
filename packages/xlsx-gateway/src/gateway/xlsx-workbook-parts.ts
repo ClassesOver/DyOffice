@@ -10,6 +10,11 @@ const defaultParts = {
 } as const
 type WorkbookPart = keyof typeof defaultParts
 
+/** Some producers write package-relative sheet targets without a leading slash. */
+export function resolveWorkbookSheetTarget(target: string): string {
+  return resolveRelTarget(WORKBOOK_PATH, target.trim().replace(/^xl[/\\]/, ''))
+}
+
 export function workbookPartPath(relationshipsXml: string, part: WorkbookPart): string {
   const relationship = parseRelationships(relationshipsXml).find(({ external, type }) =>
     !external && type.endsWith('/' + part),

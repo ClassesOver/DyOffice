@@ -26,7 +26,7 @@ import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult,WorkbookSharedFo
 import { readWorkbookWithCellDetails } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
 import type { WorkbookRichRun } from '../../../../packages/xlsx-gateway/src/shared/edit-schemas.ts'
 import { BUILTIN_NUMBER_FORMATS } from '../../../../packages/xlsx-gateway/src/shared/builtin-number-formats.ts'
-import { workbookPartPath } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts.ts'
+import { resolveWorkbookSheetTarget, workbookPartPath } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts.ts'
 import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/src/shared/grid-bounds.ts'
 
 // Isolated Node fallback sidecar for XLSX when the Rust xlsx-sidecar binary is not compiled.
@@ -629,7 +629,7 @@ async function readPivotMetadata(text:ZipText){
   for(const sheet of parseSheetElements(await text(workbookPath))){
     const rel=workbookRels.find(rel=>relationshipIdsMatch(rel.id,sheet.relationshipId)&&!rel.external&&rel.type.endsWith('/worksheet'))
     if(!rel)continue
-    const sheetPath=resolveRelTarget(workbookPath,rel.target)
+    const sheetPath=resolveWorkbookSheetTarget(rel.target)
     const pivotTables:WorkbookFile['sheets'][number]['pivotTables']=[]
     const pivotRanges:WorkbookFile['sheets'][number]['pivotRanges']=[]
     for(const pivotRel of parseRelationships(await text(relsPathFor(sheetPath)))){
@@ -831,7 +831,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
   for (const [sheetIndex,sheet] of parseSheetElements(await text(workbookPath)).entries()) {
     const rel = workbookRels.find(item => relationshipIdsMatch(item.id, sheet.relationshipId) && !item.external && /\/(worksheet|chartsheet)$/.test(item.type))
     if (!rel) continue
-    const path = resolveRelTarget(workbookPath, rel.target)
+    const path = resolveWorkbookSheetTarget(rel.target)
     if (!hasPart(path)) continue
     const sheetXml = normalizeOoxmlPartPrefix(await text(path))
     if (rel.type.endsWith('/chartsheet')) {

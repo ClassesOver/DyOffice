@@ -3,6 +3,7 @@ import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../s
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import { relsPathFor, resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import { decodeAttribute, parseSheetElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
+import { resolveWorkbookSheetTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts.ts'
 
 type ZipText = (path: string) => Promise<string>
 type Chart = NonNullable<WorkbookVisualObject['chart']>
@@ -690,7 +691,9 @@ function internalTarget(rels: Map<string, XmlElement>, part: string, id: string 
   if (!kinds.some(kind => type?.endsWith(`/${kind}`))) return undefined
   const target = attribute(rel, 'Target')
   if (!target) return undefined
-  try { return resolveRelTarget(part, target) } catch { return undefined }
+  try {
+    return part === 'xl/workbook.xml' ? resolveWorkbookSheetTarget(target) : resolveRelTarget(part, target)
+  } catch { return undefined }
 }
 
 async function readVmlDrawing(

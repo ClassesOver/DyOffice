@@ -18,7 +18,8 @@ import {
 
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { workbookDefinedNameElements } from './xlsx-defined-names.ts'
-import { resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
+import type { MutablePackage } from './xlsx-drawing-add.ts'
+import { resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { localPivotWorksheetSource, parseRelationships, parseSheetElements, parseWorkbookTabIndex, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
@@ -281,7 +282,7 @@ async function resolveNamedSource(
   const sheets = parseSheetElements(workbookXml).flatMap((sheet, index): PivotSourceSheet[] => {
     const relationship = relationships.find(({ id }) => relationshipIdsMatch(id, sheet.relationshipId))
     return relationship ? [{ name: sheet.name, index,
-      path: resolveRelTarget('xl/workbook.xml', relationship.target) }] : []
+      path: resolveWorkbookSheetTarget(relationship.target) }] : []
   })
   const hint = sheetHint?.toLowerCase()
   const candidates = hint ? sheets.filter((sheet) => sheet.name.toLowerCase() === hint) : sheets

@@ -84,7 +84,7 @@ import {
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
 import { decodeCellText, elementText, isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
-import { readWorkbookPartPath } from './xlsx-workbook-parts.ts'
+import { readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
   SheetAllocation,
@@ -2894,8 +2894,7 @@ async function resolveWorksheetPath(
   const relationshipsXml = await reader.readText('xl/_rels/workbook.xml.rels')
   const relationship = parseRelationships(relationshipsXml).find(({ id }) => relationshipIdsMatch(id, relationshipId))
   if (!relationship?.target) throw new Error(`Relationship ${relationshipId} was not found.`)
-  const target = relationship.target.replace(/^\/?xl\//, '')
-  return resolveRelTarget('xl/workbook.xml', target)
+  return resolveWorkbookSheetTarget(relationship.target)
 }
 
 function replaceSheetName(workbookXml: string, before: string, after: string): string {

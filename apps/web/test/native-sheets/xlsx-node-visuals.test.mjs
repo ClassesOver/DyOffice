@@ -21,6 +21,39 @@ const drawingRels = 'xl/drawings/_rels/drawing1.xml.rels'
 const chartPath = 'xl/charts/chart1.xml'
 const mainNs = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 
+test('resolves legacy workbook-relative targets consistently for cells and drawings', { timeout: 120_000 }, async t => {
+  const original = await readFile(fixture)
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-worksheet-target-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const workbookRels = 'xl/_rels/workbook.xml.rels'
+  for (const target of ['xl/worksheets/sheet1.xml', String.raw` xl\worksheets\sheet1.xml `, '/xl/worksheets/sheet1.xml']) {
+    const zip = await JSZip.loadAsync(original)
+    const rels = (await textOf(zip)(workbookRels)).replace('Target="worksheets/sheet1.xml"', `Target="${target}"`)
+    zip.file(workbookRels, rels)
+    const source = await zip.generateAsync({ type: 'nodebuffer' })
+    const range = await runtime.sheetsNative.readRange(source, 'Acceptance',
+      { startRow: 1, endRow: 1, startColumn: 2, endColumn: 2 })
+    assert.equal(range.cells[0].value, 45292, target)
+    assert.equal(range.cells[0].styleIndex, 1, target)
+    assert.equal((await runtime.sheetsNative.inspect(source)).visuals[0]?.chartPath, chartPath, target)
+    const edit = sheetsSaveRequest('sheet-1', [{ row: 0, column: 0, value: 'Updated', writeValue: true }])
+    const plan = await runtime.sheetsWorkbookPlanner(source, edit)
+    const saved = (await runtime.sheetsNative.savePlan(source, plan)).bytes
+    assert.equal((await runtime.sheetsNative.inspect(saved)).visuals[0]?.chartPath, chartPath, target)
+    const actual = await runtime.sheetsNative.readRange(saved, 'Acceptance',
+      { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    assert.equal(actual.cells[0].value, 'Updated', target)
+    assert.equal(await textOf(await JSZip.loadAsync(saved))(workbookRels), rels)
+  }
+})
+
 async function appendDrawing(zip, markup) {
   const source = await textOf(zip)(drawingPath)
   zip.file(drawingPath, (source.includes('xmlns:a=') ? source : source.replace('<xdr:wsDr ', `<xdr:wsDr xmlns:a="${mainNs}" `))

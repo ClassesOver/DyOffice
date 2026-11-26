@@ -21,13 +21,12 @@ import {
   registerContentTypeOverride,
   relativeTarget,
   relsPathFor,
-  resolveRelTarget,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
 import { decodeAttribute, parseRelationships, parseSheetElements, relationshipIdsMatch } from './xlsx-sheets.ts'
 import { readWorksheetTagAttribute } from './xlsx-structure.ts'
 import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
-import { readWorkbookPartPath } from './xlsx-workbook-parts.ts'
+import { readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 import {
   decodeCellText,
   elementText,
@@ -415,7 +414,7 @@ async function resolveSourcePath(pkg: MutablePackage, sheetName: string): Promis
     (entry) => !entry.external && entry.type.endsWith('/worksheet') && relationshipIdsMatch(entry.id, relationshipId),
   )?.target
   if (!relTarget) throw new PivotAddError(`Relationship ${relationshipId} not found.`)
-  return resolveRelTarget('xl/workbook.xml', relTarget)
+  return resolveWorkbookSheetTarget(relTarget)
 }
 
 /// Extract data rows (skipping the header row) from the source area.

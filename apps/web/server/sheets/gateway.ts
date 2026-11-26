@@ -11,7 +11,7 @@ import { createBufferEntrySource, type EntrySource } from '../../../../packages/
 import { countRootNamespaceElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace'
 import { parseSheetElements, readAttribute, parseRelationships, relationshipIdsMatch } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
 import { applyPatches } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml'
-import { resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add'
+import { resolveWorkbookSheetTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts'
 import { planWorkbookMutation } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-package-io'
 import {readWorkbookExternalLinks} from './external-links.ts'
 import type {WorkbookPackageQuery} from '../../worker/src/native/gateway.ts'
@@ -105,7 +105,7 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       if (rels.length !== 1 || rel.external || !/\/(worksheet|chartsheet)$/.test(rel.type)) {
         throw new Error('Invalid sheet relationship')
       }
-      const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
+      const path = resolveWorkbookSheetTarget(rel.target)
       if (!await source.has(path)) continue
       if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')
       if (canonical !== element.xml) {

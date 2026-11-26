@@ -48,6 +48,7 @@ import {
 } from './xlsx-drawing-add.ts'
 import { insertRootExt } from './xlsx-root-tail.ts'
 import { parseRelationships, parseSheetElements, relationshipIdsMatch, removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
+import { resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 
 export class SlicerAddError extends Error {}
 
@@ -211,7 +212,7 @@ async function pivotBinding(
   for (const { sheetId, relationshipId } of parseSheetElements(workbookXml)) {
     if (sheetId === undefined || relationshipId === undefined) continue
     const entry = rels.find((rel) => relationshipIdsMatch(rel.id, relationshipId))
-    if (entry === undefined || resolveRelTarget('xl/workbook.xml', entry.target) !== hostPath) {
+    if (entry === undefined || resolveWorkbookSheetTarget(entry.target) !== hostPath) {
       continue
     }
     const parsed = Number(sheetId)
@@ -1418,8 +1419,8 @@ export async function parseSlicerState(reader: SlicerPartReader): Promise<Slicer
   const sheetIdByWorksheet = new Map<string, string>()
   for (const { sheetId, relationshipId } of parseSheetElements(workbookXml)) {
     if (sheetId === undefined || relationshipId === undefined) continue
-    const target = relTarget(relationshipId)
-    if (target !== null) sheetIdByWorksheet.set(target, `sheet-${sheetId}`)
+    const relationship = workbookRels.find((rel) => relationshipIdsMatch(rel.id, relationshipId))
+    if (relationship) sheetIdByWorksheet.set(resolveWorkbookSheetTarget(relationship.target), `sheet-${sheetId}`)
   }
 
   // Cache parts by @name.
