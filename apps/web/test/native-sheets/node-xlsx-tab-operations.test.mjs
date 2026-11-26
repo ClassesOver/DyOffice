@@ -183,6 +183,20 @@ test(
         })
       },
     )
+    await t.test('preserves an explicit active tab followed by a view without an active tab', async () => {
+      const secondary = '<workbookView xWindow="1200" showSheetTabs="0"/>'
+      const source = await fixture({ changeWorkbook: (xml) => xml.replace('<workbookView/>',
+        '<workbookView activeTab="1"/>' + secondary) })
+      const before = await inspect(source)
+      assert.equal(before.sheets[before.activeTab]?.name, 'Other')
+
+      const saved = await save(source, [{ kind: 'reorder-sheets' }], [second, first])
+      const after = await inspect(saved)
+      assert.equal(after.sheets[after.activeTab]?.name, 'Other')
+      assert.equal(after.openingViewport.result.cells[0].value, 100)
+      const xml = await xmlPart(await JSZip.loadAsync(saved), wbPath)
+      assert.ok(xml.includes('<workbookView activeTab="0"/>' + secondary))
+    })
     await t.test('keeps the visible opening sheet when a hidden active tab is stale', async () => {
       const source = await fixture({ changeWorkbook: (xml) =>
         xml.replace('<sheet name="Acceptance"', '<sheet name="Acceptance" state="veryHidden"') })

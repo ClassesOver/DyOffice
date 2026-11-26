@@ -601,8 +601,14 @@ export function applySheetPlanToWorkbookXml(
   const bookViews = workbookSection(result, 'bookViews')
   if (bookViews) {
     const views = workbookSectionEntries(bookViews.section, 'workbookView')
-    const patches = views.flatMap((view) => {
-      const index = readTabIndex(view.opening, 'activeTab') ?? 0
+    const savedTabs = views.map((view) => readWorksheetTagAttribute(view.opening, 'activeTab'))
+    const hasSavedTab = savedTabs.some((tab) => tab !== undefined)
+    const patches = views.flatMap((view, viewIndex) => {
+      const saved = savedTabs[viewIndex]
+      // Both readers choose the last explicit active tab. A synthesized tab
+      // on an implicit view could override the workbook's opening sheet.
+      if (saved === undefined && hasSavedTab) return []
+      const index = parseWorkbookTabIndex(saved === undefined ? undefined : decodeAttribute(saved)) ?? 0
       const mapped = activeIndex(index)
       if (index === mapped) return []
       const opening = updateWorksheetTagAttribute(view.opening, 'activeTab', String(mapped))
