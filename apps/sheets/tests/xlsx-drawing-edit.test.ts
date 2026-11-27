@@ -1095,6 +1095,26 @@ describe('applyVisualEdits arrange properties', () => {
     expect(xml).toContain('<mc:Choice Requires="sle"><xdr:oneCellAnchor>')
   })
 
+  it('cleans the worksheet hookup when its last shape and hyperlinks are removed', async () => {
+    const entries = entriesWith()
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const worksheet = 'xl/worksheets/sheet1.xml'
+    entries.set(PATH, drawing.replace(picture, '').replace(line, '').replace(
+      '<a:hlinkClick r:id="rId5"/>',
+      '<a:hlinkClick r:id="rId5"/><a:hlinkHover r:id="hover"/>',
+    ))
+    const link = (id: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/" TargetMode="External"/>`
+    entries.set(RELS_PATH, '<Relationships>' + link('rId5') + link('hover') + '</Relationships>')
+    entries.set(worksheet, '<worksheet><sheetData/><drawing r:id="drawing"/></worksheet>')
+    entries.set(relsPath, '<Relationships><Relationship Id="drawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>')
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+    expect(entries.has(PATH)).toBe(false)
+    expect(entries.has(RELS_PATH)).toBe(false)
+    expect(entries.has(relsPath)).toBe(false)
+    expect(entries.get(worksheet)).toBe('<worksheet><sheetData/></worksheet>')
+    expect(entries.get('[Content_Types].xml')).not.toContain('/xl/drawings/drawing1.xml')
+  })
+
   it('allocates no hyperlink relationship for a removed anchor', async () => {
     const entries = entriesWith()
     await applyVisualEdits(

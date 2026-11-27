@@ -652,6 +652,15 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
   assert.equal(updatedVisuals.find(visual => visual.id === filled.id).hyperlink, newLink)
   assert.equal(updatedVisuals.find(visual => visual.name === 'Grouped shape').hyperlink, href)
   assert.ok((await textOf(await JSZip.loadAsync(updated))(drawingPath)).includes(opaque))
+
+  const remove = sheetsSaveRequest('sheet-1', [])
+  remove.visualEdits = [{ drawingPath, drawingIndex: filled.drawingIndex, remove: true }]
+  const removed = (await native.savePlan(updated, await runtime.sheetsWorkbookPlanner(updated, remove))).bytes
+  const survivingRels = await textOf(await JSZip.loadAsync(removed))(drawingRels)
+  assert.ok(!survivingRels.includes(newLink))
+  const afterRemoval = (await native.inspect(removed)).visuals
+  assert.ok(!afterRemoval.some(visual => visual.name === 'Filled shape'))
+  assert.equal(afterRemoval.find(visual => visual.name === 'Grouped shape').hyperlink, href)
 })
 
 test('uses GenOffice paint colors for gradient and pattern fills in XLSX drawings', async () => {

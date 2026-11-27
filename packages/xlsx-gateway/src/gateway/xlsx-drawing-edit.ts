@@ -449,6 +449,11 @@ function applyOneEdit(
         }
       }
     }
+    const properties = drawingNonVisualProperties(element)?.node
+    for (const name of ['hlinkClick', 'hlinkHover']) {
+      const id = drawingRelationshipAttribute(drawingMainChild(properties, name), 'id')
+      if (id) droppedHyperlinkRelIds.push(escapeXmlAttribute(id))
+    }
     return null
   }
   let patched = edit.anchor ? moveVisualAnchor(element, edit.anchor, edit.anchorSize) : anchorXml
