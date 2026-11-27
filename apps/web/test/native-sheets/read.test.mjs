@@ -286,7 +286,7 @@ test('Node XLSX restores worksheet view, print settings and manual page breaks',
   <customSheetViews><customSheetView guid="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><pageSetup orientation="portrait"/></customSheetView></customSheetViews>
   <printOptions headings="1" gridLines="1"/>
   <pageMargins left="0.4" right="0.4" top="1" bottom="1" header="0.5" footer="0.5"/>
-  <pageSetup paperSize="9" orientation="landscape" scale="85" fitToWidth="1" fitToHeight="2"/>
+  <pageSetup paperSize="9" orientation="landscape" scale="85" fitToWidth="1" fitToHeight="2" blackAndWhite="true"/>
   <headerFooter differentOddEven="1" differentFirst="1" scaleWithDoc="0"><oddHeader>&amp;LA &amp; B</oddHeader>
    <oddFooter>&amp;R&amp;P</oddFooter><evenHeader>&amp;CEven</evenHeader><firstFooter>&amp;CFirst</firstFooter></headerFooter>
   <rowBreaks count="4" manualBreakCount="3"><brk id="99" man="0"/><brk id="4" man="1"/><brk id="2" man="1"/><brk id="2" man="true"/></rowBreaks>
@@ -305,7 +305,7 @@ test('Node XLSX restores worksheet view, print settings and manual page breaks',
  assert.deepEqual(result.rowBreaks,[2,4])
  assert.deepEqual(result.colBreaks,[3])
  assert.deepEqual(result.pageSetup,{
-  orientation:'landscape',paperSize:9,scale:85,fitToWidth:1,fitToHeight:2,fitToPage:true,
+  orientation:'landscape',paperSize:9,scale:85,fitToWidth:1,fitToHeight:2,fitToPage:true,blackAndWhite:true,
   margins:{left:0.4,right:0.4,top:1,bottom:1,header:0.5,footer:0.5},printGridlines:true,printHeadings:true,
   oddHeader:'&LA & B',oddFooter:'&R&P',differentOddEven:true,differentFirst:true,headerFooterFixedSize:true,
   evenHeader:'&CEven',firstFooter:'&CFirst',

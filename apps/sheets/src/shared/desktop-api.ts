@@ -1071,6 +1071,7 @@ export const workbookRangeResultSchema = z
         fitToWidth: z.number().int().min(0).max(32_767).optional(),
         fitToHeight: z.number().int().min(0).max(32_767).optional(),
         fitToPage: z.boolean().optional(),
+        blackAndWhite: z.boolean().optional(),
         /// Inches.
         margins: z
           .object({

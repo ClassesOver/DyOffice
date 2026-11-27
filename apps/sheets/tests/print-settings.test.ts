@@ -511,6 +511,7 @@ function payloadSetup(overrides: Partial<EffectivePageSetup>): EffectivePageSetu
     margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
     printGridlines: false,
     printHeadings: false,
+    blackAndWhite: false,
     horizontalCentered: false,
     verticalCentered: false,
     printAreas: [],
@@ -558,11 +559,38 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it('prints black-and-white cells without colored fills and keeps color on other sheets', () => {
+    const worksheet = {
+      ...fakeWorksheet(),
+      getRange: () => ({
+        getDisplayValues: () => [['Styled']],
+        getValues: () => [['Styled']],
+        getCellStyleData: () => ({
+          cl: { rgb: '#FF0000' },
+          bg: { rgb: '#FFFF00' },
+          bd: { b: { s: 1, cl: { rgb: '#00FF00' } } },
+        }),
+      }),
+    } as PrintWorksheet
+    const blackAndWhite = layout(worksheet, resolveEffectivePageSetup({}, { blackAndWhite: true }, null))
+    const color = layout(worksheet, resolveEffectivePageSetup({}, { blackAndWhite: false }, null))
+    const monoBody = blackAndWhite.pages[0]?.body
+    expect(monoBody).toContain('color:#000000')
+    expect(monoBody).toContain('box-shadow:inset 0 -0.75pt 0 #000000')
+    expect(monoBody).not.toContain('background:')
+    expect(color.pages[0]?.body).toContain('color:#FF0000;background:#FFFF00')
+    expect(color.pages[0]?.body).toContain('#00FF00')
+    const html = assemblePrintHtml([blackAndWhite, color]).html
+    expect(html.match(/class="page p0 page-monochrome"/g)).toHaveLength(1)
+    expect(html).toContain('class="page p0"')
+  })
+
   it('fits a standalone chart to a single page while keeping the saved paper and footer', () => {
     const setup = resolveEffectivePageSetup({}, {
       orientation: 'landscape',
       paperSize: 9,
       scale: 100,
+      blackAndWhite: true,
       firstPageNumber: 8,
       oddFooter: '&RPage &P of &N',
     }, null)
@@ -581,6 +609,8 @@ describe('layoutSheetPrint', () => {
     expect(html).toContain('width:11.69in;height:8.27in')
     expect(html).toContain('left:0pt;top:0pt;width:900pt;height:450pt')
     expect(html).toContain('Quarterly chart')
+    expect(html).toContain('class="page p0 page-monochrome"')
+    expect(html).toContain('.page-monochrome .pv')
     expect(html).toContain('Page 8 of 1')
     expect(html).not.toContain('<table ')
   })

@@ -83,7 +83,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     '<Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>' +
     `<Override PartName="/${chartSheet}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>`))
   zip.file(chartSheet, `<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1" zoomScale="125" zoomToFit="1"/></sheetViews><pageSetup firstPageNumber="8" useFirstPageNumber="1"/><headerFooter><oddHeader>&amp;L&amp;G</oddHeader></headerFooter><drawing r:id="rId1"/><legacyDrawingHF r:id="header"/>${extension}</chartsheet>`)
+    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1" zoomScale="125" zoomToFit="1"/></sheetViews><pageSetup firstPageNumber="8" useFirstPageNumber="1" blackAndWhite="1"/><headerFooter><oddHeader>&amp;L&amp;G</oddHeader></headerFooter><drawing r:id="rId1"/><legacyDrawingHF r:id="header"/>${extension}</chartsheet>`)
   zip.file(chartSheetRels, (await text('xl/worksheets/_rels/sheet1.xml.rels')).replace('</Relationships>',
     `<Relationship Id="header" Type="${relationships}vmlDrawing" Target="../drawings/chart-header.vml"/></Relationships>`))
   zip.file(headerVmlPath, headerVml)
@@ -155,6 +155,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
       { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
     const { pageSetup } = workbookRangeResultSchema.parse(range)
     assert.equal(pageSetup.firstPageNumber, 8)
+    assert.equal(pageSetup.blackAndWhite, true)
     assert.equal(pageSetup.headerFooterPictures?.length, 1)
     const [{ id, ...picture }] = pageSetup.headerFooterPictures
     assert.deepEqual(picture, { position: 'LH', widthPt: 72, heightPt: 36, mediaType: 'image/png' })
@@ -180,6 +181,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal(worksheetPrintRange.pageSetup.orientation, 'portrait')
   assert.equal(worksheetPrintRange.pageSetup.printGridlines, true)
   assert.equal(worksheetPrintRange.pageSetup.firstPageNumber, undefined)
+  assert.equal(worksheetPrintRange.pageSetup.blackAndWhite, undefined)
   const printedPackage = textOf(await JSZip.loadAsync(printSaved))
   const printXml = await printedPackage(chartSheet)
   assert.match(printXml, /<pageMargins\b[^>]*\/><pageSetup\b[^>]*\/><headerFooter>[\s\S]*?<\/headerFooter><drawing/)

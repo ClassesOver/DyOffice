@@ -251,6 +251,7 @@ export interface SheetPrintDocument {
   readonly fileName: string
   readonly paper: PaperGeometry
   readonly margins: PrintMargins
+  readonly blackAndWhite: boolean
   /// Content scale actually applied (fit-to-page resolved).
   readonly scale: number
   readonly headerFooterScale: number
@@ -288,6 +289,7 @@ export function layoutSheetPrint(
     fileName,
     paper,
     margins,
+    blackAndWhite: setup.blackAndWhite,
     headerFooterTheme: options.headerFooterTheme,
     firstPageNumber: setup.firstPageNumber,
     pictures,
@@ -479,7 +481,7 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span} style="${cellCss(style, rawAt(data, row, column), gridlines, edges)}">` +
+      `<td${span} style="${cellCss(style, rawAt(data, row, column), gridlines, setup.blackAndWhite, edges)}">` +
       `<div class="c" style="height:${round(heightPt)}pt;align-items:${align}"><span>${escapeHtml(text)}</span></div></td>`
     )
   }
@@ -732,6 +734,10 @@ th.hd-top.hd-left { box-shadow: inset -0.75pt 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7
 .ov { position: absolute; overflow: hidden; }
 .pv { position: absolute; overflow: hidden; }
 .xlsx-print-visual { display: block; width: 100%; height: 100%; }
+.page-monochrome .hf span, .page-monochrome .shape-text, .page-monochrome .shape-text * { color: #000 !important; }
+.page-monochrome .pv, .page-monochrome .hf img { filter: grayscale(1); }
+.page-monochrome .xlsx-shape-drawn svg > path[fill]:not([fill="none"]):not([fill="transparent"]) { fill: #fff !important; }
+.page-monochrome .xlsx-shape-drawn svg > path[stroke]:not([stroke="none"]):not([stroke="transparent"]) { stroke: #000 !important; }
 ${pageRules.join('\n')}
 </style>${css ? `<style>${css}</style>` : ''}</head><body>` +
     pages.join('') +
@@ -793,7 +799,7 @@ function pageHtml(
   const contentWidthIn = Math.max(paper.widthIn - margins.left - margins.right, 0.01)
   const contentHeightIn = Math.max(paper.heightIn - margins.top - margins.bottom, 0.01)
   return (
-    `<div class="page ${paperClass}" style="width:${paper.widthIn}in;height:${paper.heightIn}in">` +
+    `<div class="page ${paperClass}${document.blackAndWhite ? ' page-monochrome' : ''}" style="width:${paper.widthIn}in;height:${paper.heightIn}in">` +
     header +
     `<div class="content" style="left:${round(margins.left + record.offsetLeftIn)}in;` +
     `top:${round(margins.top + record.offsetTopIn)}in;` +
@@ -1090,6 +1096,7 @@ function cellCss(
   style: PrintCellStyle | null,
   rawValue: unknown,
   gridlines: boolean,
+  blackAndWhite: boolean,
   edges: { top: boolean; bottom: boolean; left: boolean; right: boolean },
 ): string {
   const rules: string[] = []
@@ -1110,8 +1117,8 @@ function cellCss(
     rules.push(
       `font-family:'${family}',Calibri,'Helvetica Neue',Arial,${printCjkFonts(getLang())},sans-serif`,
     )
-  if (style?.cl?.rgb) rules.push(`color:${cssColor(style.cl.rgb)}`)
-  if (style?.bg?.rgb) rules.push(`background:${cssColor(style.bg.rgb)}`)
+  if (style?.cl?.rgb) rules.push(`color:${blackAndWhite ? '#000000' : cssColor(style.cl.rgb)}`)
+  if (!blackAndWhite && style?.bg?.rgb) rules.push(`background:${cssColor(style.bg.rgb)}`)
   const align =
     style?.ht === 1
       ? 'left'
@@ -1134,8 +1141,9 @@ function cellCss(
   ): void => {
     const border = borderEdge(style, key)
     if (border && draw) {
+      const color = blackAndWhite ? '#000000' : cssColor(border.cl?.rgb ?? '#000000')
       shadows.push(
-        `inset ${offset(printBorderWidthPt(border.s))} 0 ${cssColor(border.cl?.rgb ?? '#000000')}`,
+        `inset ${offset(printBorderWidthPt(border.s))} 0 ${color}`,
       )
     } else if (gridlines && draw) {
       shadows.push(`inset ${offset(GRIDLINE_PT)} 0 #c0c0c0`)
