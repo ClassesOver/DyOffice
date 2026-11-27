@@ -137,10 +137,6 @@ interface PrintCellStyle {
   > | null
 }
 
-/// Print weight of a cell border by Univer BorderStyleTypes value: Excel
-/// prints thin at 0.75pt (1px @ 96dpi), medium at 1.5pt and thick at
-/// 2.25pt — the same 1 : 2 : 3 ladder the grid draws. Dash patterns keep
-/// printing solid (unchanged); only the weight is mapped here.
 /// A NONE edge is the row/column-default blocker (NO_BORDER_STYLE), not a line.
 function borderEdge(
   style: PrintCellStyle | null | undefined,
@@ -150,6 +146,7 @@ function borderEdge(
   return edge == null || edge.s === BorderStyleTypes.NONE ? undefined : edge
 }
 
+/// Thin, medium and thick lines use the same 1:2:3 pixel weights as the grid.
 export function printBorderWidthPt(style: number | undefined): number {
   switch (style) {
     case BorderStyleTypes.MEDIUM:
@@ -158,10 +155,50 @@ export function printBorderWidthPt(style: number | undefined): number {
     case BorderStyleTypes.MEDIUM_DASH_DOT_DOT:
       return 1.5
     case BorderStyleTypes.THICK:
+    case BorderStyleTypes.DOUBLE:
       return 2.25
     default:
       return 0.75
   }
+}
+
+const BORDER_DASH_PX: Partial<Record<number, readonly number[]>> = {
+  [BorderStyleTypes.HAIR]: [1, 1],
+  [BorderStyleTypes.DOTTED]: [2, 2],
+  [BorderStyleTypes.DASHED]: [3, 3],
+  [BorderStyleTypes.MEDIUM_DASHED]: [3, 3],
+  [BorderStyleTypes.DASH_DOT]: [5, 2, 2, 2],
+  [BorderStyleTypes.MEDIUM_DASH_DOT]: [5, 2, 2, 2],
+  [BorderStyleTypes.SLANT_DASH_DOT]: [5, 2, 2, 2],
+  [BorderStyleTypes.DASH_DOT_DOT]: [5, 2, 2, 2, 2, 2],
+  [BorderStyleTypes.MEDIUM_DASH_DOT_DOT]: [5, 2, 2, 2, 2, 2],
+}
+
+function borderBackground(
+  style: number | undefined,
+  widthPt: number,
+  color: string,
+  side: 'top' | 'bottom' | 'left' | 'right',
+): string | undefined {
+  const horizontal = side === 'top' || side === 'bottom'
+  let gradient: string
+  if (style === BorderStyleTypes.DOUBLE) {
+    const direction = horizontal ? 'bottom' : 'right'
+    gradient = `linear-gradient(to ${direction},${color} 0 0.75pt,transparent 0.75pt 1.5pt,${color} 1.5pt 100%)`
+  } else {
+    const dash = style === undefined ? undefined : BORDER_DASH_PX[style]
+    if (!dash) return undefined
+    let positionPt = 0
+    const stops = dash.map((lengthPx, index) => {
+      const startPt = positionPt
+      positionPt += lengthPx * 0.75
+      return `${index % 2 === 0 ? color : 'transparent'} ${startPt}pt ${positionPt}pt`
+    })
+    const direction = horizontal ? 'right' : 'bottom'
+    gradient = `repeating-linear-gradient(to ${direction},${stops.join(',')})`
+  }
+  const size = horizontal ? `100% ${widthPt}pt` : `${widthPt}pt 100%`
+  return `${gradient} ${side} / ${size} no-repeat`
 }
 
 /// OOXML paper-size code → Electron pageSize (custom sizes in inches).
@@ -1148,9 +1185,8 @@ function mergeMaps(worksheet: PrintWorksheet, area: PrintArea) {
   return { anchors, covered }
 }
 
-/// Borders paint as inset shadows (no layout share, unlike CSS borders, so
-/// the planned row heights hold); `edges` says which of the cell's four
-/// edges it owns.
+/// Borders paint as inset shadows or background stripes so they do not
+/// change the planned cell geometry. Only the owning cell paints an edge.
 function cellCss(
   style: PrintCellStyle | null,
   rawValue: unknown,
@@ -1178,7 +1214,7 @@ function cellCss(
       `font-family:'${family}',Calibri,'Helvetica Neue',Arial,${printCjkFonts(getLang())},sans-serif`,
     )
   if (style?.cl?.rgb) rules.push(`color:${blackAndWhite ? '#000000' : cssColor(style.cl.rgb)}`)
-  if (!blackAndWhite && style?.bg?.rgb) rules.push(`background:${cssColor(style.bg.rgb)}`)
+  const fill = !blackAndWhite && style?.bg?.rgb ? cssColor(style.bg.rgb) : undefined
   const align =
     style?.ht === 1
       ? 'left'
@@ -1191,28 +1227,34 @@ function cellCss(
             : typeof rawValue === 'boolean'
               ? 'center'
               : 'left'
-  rules.push(`text-align:${align}`)
-  rules.push(style?.tb === 3 ? 'white-space:pre-wrap;word-break:break-word' : 'white-space:pre')
   const shadows: string[] = []
+  const patternedBorders: string[] = []
   const edge = (
     key: 't' | 'b' | 'l' | 'r',
     draw: boolean,
+    side: 'top' | 'bottom' | 'left' | 'right',
     offset: (width: number) => string,
   ): void => {
     const border = borderEdge(style, key)
     if (border && draw) {
       const color = blackAndWhite ? '#000000' : cssColor(border.cl?.rgb ?? '#000000')
-      shadows.push(
-        `inset ${offset(printBorderWidthPt(border.s))} 0 ${color}`,
-      )
+      const widthPt = printBorderWidthPt(border.s)
+      const pattern = borderBackground(border.s, widthPt, color, side)
+      if (pattern) patternedBorders.push(pattern)
+      else shadows.push(`inset ${offset(widthPt)} 0 ${color}`)
     } else if (gridlines && draw) {
       shadows.push(`inset ${offset(GRIDLINE_PT)} 0 #c0c0c0`)
     }
   }
-  edge('t', edges.top, (width) => `0 ${width}pt`)
-  edge('b', edges.bottom, (width) => `0 -${width}pt`)
-  edge('l', edges.left, (width) => `${rightToLeft ? -width : width}pt 0`)
-  edge('r', edges.right, (width) => `${rightToLeft ? width : -width}pt 0`)
+  edge('t', edges.top, 'top', (width) => `0 ${width}pt`)
+  edge('b', edges.bottom, 'bottom', (width) => `0 -${width}pt`)
+  edge('l', edges.left, rightToLeft ? 'right' : 'left', (width) => `${rightToLeft ? -width : width}pt 0`)
+  edge('r', edges.right, rightToLeft ? 'left' : 'right', (width) => `${rightToLeft ? width : -width}pt 0`)
+  if (patternedBorders.length > 0)
+    rules.push(`background:${patternedBorders.join(',')}${fill ? ` ${fill}` : ''}`, 'print-color-adjust:exact')
+  else if (fill) rules.push(`background:${fill}`)
+  rules.push(`text-align:${align}`)
+  rules.push(style?.tb === 3 ? 'white-space:pre-wrap;word-break:break-word' : 'white-space:pre')
   if (shadows.length > 0) rules.push(`box-shadow:${shadows.join(',')}`)
   return rules.join(';')
 }

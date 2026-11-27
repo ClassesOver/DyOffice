@@ -1,3 +1,4 @@
+import { BorderStyleTypes } from '@univerjs/core'
 import { describe, expect, it } from 'vitest'
 
 import { shiftDefinedNames } from '@genoffice/xlsx-gateway/gateway/xlsx-structure'
@@ -1007,6 +1008,35 @@ describe('layoutSheetPrint', () => {
       layout(worksheet, payloadSetup({ printTitles: '1:1', printAreas: ['A5:C10'] })),
     ]).html
     expect(cropped).toContain('<thead><tr style="height:15pt"><td rowspan="1" colspan="3"')
+  })
+
+  it('prints patterned borders over the cell fill without painting a shared edge twice', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getRange: ((row: number, column: number, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => column === 0 ? {
+          bg: { rgb: '#fff0b0' },
+          bd: {
+            t: { s: BorderStyleTypes.DOTTED, cl: { rgb: '#ff0000' } },
+            b: { s: BorderStyleTypes.DOUBLE, cl: { rgb: '#208040' } },
+            r: { s: BorderStyleTypes.MEDIUM_DASH_DOT, cl: { rgb: '#0000ff' } },
+          },
+        } : { bd: { l: { s: BorderStyleTypes.DASHED, cl: { rgb: '#ff00ff' } } } },
+      })) as PrintWorksheet['getRange'],
+    }
+    const setup = payloadSetup({ printAreas: ['A1:B1'], printGridlines: true })
+    const body = layout(worksheet, setup).pages[0]?.body ?? ''
+    expect(body).toContain('repeating-linear-gradient(to right,#ff0000')
+    expect(body).toContain('linear-gradient(to bottom,#208040')
+    expect(body).toContain('repeating-linear-gradient(to bottom,#0000ff')
+    expect(body).toContain('right / 1.5pt 100% no-repeat #fff0b0')
+    expect(body).not.toContain('#ff00ff')
+
+    const monochrome = layout(worksheet, { ...setup, blackAndWhite: true }).pages[0]?.body ?? ''
+    expect(monochrome).toContain('repeating-linear-gradient(to right,#000000')
+    expect(monochrome).not.toMatch(/#ff0000|#208040|#0000ff|#fff0b0/)
   })
 
   it('preserves value alignment for titles outside the saved print area', () => {
