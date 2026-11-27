@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const {createElement: h, useEffect, useRef, useState, useSyncExternalStore} = require('react')
     const id = '@local/dsh-dyoffice'
     const copy = {
-      zh: {showDocument:'在聊天中打开',messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
+      zh: {showDocument:'在聊天中打开',hideDocument:'收起文档',messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
         url: 'DyOffice 服务地址', code: '授权码', codeHint: '粘贴从「频道分享」复制的 DSH 插件授权码',
@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
         truncated: '正文仅显示前 24,000 字符。', tasks: '任务进度', noTasks: '暂无任务。',
         queued: '排队中', running: '运行中', waiting_peer: '等待协作', cancel_requested: '正在取消',
         succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown_outcome: '结果待核对'},
-      en: {showDocument:'Open in chat',messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
+      en: {showDocument:'Open in chat',hideDocument:'Collapse document',messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
         url: 'DyOffice service URL', code: 'Authorization code', codeHint: 'Paste the DSH plugin authorization code from channel sharing',
@@ -115,6 +115,19 @@ window.__ModuleLoader__.load({
     }
     const allowsEmbed = (connection, origin) => connection?.origin === origin &&
       (connection?.dshEditorOrigins ?? [connection?.dshEditorOrigin]).includes(window.location.origin)
+    const chatFrameHeight='min(32dvh,280px)'
+    // Keep iframe interaction coordinates and the editor's layout in the same scaled viewport.
+    const embeddedEditorStyle={display:'block',width:'125%',height:'125%',maxWidth:'none',border:0,transform:'scale(.8)',transformOrigin:'top left'}
+    const chatDocumentStyles=`
+      .dsh-chat-document{min-width:0;margin-block:6px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:9px;color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-bg-layer-1,Canvas)}
+      .dsh-chat-document>summary{cursor:pointer;padding:8px 12px;font:inherit;font-size:13px;font-weight:600;line-height:20px}
+      .dsh-chat-document>summary::marker{color:var(--dsw-alias-brand-primary,Highlight)}
+      .dsh-chat-document>summary:hover{background:color-mix(in srgb,currentColor 5%,transparent)}
+      .dsh-chat-document>summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:-2px}
+      .dsh-chat-document .when-open,.dsh-chat-document[open] .when-closed{display:none}
+      .dsh-chat-document[open] .when-open{display:inline}
+      .dsh-chat-document .editor-viewport{box-sizing:border-box;overflow:hidden;height:min(32vh,280px);height:${chatFrameHeight};border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}
+    `
     const studioStyles = `
       .dsh-office-studio{--dsh-office-party-dsh:#8265d0;--dsh-office-party-office:#32827c;container-type:inline-size;box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:inherit}
       .dsh-office-studio *{box-sizing:border-box}
@@ -131,7 +144,7 @@ window.__ModuleLoader__.load({
       .dsh-office-tools{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:9px}
       .dsh-office-paper,.dsh-office-frame{min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:5px;background:var(--dsw-alias-bg-layer-1,Canvas)}
       .dsh-office-paper{min-height:145px;max-height:340px;overflow:auto;padding:16px 18px;line-height:1.7;font-size:14px;overflow-wrap:anywhere}.dsh-office-paper p,.dsh-office-paper h3{margin:0 0 .6em}
-      .dsh-office-frame{position:relative;height:65vh;height:65dvh;max-height:800px;overflow:hidden}
+      .dsh-office-frame{position:relative;height:min(32vh,280px);height:${chatFrameHeight};overflow:hidden}
       .dsh-office-log{min-width:0;padding:12px 16px;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}
       .dsh-office-message{position:relative;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da);margin-inline-start:4px;padding:0 0 12px 13px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
       .dsh-office-message:last-child{padding-bottom:0;border-color:transparent}
@@ -522,7 +535,7 @@ window.__ModuleLoader__.load({
         const url=new URL(created.href)
         url.searchParams.set('dshEmbed','1')
         return h(RemoteViewport,{anchor},h('iframe',{ref:frame,title:created.name,src:url.href,
-          style:{width:'100%',height:'100%',border:0}}))
+          style:embeddedEditorStyle}))
       }
       if(syncOnly)return null
       const progress = creation && h('p', {role: creation.error ? 'alert' : 'status',
@@ -541,7 +554,7 @@ window.__ModuleLoader__.load({
             h('strong',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},created.name),
             h('a',{href:value?.canEdit && !value.paused ? guestEditorUrl(created.fileId) : created.href,
               target:'_blank',rel:'noopener noreferrer',style:{...pairStyles.link,whiteSpace:'nowrap'}},t('open'))),
-          h('iframe',{ref:frame,src:url.href,title:created.name,style:{width:'100%',flex:1,border:0,minHeight:0,background:'Canvas'}}))
+          h('div',{style:{flex:1,minHeight:0,overflow:'hidden'}},h('iframe',{ref:frame,src:url.href,title:created.name,style:embeddedEditorStyle})))
       }
       if (!value || value.selectedFile !== selectedFile) return h('div', null, progress,
         h('p', {role: 'status', style: {padding: 16}}, t(error ?? 'loading')))
@@ -724,9 +737,10 @@ window.__ModuleLoader__.load({
         }
         function ChatDocument({url,t}){
           const [mounted,setMounted]=useState(false)
-          return h('details',{onToggle:event=>{if(event.currentTarget.open)setMounted(true)}},
-            h('summary',null,t('showDocument')),
-            mounted&&h('iframe',{title:t('livePreview'),src:url,style:{display:'block',width:'100%',height:'min(70vh,760px)',border:0}}))
+          return h('details',{className:'dsh-chat-document',onToggle:event=>{if(event.currentTarget.open)setMounted(true)}},
+            h('summary',null,h('span',{className:'when-closed'},t('showDocument')),h('span',{className:'when-open'},t('hideDocument'))),
+            h('style',null,chatDocumentStyles),
+            mounted&&h('div',{className:'editor-viewport'},h('iframe',{title:t('livePreview'),src:url,style:embeddedEditorStyle})))
         }
         ctx.effect(()=>ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({
           name:'conversation.chat.turnTail',id:'dyoffice-snapshot',locale:namespace,
