@@ -1,9 +1,14 @@
 import { expect, it } from 'vitest'
 
-import { rewriteTableReferencesInPart } from '../src/gateway/xlsx-table-references'
+import {
+  findTableReferenceInPart,
+  rewriteTableReferencesInPart,
+} from '../src/gateway/xlsx-table-references'
+import { findDefinedNameTableReference } from '../src/gateway/xlsx-sheets'
 
 const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const rewrite = (formula: string) => formula.replaceAll('Sales[', 'Orders[')
+const names = new Set(['sales'])
 
 it('renames worksheet table references only in real cells and known worksheet rules', () => {
   const embedded = '<custom><f>SUM(Sales[Total])</f></custom>'
@@ -41,4 +46,18 @@ it('renames calculated and totals formulas only on table columns', () => {
   expect(changed).toContain('<t:totalsRowFormula>SUM(Orders[Total])</t:totalsRowFormula>')
   expect(changed).toContain(nested)
   expect(changed).toContain(foreignTable)
+  expect(findTableReferenceInPart(xml, 'table', names)).toBe('sales')
+  expect(findTableReferenceInPart(changed, 'table', names)).toBeUndefined()
+})
+
+it('detects local references in surviving defined names and ignores literals and external tables', () => {
+  const xml =
+    '<workbook><definedNames>' +
+    '<definedName name="Label">"Sales[Total]"</definedName>' +
+    '<definedName name="External">[1]Remote!Sales[Total]</definedName>' +
+    '<definedName name="OtherTable">XSALes[Total]</definedName>' +
+    '<definedName name="Local" localSheetId="0">SUM(sALes&#91;Total])</definedName>' +
+    '</definedNames></workbook>'
+  expect(findDefinedNameTableReference(xml, names, new Set())).toBe('sales')
+  expect(findDefinedNameTableReference(xml, names, new Set([0]))).toBeUndefined()
 })

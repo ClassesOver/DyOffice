@@ -1,4 +1,5 @@
 import {
+  findStructuredTableReference,
   FORMULA_REFERENCE_PATTERN,
   formulaCodeSegments,
   qualifierMatches,
@@ -859,12 +860,9 @@ export function tableDisplayName(tableXml: string): string | undefined {
 }
 
 export function tablePartNames(tableXml: string): string[] {
-  const opening = readRootStartTag(tableXml)
-  if (!/^<(?:[\w.-]+:)?table[\s/>]/.test(opening)) return []
-  return ['displayName', 'name'].flatMap((attribute) => {
-    const value = readWorksheetTagAttribute(opening, attribute)
-    return value ? [decodeAttribute(value)] : []
-  })
+  const root = spreadsheetPartRoot(tableXml)
+  if (root?.local !== 'table') return []
+  return ['displayName', 'name'].flatMap((attribute) => root.attributes.get(attribute) || [])
 }
 
 /// True when a defined name that survives the removal mentions the token
@@ -876,11 +874,26 @@ export function definedNamesUseToken(
   token: string,
   removedLocalIds: ReadonlySet<number>,
 ): boolean {
-  const needle = token.toLowerCase()
+  return (
+    token.endsWith('[') &&
+    findDefinedNameTableReference(
+      workbookXml,
+      new Set([token.slice(0, -1).toLowerCase()]),
+      removedLocalIds,
+    ) !== undefined
+  )
+}
+
+export function findDefinedNameTableReference(
+  workbookXml: string,
+  tableNames: ReadonlySet<string>,
+  removedLocalIds: ReadonlySet<number>,
+): string | undefined {
   for (const formula of survivingDefinedNameFormulas(workbookXml, removedLocalIds)) {
-    if (formula.toLowerCase().includes(needle)) return true
+    const name = findStructuredTableReference(formula, tableNames)
+    if (name !== undefined) return name
   }
-  return false
+  return undefined
 }
 
 /// True when a pivotCacheDefinition part reads its source rows from the

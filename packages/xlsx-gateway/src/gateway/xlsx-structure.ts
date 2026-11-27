@@ -2514,10 +2514,8 @@ function formulaQuoteEnd(formula: string, start: number, quote: string): number 
   return formula.length
 }
 
-export function renameStructuredTableReferences(formula: string, names: ReadonlyMap<string, string>): string {
+function* structuredTableReferenceTokens(formula: string) {
   const tokens = /["'[]|[\p{L}\p{N}_.\\]+/gu
-  let result = ''
-  let cursor = 0
   for (let match = tokens.exec(formula); match; match = tokens.exec(formula)) {
     const token = match[0]
     const start = match.index
@@ -2531,13 +2529,39 @@ export function renameStructuredTableReferences(formula: string, names: Readonly
       continue
     }
     if (formula[end] !== '[' || formula[start - 1] === ']') continue
-    const replacement = names.get(token.toLowerCase())
-    if (replacement === undefined || replacement === token) continue
     if (formula[start - 1] === '!') {
       const qualifier = formula.slice(0, start)
-      if (/\][\p{L}\p{N}_.\\]+!$/u.test(qualifier) ||
-        /'(?:[^']|'')*'!$/u.exec(qualifier)?.[0]?.includes('[')) continue
+      if (
+        /\][\p{L}\p{N}_.\\]*!$/u.test(qualifier) ||
+        /'(?:[^']|'')*'!$/u.exec(qualifier)?.[0]?.includes('[')
+      )
+        continue
     }
+    yield { token, start, end }
+  }
+}
+
+export function findStructuredTableReference(
+  formula: string,
+  tableNames: ReadonlySet<string>,
+): string | undefined {
+  if (!formula.includes('[')) return undefined
+  for (const { token } of structuredTableReferenceTokens(formula)) {
+    const name = token.toLowerCase()
+    if (tableNames.has(name)) return name
+  }
+  return undefined
+}
+
+export function renameStructuredTableReferences(
+  formula: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  let result = ''
+  let cursor = 0
+  for (const { token, start, end } of structuredTableReferenceTokens(formula)) {
+    const replacement = names.get(token.toLowerCase())
+    if (replacement === undefined || replacement === token) continue
     result += formula.slice(cursor, start) + replacement
     cursor = end
   }

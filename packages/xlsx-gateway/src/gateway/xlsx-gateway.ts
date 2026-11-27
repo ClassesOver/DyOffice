@@ -66,7 +66,7 @@ import {
   type TableEdit,
 } from './xlsx-table-edit.ts'
 import { rewriteChartReferences } from './xlsx-chart-references.ts'
-import { rewriteTableReferencesInPart } from './xlsx-table-references.ts'
+import { findTableReferenceInPart, rewriteTableReferencesInPart } from './xlsx-table-references.ts'
 import type { PivotFilterDef } from '../domain/pivot-filters.ts'
 import {
   applyPivotAdditions,
@@ -118,7 +118,7 @@ import {
   classifyRemovedSheetRels,
   convertPivotTableSourceToRange,
   definedNamesReferenceSheet,
-  definedNamesUseToken,
+  findDefinedNameTableReference,
   nextFreeRelationshipIds,
   nextWorkbookSheetIds,
   parseRelationships,
@@ -129,7 +129,7 @@ import {
   removePartOverride,
   removeRelationshipById,
   renameTableInPivotCacheSource,
-  tableDisplayName,
+  tablePartNames,
   sanitizeClonedWorksheetXml,
   SheetEditError,
   stripPageSetupRelIds,
@@ -2312,6 +2312,56 @@ async function collectPivotSourceSheets(
   return names
 }
 
+async function assertNoRemovedTableReferences(
+  pkg: PackageEditor,
+  removedTableParts: ReadonlyMap<string, string>,
+  removedOwnedParts: ReadonlySet<string>,
+  survivingReferenceParts: ReadonlyMap<string, 'worksheet' | 'table' | 'chart'>,
+  workbookXml: string,
+  removedLocalIds: ReadonlySet<number>,
+): Promise<void> {
+  const tables = new Map<string, { name: string; sheet: string }>()
+  for (const [path, sheet] of removedTableParts) {
+    if (!removedOwnedParts.has(path)) continue
+    const xml = await pkg.readText(path)
+    for (const name of tablePartNames(xml)) tables.set(name.toLowerCase(), { name, sheet })
+    pkg.releaseSourceText(path)
+  }
+  if (!tables.size) return
+
+  const names = new Set(tables.keys())
+  const block = (name: string, owner: string) => {
+    const table = tables.get(name)!
+    throw new SheetEditError(
+      `${owner} uses table "${table.name}" on "${table.sheet}" — deleting the sheet is not allowed.`,
+    )
+  }
+  const definedName = findDefinedNameTableReference(workbookXml, names, removedLocalIds)
+  if (definedName !== undefined) block(definedName, 'A workbook defined name')
+
+  for (const [path, kind] of survivingReferenceParts) {
+    if (removedOwnedParts.has(path) || !(await pkg.has(path))) continue
+    if (!(await pkg.canPatch(path))) {
+      if ((await pkg.containsText(path, '[')) || (await pkg.containsText(path, '&#'))) {
+        throw new SheetEditError(
+          `${path} is too large to verify structured table references before deleting the sheet.`,
+        )
+      }
+      continue
+    }
+    const reference = findTableReferenceInPart(await pkg.readText(path), kind, names)
+    pkg.releaseSourceText(path)
+    if (reference === undefined) continue
+    const owner =
+      kind === 'chart'
+        ? 'A surviving chart'
+        : kind === 'table'
+          ? 'A surviving table formula'
+          : 'A formula on another sheet'
+    block(reference, owner)
+  }
+}
+
 async function applySheetPlanToPackage(
   pkg: PackageEditor,
   plan: SheetEditPlan,
@@ -2372,7 +2422,7 @@ async function applySheetPlanToPackage(
   // relationships (pivot tables, slicers) fail closed inside
   // classifyRemovedSheetRels.
   const removalRelsPaths = new Map<string, string>()
-  const ownedPartsByRemoval = new Map<string, ReadonlySet<string>>()
+  const removedTableParts = new Map<string, string>()
   const removedOwnedParts = new Set<string>()
   for (const removal of plan.removals) {
     const removalPath = removalPaths.get(removal) ?? ''
@@ -2380,7 +2430,13 @@ async function applySheetPlanToPackage(
     removalRelsPaths.set(removal, relsPath)
     const owned = new Set<string>()
     if (await pkg.has(relsPath)) {
-      const targets = classifyRemovedSheetRels(await pkg.readText(relsPath), removal)
+      const xml = await pkg.readText(relsPath)
+      const targets = classifyRemovedSheetRels(xml, removal)
+      for (const entry of parseRelationships(xml)) {
+        if (!entry.external && entry.type.endsWith('/table')) {
+          removedTableParts.set(resolveRelTarget(removalPath, entry.target), removal)
+        }
+      }
       const queue = targets.map((target) => resolveRelTarget(removalPath, target))
       while (queue.length > 0) {
         const part = queue.pop() as string
@@ -2394,7 +2450,6 @@ async function applySheetPlanToPackage(
         }
       }
     }
-    ownedPartsByRemoval.set(removal, owned)
     for (const part of owned) removedOwnedParts.add(part)
   }
 
@@ -2407,6 +2462,17 @@ async function applySheetPlanToPackage(
     ...[...removedOwnedParts].filter((part) => part.endsWith('.rels')),
   ])
   const keepQueue: string[] = []
+  const survivingReferenceParts = new Map<string, 'worksheet' | 'table' | 'chart'>(
+    survivingWorksheetPaths.map(path => [path, 'worksheet']),
+  )
+  const recordReferencePart = (owner: string, target: string, type: string) => {
+    if (!removedTableParts.size) return
+    if (type.endsWith('/table') && survivingReferenceParts.get(owner) === 'worksheet') {
+      survivingReferenceParts.set(target, 'table')
+    } else if (type.endsWith('/chart')) {
+      survivingReferenceParts.set(target, 'chart')
+    }
+  }
   for (const relsPath of packagePaths) {
     if (!relsPath.endsWith('.rels') || dyingRelsParts.has(relsPath)) continue
     const owner = partPathForRels(relsPath)
@@ -2415,6 +2481,7 @@ async function applySheetPlanToPackage(
       if (entry.external) continue
       const target = resolveRelTarget(owner, entry.target)
       if (removedOwnedParts.has(target)) keepQueue.push(target)
+      recordReferencePart(owner, target, entry.type)
     }
   }
   while (keepQueue.length > 0) {
@@ -2423,7 +2490,10 @@ async function applySheetPlanToPackage(
     const childRelsPath = relsPathFor(part)
     if (removedOwnedParts.delete(childRelsPath)) {
       for (const entry of parseRelationships(await pkg.readText(childRelsPath))) {
-        if (!entry.external) keepQueue.push(resolveRelTarget(part, entry.target))
+        if (entry.external) continue
+        const target = resolveRelTarget(part, entry.target)
+        keepQueue.push(target)
+        recordReferencePart(part, target, entry.type)
       }
     }
   }
@@ -2472,35 +2542,10 @@ async function applySheetPlanToPackage(
         `A pivot table reads its source data from "${removal}" — deleting it is not allowed.`,
       )
     }
-    // Structured references (DecoTable[Amount]) into a removed table are not
-    // sheet-qualified, so the sheet-name checks above cannot catch them.
-    // Excel treats table names as case-insensitive, so the scan must too;
-    // entries too large to patch fall back to the sidecar's exact-case scan.
-    for (const part of ownedPartsByRemoval.get(removal) ?? []) {
-      if (!removedOwnedParts.has(part) || !/^xl\/tables\/[^/]+\.xml$/.test(part)) continue
-      const name = tableDisplayName(await pkg.readText(part))
-      if (name === undefined) continue
-      const needle = `${name}[`
-      const needleLower = needle.toLowerCase()
-      for (const path of survivingWorksheetPaths) {
-        const referenced = (await pkg.canPatch(path))
-          ? (await pkg.readText(path)).toLowerCase().includes(needleLower)
-          : await pkg.containsText(path, needle)
-        if (referenced) {
-          throw new SheetEditError(
-            `Another sheet's formulas use table "${name}" on "${removal}" — deleting it is not allowed.`,
-          )
-        }
-      }
-      // Defined names scoped to a removed sheet die with it (matching the
-      // sheet-name check above), so only surviving names can block.
-      if (definedNamesUseToken(workbookXml, needle, removedLocalIds)) {
-        throw new SheetEditError(
-          `A workbook defined name uses table "${name}" on "${removal}" — deleting it is not allowed.`,
-        )
-      }
-    }
   }
+  await assertNoRemovedTableReferences(
+    pkg, removedTableParts, removedOwnedParts, survivingReferenceParts, workbookXml, removedLocalIds,
+  )
 
   for (const removal of plan.removals) {
     const relsPath = removalRelsPaths.get(removal) ?? ''

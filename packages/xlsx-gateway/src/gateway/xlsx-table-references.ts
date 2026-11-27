@@ -1,5 +1,6 @@
+import { chartFormulaElements } from './xlsx-chart-references.ts'
 import { rewriteWorksheetValidations } from './xlsx-dv.ts'
-import { rewriteWorksheetCellFormulas } from './xlsx-structure.ts'
+import { findStructuredTableReference, rewriteWorksheetCellFormulas } from './xlsx-structure.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
@@ -54,4 +55,25 @@ export function rewriteTableReferencesInPart(
     }
   }
   return applyPatches(xml, patches)
+}
+
+export function findTableReferenceInPart(
+  xml: string,
+  kind: 'worksheet' | 'table' | 'chart',
+  tableNames: ReadonlySet<string>,
+): string | undefined {
+  if (!xml.includes('[') && !xml.includes('&#')) return undefined
+  if (kind === 'chart') {
+    for (const { element } of chartFormulaElements(xml)) {
+      const found = findStructuredTableReference(elementText(element.inner), tableNames)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  let found: string | undefined
+  rewriteTableReferencesInPart(xml, kind, (formula) => {
+    found ??= findStructuredTableReference(formula, tableNames)
+    return formula
+  })
+  return found
 }

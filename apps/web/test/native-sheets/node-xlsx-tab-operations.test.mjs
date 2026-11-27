@@ -87,8 +87,8 @@ test(
     const native = runtime.sheetsNative
     const read = (bytes, sheet) => native.readRange(bytes, sheet, bounds)
     const inspect = (bytes) => native.inspect(bytes, undefined, true)
-    const save = async (bytes, sheetOps, sheetOrder) => {
-      const request = { ...sheetsSaveRequest(first, []), sheetOps, sheetOrder }
+    const save = async (bytes, sheetOps, sheetOrder, fields = {}) => {
+      const request = { ...sheetsSaveRequest(first, []), sheetOps, sheetOrder, ...fields }
       return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request)))
         .bytes
     }
@@ -300,6 +300,38 @@ test(
       assert.equal(after.sheets[after.activeTab]?.name, 'Other')
       assert.equal(after.openingViewport.sheetId, after.sheets[after.activeTab].id)
       assert.equal(after.openingViewport.result.cells[0].value, 100)
+    })
+    await t.test('protects the source sheet of genuine structured table references', async (t) => {
+      const table = { sheetId: second, area: { startRow: 0, endRow: 1, startColumn: 0, endColumn: 0 },
+        name: 'SourceRows', columnNames: ['Amount'], bandedRows: true }
+      const base = await save(await fixture(), [], [first, second], { tableAdditions: [table] })
+      const removal = [{ kind: 'remove-sheet', sheetId: second }]
+      const modified = async (path, edit) => {
+        const zip = await JSZip.loadAsync(base)
+        zip.file(path, edit(await xmlPart(zip, path)))
+        return zip.generateAsync({ type: 'nodebuffer' })
+      }
+      const addRow = (markup) => (xml) => xml.replace('</sheetData>', `<row r="5">${markup}</row></sheetData>`)
+
+      await t.test('allows deletion when text and cached XML only resemble a reference', async () => {
+        const literal = '<c r="A5"><f>"SourceRows[Amount]"</f></c>'
+        const cached = '<custom><f>SUM(SourceRows[Amount])</f></custom>'
+        const file = await modified(one, addRow(literal + '<c r="B5">' + cached + '</c>'))
+        const deleted = await save(file, removal, [first])
+        assert.deepEqual((await inspect(deleted)).sheets.map((sheet) => sheet.name), ['Acceptance'])
+        assert.ok((await xmlPart(await JSZip.loadAsync(deleted), one)).includes(cached))
+      })
+
+      await t.test('blocks deletion for an entity-encoded, case-insensitive reference', async () => {
+        const file = await modified(one, addRow('<c r="A5"><f>SUM(sourcerows&#91;Amount])</f></c>'))
+        await assert.rejects(save(file, removal, [first]), /Invalid workbook input/)
+      })
+
+      await t.test('blocks deletion when a surviving chart reads the table', async () => {
+        const file = await modified('xl/charts/chart1.xml', (xml) =>
+          xml.replace('Acceptance!$A$2:$A$3', 'SourceRows[Amount]'))
+        await assert.rejects(save(file, removal, [first]), /Invalid workbook input/)
+      })
     })
     await t.test('protects sheets referenced by surviving objects from deletion', async (t) => {
       const clearGlobal = (xml) => xml.replace(/<definedNames>[\s\S]*?<\/definedNames>/, '')
