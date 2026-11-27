@@ -3,7 +3,7 @@ import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/share
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import {
-  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingMainName, pictureExtensionBlips, readDrawingGraphicFrame, readDrawingPicture, SVG_BLIP_NAMESPACE,
+  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingMainName, readDrawingGraphicFrame, SVG_BLIP_NAMESPACE,
 } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
 import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
@@ -75,9 +75,11 @@ function children(node?: XmlElement): XmlElement[] {
   return entries.filter(entry => isDrawingMainName(entry.name, entry.namespace))
     .map(entry => ({ ...entry, drawingMainOnly: true }))
 }
+function isSheetDrawingChild(parent: XmlElement, entry: XmlElement): boolean {
+  return entry.namespace === parent.namespace && (entry.namespace !== undefined || entry.name.startsWith('xdr:'))
+}
 function sheetDrawingChild(node: XmlElement, tag: string): XmlElement | undefined {
-  return children(node).find(entry => entry.tag === tag && entry.namespace === node.namespace &&
-    (entry.namespace !== undefined || entry.name.startsWith('xdr:')))
+  return children(node).find(entry => entry.tag === tag && isSheetDrawingChild(node, entry))
 }
 function drawingMainPart(node: XmlElement, tag: string): XmlElement | undefined {
   const part = sheetDrawingChild(node, tag)
@@ -93,10 +95,10 @@ function* descendants(node?: XmlElement): Generator<XmlElement> {
 function first(node: XmlElement | undefined, tag: string) {
   for (const descendant of descendants(node)) if (descendant.tag === tag) return descendant
 }
-function attribute(node: XmlElement | undefined, key: string): string | undefined {
-  const raw = node?.attrs?.[`@_${key}`] ?? Object.entries(node?.attrs ?? {}).find(([name]) =>
+function attribute(node: XmlElement | undefined, key: string, unqualifiedOnly = false): string | undefined {
+  const raw = node?.attrs?.[`@_${key}`] ?? (unqualifiedOnly ? undefined : Object.entries(node?.attrs ?? {}).find(([name]) =>
     !name.startsWith('@_xmlns:') && name.endsWith(`:${key}`)
-  )?.[1]
+  )?.[1])
   return raw === undefined ? undefined : decodeAttribute(raw)
 }
 function relationshipAttribute(node: XmlElement | undefined, key: string): string | undefined {
@@ -516,10 +518,10 @@ export function visualMediaType(path: string): string | undefined {
   }
 }
 
-function pictureCrop(blipFill?: ScopedElement): WorkbookVisualObject['crop'] {
-  const src = drawingMainChild(blipFill, 'srcRect')
+function pictureCrop(blipFill?: XmlElement): WorkbookVisualObject['crop'] {
+  const src = child(blipFill, 'srcRect')
   if (!src) return undefined
-  const side = (name: string) => (finite(src.attributes.get(name)) ?? 0) / 100_000
+  const side = (name: string) => (finite(attribute(src, name, true)) ?? 0) / 100_000
   const left = side('l'), top = side('t'), right = side('r'), bottom = side('b')
   if ([left, top, right, bottom].some(value => Math.abs(value) > 1) || left + right >= 1 || top + bottom >= 1 ||
       !(left || top || right || bottom)) return undefined
@@ -658,7 +660,7 @@ function readShape(
   const frameHeight = finite(attribute(extent, 'cy'))
   const blip = child(child(properties, 'blipFill'), 'blip')
   const fillMediaPath = previewPath(references.relationships, references.part, relationshipAttribute(blip, 'embed'), references.hasPart) ??
-    svgEmbedsPreview(shapeSvgEmbeds(blip), references)
+    svgEmbedsPreview(svgBlipEmbeds(blip), references)
   const fillColor = child(properties, 'noFill') ? 'none'
     : areaColor(properties, theme) ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
   return {
@@ -686,21 +688,54 @@ function readShape(
   }
 }
 
+function readPicture(
+  picture: XmlElement,
+  base: VisualBase,
+  references: DrawingReferences,
+  scaledFrame?: { width: number; height: number },
+): WorkbookVisualObject | undefined {
+  const fill = drawingMainPart(picture, 'blipFill')
+  const blip = child(fill ?? { ...picture, drawingMainOnly: true }, 'blip')
+  if (!blip) return undefined
+  const { relationships, part, hasPart } = references
+  const raster = previewPath(relationships, part, relationshipAttribute(blip, 'embed'), hasPart)
+  const mediaPath = raster?.startsWith('xl/media/') ? raster : svgEmbedsPreview(svgBlipEmbeds(blip), references)
+  const mediaType = mediaPath && visualMediaType(mediaPath)
+  const { anchor } = base
+  if (!mediaPath || !mediaType || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&
+    anchor.fromRowOffset === anchor.toRowOffset && anchor.fromColumnOffset === anchor.toColumnOffset)) return undefined
+
+  const transform = child(drawingMainPart(picture, 'spPr'), 'xfrm')
+  const rotation = finite(attribute(transform, 'rot', true))
+  const extent = rotation ? child(transform, 'ext') : undefined
+  const frameWidth = rotation ? scaledFrame?.width ?? finite(attribute(extent, 'cx', true)) : undefined
+  const frameHeight = rotation ? scaledFrame?.height ?? finite(attribute(extent, 'cy', true)) : undefined
+  return {
+    ...base, kind: 'image', mediaPath, mediaType,
+    opacity: blipOpacity(attribute(child(blip, 'alphaModFix'), 'amt', true)),
+    crop: pictureCrop(fill), rotation: rotation ? rotation / 60_000 : undefined,
+    flipH: ['1', 'true'].includes(attribute(transform, 'flipH', true) ?? ''),
+    flipV: ['1', 'true'].includes(attribute(transform, 'flipV', true) ?? ''),
+    frameWidth: frameWidth && frameWidth > 0 ? frameWidth : undefined,
+    frameHeight: frameHeight && frameHeight > 0 ? frameHeight : undefined,
+  }
+}
+
 type GroupBox = { x: number; y: number; width: number; height: number }
-const groupTransform = (node: XmlElement) => child(child(node, 'grpSpPr'), 'xfrm')
+const groupTransform = (node: XmlElement) => child(drawingMainPart(node, 'grpSpPr'), 'xfrm')
 const transformValue = (transform: XmlElement | undefined, part: string, key: string) => integer(attribute(child(transform, part), key))
 const supportedGroupTransform = (transform: XmlElement | undefined) =>
   !finite(attribute(transform, 'rot')) && !trueAttribute(transform, 'flipH') && !trueAttribute(transform, 'flipV')
 const groupChildTags = new Set(['grpSp', 'sp', 'cxnSp', 'pic', 'graphicFrame'])
 
-function readGroupShapes(
+function readGroupVisuals(
   group: XmlElement, base: VisualBase, theme: readonly string[], references: DrawingReferences,
 ): WorkbookVisualObject[] {
-  const shapeVisuals: WorkbookVisualObject[] = []
+  const groupVisuals: WorkbookVisualObject[] = []
   const rootTransform = groupTransform(group)
   const width = transformValue(rootTransform, 'ext', 'cx')
   const height = transformValue(rootTransform, 'ext', 'cy')
-  if (width === undefined || height === undefined || width <= 0 || height <= 0) return shapeVisuals
+  if (width === undefined || height === undefined || width <= 0 || height <= 0) return groupVisuals
   let ordinal = 0
   function expand(node: XmlElement, box: GroupBox, depth: number) {
     const transform = groupTransform(node)
@@ -712,12 +747,15 @@ function readGroupShapes(
     const scaleX = extentX > 0 ? box.width / extentX : 1
     const scaleY = extentY > 0 ? box.height / extentY : 1
     for (const entry of children(node)) {
-      if (!groupChildTags.has(entry.tag)) continue
-      const nonvisual = first(entry, 'cNvPr')
+      if (!groupChildTags.has(entry.tag) || !isSheetDrawingChild(node, entry)) continue
+      const picProperties = entry.tag === 'pic' ? sheetDrawingChild(entry, 'nvPicPr') : undefined
+      const nonvisual = entry.tag === 'pic'
+        ? picProperties && sheetDrawingChild(picProperties, 'cNvPr')
+        : first(entry, 'cNvPr')
       if (trueAttribute(nonvisual, 'hidden')) continue
       const nested = entry.tag === 'grpSp'
       const transform = nested ? groupTransform(entry)
-        : entry.tag === 'graphicFrame' ? child(entry, 'xfrm') : child(child(entry, 'spPr'), 'xfrm')
+        : entry.tag === 'graphicFrame' ? sheetDrawingChild(entry, 'xfrm') : child(drawingMainPart(entry, 'spPr'), 'xfrm')
       const x = transformValue(transform, 'off', 'x')
       const y = transformValue(transform, 'off', 'y')
       const width = transformValue(transform, 'ext', 'cx')
@@ -734,7 +772,7 @@ function readGroupShapes(
         continue
       }
       const id = `${base.id}-${++ordinal}`
-      if (entry.tag !== 'sp' && entry.tag !== 'cxnSp') continue
+      if (entry.tag === 'graphicFrame') continue
       const { fromRow, fromColumn, fromRowOffset, fromColumnOffset } = base.anchor
       const anchor = {
         fromRow, fromColumn,
@@ -746,16 +784,19 @@ function readGroupShapes(
       }
       if (![anchor.fromRowOffset, anchor.fromColumnOffset, anchor.toRowOffset, anchor.toColumnOffset].every(Number.isSafeInteger)) continue
       // The save gateway edits physical anchors. A child has no independent anchor.
-      const shape = readShape(entry, {
+      const childBase = {
         id, sheetId: base.sheetId, drawingPath: base.drawingPath, anchor,
         name: attribute(nonvisual, 'name'), altText: attribute(nonvisual, 'descr') || undefined,
         hyperlink: drawingHyperlink(relationshipAttribute(child(nonvisual, 'hlinkClick'), 'id'), references.relationships),
-      }, theme, references)
-      if (shape) shapeVisuals.push(shape)
+      }
+      const visual = entry.tag === 'pic'
+        ? readPicture(entry, childBase, references, childBox)
+        : readShape(entry, childBase, theme, references)
+      if (visual) groupVisuals.push(visual)
     }
   }
   expand(group, { x: 0, y: 0, width, height }, 0)
-  return shapeVisuals
+  return groupVisuals
 }
 
 async function readRelationships(read: ZipText, part: string): Promise<Relationships> {
@@ -794,7 +835,7 @@ function previewPath(
   return path && visualMediaType(path) && hasPart(path) ? path : undefined
 }
 
-function shapeSvgEmbeds(blip: XmlElement | undefined): (string | undefined)[] {
+function svgBlipEmbeds(blip: XmlElement | undefined): (string | undefined)[] {
   return children(child(blip, 'extLst')).filter(extension => extension.tag === 'ext').flatMap(extension =>
     // Only inspect the direct extension payload. The ordinary DrawingML
     // child reader intentionally omits non-DrawingML namespaces.
@@ -1009,9 +1050,9 @@ export async function readWorkbookVisuals(
         const altText = nonvisual?.attributes.get('descr') || undefined
         const hyperlink = drawingHyperlink(drawingRelationshipAttribute(drawingMainChild(nonvisual, 'hlinkClick'), 'id'), drawingRels)
         const base = { id, sheetId, anchor, name, drawingPath, drawingIndex, editAs, altText, ...(hyperlink ? { hyperlink } : {}) }
-        const group = child(entry, 'grpSp')
+        const group = sheetDrawingChild(entry, 'grpSp')
         if (group) {
-          for (const shape of readGroupShapes(group, base, theme, references)) result.push(shape)
+          for (const shape of readGroupVisuals(group, base, theme, references)) result.push(shape)
           continue
         }
         const graphicFrame = readDrawingGraphicFrame(slot.element)
@@ -1027,30 +1068,9 @@ export async function readWorkbookVisuals(
           if (shape) result.push(shape)
           continue
         }
-        const picture = readDrawingPicture(slot.element)
-        if (!picture?.blip) continue
-        const embed = drawingRelationshipAttribute(picture.blip, 'embed')
-        const primary = previewPath(drawingRels, drawingPath, embed, hasPart)
-        const mediaPath = primary?.startsWith('xl/media/') ? primary : svgEmbedsPreview(
-          pictureExtensionBlips(picture.blip).map(blip => drawingRelationshipAttribute(blip, 'embed')),
-          references,
-        )
-        if (!mediaPath) continue
-        const mediaType = visualMediaType(mediaPath)
-        if (!mediaType || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&
-          anchor.fromRowOffset === anchor.toRowOffset && anchor.fromColumnOffset === anchor.toColumnOffset)) continue
-        const xfrm = drawingMainChild(drawingChild(picture.picture, 'spPr'), 'xfrm')
-        const rotation = finite(xfrm?.attributes.get('rot'))
-        const frame = rotation ? drawingMainChild(xfrm, 'ext') : undefined
-        const frameWidth = finite(frame?.attributes.get('cx'))
-        const frameHeight = finite(frame?.attributes.get('cy'))
-        result.push({ ...base, kind: 'image', mediaPath, mediaType,
-          opacity: blipOpacity(drawingMainChild(picture.blip, 'alphaModFix')?.attributes.get('amt')),
-          crop: pictureCrop(picture.fill), rotation: rotation ? rotation / 60_000 : undefined,
-          flipH: ['1', 'true'].includes(xfrm?.attributes.get('flipH') ?? ''), flipV: ['1', 'true'].includes(xfrm?.attributes.get('flipV') ?? ''),
-          frameWidth: frameWidth && frameWidth > 0 ? frameWidth : undefined,
-          frameHeight: frameHeight && frameHeight > 0 ? frameHeight : undefined,
-        })
+        const picture = sheetDrawingChild(entry, 'pic')
+        const visual = picture && readPicture(picture, base, references)
+        if (visual) result.push(visual)
       }
     }
     for (const [shapeId, object] of oleObjects) {

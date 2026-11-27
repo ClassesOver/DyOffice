@@ -883,7 +883,7 @@ test('saves layer order across reorder and removal commands', { timeout: 120_000
   assert.equal((await textOf(await JSZip.loadAsync(bytes))(drawingPath)).split(comment).length, 4)
 })
 
-test('places nested group shapes and straight connectors with read-only child locators', async () => {
+test('places nested group shapes and straight connectors with read-only child locators', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   await appendDrawing(zip, `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>1000</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>2000</xdr:rowOff></xdr:from>
     <xdr:ext cx="400000" cy="240000"/><xdr:grpSp>
@@ -899,12 +899,26 @@ test('places nested group shapes and straight connectors with read-only child lo
         <xdr:cxnSp><xdr:nvCxnSpPr><xdr:cNvPr id="94" name="Straight line"/></xdr:nvCxnSpPr>
           <xdr:spPr><a:xfrm flipH="1"><a:off x="70000" y="70000"/><a:ext cx="20000" cy="0"/></a:xfrm><a:prstGeom prst="straightConnector1"/><a:ln><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ln></xdr:spPr>
         </xdr:cxnSp>
+        <xdr:pic xmlns:r="${relationships.slice(0, -1)}">
+          <xdr:nvPicPr><xdr:cNvPr id="95" name="Grouped logo" descr="Group artwork"/></xdr:nvPicPr>
+          <xdr:blipFill><a:blip><a:alphaModFix amt="60000"/><a:extLst><a:ext uri="svg">
+            <s:svgBlip xmlns:s="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="vector"/>
+          </a:ext></a:extLst></a:blip><a:srcRect l="10000"/></xdr:blipFill>
+          <xdr:spPr><a:xfrm rot="5400000" flipV="1"><a:off x="65000" y="65000"/><a:ext cx="20000" cy="10000"/></a:xfrm></xdr:spPr>
+        </xdr:pic>
       </xdr:grpSp>
     </xdr:grpSp><xdr:clientData/></xdr:oneCellAnchor>`)
+  const mediaPath = 'xl/media/group.svg'
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+  zip.file(mediaPath, svg)
+  zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>',
+    `<Relationship Id="vector" Type="${relationships}image" Target="../media/group.svg"/></Relationships>`))
+  zip.file('[Content_Types].xml', (await textOf(zip)('[Content_Types].xml')).replace('</Types>',
+    '<Default Extension="svg" ContentType="image/svg+xml"/></Types>'))
   const theme = ['#FFFFFF', '#000000', '#EEEEEE', '#111111', '#4472C4']
   const visuals = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet, theme))
-  assert.deepEqual(visuals.map(({ id }) => id), ['visual-1', 'visual-2-1', 'visual-2-2'])
-  const [, ellipse, line] = visuals
+  assert.deepEqual(visuals.map(({ id }) => id), ['visual-1', 'visual-2-1', 'visual-2-2', 'visual-2-3'])
+  const [, ellipse, line, picture] = visuals
   assert.equal(ellipse.kind, 'shape')
   assert.equal(ellipse.name, 'Ellipse')
   assert.equal(ellipse.shapeType, 'ellipse')
@@ -924,5 +938,35 @@ test('places nested group shapes and straight connectors with read-only child lo
   assert.deepEqual(line.anchor, {
     fromRow: 2, fromColumn: 1, fromRowOffset: 92000, fromColumnOffset: 241000,
     toRow: 2, toColumn: 1, toRowOffset: 92000, toColumnOffset: 281000,
+  })
+  assert.equal(picture.kind, 'image')
+  assert.equal(picture.name, 'Grouped logo')
+  assert.equal(picture.altText, 'Group artwork')
+  assert.equal(picture.drawingIndex, undefined)
+  assert.equal(picture.mediaPath, mediaPath)
+  assert.deepEqual([picture.rotation, picture.flipV, picture.frameWidth, picture.frameHeight], [90, true, 40000, 10000])
+  assert.equal(picture.opacity, 0.6)
+  assert.deepEqual(picture.crop, { left: 0.1, top: 0, right: 0, bottom: 0 })
+  assert.deepEqual(picture.anchor, {
+    fromRow: 2, fromColumn: 1, fromRowOffset: 87000, fromColumnOffset: 231000,
+    toRow: 2, toColumn: 1, toRowOffset: 97000, toColumnOffset: 271000,
+  })
+
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-group-image-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+  const request = sheetsSaveRequest(picture.sheetId, [{ row: 1, column: 0, value: 22, writeValue: true }])
+  const saved = (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+  const savedPicture = (await runtime.sheetsNative.inspect(saved)).visuals.find(visual => visual.id === picture.id)
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(picture)))
+  assert.deepEqual(await runtime.sheetsNative.readMedia(saved, picture.id), {
+    mediaType: 'image/svg+xml', base64: Buffer.from(svg).toString('base64'),
   })
 })
