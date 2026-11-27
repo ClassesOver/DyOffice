@@ -1294,8 +1294,8 @@ fn multi_level_categories_use_the_innermost_level_only() {
 }
 
 #[test]
-fn reads_series_line_width_in_px() {
-    let body = r#"<c:plotArea><c:lineChart><c:ser><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></c:spPr></c:ser><c:ser/></c:lineChart></c:plotArea>"#;
+fn reads_series_line_width_in_px_and_preset_dashes() {
+    let body = r#"<c:plotArea><c:lineChart><c:ser><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="dashDot"/></a:ln></c:spPr></c:ser><c:ser/></c:lineChart></c:plotArea>"#;
     let chart = metadata(body);
     // 12700 EMU = 1pt = 4/3 px.
     let width = chart.series[0].line_width.unwrap();
@@ -1304,6 +1304,8 @@ fn reads_series_line_width_in_px() {
     let json = serde_json::to_value(&chart).unwrap();
     assert!(json["series"][0].get("lineWidth").is_some());
     assert!(json["series"][1].get("lineWidth").is_none());
+    assert_eq!(json["series"][0]["lineDash"], "dashDot");
+    assert!(json["series"][1].get("lineDash").is_none());
 }
 
 #[test]

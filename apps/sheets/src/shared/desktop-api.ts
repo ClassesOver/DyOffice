@@ -572,6 +572,7 @@ const visualObjectSchema = z
               lineColor: z.string().optional(),
               /// spPr/a:ln/@w in CSS px (EMU / 12700 pt · 96/72).
               lineWidth: z.number().finite().optional(),
+              lineDash: z.string().optional(),
               smooth: z.boolean().optional(),
               /// c:marker symbol — "none" hides scatter/line markers.
               marker: z.string().optional(),

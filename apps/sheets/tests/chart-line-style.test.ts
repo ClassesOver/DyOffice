@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-import { BarChart, LineChart } from '../src/renderer/WorkbookVisuals'
+import { BarChart, LineChart, RadarChart } from '../src/renderer/WorkbookVisuals'
 
 const series = {
   name: 'Revenue', categories: ['Q1', 'Q2', 'Q3'], values: [3, 7, 5],
-  lineWidth: 4, lineColor: '#10253F', smooth: true,
+  lineWidth: 4, lineColor: '#10253F', lineDash: 'dash', smooth: true,
 }
 
 describe('smooth line series', () => {
@@ -15,6 +15,7 @@ describe('smooth line series', () => {
       seriesList: [series], selectedEl: { kind: 'series', seriesIndex: 0 },
     }))
     expect(markup).toMatch(/<path d="M[^"]+C[^"]+" fill="none" stroke="#10253F" stroke-width="6"/)
+    expect(markup).toContain('stroke-dasharray="24 18"')
   })
 
   it('honors smoothing and keeps separate gaps in column and line combos', () => {
@@ -25,5 +26,11 @@ describe('smooth line series', () => {
       isHorizontal: false, dispBlanksAs: 'gap', secondaryAxis: { min: 0, max: 10 },
     }))
     expect(markup.match(/<path d="M[^"]+C[^"]+" fill="none" stroke="#10253F"/g) ?? []).toHaveLength(2)
+    expect(markup.match(/stroke-dasharray="16 12"/g) ?? []).toHaveLength(2)
+  })
+
+  it('applies the preset to the radar series outline', () => {
+    const markup = renderToStaticMarkup(createElement(RadarChart, { seriesList: [series] }))
+    expect(markup).toMatch(/<polygon[^>]+stroke="#10253F" stroke-width="4" stroke-dasharray="16 12"/)
   })
 })

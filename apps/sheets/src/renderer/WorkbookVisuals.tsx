@@ -1631,6 +1631,16 @@ const LINE_DASH_PATTERNS: Record<string, readonly number[]> = {
   sysDot: [1, 1],
 }
 
+function presetDashPattern(preset: string | undefined): readonly number[] | undefined {
+  return preset !== undefined && Object.hasOwn(LINE_DASH_PATTERNS, preset)
+    ? LINE_DASH_PATTERNS[preset]
+    : undefined
+}
+
+function chartDashArray(preset: string | undefined, width: number): string | undefined {
+  return presetDashPattern(preset)?.map((unit) => unit * width).join(' ')
+}
+
 /// DrawingML gradient angle (degrees clockwise, 0 = left-to-right) to SVG
 /// linearGradient endpoints in objectBoundingBox units. The bounding-box
 /// stretch matches lin@scaled gradients closely enough for cell-anchored
@@ -1740,7 +1750,7 @@ function ShapeVisual({
     transforms.push(`scale(${visual.flipH ? -1 : 1}, ${visual.flipV ? -1 : 1})`)
   }
   const strokeWidth = visual.lineWidth ?? 1
-  let dashPattern = visual.lineDash ? LINE_DASH_PATTERNS[visual.lineDash] : undefined
+  let dashPattern = presetDashPattern(visual.lineDash)
   // Round-capped dot patterns render as true circles via zero-length dashes:
   // the stretched viewBox distorts dash lengths but not the cap circle.
   if (dashPattern && visual.lineCap === 'rnd' && dashPattern[0] === 1 && dashPattern.length === 2) {
@@ -3603,6 +3613,7 @@ export function BarChart({
     return {
       stroke,
       width: series.lineWidth ?? 3,
+      lineDash: series.lineDash,
       smooth: series.smooth,
       markerColor: stroke ?? seriesColor(series, paletteIndex),
       segments: lineSegments(
@@ -3770,6 +3781,7 @@ export function BarChart({
                 smooth={line.smooth}
                 stroke={stroke}
                 strokeWidth={line.width}
+                lineDash={line.lineDash}
               />
             ))}
           {symbol !== null &&
@@ -4507,6 +4519,7 @@ export function LineChart({
               280 - Math.max(0, Math.min(1, ((values[index] ?? 0) - bounds.min) / (span || 1))) * 240,
             ])}
             smooth={series.smooth}
+            lineDash={series.lineDash}
             stroke={stroke}
             strokeWidth={
               selectedEl?.kind === 'series' && selectedEl.seriesIndex === seriesIndex
@@ -4862,7 +4875,7 @@ function AreaChart({
 
 /// Spider chart: one spoke per category, rings at quarter steps, one closed
 /// polygon per series.
-function RadarChart({
+export function RadarChart({
   seriesList,
   dataLabels,
   categoryFormat,
@@ -4936,6 +4949,8 @@ function RadarChart({
       })}
       {seriesList.map((series, seriesIndex) => {
         const isSel = selectedEl?.kind === 'series' && selectedEl.seriesIndex === seriesIndex
+        const width = series.lineWidth ?? 2.5
+        const strokeWidth = isSel ? Math.max(4, width + 1.5) : width
         return (
           <polygon
             key={seriesIndex}
@@ -4943,9 +4958,8 @@ function RadarChart({
             fill={seriesColor(series, seriesIndex)}
             fillOpacity="0.18"
             stroke={isSel ? '#107C41' : (lineStroke(series, seriesIndex) ?? 'none')}
-            strokeWidth={
-              isSel ? Math.max(4, (series.lineWidth ?? 2.5) + 1.5) : (series.lineWidth ?? 2.5)
-            }
+            strokeWidth={strokeWidth}
+            strokeDasharray={chartDashArray(series.lineDash, strokeWidth)}
             onClick={
               onElement
                 ? (event) => {
@@ -4997,14 +5011,15 @@ function smoothChartPath(points: readonly (readonly [number, number])[]): string
   return path
 }
 
-function SeriesStroke({ points, smooth, stroke, strokeWidth, onClick }: {
+function SeriesStroke({ points, smooth, stroke, strokeWidth, lineDash, onClick }: {
   readonly points: readonly (readonly [number, number])[]
   readonly smooth?: boolean | undefined
   readonly stroke: string
   readonly strokeWidth: number
+  readonly lineDash?: string | undefined
   readonly onClick?: React.MouseEventHandler<SVGElement> | undefined
 }): React.JSX.Element {
-  const style = { fill: 'none', stroke, strokeWidth, onClick }
+  const style = { fill: 'none', stroke, strokeWidth, strokeDasharray: chartDashArray(lineDash, strokeWidth), onClick }
   return smooth && points.length > 2
     ? <path d={smoothChartPath(points)} {...style} />
     : <polyline points={points.map((point) => point.join(',')).join(' ')} {...style} />
@@ -5095,6 +5110,7 @@ export function ScatterChart({
       smooth: series.smooth ?? styleWantsSmooth,
       stroke,
       strokeWidth: series.lineWidth ?? 2,
+      lineDash: series.lineDash,
       onClick: onElement ? (event: React.MouseEvent<SVGElement>) => {
         event.stopPropagation()
         onElement({ kind: 'series', seriesIndex })

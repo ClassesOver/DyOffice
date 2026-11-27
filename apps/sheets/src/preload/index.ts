@@ -4344,6 +4344,7 @@ function parseChart(input: unknown): NonNullable<WorkbookVisualObject['chart']> 
       !isOptionalFiniteNumber(entry.explosionPct) ||
       !isOptionalString(entry.lineColor) ||
       !isOptionalFiniteNumber(entry.lineWidth) ||
+      !isOptionalString(entry.lineDash) ||
       (entry.smooth !== undefined && typeof entry.smooth !== 'boolean') ||
       !isOptionalString(entry.marker) ||
       !isOptionalString(entry.plot) ||
@@ -4373,6 +4374,7 @@ function parseChart(input: unknown): NonNullable<WorkbookVisualObject['chart']> 
       ...(pointExplosions === undefined ? {} : { pointExplosions }),
       ...(entry.lineColor === undefined ? {} : { lineColor: entry.lineColor }),
       ...(entry.lineWidth === undefined ? {} : { lineWidth: entry.lineWidth }),
+      ...(entry.lineDash === undefined ? {} : { lineDash: entry.lineDash }),
       ...(entry.smooth === undefined ? {} : { smooth: entry.smooth }),
       ...(entry.marker === undefined ? {} : { marker: entry.marker }),
       ...(entry.plot === undefined ? {} : { plot: entry.plot }),

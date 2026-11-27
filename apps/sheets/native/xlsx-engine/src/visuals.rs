@@ -212,6 +212,9 @@ pub struct ChartSeries {
     /// spPr/a:ln/@w converted from EMU to CSS px (w / 12700 pt · 96/72).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_width: Option<f64>,
+    /// spPr/a:ln/a:prstDash/@val.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_dash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smooth: Option<bool>,
     /// c:marker/c:symbol — "none" hides scatter/line markers.

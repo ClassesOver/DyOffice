@@ -42,6 +42,14 @@ describe('scatter series styling', () => {
     expect(chart('smooth', false)).toContain('<polyline')
   })
 
+  it('renders preset dashes on straight scatter strokes and treats unknown presets as solid', () => {
+    const chart = (lineDash: string) => renderToStaticMarkup(createElement(ScatterChart, {
+      scatterStyle: 'line', seriesList: [{ ...series, lineDash, lineWidth: 4 }],
+    }))
+    expect(chart('dashDot')).toContain('stroke-dasharray="16 12 4 12"')
+    expect(chart('constructor')).not.toContain('stroke-dasharray')
+  })
+
   it('separates gaps, spans missing cells, and draws zero-valued points when requested', () => {
     const sparse = { ...series, categories: ['1', '2', '3', '4', '5'], values: [3, 5, 0, 2, 4], blanks: [2] }
     const chart = (dispBlanksAs: 'gap' | 'span' | 'zero') => renderToStaticMarkup(createElement(ScatterChart, {

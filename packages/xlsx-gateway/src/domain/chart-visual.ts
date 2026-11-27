@@ -55,6 +55,8 @@ export interface ChartSeriesVisualState {
   lineColor?: string | undefined
   /// spPr/a:ln/@w in CSS px (EMU / 12700 pt · 96/72).
   lineWidth?: number | undefined
+  /// spPr/a:ln/a:prstDash/@val.
+  lineDash?: string | undefined
   smooth?: boolean | undefined
   /// c:marker symbol; "none" hides scatter/line markers.
   marker?: string | undefined

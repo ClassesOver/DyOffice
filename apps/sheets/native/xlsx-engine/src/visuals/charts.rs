@@ -808,6 +808,10 @@ pub(crate) fn parse_chart_series(
         .and_then(|ln| ln.attribute("w"))
         .and_then(|value| value.parse::<f64>().ok())
         .map(|emu| emu / 12700.0 * (96.0 / 72.0));
+    let line_dash = line
+        .and_then(|ln| direct_child(ln, "prstDash"))
+        .and_then(|dash| dash.attribute("val"))
+        .map(ToOwned::to_owned);
     let smooth = boolean_child(series, "smooth").or_else(|| {
         series
             .parent()
@@ -845,6 +849,7 @@ pub(crate) fn parse_chart_series(
         point_explosions: (!point_explosions.is_empty()).then_some(point_explosions),
         line_color,
         line_width,
+        line_dash,
         smooth,
         marker,
         category_groups: category_node.and_then(category_groups),

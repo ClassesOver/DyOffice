@@ -411,6 +411,7 @@ function parseSeries(series: XmlElement, plot: XmlElement, index: number, theme:
     ...(pointExplosions.length ? { pointExplosions } : {}),
     lineColor: child(stroke, 'noFill') && !/^(line|area)3DChart$/.test(plot.tag) ? 'none' : color(stroke, theme),
     lineWidth: width === undefined ? undefined : width / 9525,
+    lineDash: val(stroke, 'prstDash'),
     smooth: flag(child(series, 'smooth')) ?? flag(child(plot, 'smooth')),
     marker: val(child(series, 'marker'), 'symbol'),
     plot: flatPlot(plot.tag), dataLabels: labelMode(labels ?? child(plot, 'dLbls')),
