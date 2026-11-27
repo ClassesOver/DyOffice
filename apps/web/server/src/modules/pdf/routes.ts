@@ -1,8 +1,7 @@
 import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
+import type { FastifyInstance } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
-import { cookies, type createCsrfService } from '../auth/csrf.ts'
-import { authError } from '../auth/sessions.ts'
+import type { createCsrfService } from '../auth/csrf.ts'
 import { uuidSchema, fileParamsSchema, emptyQuerySchema } from '../files/http-schema.ts'
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import { withDisconnect } from '../request-signal.ts'
@@ -73,8 +72,7 @@ export function registerPdfRoutes(
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
-      if (!editorFileToken(request)) throw authError(403)
-      await authenticateEditorFile(request,sessions,csrf,true)
+      await authenticateEditorFile(request,sessions,csrf,true,403)
       if (binaryUpload(request.routeOptions.url)) await admission.admit(request, reply, { waitMs: 10_000 })
       if (request.routeOptions.url===signaturesQuery) await admission.admit(request,reply)
     })

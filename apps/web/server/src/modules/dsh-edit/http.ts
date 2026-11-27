@@ -12,13 +12,21 @@ const nativePath=/^\/native-(docx|xlsx|pptx|pdf)\/(?:index\.html)?$/
 const requestTokens=new WeakMap<FastifyRequest,string>()
 export const editorFileToken=(request:FastifyRequest)=>requestTokens.get(request)??cookies(request).session??''
 
-export async function authenticateEditorFile(request:FastifyRequest,sessions:SessionService,csrf:ReturnType<typeof createCsrfService>,mutation:boolean) {
- if(requestTokens.has(request))return
- const token=editorFileToken(request)
- if(!token)throw authError()
+export async function authenticateEditorFile(
+ request:FastifyRequest,
+ sessions:SessionService,
+ csrf:ReturnType<typeof createCsrfService>,
+ mutation:boolean,
+ missingStatus:401|403=401,
+) {
+ const guestToken=requestTokens.get(request)
+ if(guestToken!==undefined)return guestToken
+ const token=cookies(request).session
+ if(!token)throw authError(missingStatus)
  csrf.originCheck(request,mutation)
  if(mutation)csrf.requireSession(request,token)
  await sessions.authenticate(token)
+ return token
 }
 
 const common=new Set([

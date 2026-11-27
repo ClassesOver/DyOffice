@@ -1,4 +1,4 @@
-import {editorFileToken} from '../dsh-edit/http.ts'
+import {editorFileToken as token} from '../dsh-edit/http.ts'
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import type { LeaseService } from '../leases/service.ts'
 import type { RevisionService } from './service.ts'
@@ -12,7 +12,6 @@ export type TransferRunner = <T>(request: FastifyRequest, reply: FastifyReply, o
 const epoch = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } as const
 const editor = { editorId: id }, base = { baseRevision: id, leaseEpoch: epoch, ...editor }
 const object = (properties: object, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, required, properties })
-const token = (request: FastifyRequest) => editorFileToken(request)
 const fileId = (request: FastifyRequest) => (request.params as { id: string }).id
 export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions, transfer, wordCollaboration }: { leases: LeaseService; revisions: RevisionService; transfer: TransferRunner; wordCollaboration?: boolean }) {
   const wordVersion={type:'integer',minimum:0,maximum:2147483647}

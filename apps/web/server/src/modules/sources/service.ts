@@ -101,7 +101,9 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       await connection.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)", [tokenHash(token), String(transactions.sessionIdleMs)])
       policy = createSourceEgressPolicy(await readSourceEgressTargets(connection, principal.deploymentId), { allowUnlistedSql: true })
     }
-    return dbhub.bind(policy, [principal.deploymentId, principal.userId, row.source_id, row.version])
+    return row.kind === 'mysql' || row.kind === 'starrocks'
+      ? dbhub.bind(policy, [principal.deploymentId, principal.userId, row.source_id, row.version])
+      : policy
   }
   async function access<T>(token: string, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>): Promise<T> {
     return transactions.withPrincipalTransaction({ kind: 'session', token }, async (connection, principal) => {

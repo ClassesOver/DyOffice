@@ -14,11 +14,12 @@ import type { SqlRows } from './sql-types.ts'
 const DEFAULT_PACKAGE = '@bytebase/dbhub@2.1.0'
 export const DBHUB_STARTUP_TIMEOUT_MS = 30_000
 
-export function dbhubDsn(kind: SqlSourceKind, target: Awaited<ReturnType<SourceEgressPolicy['sql']>>): string {
-  // DBHub supports MySQL, and StarRocks exposes the MySQL wire protocol.
-  const scheme = kind === 'postgres' ? 'postgresql' : 'mysql'
+type DbhubSourceKind = Exclude<SqlSourceKind, 'postgres'>
+
+export function dbhubDsn(target: Awaited<ReturnType<SourceEgressPolicy['sql']>>): string {
+  // MySQL and StarRocks both use the MySQL wire protocol here.
   const tls = target.tls ? '' : '?ssl-mode=DISABLED'
-  return `${scheme}://${encodeURIComponent(target.username)}:${encodeURIComponent(target.password)}@${target.address.includes(':') ? `[${target.address}]` : target.address}:${target.port}/${encodeURIComponent(target.database)}${tls}`
+  return `mysql://${encodeURIComponent(target.username)}:${encodeURIComponent(target.password)}@${target.address.includes(':') ? `[${target.address}]` : target.address}:${target.port}/${encodeURIComponent(target.database)}${tls}`
 }
 
 export function dbhubConfig(maxRows: number, timeoutMs: number): string {
@@ -84,7 +85,7 @@ export function createDbhubRuntime() {
   }
 }
 
-async function openSession(dsn: string, config: string, kind: SqlSourceKind, timeoutMs: number): Promise<Session> {
+async function openSession(dsn: string, config: string, kind: DbhubSourceKind): Promise<Session> {
   const configPath = join(tmpdir(), `dyoffice-dbhub-${randomUUID()}.toml`)
   const client = new Client({ name: 'dyoffice-dbhub-client', version: '1.0.0' })
   const close = async () => { try { await client.close() } finally { await rm(configPath, { force: true }) } }
@@ -101,11 +102,11 @@ async function openSession(dsn: string, config: string, kind: SqlSourceKind, tim
   } catch (error) { await close(); throw error }
 }
 
-async function callDbhub(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, tool: DbhubTool, args: Record<string, unknown>, execution: SourceExecution): Promise<unknown> {
+async function callDbhub(policy: SourceEgressPolicy, kind: DbhubSourceKind, secret: string, tool: DbhubTool, args: Record<string, unknown>, execution: SourceExecution): Promise<unknown> {
   const target = await policy.sql(kind, secret)
   const timeoutMs = execution.statementTimeoutMs ?? 5000
-  const config = dbhubConfig(execution.maxRows, timeoutMs), dsn = dbhubDsn(kind, target)
-  const start = () => openSession(dsn, config, kind, timeoutMs)
+  const config = dbhubConfig(execution.maxRows, timeoutMs), dsn = dbhubDsn(target)
+  const start = () => openSession(dsn, config, kind)
   const run = async ({ client }: Session) => {
     if (!client.transport) throw new Error('DBHub disconnected')
     const result = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: timeoutMs + 4000 })
@@ -129,13 +130,13 @@ async function callDbhub(policy: SourceEgressPolicy, kind: SqlSourceKind, secret
   }
 }
 
-export async function queryDbhubSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: unknown, execution: SourceExecution, scope?: SqlTableScope): Promise<SqlRows> {
+export async function queryDbhubSource(policy: SourceEgressPolicy, kind: DbhubSourceKind, secret: string, sql: unknown, execution: SourceExecution, scope?: SqlTableScope): Promise<SqlRows> {
   const normalized = validateReadOnlySql(sql, kind, scope)
   return statementsToRows(await callDbhub(policy, kind, secret, 'execute_sql', { sql: normalized }, execution))
 }
 
 /** Use DBHub's schema search tool for metadata; it avoids connector-specific catalog SQL. */
-export async function searchDbhubObjects(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, args: Record<string, unknown>, execution: SourceExecution): Promise<Record<string, unknown>> {
+export async function searchDbhubObjects(policy: SourceEgressPolicy, kind: DbhubSourceKind, secret: string, args: Record<string, unknown>, execution: SourceExecution): Promise<Record<string, unknown>> {
   const payload = await callDbhub(policy, kind, secret, 'search_objects', args, execution)
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw sourceError(502)
   return payload as Record<string, unknown>
