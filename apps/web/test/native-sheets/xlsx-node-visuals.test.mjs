@@ -1040,6 +1040,52 @@ test('saves layer order across reorder and removal commands', { timeout: 120_000
   assert.equal((await textOf(await JSZip.loadAsync(bytes))(drawingPath)).split(comment).length, 4)
 })
 
+test('round-trips formatted plot labels while preserving series point overrides', async t => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const pointOverrides = '<c:dLbls><c:dLbl><c:idx val="0"/><c:showVal/></c:dLbl>' +
+    '<c:dLbl><c:idx val="1"/><c:delete/><c:showVal val="1"/></c:dLbl>' +
+    '<c:numFmt formatCode="0.00" sourceLinked="0"/><c:showVal val="0"/></c:dLbls>'
+  const chart = await textOf(zip)(chartPath)
+  zip.file(chartPath, chart.replace('<c:val>', pointOverrides + '<c:val>')
+    .replace('</c:ser>', `</c:ser>
+      <c:dLbls>
+        <c:dLbl><c:idx val="0"/><c:numFmt formatCode="0.000" sourceLinked="0"/></c:dLbl>
+        <c:numFmt formatCode="0.0" sourceLinked="0"/><c:showVal val="0"/>
+      </c:dLbls>`))
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-plot-labels-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const source = await zip.generateAsync({ type: 'nodebuffer' })
+  const inspect = async bytes => (await runtime.sheetsNative.inspect(bytes)).visuals[0].chart
+  const save = async (bytes, chartEdit) => {
+    const request = sheetsSaveRequest('sheet-1', [])
+    request.chartEdits = [{ chartPath, ...chartEdit }]
+    return (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+  }
+  const original = await inspect(source)
+  assert.equal(original.dataLabels, 'none')
+  assert.equal(original.dataLabelFormat, '0.0')
+  assert.deepEqual(original.series[0].pointLabels.map(({ index, showVal }) => [index, showVal]), [[0, true], [1, false]])
+  const edited = await save(source, { dataLabelPosition: 'inside-end', dataLabelFormat: '#,##0' })
+  const editedChart = await inspect(edited)
+  assert.equal(editedChart.dataLabelFormat, '#,##0')
+  assert.equal(editedChart.dataLabelPosition, 'inside-end')
+  const editedXml = await textOf(await JSZip.loadAsync(edited))(chartPath)
+  assert.ok(editedXml.includes('formatCode="0.000"'))
+  assert.equal(editedXml.match(/<c:dLbls[>\s]/g).length, 2)
+  const cleared = await save(edited, { dataLabels: 'none' })
+  assert.deepEqual((await inspect(cleared)).series[0].pointLabels, original.series[0].pointLabels)
+  const clearedXml = await textOf(await JSZip.loadAsync(cleared))(chartPath)
+  assert.ok(clearedXml.includes(pointOverrides))
+  assert.equal(clearedXml.match(/<c:dLbls[>\s]/g).length, 1)
+})
+
 test('rotates a nested group in the parent coordinate space', async () => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   await appendDrawing(zip, `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>

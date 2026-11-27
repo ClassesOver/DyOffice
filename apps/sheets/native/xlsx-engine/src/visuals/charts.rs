@@ -620,11 +620,7 @@ pub(crate) fn data_labels_node<'a>(document: &'a Document<'a>) -> Option<Node<'a
 }
 
 pub(crate) fn data_labels_mode(labels: Node<'_, '_>) -> &'static str {
-    let shown = |name: &str| {
-        direct_child(labels, name)
-            .and_then(|node| node.attribute("val"))
-            .is_some_and(|value| value == "1" || value == "true")
-    };
+    let shown = |name| label_flag(labels, name).unwrap_or(false);
     if shown("delete") {
         return "none";
     }
@@ -635,6 +631,12 @@ pub(crate) fn data_labels_mode(labels: Node<'_, '_>) -> &'static str {
         (_, true, _) => "value",
         _ => "none",
     }
+}
+
+fn label_flag(labels: Node<'_, '_>, name: &str) -> Option<bool> {
+    // CT_Boolean defaults to true for a present element without val.
+    direct_child(labels, name)
+        .map(|node| matches!(node.attribute("val"), None | Some("1" | "true")))
 }
 
 pub(crate) fn data_labels(document: &Document<'_>) -> Option<String> {
@@ -858,15 +860,10 @@ pub(crate) fn point_labels(labels: Node<'_, '_>) -> Vec<PointLabel> {
         .filter(|node| node.has_tag_name("dLbl"))
         .filter_map(|label| {
             let index = direct_child(label, "idx")?.attribute("val")?.parse().ok()?;
-            let flag = |name: &str| {
-                direct_child(label, name)
-                    .and_then(|node| node.attribute("val"))
-                    .map(|value| value == "1" || value == "true")
-            };
-            let show_val = if flag("delete") == Some(true) {
+            let show_val = if label_flag(label, "delete") == Some(true) {
                 Some(false)
             } else {
-                flag("showVal")
+                label_flag(label, "showVal")
             };
             let layout =
                 direct_child(label, "layout").and_then(|node| direct_child(node, "manualLayout"));

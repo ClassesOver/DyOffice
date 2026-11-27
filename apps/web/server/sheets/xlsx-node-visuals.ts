@@ -543,7 +543,9 @@ function readChart(xml: string, theme: readonly string[], lookup: SourceNumberFo
   const scatter = plots.find(plot => plot.tag === 'scatterChart')
   const labels = child(plots[0], 'dLbls')
   const seriesLabels = child(child(plots[0], 'ser'), 'dLbls')
-  const activeLabels = labels && (labelMode(labels) !== 'none' || !seriesLabels) ? labels : seriesLabels
+  const seriesMode = labelMode(seriesLabels)
+  const activeLabels = labelMode(labels) === 'none' && seriesMode !== undefined && seriesMode !== 'none'
+    ? seriesLabels : labels ?? seriesLabels
   const positions = { ctr: 'center', inEnd: 'inside-end', outEnd: 'outside-end' } as const
   const position = member(val(activeLabels, 'dLblPos'), ['ctr', 'inEnd', 'outEnd'] as const)
   const autoTitle = title && !flag(child(chart, 'autoTitleDeleted'))

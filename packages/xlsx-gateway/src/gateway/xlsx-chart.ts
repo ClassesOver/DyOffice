@@ -1,4 +1,5 @@
 import type { WorkbookChartEdit } from '../shared/edit-schemas.ts'
+import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 
 /// Surgical edits to a chart part (xl/charts/chartN.xml): title text, chart
 /// type conversion within the axis-based family, and series solid colors.
@@ -771,36 +772,44 @@ function setDataLabels(
   chartXml: string,
   mode: NonNullable<WorkbookChartEdit['dataLabels']>,
 ): string {
-  const plotPattern =
-    /<c:(barChart|lineChart|areaChart|pieChart|doughnutChart)>([\s\S]*?)(<\/c:\1>)/
-  const plotMatch = plotPattern.exec(chartXml)
-  if (!plotMatch?.[1] || plotMatch[2] === undefined) {
+  return rewritePlotLabels(chartXml, () => mode === 'none' ? '' : `<c:dLbls>${labelModeXml(mode)}</c:dLbls>`)
+}
+
+function labelModeXml(mode: NonNullable<WorkbookChartEdit['dataLabels']>): string {
+  return '<c:showLegendKey val="0"/>' +
+    `<c:showVal val="${mode === 'value' ? '1' : '0'}"/>` +
+    `<c:showCatName val="${mode === 'category-percent' ? '1' : '0'}"/>` +
+    '<c:showSerName val="0"/>' +
+    `<c:showPercent val="${mode === 'percent' || mode === 'category-percent' ? '1' : '0'}"/>` +
+    '<c:showBubbleSize val="0"/>'
+}
+
+function rewritePlotLabels(
+  chartXml: string,
+  rewrite: (existing: ChildElement | undefined) => string,
+): string {
+  const plot = /<c:(barChart|lineChart|areaChart|pieChart|doughnutChart)>([\s\S]*?)(<\/c:\1>)/.exec(chartXml)
+  if (!plot?.[1] || plot[2] === undefined) {
     throw new ChartEditError('This chart type does not support data labels.')
   }
-  const inner = plotMatch[2]
-  // The plot-level dLbls slot sits right after the last series.
-  const withoutLabels = inner.replace(/(<\/c:ser>)<c:dLbls>[\s\S]*?<\/c:dLbls>/, '$1')
-  let next = withoutLabels
-  if (mode !== 'none') {
-    const showValue = mode === 'value'
-    const showCategory = mode === 'category-percent'
-    const showPercent = mode === 'percent' || mode === 'category-percent'
-    const labels =
-      '<c:dLbls><c:showLegendKey val="0"/>' +
-      `<c:showVal val="${showValue ? '1' : '0'}"/>` +
-      `<c:showCatName val="${showCategory ? '1' : '0'}"/>` +
-      '<c:showSerName val="0"/>' +
-      `<c:showPercent val="${showPercent ? '1' : '0'}"/>` +
-      '<c:showBubbleSize val="0"/></c:dLbls>'
-    const lastSeriesEnd = withoutLabels.lastIndexOf('</c:ser>')
-    if (lastSeriesEnd === -1) throw new ChartEditError('This chart has no series to label.')
-    const insertAt = lastSeriesEnd + '</c:ser>'.length
-    next = withoutLabels.slice(0, insertAt) + labels + withoutLabels.slice(insertAt)
+  const inner = plot[2]
+  const children = childElements(inner)
+  const entries = children.filter(child => child.name === 'c:dLbls')
+  const existing = entries[0]
+  const replacement = rewrite(existing)
+  let next = inner
+  if (existing) {
+    // Remove stale duplicates from earlier saves, without touching series labels.
+    for (const entry of entries.reverse()) {
+      next = next.slice(0, entry.start) + (entry === existing ? replacement : '') + next.slice(entry.start + entry.xml.length)
+    }
+  } else if (replacement) {
+    const series = children.filter(child => child.name === 'c:ser').at(-1)
+    if (!series) throw new ChartEditError('This chart has no series to label.')
+    const at = series.start + series.xml.length
+    next = inner.slice(0, at) + replacement + inner.slice(at)
   }
-  return chartXml.replace(
-    plotPattern,
-    (_full, plot: string, _inner, close: string) => `<c:${plot}>${next}${close}`,
-  )
+  return spliceMatch(chartXml, plot, `<c:${plot[1]}>${next}${plot[3]}`)
 }
 
 const DLBL_POSITIONS: Record<NonNullable<WorkbookChartEdit['dataLabelPosition']>, string> = {
@@ -817,48 +826,32 @@ function setDataLabelDetail(
   position: WorkbookChartEdit['dataLabelPosition'],
   format: WorkbookChartEdit['dataLabelFormat'],
 ): string {
-  const plotPattern =
-    /<c:(barChart|lineChart|areaChart|pieChart|doughnutChart)>([\s\S]*?)(<\/c:\1>)/
-  const plotMatch = plotPattern.exec(chartXml)
-  if (!plotMatch?.[1] || plotMatch[2] === undefined) {
-    throw new ChartEditError('This chart type does not support data labels.')
-  }
-  const inner = plotMatch[2]
-  const numFmt =
-    format === undefined
-      ? ''
-      : `<c:numFmt formatCode="${escapeXmlAttribute(format)}" sourceLinked="0"/>`
-  const dLblPos = position === undefined ? '' : `<c:dLblPos val="${DLBL_POSITIONS[position]}"/>`
-  const existing = /<\/c:ser><c:dLbls>([\s\S]*?)<\/c:dLbls>/.exec(inner)
-  let next: string
-  if (existing && existing[1] !== undefined) {
-    let labels = existing[1]
-    if (numFmt !== '') {
-      const pattern = /<c:numFmt [^>]*\/>/
-      labels = pattern.test(labels) ? labels.replace(pattern, () => numFmt) : numFmt + labels
+  return rewritePlotLabels(chartXml, existing => {
+    let labels = existing?.inner ?? labelModeXml('value')
+    if (format !== undefined) {
+      labels = setPlotLabelChild(labels, 'c:numFmt',
+        `<c:numFmt formatCode="${escapeXmlAttribute(format)}" sourceLinked="0"/>`,
+        name => name !== 'c:dLbl' && name !== 'c:delete')
     }
-    if (dLblPos !== '') {
-      const pattern = /<c:dLblPos val="[^"]*"\/>/
-      if (pattern.test(labels)) {
-        labels = labels.replace(pattern, () => dLblPos)
-      } else {
-        const anchor = /<c:show|<c:separator[>/]/.exec(labels)
-        const at = anchor ? anchor.index : labels.length
-        labels = labels.slice(0, at) + dLblPos + labels.slice(at)
-      }
+    if (position !== undefined) {
+      labels = setPlotLabelChild(labels, 'c:dLblPos', `<c:dLblPos val="${DLBL_POSITIONS[position]}"/>`,
+        name => name.startsWith('c:show') || name === 'c:separator' || name === 'c:extLst')
     }
-    next = spliceMatch(inner, existing, `</c:ser><c:dLbls>${labels}</c:dLbls>`)
-  } else {
-    const lastSeriesEnd = inner.lastIndexOf('</c:ser>')
-    if (lastSeriesEnd === -1) throw new ChartEditError('This chart has no series to label.')
-    const at = lastSeriesEnd + '</c:ser>'.length
-    const created =
-      `<c:dLbls>${numFmt}${dLblPos}<c:showLegendKey val="0"/><c:showVal val="1"/>` +
-      '<c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/>' +
-      '<c:showBubbleSize val="0"/></c:dLbls>'
-    next = inner.slice(0, at) + created + inner.slice(at)
-  }
-  return spliceMatch(chartXml, plotMatch, `<c:${plotMatch[1]}>${next}${plotMatch[3]}`)
+    const opening = existing?.opening.replace(/\/>$/, '>') ?? '<c:dLbls>'
+    return `${opening}${labels}</c:dLbls>`
+  })
+}
+
+function setPlotLabelChild(
+  labels: string,
+  name: string,
+  replacement: string,
+  insertBefore: (name: string) => boolean,
+): string {
+  const children = childElements(labels)
+  const existing = children.find(child => child.name === name)
+  const start = existing?.start ?? children.find(child => insertBefore(child.name))?.start ?? labels.length
+  return labels.slice(0, start) + replacement + labels.slice(start + (existing?.xml.length ?? 0))
 }
 
 /// Sets or removes (null) the title of the first category/value axis.

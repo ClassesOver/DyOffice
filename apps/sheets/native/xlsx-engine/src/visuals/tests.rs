@@ -999,7 +999,7 @@ fn maps_data_labels_from_plot_or_series() {
         )
     };
     assert_eq!(
-        metadata(&plot("<c:dLbls><c:showVal val=\"1\"/></c:dLbls>"))
+        metadata(&plot("<c:dLbls><c:showVal/></c:dLbls>"))
             .data_labels
             .as_deref(),
         Some("value")
@@ -1019,7 +1019,7 @@ fn maps_data_labels_from_plot_or_series() {
         Some("category-percent")
     );
     assert_eq!(
-        metadata(&plot("<c:dLbls><c:delete val=\"1\"/></c:dLbls>"))
+        metadata(&plot("<c:dLbls><c:delete/><c:showVal val=\"1\"/></c:dLbls>"))
             .data_labels
             .as_deref(),
         Some("none")
@@ -1073,8 +1073,8 @@ fn reads_per_point_labels_and_series_label_mode() {
         r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="stacked"/>
 <c:ser><c:idx val="0"/><c:order val="0"/><c:dLbls>
 <c:dLbl><c:idx val="0"/><c:layout><c:manualLayout><c:x val="-3.5074946635165727E-3"/><c:y val="-0.31619290890264545"/></c:manualLayout></c:layout><c:dLblPos val="ctr"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/></c:dLbl>
-<c:dLbl><c:idx val="1"/><c:layout><c:manualLayout><c:x val="5.1730278597851252E-3"/><c:y val="-0.25438597272216551"/></c:manualLayout></c:layout><c:dLblPos val="ctr"/><c:showVal val="1"/></c:dLbl>
-<c:dLbl><c:idx val="2"/><c:delete val="1"/></c:dLbl>
+<c:dLbl><c:idx val="1"/><c:layout><c:manualLayout><c:x val="5.1730278597851252E-3"/><c:y val="-0.25438597272216551"/></c:manualLayout></c:layout><c:dLblPos val="ctr"/><c:showVal/></c:dLbl>
+<c:dLbl><c:idx val="2"/><c:delete/><c:showVal val="1"/></c:dLbl>
 <c:dLbl><c:idx val="3"/><c:layout><c:manualLayout><c:x val="0.01"/><c:y val="-0.1"/></c:manualLayout></c:layout></c:dLbl>
 <c:dLblPos val="ctr"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/></c:dLbls>
 <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>286.08</c:v></c:pt><c:pt idx="1"><c:v>243</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>

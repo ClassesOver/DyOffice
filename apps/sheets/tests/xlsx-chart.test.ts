@@ -1304,6 +1304,33 @@ describe('applyChartEdit data label position and format', () => {
     expect(cleared).not.toContain('dLblPos')
   })
 
+  it('edits only the plot labels when the chart has whitespace and point formatting', () => {
+    const source = BAR_CHART.replace(
+      '</c:ser>',
+      '</c:ser>\n<!-- plot labels -->\n<c:dLbls>' +
+        '<c:dLbl><c:idx val="0"/><c:numFmt formatCode="0.000" sourceLinked="0"/></c:dLbl>' +
+        '<c:numFmt formatCode="0.0" sourceLinked="0"/><c:showVal/></c:dLbls>',
+    )
+    const edited = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      dataLabelPosition: 'inside-end',
+      dataLabelFormat: '#,##0',
+    })
+    expect(edited.match(/<c:dLbls>/g)).toHaveLength(1)
+    expect(edited).toContain('<c:numFmt formatCode="0.000" sourceLinked="0"/></c:dLbl>')
+    expect(edited).toContain('<c:numFmt formatCode="#,##0" sourceLinked="0"/><c:dLblPos val="inEnd"/>')
+    const stale = source.replace(
+      /<c:dLbls>[\s\S]*?<\/c:dLbls>/,
+      '<c:dLbls />\n<c:dLbls><c:showVal/></c:dLbls>',
+    )
+    const removed = applyChartEdit(stale, {
+      chartPath: 'xl/charts/chart1.xml',
+      dataLabels: 'none',
+    })
+    expect(removed).not.toMatch(/<c:dLbls\b/)
+    expect(removed).toContain('<!-- plot labels -->')
+  })
+
   it('escapes quotes in the format code attribute', () => {
     const xml = applyChartEdit(BAR_CHART, {
       chartPath: 'xl/charts/chart1.xml',
