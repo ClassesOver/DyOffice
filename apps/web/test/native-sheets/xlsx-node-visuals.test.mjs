@@ -576,10 +576,39 @@ test('resolves drawing, chart, and picture relationships by their declared names
   ])
 })
 
+test('uses an internal SVG extension when a picture has no usable raster', async () => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const office = relationships.slice(0, -1)
+  const svg = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main'
+  const blip = (extensions, raster = '') => `<a:blip ${raster}><a:extLst><a:ext uri="svg">${extensions}</a:ext></a:extLst></a:blip>`
+  const pic = (name, image) => `<xdr:oneCellAnchor xmlns:p="${office}" xmlns:s="${svg}" xmlns:f="urn:foreign">
+    <xdr:from><xdr:col>1</xdr:col><xdr:row>3</xdr:row></xdr:from><xdr:ext cx="50" cy="60"/>
+    <xdr:pic><xdr:nvPicPr><xdr:cNvPr id="99" name="${name}"/></xdr:nvPicPr><xdr:blipFill>${image}</xdr:blipFill></xdr:pic>
+    </xdr:oneCellAnchor>`
+  await appendDrawing(zip,
+    pic('Vector', blip('<f:svgBlip p:embed="foreign"/><s:svgBlip p:embed="vector"/>', 'p:embed="missing"')) +
+    pic('Raster', blip('<s:svgBlip p:embed="vector"/>', 'p:embed="raster"')) +
+    pic('External vector', blip('<s:svgBlip p:embed="externalVector"/>')))
+  zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>', `
+    <Relationship Id="vector" Type="${relationships}image" Target="../media/vector.svg"/>
+    <Relationship Id="foreign" Type="${relationships}image" Target="../media/foreign.svg"/>
+    <Relationship Id="raster" Type="${relationships}image" Target="../media/raster.png"/>
+    <Relationship Id="missing" Type="${relationships}image" Target="../media/missing.png"/>
+    <Relationship Id="externalVector" Type="${relationships}image" Target="https://example.invalid/vector.svg" TargetMode="External"/>
+    </Relationships>`))
+  for (const filename of ['vector.svg', 'foreign.svg', 'raster.png']) zip.file('xl/media/' + filename, 'fixture')
+  const visuals = await readWorkbookVisuals(textOf(zip), sourceSheet, [], path => Boolean(zip.file(path)))
+  assert.deepEqual(visuals.filter(visual => visual.kind === 'image').map(visual => [visual.name, visual.mediaPath]), [
+    ['Vector', 'xl/media/vector.svg'], ['Raster', 'xl/media/raster.png'],
+  ])
+})
+
 test('opens shape picture fills and hyperlinks and preserves them through a cell save', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const fillPath = 'xl/media/shape-fill.png'
   const svgPath = 'xl/media/shape-fill.svg'
+  const vectorOnlyPath = 'xl/media/vector-only.svg'
+  const svgBytes = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
   const href = 'https://example.invalid/help?view=sheet&item=shape'
   const shape = (id, name, imageId, linkId) => `
@@ -604,25 +633,30 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
     .replace('</a:blip>', '<a:extLst><a:ext uri="svg">' +
       '<v:svgBlip xmlns:v="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="vector"/>' +
       '</a:ext></a:extLst></a:blip>')
+  const vectorOnly = standalone.replace('Filled shape', 'Vector-only fill').replace('id="81"', 'id="85"')
+    .replace('r:embed="fill"', '').replace('r:embed="vector"', 'r:embed="vectorOnly"')
   await appendDrawing(zip, anchor(1, standalone) + anchor(3, group) +
-    anchor(5, shape(84, 'External fill', 'external', 'fill')))
+    anchor(5, shape(84, 'External fill', 'external', 'fill')) + anchor(7, vectorOnly))
   zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>', `
     <Relationship Id="fill" Type="${relationships}image" Target="../media/shape-fill.png"/>
     <Relationship Id="vector" Type="${relationships}image" Target="../media/shape-fill.svg"/>
+    <Relationship Id="vectorOnly" Type="${relationships}image" Target="../media/vector-only.svg"/>
     <Relationship Id="external" Type="${relationships}image" Target="https://example.invalid/image.png" TargetMode="External"/>
     <Relationship Id="help" Type="${relationships}hyperlink" Target="${href.replace('&', '&amp;')}" TargetMode="External"/>
   </Relationships>`))
   zip.file(fillPath, Buffer.from(png, 'base64'))
-  zip.file(svgPath, '<svg xmlns="http://www.w3.org/2000/svg"/>')
+  zip.file(svgPath, svgBytes)
+  zip.file(vectorOnlyPath, svgBytes)
   zip.file('[Content_Types].xml', (await textOf(zip)('[Content_Types].xml')).replace('</Types>',
     '<Default Extension="png" ContentType="image/png"/><Default Extension="svg" ContentType="image/svg+xml"/></Types>'))
   const fillProperties = ({ fillColor, fillMediaPath, fillMediaType, opacity, hyperlink }) =>
     ({ fillColor, fillMediaPath, fillMediaType, opacity, hyperlink })
   const expected = { fillColor: 'none', fillMediaPath: fillPath, fillMediaType: 'image/png', opacity: 0.6, hyperlink: href }
   const visuals = await readWorkbookVisuals(textOf(zip), sourceSheet, [], path => Boolean(zip.file(path)))
-  const [, filled, grouped, external] = visuals
+  const [, filled, grouped, external, vector] = visuals
   assert.deepEqual(fillProperties(filled), expected)
   assert.deepEqual(fillProperties(grouped), expected)
+  assert.deepEqual(fillProperties(vector), { ...expected, fillMediaPath: vectorOnlyPath, fillMediaType: 'image/svg+xml' })
   assert.equal(grouped.drawingIndex, undefined)
   assert.deepEqual(fillProperties(external), fillProperties({ fillColor: '#112233' }))
 
@@ -638,6 +672,9 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
   const native = runtime.sheetsNative
   const bytes = await zip.generateAsync({ type: 'nodebuffer' })
   assert.deepEqual(await native.readMedia(bytes, filled.id), { mediaType: 'image/png', base64: png })
+  assert.deepEqual(await native.readMedia(bytes, vector.id), {
+    mediaType: 'image/svg+xml', base64: Buffer.from(svgBytes).toString('base64'),
+  })
   const request = sheetsSaveRequest('sheet-1', [{ row: 1, column: 0, value: 22, writeValue: true }])
   const saved = (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   const reopened = (await native.inspect(saved)).visuals.find(visual => visual.id === filled.id)

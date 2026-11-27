@@ -14,7 +14,7 @@ const CHART_NAMESPACES = new Set([
   'http://schemas.openxmlformats.org/drawingml/2006/chart',
   'http://purl.oclc.org/ooxml/drawingml/chart',
 ])
-const SVG_NS = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main'
+export const SVG_BLIP_NAMESPACE = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main'
 const MARKUP_COMPATIBILITY_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 const anchorNames = new Set(['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor'])
 const compatibilityBranches = new Set(['AlternateContent', 'Choice', 'Fallback'])
@@ -114,7 +114,7 @@ export function pictureExtensionBlips(blip: ScopedElement | undefined): ScopedEl
   return scopedChildren(list).filter(
     (extension) => extension.local === 'ext' && extension.namespace === list.namespace,
   ).flatMap(extension => scopedChildren(extension).filter(
-    (child) => child.local === 'svgBlip' && child.namespace === SVG_NS,
+    (child) => child.local === 'svgBlip' && child.namespace === SVG_BLIP_NAMESPACE,
   ))
 }
 

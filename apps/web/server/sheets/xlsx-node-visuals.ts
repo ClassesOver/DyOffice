@@ -3,7 +3,7 @@ import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/share
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import {
-  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingMainName, readDrawingGraphicFrame, readDrawingPicture,
+  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingMainName, pictureExtensionBlips, readDrawingGraphicFrame, readDrawingPicture, SVG_BLIP_NAMESPACE,
 } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
 import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
@@ -657,7 +657,8 @@ function readShape(
   const frameWidth = finite(attribute(extent, 'cx'))
   const frameHeight = finite(attribute(extent, 'cy'))
   const blip = child(child(properties, 'blipFill'), 'blip')
-  const fillMediaPath = previewPath(references.relationships, references.part, relationshipAttribute(blip, 'embed'), references.hasPart)
+  const fillMediaPath = previewPath(references.relationships, references.part, relationshipAttribute(blip, 'embed'), references.hasPart) ??
+    svgEmbedsPreview(shapeSvgEmbeds(blip), references)
   const fillColor = child(properties, 'noFill') ? 'none'
     : areaColor(properties, theme) ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
   return {
@@ -791,6 +792,23 @@ function previewPath(
 ) {
   const path = internalTarget(rels, part, id, 'image')
   return path && visualMediaType(path) && hasPart(path) ? path : undefined
+}
+
+function shapeSvgEmbeds(blip: XmlElement | undefined): (string | undefined)[] {
+  return children(child(blip, 'extLst')).filter(extension => extension.tag === 'ext').flatMap(extension =>
+    // Only inspect the direct extension payload. The ordinary DrawingML
+    // child reader intentionally omits non-DrawingML namespaces.
+    elements(extension.tokens, extension.namespaces)
+      .filter(payload => payload.tag === 'svgBlip' && payload.namespace === SVG_BLIP_NAMESPACE)
+      .map(payload => relationshipAttribute(payload, 'embed')),
+  )
+}
+
+function svgEmbedsPreview(ids: (string | undefined)[], references: DrawingReferences): string | undefined {
+  for (const id of ids) {
+    const path = previewPath(references.relationships, references.part, id, references.hasPart)
+    if (path?.startsWith('xl/media/') && visualMediaType(path) === 'image/svg+xml') return path
+  }
 }
 
 function vmlImageId(node: XmlElement | undefined) {
@@ -1012,8 +1030,12 @@ export async function readWorkbookVisuals(
         const picture = readDrawingPicture(slot.element)
         if (!picture?.blip) continue
         const embed = drawingRelationshipAttribute(picture.blip, 'embed')
-        const mediaPath = internalTarget(drawingRels, drawingPath, embed, 'image')
-        if (!mediaPath?.startsWith('xl/media/') || !hasPart(mediaPath)) continue
+        const primary = previewPath(drawingRels, drawingPath, embed, hasPart)
+        const mediaPath = primary?.startsWith('xl/media/') ? primary : svgEmbedsPreview(
+          pictureExtensionBlips(picture.blip).map(blip => drawingRelationshipAttribute(blip, 'embed')),
+          references,
+        )
+        if (!mediaPath) continue
         const mediaType = visualMediaType(mediaPath)
         if (!mediaType || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&
           anchor.fromRowOffset === anchor.toRowOffset && anchor.fromColumnOffset === anchor.toColumnOffset)) continue
