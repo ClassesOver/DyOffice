@@ -233,7 +233,7 @@ test(
       },
     )
 
-    await t.test('rewrites and checks single-quoted pivot cache source attributes', async (t) => {
+    await t.test('rewrites and checks pivot cache sources regardless of the part name', async (t) => {
       const base = await fixture({
         changeWorkbook: (xml) => xml.replace(/<definedNames>[\s\S]*?<\/definedNames>/, ''),
       })
@@ -253,23 +253,35 @@ test(
         ],
       })
       assert.equal((await inspect(withPivot)).sheets[1].pivotTables.length, 1)
-      const single = await editPart(withPivot, cachePath, (xml) =>
-        xml.replace('sheet="Acceptance"', "sheet='Acceptance'"),
-      )
-      const target = async (bytes) =>
-        (await readPart(bytes, cachePath)).match(/<worksheetSource\b[^>]*>/)?.[0]
-      assert.match(await target(single), /sheet='Acceptance'/)
+      const custom = 'xl/pivotCache/sales-source.xml'
+      const customZip = await JSZip.loadAsync(withPivot)
+      customZip.file(custom, (await xmlPart(customZip, cachePath)).replace('sheet="Acceptance"', "sheet='Acceptance'"))
+      customZip.remove(cachePath)
+      const oldCacheRels = 'xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels'
+      customZip.file('xl/pivotCache/_rels/sales-source.xml.rels', await xmlPart(customZip, oldCacheRels))
+      customZip.remove(oldCacheRels)
+      for (const path of Object.keys(customZip.files).filter(path => path.endsWith('.rels') || path === contentTypes)) {
+        const xml = await xmlPart(customZip, path)
+        if (xml.includes('pivotCacheDefinition1.xml')) {
+          customZip.file(path, xml.replaceAll('pivotCacheDefinition1.xml', 'sales-source.xml'))
+        }
+      }
+      const customCache = await customZip.generateAsync({ type: 'nodebuffer' })
+      assert.equal((await inspect(customCache)).sheets[1].pivotTables.length, 1)
+      const target = async (bytes, path = cachePath) =>
+        (await readPart(bytes, path)).match(/<worksheetSource\b[^>]*>/)?.[0]
+      assert.match(await target(customCache, custom), /sheet='Acceptance'/)
       const renames = [{ kind: 'rename-sheet', sheetId: first, newName: 'Source' }]
       const good = await save(withPivot, renames, [first, second])
-      const bad = await save(single, renames, [first, second])
+      const rewritten = await save(customCache, renames, [first, second])
       assert.match(await target(good), /sheet="Source"/)
       await t.test('renames the cache source', async () => {
-        assert.match(await target(bad), /sheet=(["'])Source\1/)
+        assert.match(await target(rewritten, custom), /sheet=(["'])Source\1/)
       })
       const removal = [{ kind: 'remove-sheet', sheetId: first }]
       await assert.rejects(save(withPivot, removal, [second]), /Invalid workbook input/)
       await t.test('blocks deletion while a pivot cache still uses that sheet', async () => {
-        await assert.rejects(save(single, removal, [second]), /Invalid workbook input/)
+        await assert.rejects(save(customCache, removal, [second]), /Invalid workbook input/)
       })
     })
   },

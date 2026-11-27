@@ -73,6 +73,7 @@ import {
   type PivotAddGrouping,
   type PivotAddRowLine,
   type PivotValueSpec,
+  PIVOT_CACHE_CONTENT_TYPE,
 } from './xlsx-pivot-add.ts'
 import type { SheetFilterState, TableFilterRoute } from './xlsx-filter.ts'
 import {
@@ -1438,9 +1439,7 @@ export async function planCellEditsToXlsx(
   // Only shifting ops desync a pivot cache's recorded source range; sizing,
   // visibility, and outline ops on the source sheet are safe to save.
   const pivotCacheDefinitionPaths = structuralOps.some(({ ops }) => ops.some(isShiftingOp))
-    ? (await pkg.paths()).filter((path) =>
-        /^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path),
-      )
+    ? await pivotCachePartPaths(pkg, await pkg.paths())
     : []
   const structuralPivotSources = await collectPivotSourceSheets(pkg, pivotCacheDefinitionPaths, workbookXml)
   for (const { sheetName, ops } of structuralOps) {
@@ -2020,8 +2019,10 @@ export async function planCellEditsToXlsx(
   if (tableRenames.size > 0) {
     const rewrite = (formula: string) => renameStructuredTableReferences(formula, tableRenames)
     workbookXml = rewriteDefinedNames(workbookXml, rewrite)
-    for (const path of await pkg.paths()) {
-      const kind = /^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path)
+    const paths = await pkg.paths()
+    const caches = new Set(await pivotCachePartPaths(pkg, paths))
+    for (const path of paths) {
+      const kind = caches.has(path)
         ? 'pivotCache'
         : /^xl\/(worksheets|tables|charts)\/[^/]+\.xml$/.exec(path)?.[1]
       if (!kind) continue
@@ -2221,8 +2222,7 @@ async function updateConvertedPivotSources(
     names: new Set(table.names.map((name) => name.toLowerCase())),
     xml: table.xml,
   }))
-  for (const path of await pkg.paths()) {
-    if (!/^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path)) continue
+  for (const path of await pivotCachePartPaths(pkg, await pkg.paths())) {
     if (!(await pkg.canPatch(path))) {
       if (!(await pkg.containsText(path, 'worksheetSource'))) continue
       throw new TableEditError(`${path} is too large to preserve a converted table's pivot source.`)
@@ -2245,6 +2245,55 @@ async function updateConvertedPivotSources(
       touchedEntries.add(path)
     }
   }
+}
+
+async function pivotCachePartPaths(
+  pkg: PackageEditor,
+  paths: readonly string[],
+): Promise<string[]> {
+  const entries = new Set(paths)
+  // Older packages may omit the declaration, so keep the conventional paths too.
+  const caches = new Set(
+    paths.filter((path) => /^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path)),
+  )
+  const addTarget = (owner: string, target: string) => {
+    try {
+      const path = resolveRelTarget(owner, target)
+      if (entries.has(path)) caches.add(path)
+    } catch {
+      // A malformed target does not identify a package entry.
+    }
+  }
+  const contentTypesPath = '[Content_Types].xml'
+  const workbookRelsPath = 'xl/_rels/workbook.xml.rels'
+  const [contentTypes, workbookRels] = await Promise.all([
+    entries.has(contentTypesPath) ? pkg.readText(contentTypesPath) : '',
+    entries.has(workbookRelsPath) ? pkg.readText(workbookRelsPath) : '',
+  ])
+  const [element] = childElements(contentTypes)
+  if (element) {
+    const root = withNamespaces(element, new Map())
+    if (
+      root.local === 'Types' &&
+      (root.namespace === '' ||
+        root.namespace === 'http://schemas.openxmlformats.org/package/2006/content-types')
+    ) {
+      for (const child of scopedChildren(root)) {
+        if (!isElement(child, 'Override', root.namespace)) continue
+        if (child.attributes.get('ContentType') !== PIVOT_CACHE_CONTENT_TYPE) continue
+        const part = child.attributes.get('PartName')
+        if (!part) continue
+        const path = part.replace(/^\//, '')
+        if (entries.has(path)) caches.add(path)
+        else addTarget('', part)
+      }
+    }
+  }
+  for (const relationship of parseRelationships(workbookRels)) {
+    if (relationship.external || !relationship.type.endsWith('/pivotCacheDefinition')) continue
+    addTarget('xl/workbook.xml', relationship.target)
+  }
+  return [...caches]
 }
 
 async function collectPivotSourceSheets(
@@ -2313,9 +2362,9 @@ async function applySheetPlanToPackage(
   const chartPaths = packagePaths.filter(
     (path) => path.startsWith('xl/charts/') && path.endsWith('.xml'),
   )
-  const pivotCacheDefinitionPaths = packagePaths.filter((path) =>
-    /^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(path),
-  )
+  const pivotCacheDefinitionPaths = plan.renames.length > 0 || plan.removals.length > 0
+    ? await pivotCachePartPaths(pkg, packagePaths)
+    : []
 
   // Satellite parts owned by the removed sheets — drawings with their images
   // and charts, legacy VML, comments, tables — die with the sheet. The
@@ -2483,6 +2532,7 @@ async function applySheetPlanToPackage(
       }
     }
     for (const cachePath of pivotCacheDefinitionPaths) {
+      if (removedOwnedParts.has(cachePath)) continue
       const xml = await pkg.readText(cachePath)
       const renamed = renamer.pivotCache(xml)
       if (renamed !== xml) {

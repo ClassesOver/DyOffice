@@ -52,13 +52,15 @@ export function isSpreadsheetNamespace(namespace: string | undefined): boolean {
   return namespace !== undefined && WORKSHEET_NAMESPACES.has(namespace)
 }
 
-export function spreadsheetSheetRoot(xml: string): ScopedElement | undefined {
+export function spreadsheetPartRoot(xml: string): ScopedElement | undefined {
   const node = childElements(xml)[0]
   const root = node && withNamespaces(node, new Map([['', '']]))
-  return (root?.local === 'worksheet' || root?.local === 'chartsheet') &&
-    isSpreadsheetNamespace(root.namespace)
-    ? root
-    : undefined
+  return root && isSpreadsheetNamespace(root.namespace) ? root : undefined
+}
+
+export function spreadsheetSheetRoot(xml: string): ScopedElement | undefined {
+  const root = spreadsheetPartRoot(xml)
+  return root?.local === 'worksheet' || root?.local === 'chartsheet' ? root : undefined
 }
 
 export function scopedChildren(parent: ScopedElement): ScopedElement[] {

@@ -24,9 +24,8 @@ import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
 import { localPivotWorksheetSource, parseRelationships, parseSheetElements, parseWorkbookTabIndex, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
 import { readDefinedNameText, readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
-import { childElements } from './xlsx-style-entries.ts'
 import { areaToRef, parseRef, sheetTableParts } from './xlsx-table-add.ts'
-import { isElement, scopedChildren, withNamespaces, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import { isElement, scopedChildren, spreadsheetPartRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PivotParseError extends Error {}
 
@@ -113,14 +112,8 @@ export interface PivotDefinition {
 }
 
 function pivotRoot(xml: string, name: string): ScopedElement | null {
-  const [element] = childElements(xml)
-  if (!element) return null
-  const root = withNamespaces(element, new Map())
-  return root.local === name && (
-    root.namespace === '' ||
-    root.namespace === 'http://schemas.openxmlformats.org/spreadsheetml/2006/main' ||
-    root.namespace === 'http://purl.oclc.org/ooxml/spreadsheetml/main'
-  ) ? root : null
+  const root = spreadsheetPartRoot(xml)
+  return root?.local === name ? root : null
 }
 
 function attr(element: ScopedElement, name: string): string | null {

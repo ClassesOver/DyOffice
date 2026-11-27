@@ -211,7 +211,7 @@ const PIVOT_RECORDS_REL_TYPE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords'
 const PIVOT_TABLE_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml'
-const PIVOT_CACHE_CONTENT_TYPE =
+export const PIVOT_CACHE_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml'
 const PIVOT_RECORDS_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml'

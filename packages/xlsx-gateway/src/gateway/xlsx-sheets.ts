@@ -22,6 +22,7 @@ import {
   patchElement,
   prefixOf,
   scopedChildren,
+  spreadsheetPartRoot,
   spreadsheetSheetRoot,
   withBody,
   withNamespaces,
@@ -944,9 +945,8 @@ export function convertPivotTableSourceToRange(
 
 export function localPivotWorksheetSource(xml: string) {
   if (!xml.includes('worksheetSource')) return undefined
-  const [element] = childElements(xml)
-  if (!element) return undefined
-  const root = withNamespaces(element, new Map())
+  const root = spreadsheetPartRoot(xml)
+  if (!root) return undefined
   const cache = root.local === 'cacheSource' ? root
     : root.local === 'pivotCacheDefinition'
       ? scopedChildren(root).find((entry) => isElement(entry, 'cacheSource', root.namespace))

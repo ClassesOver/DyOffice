@@ -128,9 +128,9 @@ async function findPivotTablePathForRefresh(
   const matches: string[] = []
   for (const tablePath of candidates) {
     const location = findPivotTableLocation(await pkg.readText(tablePath))
-    const ref = location && readWorksheetTagAttribute(location.opening, 'ref')
+    const ref = location?.attributes.get('ref')
     if (!ref) continue
-    const { start: origin } = parseAreaRef(decodeAttribute(ref))
+    const { start: origin } = parseAreaRef(ref)
     if (origin.col === start.col && origin.row === start.row) matches.push(tablePath)
   }
   if (matches.length !== 1) {
@@ -242,10 +242,10 @@ export async function applyPivotLayoutExpansions(
 
     const pivotTableXml = await pkg.readText(pivotTablePath)
     const location = findPivotTableLocation(pivotTableXml)
-    const currentRef = location && readWorksheetTagAttribute(location.opening, 'ref')
+    const currentRef = location?.attributes.get('ref')
     if (!location || !currentRef) continue
 
-    const oldArea = parseAreaRef(decodeAttribute(currentRef))
+    const oldArea = parseAreaRef(currentRef)
     const newArea = parseAreaRef(update.newOutputRef)
     const sameArea =
       oldArea.start.col === newArea.start.col &&

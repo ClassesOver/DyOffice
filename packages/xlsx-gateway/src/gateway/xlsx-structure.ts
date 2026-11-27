@@ -11,7 +11,6 @@ import { workbookNameParts } from './xlsx-defined-names.ts'
 import { rewriteWorksheetValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
-import { findRootChild } from './xlsx-root-tail.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
   applyPatches,
@@ -20,6 +19,7 @@ import {
   patchElement,
   prefixOf,
   scopedChildren,
+  spreadsheetPartRoot,
   withBody,
   worksheetRoot,
   type ScopedElement,
@@ -2202,11 +2202,13 @@ function moveArea(area: CellArea, shift: Shift, axis: Axis): CellArea | null {
     : { ...area, startColumn: moved.start, endColumn: moved.end }
 }
 
-export function findPivotTableLocation(xml: string): { start: number; opening: string } | undefined {
-  const location = findRootChild(xml, 'pivotTableDefinition', 'location')
-  if (!location) return undefined
-  const opening = readRootStartTag(xml.slice(location.start, location.end))
-  return opening ? { start: location.start, opening } : undefined
+export function findPivotTableLocation(xml: string): ScopedElement | undefined {
+  const root = spreadsheetPartRoot(xml)
+  if (root?.local !== 'pivotTableDefinition') return undefined
+  const location = scopedChildren(root).find((child) =>
+    isElement(child, 'location', root.namespace),
+  )
+  return location && { ...location, start: root.start + root.opening.length + location.start }
 }
 
 /// A pivot body and its report filters can move together as one block. The
@@ -2214,20 +2216,20 @@ export function findPivotTableLocation(xml: string): { start: number; opening: s
 /// describe cells that were deleted, rearranged, or pulled apart.
 export function shiftPivotTablePart(xml: string, ops: readonly StructuralOp[]): string {
   const location = findPivotTableLocation(xml)
-  const reference = location && readWorksheetTagAttribute(location.opening, 'ref')
+  const reference = location?.attributes.get('ref')
   if (!location || reference === undefined) {
     throw new StructuralShiftError('A pivot table has no output reference.')
   }
   const tag = location.opening
-  const ref = decodeXmlText(reference)
+  const ref = reference
   const [first = '', last = first, extra] = ref.split(':')
   const start = parseA1(first)
   const end = parseA1(last)
   if (!start || !end || extra !== undefined) {
     throw new StructuralShiftError('A pivot table has an invalid output reference.')
   }
-  const pageRows = Number(readWorksheetTagAttribute(tag, 'rowPageCount') ?? 0)
-  const pageColumns = Number(readWorksheetTagAttribute(tag, 'colPageCount') ?? 1)
+  const pageRows = Number(location.attributes.get('rowPageCount') ?? 0)
+  const pageColumns = Number(location.attributes.get('colPageCount') ?? 1)
   // The report filters sit above the body with a blank separator row and
   // occupy pairs of caption/value cells from the body's leftmost column.
   const filterTop = pageRows > 0 ? start.row - pageRows - 1 : start.row
