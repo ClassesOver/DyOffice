@@ -419,6 +419,24 @@ export function rotationAttribute(degrees: number): string | null {
   return normalized === 0 ? null : String(normalized)
 }
 
+function shapeFillBlip(anchor: ScopedElement): ScopedElement | undefined {
+  const shape = drawingChild(anchor, 'sp') ?? drawingChild(anchor, 'cxnSp')
+  const fill = drawingMainChild(drawingChild(shape, 'spPr'), 'blipFill')
+  return drawingMainChild(fill, 'blip')
+}
+
+function collectImageRelationships(
+  blip: ScopedElement | undefined,
+  removedRelationships: RemovedAnchorRelationship[],
+): void {
+  for (const image of [blip, ...pictureExtensionBlips(blip)]) {
+    for (const key of ['embed', 'link'] as const) {
+      const id = drawingRelationshipAttribute(image, key)
+      if (id) removedRelationships.push({ id: escapeXmlAttribute(id), kind: 'image' })
+    }
+  }
+}
+
 /// One anchor's edits applied to its XML text; null when the anchor is
 /// removed. Hyperlink relationships are allocated by the caller.
 function applyOneEdit(
@@ -441,13 +459,8 @@ function applyOneEdit(
       }
       removedRelationships.push({ id: escapeXmlAttribute(relId), kind: 'chart' })
     } else {
-      const blip = readDrawingPicture(element)?.blip
-      for (const image of [blip, ...pictureExtensionBlips(blip)]) {
-        for (const key of ['embed', 'link'] as const) {
-          const id = drawingRelationshipAttribute(image, key)
-          if (id) removedRelationships.push({ id: escapeXmlAttribute(id), kind: 'image' })
-        }
-      }
+      collectImageRelationships(readDrawingPicture(element)?.blip, removedRelationships)
+      collectImageRelationships(shapeFillBlip(element), removedRelationships)
     }
     const properties = drawingNonVisualProperties(element)?.node
     for (const name of ['hlinkClick', 'hlinkHover']) {
@@ -460,6 +473,7 @@ function applyOneEdit(
   // Re-applying the current paint rebuilds identical XML.
   if (edit.fillColor !== undefined || edit.lineColor !== undefined) {
     patched = repaintShape(patched, element, edit.fillColor, edit.lineColor)
+    if (edit.fillColor !== undefined) collectImageRelationships(shapeFillBlip(element), removedRelationships)
   }
   if (edit.frameSize || edit.rotation !== undefined || edit.flipH !== undefined || edit.flipV !== undefined) {
     patched = updateFrameTransform(patched, element, edit)

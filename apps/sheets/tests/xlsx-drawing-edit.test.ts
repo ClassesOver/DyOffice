@@ -129,6 +129,26 @@ describe('applyVisualEdits', () => {
     }
   })
 
+  it.each([{ remove: true as const }, { fillColor: '#123456' }])(
+    'cleans an unused shape picture fill after %j',
+    async edit => {
+      const entries = packageWithDrawing()
+      const relsPath = 'xl/drawings/_rels/drawing1.xml.rels'
+      const targetPath = 'xl/media/shape-fill.png'
+      const opaque = '<xdr:extLst><xdr:ext uri="vendor"><v:blip xmlns:v="urn:vendor" r:embed="rId8"/></xdr:ext></xdr:extLst>'
+      entries.set(PATH, DRAWING.replace('<xdr:sp><xdr:txBody/></xdr:sp>',
+        '<xdr:sp><xdr:spPr><a:blipFill><a:blip r:embed="fill"/></a:blipFill>' + opaque + '</xdr:spPr></xdr:sp>'))
+      entries.set(relsPath, DRAWING_RELS.replace('</Relationships>',
+        '<Relationship Id="fill" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/shape-fill.png"/></Relationships>'))
+      entries.set(targetPath, 'png')
+      await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 2, ...edit }], new Set())
+      expect(entries.has(targetPath)).toBe(false)
+      expect(entries.get(relsPath)).not.toContain('Id="fill"')
+      expect(entries.has('xl/media/image1.png')).toBe(true)
+      if (!('remove' in edit)) expect(entries.get(PATH)).toContain(opaque)
+    },
+  )
+
   it('keeps media shared by another anchor while removing only the unused relationship', async () => {
     const entries = packageWithDrawing()
     entries.set(

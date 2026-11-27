@@ -579,6 +579,7 @@ test('resolves drawing, chart, and picture relationships by their declared names
 test('opens shape picture fills and hyperlinks and preserves them through a cell save', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const fillPath = 'xl/media/shape-fill.png'
+  const svgPath = 'xl/media/shape-fill.svg'
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
   const href = 'https://example.invalid/help?view=sheet&item=shape'
   const shape = (id, name, imageId, linkId) => `
@@ -600,16 +601,21 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
   const standalone = shape(81, 'Filled shape', 'fill', 'help')
     .replace('<xdr:nvSpPr>', opaque + '<xdr:nvSpPr>')
     .replace('<a:hlinkClick', '<d:hlinkClick xmlns:d="' + mainNs + '"')
+    .replace('</a:blip>', '<a:extLst><a:ext uri="svg">' +
+      '<v:svgBlip xmlns:v="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="vector"/>' +
+      '</a:ext></a:extLst></a:blip>')
   await appendDrawing(zip, anchor(1, standalone) + anchor(3, group) +
     anchor(5, shape(84, 'External fill', 'external', 'fill')))
   zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>', `
     <Relationship Id="fill" Type="${relationships}image" Target="../media/shape-fill.png"/>
+    <Relationship Id="vector" Type="${relationships}image" Target="../media/shape-fill.svg"/>
     <Relationship Id="external" Type="${relationships}image" Target="https://example.invalid/image.png" TargetMode="External"/>
     <Relationship Id="help" Type="${relationships}hyperlink" Target="${href.replace('&', '&amp;')}" TargetMode="External"/>
   </Relationships>`))
   zip.file(fillPath, Buffer.from(png, 'base64'))
+  zip.file(svgPath, '<svg xmlns="http://www.w3.org/2000/svg"/>')
   zip.file('[Content_Types].xml', (await textOf(zip)('[Content_Types].xml')).replace('</Types>',
-    '<Default Extension="png" ContentType="image/png"/></Types>'))
+    '<Default Extension="png" ContentType="image/png"/><Default Extension="svg" ContentType="image/svg+xml"/></Types>'))
   const fillProperties = ({ fillColor, fillMediaPath, fillMediaType, opacity, hyperlink }) =>
     ({ fillColor, fillMediaPath, fillMediaType, opacity, hyperlink })
   const expected = { fillColor: 'none', fillMediaPath: fillPath, fillMediaType: 'image/png', opacity: 0.6, hyperlink: href }
@@ -656,7 +662,11 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
   const remove = sheetsSaveRequest('sheet-1', [])
   remove.visualEdits = [{ drawingPath, drawingIndex: filled.drawingIndex, remove: true }]
   const removed = (await native.savePlan(updated, await runtime.sheetsWorkbookPlanner(updated, remove))).bytes
-  const survivingRels = await textOf(await JSZip.loadAsync(removed))(drawingRels)
+  const removedZip = await JSZip.loadAsync(removed)
+  const survivingRels = await textOf(removedZip)(drawingRels)
+  assert.equal(removedZip.file(svgPath), null)
+  assert.ok(!survivingRels.includes('Id="vector"'))
+  assert.deepEqual(await removedZip.file(fillPath).async('nodebuffer'), Buffer.from(png, 'base64'))
   assert.ok(!survivingRels.includes(newLink))
   const afterRemoval = (await native.inspect(removed)).visuals
   assert.ok(!afterRemoval.some(visual => visual.name === 'Filled shape'))
