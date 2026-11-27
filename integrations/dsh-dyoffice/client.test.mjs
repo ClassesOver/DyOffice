@@ -73,6 +73,25 @@ test('a pending conversation retries the authorization prompt after a temporary 
   } finally {stop()}
 })
 
+test('pairing asks for the server address only when a standalone token needs it',async()=>{
+  let prompt,states=[]
+  const react={createElement:(component,props,...children)=>({component,props,children}),
+    useState:initial=>[states.length?states.shift():initial,()=>{}],useRef:()=>({current:null}),useEffect(){}}
+  runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{URL,window:{__ModuleLoader__:{load({factory}){
+    factory(()=>react).apply({effect:f=>f(),on(){},locale:{bind(){},register(){}},sidebarRightTabs:{register(){}},
+      uiConversation:{events:{register(){}},views:{register(){}}},
+      slots:{inject:(_,f)=>f(),register:(spec,render)=>{if(spec.name==='conversation.input.overlay')prompt=render}},
+    })
+  }}}})
+  states=['']
+  const form=prompt({sessionId:'session'})
+  const hasAddress=node=>node?.props?.type==='url'||Boolean(node?.children?.some(hasAddress))
+  for(const [code,expected] of [['',false],['https://office.example/#dsh=test-code',false],['httpLegacyToken',true]]){
+    states=['',code]
+    assert.equal(hasAddress(form.component({...form.props,t:key=>key})),expected)
+  }
+})
+
 test('a delivered thumbnail opens in the right preview only on click',async()=>{
   const slots=new Map(),opened=[]
   const react={createElement:(component,props,...children)=>({component,props,children}),useEffect:f=>f(),useState:x=>[x,()=>{}]}

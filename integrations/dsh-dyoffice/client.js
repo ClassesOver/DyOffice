@@ -7,11 +7,11 @@ window.__ModuleLoader__.load({
       zh: {messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
-        url: 'DyOffice 服务 URL', code: '授权 Token', codeHint: '粘贴频道分享生成的 Token',
+        url: 'DyOffice 服务地址', code: '授权码', codeHint: '粘贴从「频道分享」复制的 DSH 插件授权码',
         getCode: '前往频道分享获取 Token', getCodeHint: '在 DyOffice 的「频道分享」中生成 Token。',
         updateToken: '更新授权 Token', noDocument: '当前频道没有可预览的文档。',
         canCreate: '此 Token 可创建文档。', cannotCreate: '此 Token 无创建权限。请在频道分享中勾选创建权限，再更新 Token。',
-        usage: '例如：/dyoffice word 创建一个活动策划。只需要空白文件时，使用 /dyoffice word 创建空白文件 demo。',
+        usage: '在聊天里说「帮我写一份活动策划，保存为 Word」，或「建一个叫活动预算的空白 Excel 表」。',
         planning: 'DyOffice 助手已接收交接，正在规划正文…', generating: 'DyOffice 正在撰写…', awaitingSave: 'DyOffice 正在保存正文…', writingFailed: '模型连接中断，请检查 DyOffice 的模型设置后重试。',
         noTool: '模型没有写入文档内容，请重试或切换模型。',
         outputLimit: '正文达到输出上限，请缩短要求或分段撰写。', timedOut: '模型响应超时，请重试。', emptyOutput: '模型没有返回正文，请重试或切换模型。',
@@ -38,11 +38,11 @@ window.__ModuleLoader__.load({
       en: {messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
-        url: 'DyOffice service URL', code: 'Authorization token', codeHint: 'Paste the token from channel sharing',
+        url: 'DyOffice service URL', code: 'Authorization code', codeHint: 'Paste the DSH plugin authorization code from channel sharing',
         getCode: 'Get a token from channel sharing', getCodeHint: 'Generate a token in DyOffice channel sharing.',
         updateToken: 'Update authorization token', noDocument: 'This channel has no document to preview.',
         canCreate: 'This token can create documents.', cannotCreate: 'This token cannot create documents. Enable creation in channel sharing and update the token.',
-        usage: 'For example, /dyoffice word create an event plan. Use /dyoffice word create blank demo for an empty file.',
+        usage: 'In chat, ask “Write an event plan and save it as a Word document” or “Create a blank Excel file named Event budget”.',
         planning: 'DyOffice Assistant accepted the handoff and is preparing a plan…', generating: 'DyOffice is writing…', awaitingSave: 'DyOffice is saving the draft…', writingFailed: 'The model connection failed. Check the model in DyOffice and try again.',
         noTool: 'The model did not write any document content. Try again or switch models.',
         outputLimit: 'The draft reached the output limit. Try a shorter request.', timedOut: 'The model took too long to respond. Try again.', emptyOutput: 'The model returned no document text. Try again or switch models.',
@@ -183,7 +183,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null)
       const [busy, setBusy] = useState(false)
       const pending = useRef(null)
-      const needsAddress = !defaultOrigin && !code.trim().startsWith('http')
+      const needsAddress = !defaultOrigin && /^[A-Za-z0-9_-]+$/u.test(code.trim())
       useEffect(() => () => pending.current?.abort(), [])
       async function connect(event) {
         event.preventDefault()
