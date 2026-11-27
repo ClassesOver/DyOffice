@@ -14,7 +14,7 @@ import {parseSheetProtectionAttributes,protectedRangeHasCredentials} from '../..
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
-import {elementText as worksheetElementText,isElement,lastWorksheetView,scopedChildren,spreadsheetSheetRoot,withNamespaces,X14_CF_EXT_URI,X14_XMLNS,XM_XMLNS,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import {elementText as worksheetElementText,isElement,lastWorksheetView,scopedChildren,spreadsheetSheetRoot,withNamespaces,X14_CF_EXT_URI,X14_CF_RULE_ID_EXT_URI,X14_XMLNS,XM_XMLNS,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import {inferWorksheetAddresses,readDefinedNameText,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
@@ -310,8 +310,6 @@ function readManualBreaks(section: ScopedElement | undefined, max: number): numb
 
 type ResolveColor=(element:XmlElement|undefined)=>{rgb:string|undefined}
 type SheetConditionalRule=SheetMetadata['conditionalRules'][number]
-const conditionalRuleIdExtension = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
-
 function cfChildren(parent: ScopedElement | undefined, name: string, namespace = parent?.namespace): ScopedElement[] {
   return parent ? scopedChildren(parent).filter(child => isElement(child, name, namespace)) : []
 }
@@ -436,7 +434,7 @@ function readConditionalRules(
         ? children.find(child => isElement(child, 'extLst', node.namespace))
         : undefined
       const idExtension = cfChildren(extensionList, 'ext').find(extension =>
-        extension.attributes.get('uri')?.toUpperCase() === conditionalRuleIdExtension)
+        extension.attributes.get('uri')?.toUpperCase() === X14_CF_RULE_ID_EXT_URI)
       const twin = bars.get(cfText(cfChildren(idExtension, 'id', X14_XMLNS)[0]).trim().toLowerCase())
       rules.push(twin === undefined ? rule : mergeEnhancedDataBar(rule, twin, resolveColor))
     }

@@ -2,6 +2,7 @@ import { decodeXlsxEscapes, decodeXmlText } from './xlsx-escapes.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 
 export const X14_CF_EXT_URI = '{78C0D931-6437-407D-A8EE-F0AAD7539E65}'
+export const X14_CF_RULE_ID_EXT_URI = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
 export const X14_XMLNS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 export const XM_XMLNS = 'http://schemas.microsoft.com/office/excel/2006/main'
 const WORKSHEET_NAMESPACES = new Set([
