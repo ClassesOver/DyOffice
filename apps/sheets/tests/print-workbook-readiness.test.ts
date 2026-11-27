@@ -541,6 +541,44 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
     expect(h.sheet2.activate).not.toHaveBeenCalled()
   })
 
+  it('opens a chart sheet with its saved setup and prints one chart-only page', async () => {
+    const h = headlessContext()
+    const state = h.ctx.lazyWorkbookRef.current!
+    state.file.sheets[0]!.chartSheet = true
+    state.file.visuals = [{
+      id: 'standalone-chart',
+      sheetId: 'sheet-1',
+      kind: 'chart',
+      anchor: {
+        fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+        fromRowOffset: 0, fromColumnOffset: 0,
+        toRowOffset: 600 * 9525, toColumnOffset: 1_200 * 9525,
+      },
+      chart: { chartTypes: ['barChart'], title: 'Standalone revenue',
+        series: [{ name: 'Sales', values: [42], categories: ['Jan'] }] },
+    }]
+    const readWorkbookRange = vi.fn().mockResolvedValue(fileStateResult({
+      orientation: 'landscape',
+      paperSize: 9,
+      firstPageNumber: 8,
+      oddFooter: '&RChart &P',
+    }))
+    Object.assign(window.desktopApi, { readWorkbookRange })
+
+    const host = await openPrintPreviewHost(h.ctx)
+    if (!host) throw new Error('Print preview failed to open')
+    expect(host.chartSheet).toBe(true)
+    expect(host.setup.orientation).toBe('landscape')
+    expect(host.hasSelection).toBe(false)
+    const job = await host.buildJob('active', {})
+    expect(job.pageCount).toBe(1)
+    const html = assemblePrintHtml(job.documents).html
+    expect(html).toContain('Standalone revenue')
+    expect(html).toContain('Chart 8')
+    expect(html).not.toContain('<table ')
+    expect(h.sheet1.activate).not.toHaveBeenCalled()
+  })
+
   it('prints every visible sheet without changing its active tab', async () => {
     const h = headlessContext()
     expect(await handleExportPdf(h.ctx, 'D:/book.pdf')).toBe(true)

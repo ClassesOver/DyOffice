@@ -222,6 +222,7 @@ export function paperGeometry(
 }
 
 export interface SheetPrintOptions {
+  readonly chartSheet?: boolean
   /// Manual page breaks (0-based index of the row/column that starts a page).
   readonly breaks?: { rowBreaks: readonly number[]; colBreaks: readonly number[] } | null
   /// Print this A1 range instead of the sheet's print area (Excel's "Print Selection").
@@ -278,6 +279,43 @@ export function layoutSheetPrint(
     sheet && !sheet.getColVisible(column)
       ? 0
       : finitePt(worksheet.getColumnWidth(column), 64) * 0.75
+  const paper = paperGeometry(setup.paperSize, setup.orientation)
+  const margins = setup.margins
+  const printableWidthPt = Math.max((paper.widthIn - margins.left - margins.right) * 72, 1)
+  const printableHeightPt = Math.max((paper.heightIn - margins.top - margins.bottom) * 72, 1)
+  const common = {
+    sheetName,
+    fileName,
+    paper,
+    margins,
+    headerFooterTheme: options.headerFooterTheme,
+    firstPageNumber: setup.firstPageNumber,
+    pictures,
+    headerFooter: {
+      odd: { header: setup.header, footer: setup.footer },
+      first: setup.firstPage,
+      even: setup.evenPages,
+    },
+    css: visuals.css,
+    now: options.now ?? new Date(),
+  }
+  if (options.chartSheet) {
+    const { body, scale } = layoutChartSheet(visuals.visuals, rowHeightPt, columnWidthPt, {
+      widthPt: printableWidthPt,
+      heightPt: printableHeightPt,
+    })
+    return {
+      ...common,
+      scale,
+      headerFooterScale: 1,
+      pages: [{
+        body,
+        page: { area: 0, rowStart: 0, rowEnd: 0, colStart: 0, colEnd: 0 },
+        offsetLeftIn: 0,
+        offsetTopIn: 0,
+      }],
+    }
+  }
   const areas =
     options.selection !== undefined && options.selection !== null
       ? [parseArea(options.selection)]
@@ -302,11 +340,6 @@ export function layoutSheetPrint(
   const headingHeightPt = headings ? HEADING_ROW_HEIGHT_PT : 0
   const titleRowsHeightPt = spanTotal(titleRows, rowHeightPt)
   const titleColumnsWidthPt = spanTotal(titleColumns, columnWidthPt)
-
-  const paper = paperGeometry(setup.paperSize, setup.orientation)
-  const margins = setup.margins
-  const printableWidthPt = Math.max((paper.widthIn - margins.left - margins.right) * 72, 1)
-  const printableHeightPt = Math.max((paper.heightIn - margins.top - margins.bottom) * 72, 1)
 
   const baseInput = {
     areas,
@@ -585,23 +618,41 @@ export function layoutSheetPrint(
   })
 
   return {
-    sheetName,
-    fileName,
-    paper,
-    margins,
+    ...common,
     scale,
     headerFooterScale: setup.headerFooterScaleWithDoc ? scale : 1,
-    headerFooterTheme: options.headerFooterTheme,
-    firstPageNumber: setup.firstPageNumber,
-    pictures,
-    headerFooter: {
-      odd: { header: setup.header, footer: setup.footer },
-      first: setup.firstPage,
-      even: setup.evenPages,
-    },
-    css: visuals.css,
     pages: records,
-    now: options.now ?? new Date(),
+  }
+}
+
+/// A chart sheet fits its drawing as a unit inside the printable page.
+function layoutChartSheet(
+  visuals: readonly PrintVisual[],
+  rowHeightPt: (row: number) => number,
+  columnWidthPt: (column: number) => number,
+  printable: { widthPt: number; heightPt: number },
+): { body: string; scale: number } {
+  if (visuals.length === 0) return { body: '', scale: 1 }
+  const startRow = Math.min(...visuals.map((visual) => visual.fromRow))
+  const startColumn = Math.min(...visuals.map((visual) => visual.fromColumn))
+  const drawings = visuals.map((visual) => ({
+    visual,
+    x: spanTotal({ start: startColumn, end: visual.fromColumn - 1 }, columnWidthPt) +
+      visualOffsetPt(visual.offsetXPx),
+    y: spanTotal({ start: startRow, end: visual.fromRow - 1 }, rowHeightPt) +
+      visualOffsetPt(visual.offsetYPx),
+    widthPx: Math.max(1, finitePt(visual.widthPx, 1)),
+    heightPx: Math.max(1, finitePt(visual.heightPx, 1)),
+  }))
+  const left = Math.min(...drawings.map(({ x }) => x))
+  const top = Math.min(...drawings.map(({ y }) => y))
+  const right = Math.max(...drawings.map(({ x, widthPx }) => x + widthPx * 0.75))
+  const bottom = Math.max(...drawings.map(({ y, heightPx }) => y + heightPx * 0.75))
+  return {
+    scale: Math.min(printable.widthPt / (right - left), printable.heightPt / (bottom - top)),
+    body: drawings.map(({ visual, x, y, widthPx, heightPx }) =>
+      visualOverlayHtml(visual, x - left, y - top, widthPx, heightPx),
+    ).join(''),
   }
 }
 

@@ -446,7 +446,7 @@ async function sheetPrintDocument(
     ? await loadHeaderFooterPictures(state.file.sessionId, setup.headerFooterPictures)
     : new Map<string, HeaderFooterPictureImage>()
   const runtime = ctx.univerRef.current
-  const visuals = !useLiveVisuals && state && runtime
+  const visuals = (!useLiveVisuals || fileSheet?.chartSheet) && state && runtime
     ? await snapshotSheetVisuals(
         document,
         worksheet,
@@ -472,6 +472,7 @@ async function sheetPrintDocument(
     pictures,
     visuals,
     {
+      chartSheet: fileSheet?.chartSheet === true,
       breaks: state ? effectivePageBreaks(state, sheetId) : null,
       selection,
       now,
@@ -501,6 +502,7 @@ export interface PrintPreviewHost {
   readonly setup: EffectivePageSetup
   readonly marginsPreset: 'normal' | 'wide' | 'narrow' | 'custom'
   readonly hasSelection: boolean
+  readonly chartSheet: boolean
   readonly sheetCount: number
   buildJob(range: PrintRange, overrides: PageSetupJournalState): Promise<PrintJob>
   listPrinters(): Promise<PrinterInfo[]>
@@ -540,8 +542,9 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     state?.editJournal.structuralOps.get(sheetId) ?? [],
   )
   const activeRange = workbook.getActiveRange()
+  const chartSheet = fileSheet?.chartSheet === true
   const hasSelection =
-    activeRange !== null && (activeRange.getWidth() > 1 || activeRange.getHeight() > 1)
+    !chartSheet && activeRange !== null && (activeRange.getWidth() > 1 || activeRange.getHeight() > 1)
   const selectionA1 = (): string | null => {
     const range = workbook.getActiveRange()
     if (!range) return null
@@ -567,6 +570,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     setup,
     marginsPreset: journal.margins ?? (fileSetup?.margins === undefined ? 'normal' : 'custom'),
     hasSelection,
+    chartSheet,
     sheetCount: printableSheets().length,
     async buildJob(range, overrides) {
       const now = new Date()
@@ -674,6 +678,10 @@ export async function openPrintPreviewHost(
     if (!loaded) return null
   }
   await settleFormulas(ctx.univerRef.current)
+  const activeId = ctx.univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getSheetId()
+  if (state && activeId && state.file.sheets.some((sheet) => sheet.id === activeId && sheet.chartSheet)) {
+    await ensureSheetFileState(state, activeId, ctx.lazyWorkbookRef)
+  }
   if (ctx.lazyWorkbookRef.current !== state) return null
   return createPrintPreviewHost(ctx)
 }

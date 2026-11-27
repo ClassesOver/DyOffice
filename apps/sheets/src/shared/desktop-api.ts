@@ -96,6 +96,8 @@ const worksheetMetadataSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
+    /// The workbook relationship references a chartsheet instead of a worksheet.
+    chartSheet: z.literal(true).optional(),
     rowCount: z.number().int().positive(),
     columnCount: z.number().int().positive(),
     /// Uncompressed worksheet XML size reported by the sidecar. Optional for

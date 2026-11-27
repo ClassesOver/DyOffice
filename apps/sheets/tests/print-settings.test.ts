@@ -558,6 +558,33 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it('fits a standalone chart to a single page while keeping the saved paper and footer', () => {
+    const setup = resolveEffectivePageSetup({}, {
+      orientation: 'landscape',
+      paperSize: 9,
+      scale: 100,
+      firstPageNumber: 8,
+      oddFooter: '&RPage &P of &N',
+    }, null)
+    const chart = {
+      id: 'chart-sheet-drawing',
+      fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+      offsetXPx: 10, offsetYPx: 20, widthPx: 1_200, heightPx: 600,
+      html: '<figure>Quarterly chart</figure>',
+    }
+    const document = layout(fakeWorksheet(), setup, new Map(), { visuals: [chart], css: '' }, {
+      chartSheet: true,
+    })
+    expect(document.pages).toHaveLength(1)
+    expect(document.scale).toBeCloseTo(10.29 * 96 / 1_200, 4)
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('width:11.69in;height:8.27in')
+    expect(html).toContain('left:0pt;top:0pt;width:900pt;height:450pt')
+    expect(html).toContain('Quarterly chart')
+    expect(html).toContain('Page 8 of 1')
+    expect(html).not.toContain('<table ')
+  })
+
   it('renders styles from saved headers and pending footer edits', () => {
     const setup = resolveEffectivePageSetup(
       { footer: { right: '&IPages &N&I' } },

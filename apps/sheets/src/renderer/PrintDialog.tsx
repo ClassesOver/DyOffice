@@ -389,68 +389,72 @@ export function PrintDialog({
                 )}
               </select>
             </label>
-            <label>
-              {t('dlgPrintScaling')}
-              <select
-                value={settings.scaling}
-                onChange={(event) => setScaling(event.target.value as Scaling)}
-              >
-                <option value="none">{t('dlgPrintNoScaling')}</option>
-                <option value="sheet">{t('dlgPrintFitSheet')}</option>
-                <option value="columns">{t('dlgPrintFitColumns')}</option>
-                <option value="rows">{t('dlgPrintFitRows')}</option>
-                {host.setup.fitToPage && (
-                  <option value="fit-file">
-                    {t('dlgPrintFitFile', {
-                      width: host.setup.fitToWidth || '*',
-                      height: host.setup.fitToHeight || '*',
-                    })}
-                  </option>
+            {!host.chartSheet && (
+              <>
+                <label>
+                  {t('dlgPrintScaling')}
+                  <select
+                    value={settings.scaling}
+                    onChange={(event) => setScaling(event.target.value as Scaling)}
+                  >
+                    <option value="none">{t('dlgPrintNoScaling')}</option>
+                    <option value="sheet">{t('dlgPrintFitSheet')}</option>
+                    <option value="columns">{t('dlgPrintFitColumns')}</option>
+                    <option value="rows">{t('dlgPrintFitRows')}</option>
+                    {host.setup.fitToPage && (
+                      <option value="fit-file">
+                        {t('dlgPrintFitFile', {
+                          width: host.setup.fitToWidth || '*',
+                          height: host.setup.fitToHeight || '*',
+                        })}
+                      </option>
+                    )}
+                    <option value="custom">{t('dlgPrintCustomScale')}</option>
+                  </select>
+                </label>
+                {settings.scaling === 'custom' && (
+                  <label className="dialog-span">
+                    {t('dlgPrintCustomScalePercent')}
+                    <input
+                      type="number"
+                      min={10}
+                      max={400}
+                      value={settings.scale}
+                      onChange={(event) => {
+                        const scale = Math.min(400, Math.max(10, Number(event.target.value) || 100))
+                        setScaling('custom', scale)
+                      }}
+                    />
+                  </label>
                 )}
-                <option value="custom">{t('dlgPrintCustomScale')}</option>
-              </select>
-            </label>
-            {settings.scaling === 'custom' && (
-              <label className="dialog-span">
-                {t('dlgPrintCustomScalePercent')}
-                <input
-                  type="number"
-                  min={10}
-                  max={400}
-                  value={settings.scale}
-                  onChange={(event) => {
-                    const scale = Math.min(400, Math.max(10, Number(event.target.value) || 100))
-                    setScaling('custom', scale)
-                  }}
-                />
-              </label>
+                <label className="dialog-check">
+                  <input
+                    type="checkbox"
+                    checked={settings.printGridlines}
+                    onChange={(event) =>
+                      update(
+                        { printGridlines: event.target.checked },
+                        `print-gridlines:${event.target.checked ? '1' : '0'}`,
+                      )
+                    }
+                  />
+                  {t('dlgPrintGridlines')}
+                </label>
+                <label className="dialog-check">
+                  <input
+                    type="checkbox"
+                    checked={settings.printHeadings}
+                    onChange={(event) =>
+                      update(
+                        { printHeadings: event.target.checked },
+                        `print-headings:${event.target.checked ? '1' : '0'}`,
+                      )
+                    }
+                  />
+                  {t('dlgPrintHeadings')}
+                </label>
+              </>
             )}
-            <label className="dialog-check">
-              <input
-                type="checkbox"
-                checked={settings.printGridlines}
-                onChange={(event) =>
-                  update(
-                    { printGridlines: event.target.checked },
-                    `print-gridlines:${event.target.checked ? '1' : '0'}`,
-                  )
-                }
-              />
-              {t('dlgPrintGridlines')}
-            </label>
-            <label className="dialog-check">
-              <input
-                type="checkbox"
-                checked={settings.printHeadings}
-                onChange={(event) =>
-                  update(
-                    { printHeadings: event.target.checked },
-                    `print-headings:${event.target.checked ? '1' : '0'}`,
-                  )
-                }
-              />
-              {t('dlgPrintHeadings')}
-            </label>
           </div>
           <div className="print-preview">
             <div className="print-preview-bar">

@@ -54,7 +54,7 @@ interface ParsedCell {
 
 type SheetViewMetadata=Pick<WorkbookFile['sheets'][number],'tabColor'|'showGridLines'|'showFormulas'|'showRowColHeaders'|'rightToLeft'|'zoomScale'|'outlineLevelRow'|'outlineLevelCol'|'outlineSummaryBelow'|'outlineSummaryRight'>
 type SheetMetadata=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'|'autoFilter'|'autoFilterColumns'|'rows'|'merges'|'conditionalRules'|'hyperlinks'|'dataValidations'|'rowBreaks'|'colBreaks'|'pageSetup'>
-  & Pick<WorkbookFile['sheets'][number],'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'|'comments'|'tables'|'sparklines'>
+  & Pick<WorkbookFile['sheets'][number],'chartSheet'|'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'|'comments'|'tables'|'sparklines'>
   & { view: SheetViewMetadata; dimension?: Bounds; rowExtent: number }
 type FilterColumn=WorkbookRangeResult['autoFilterColumns'][number]
 const EMPTY_SHEET_METADATA:SheetMetadata={sheetProtection:null,protectedRanges:[],autoFilter:null,autoFilterColumns:[],
@@ -832,7 +832,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
       const view = lastWorksheetView(children.find(node => node.local === 'sheetViews'))
       const savedZoom = sizeValue(view?.attributes.get('zoomScale'))
       const zoomScale = savedZoom ? Math.max(10, Math.min(400, Math.round(savedZoom))) : 100
-      sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,
+      sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,chartSheet:true,
         ...headerFooterMetadata(readPageSetup(children), await loadHeaderPictures()),
         view:{tabColor:resolveColor(color).rgb??null,
           showGridLines:false,showRowColHeaders:false,zoomScale:zoomScale===100?undefined:zoomScale}})
@@ -1101,6 +1101,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           valueCellCount:s.valueCellCount,
           valueRowCount:s.valueRowCount,
           valueColumnCount:s.valueColumnCount,
+          chartSheet:s.chartSheet,
           columnWidths:s.columnWidths,defaultRowHeight:s.defaultRowHeight,defaultRowHeightFixed:s.defaultRowHeightFixed,
           defaultColumnWidth:s.defaultColumnWidth,baseColumnWidth:s.baseColumnWidth,freeze:s.freeze,
           hidden: state==='hidden'||state==='veryHidden',
