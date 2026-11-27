@@ -13,7 +13,14 @@ import {
   solidFillXml,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
-import { drawingAnchorElements, isDrawingChild, readDrawingGraphicFrame } from './xlsx-drawing-anchors.ts'
+import {
+  drawingAnchorElements,
+  drawingRelationshipAttribute,
+  isDrawingChild,
+  pictureExtensionBlips,
+  readDrawingGraphicFrame,
+  readDrawingPicture,
+} from './xlsx-drawing-anchors.ts'
 import { hasXmlAttributeValue, readRelationshipId } from './xlsx-namespace.ts'
 import {
   findRelationshipsRoot,
@@ -423,10 +430,13 @@ function applyOneEdit(
         )
       }
       removedRelationships.push({ id: escapeXmlAttribute(relId), kind: 'chart' })
-    } else if (anchorXml.includes(`<${p}pic`)) {
-      for (const match of anchorXml.matchAll(/\s[\w.-]+:(?:embed|link)="([^"]+)"/g)) {
-        const id = match[1]
-        if (id !== undefined) removedRelationships.push({ id, kind: 'image' })
+    } else {
+      const blip = readDrawingPicture(element)?.blip
+      for (const image of [blip, ...pictureExtensionBlips(blip)]) {
+        for (const key of ['embed', 'link'] as const) {
+          const id = drawingRelationshipAttribute(image, key)
+          if (id) removedRelationships.push({ id: escapeXmlAttribute(id), kind: 'image' })
+        }
       }
     }
     return null

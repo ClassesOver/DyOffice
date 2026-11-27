@@ -2,7 +2,9 @@ import { XMLParser } from 'fast-xml-parser'
 import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/shared/workbook-chart-path.ts'
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
-import { drawingAnchorElements, isDrawingChild, readDrawingGraphicFrame } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
+import {
+  drawingAnchorElements, drawingChild, drawingMainChild, drawingRelationshipAttribute, readDrawingGraphicFrame, readDrawingPicture,
+} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
 import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import { relsPathFor, resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
@@ -472,9 +474,7 @@ function readAnchor<Node>(
 function readDrawingAnchor(node: ScopedElement): Anchor | undefined {
   return readAnchor(
     node,
-    (parent, key) => parent && scopedChildren(parent).find(field =>
-      field.local === key && isDrawingChild(parent, field),
-    ),
+    drawingChild,
     field => field && elementText(field.inner),
     (field, key) => field?.attributes.get(key),
   )
@@ -495,18 +495,18 @@ export function visualMediaType(path: string): string | undefined {
   }
 }
 
-function pictureCrop(blipFill?: XmlElement): WorkbookVisualObject['crop'] {
-  const src = child(blipFill, 'srcRect')
+function pictureCrop(blipFill?: ScopedElement): WorkbookVisualObject['crop'] {
+  const src = drawingMainChild(blipFill, 'srcRect')
   if (!src) return undefined
-  const side = (name: string) => (finite(attribute(src, name)) ?? 0) / 100_000
+  const side = (name: string) => (finite(src.attributes.get(name)) ?? 0) / 100_000
   const left = side('l'), top = side('t'), right = side('r'), bottom = side('b')
   if ([left, top, right, bottom].some(value => Math.abs(value) > 1) || left + right >= 1 || top + bottom >= 1 ||
       !(left || top || right || bottom)) return undefined
   return { left, top, right, bottom }
 }
 
-function blipOpacity(blip: XmlElement | undefined): number | undefined {
-  const alpha = finite(attribute(child(blip, 'alphaModFix'), 'amt'))
+function blipOpacity(amount: string | undefined): number | undefined {
+  const alpha = finite(amount)
   return alpha === undefined || alpha >= 100_000 ? undefined : Math.max(0, alpha / 100_000)
 }
 
@@ -646,7 +646,7 @@ function readShape(
     shapeType,
     ...(customPath ? { customPath } : {}),
     fillColor,
-    ...(fillMediaPath ? { fillMediaPath, fillMediaType: visualMediaType(fillMediaPath), opacity: blipOpacity(blip) } : {}),
+    ...(fillMediaPath ? { fillMediaPath, fillMediaType: visualMediaType(fillMediaPath), opacity: blipOpacity(attribute(child(blip, 'alphaModFix'), 'amt')) } : {}),
     lineColor: child(line, 'noFill') ? 'none' : color(line, theme) ?? styleColor('lnRef') ?? 'none',
     lineWidth: width === undefined ? undefined : width / 12_700,
     lineDash: val(line, 'prstDash'),
@@ -989,23 +989,23 @@ export async function readWorkbookVisuals(
           if (shape) result.push(shape)
           continue
         }
-        const picture = child(entry, 'pic')
-        const blipFill = child(picture, 'blipFill')
-        const blip = child(blipFill, 'blip')
-        const mediaPath = internalTarget(drawingRels, drawingPath, relationshipAttribute(blip, 'embed'), 'image')
+        const picture = readDrawingPicture(slot.element)
+        if (!picture?.blip) continue
+        const embed = drawingRelationshipAttribute(picture.blip, 'embed')
+        const mediaPath = internalTarget(drawingRels, drawingPath, embed, 'image')
         if (!mediaPath?.startsWith('xl/media/') || !hasPart(mediaPath)) continue
         const mediaType = visualMediaType(mediaPath)
         if (!mediaType || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&
           anchor.fromRowOffset === anchor.toRowOffset && anchor.fromColumnOffset === anchor.toColumnOffset)) continue
-        const xfrm = child(child(picture, 'spPr'), 'xfrm')
-        const rotation = finite(attribute(xfrm, 'rot'))
-        const frame = rotation ? child(xfrm, 'ext') : undefined
-        const frameWidth = finite(attribute(frame, 'cx'))
-        const frameHeight = finite(attribute(frame, 'cy'))
+        const xfrm = drawingMainChild(drawingChild(picture.picture, 'spPr'), 'xfrm')
+        const rotation = finite(xfrm?.attributes.get('rot'))
+        const frame = rotation ? drawingMainChild(xfrm, 'ext') : undefined
+        const frameWidth = finite(frame?.attributes.get('cx'))
+        const frameHeight = finite(frame?.attributes.get('cy'))
         result.push({ ...base, kind: 'image', mediaPath, mediaType,
-          opacity: blipOpacity(blip),
-          crop: pictureCrop(blipFill), rotation: rotation ? rotation / 60_000 : undefined,
-          flipH: ['1', 'true'].includes(attribute(xfrm, 'flipH') ?? ''), flipV: ['1', 'true'].includes(attribute(xfrm, 'flipV') ?? ''),
+          opacity: blipOpacity(drawingMainChild(picture.blip, 'alphaModFix')?.attributes.get('amt')),
+          crop: pictureCrop(picture.fill), rotation: rotation ? rotation / 60_000 : undefined,
+          flipH: ['1', 'true'].includes(xfrm?.attributes.get('flipH') ?? ''), flipV: ['1', 'true'].includes(xfrm?.attributes.get('flipV') ?? ''),
           frameWidth: frameWidth && frameWidth > 0 ? frameWidth : undefined,
           frameHeight: frameHeight && frameHeight > 0 ? frameHeight : undefined,
         })

@@ -14,6 +14,7 @@ const CHART_NAMESPACES = new Set([
   'http://schemas.openxmlformats.org/drawingml/2006/chart',
   'http://purl.oclc.org/ooxml/drawingml/chart',
 ])
+const SVG_NS = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main'
 const MARKUP_COMPATIBILITY_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 const anchorNames = new Set(['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor'])
 const compatibilityBranches = new Set(['AlternateContent', 'Choice', 'Fallback'])
@@ -44,24 +45,59 @@ function findNamespacedChild(
   )
 }
 
+export function drawingChild(parent: ScopedElement | undefined, local: string): ScopedElement | undefined {
+  return parent && scopedChildren(parent).find(
+    (node) => node.local === local && isDrawingChild(parent, node),
+  )
+}
+
+export function drawingMainChild(parent: ScopedElement | undefined, local: string): ScopedElement | undefined {
+  return parent && findNamespacedChild(parent, local, GRAPHIC_NAMESPACES, 'a')
+}
+
+export function drawingRelationshipAttribute(
+  node: ScopedElement | undefined,
+  key: 'id' | 'embed' | 'link',
+): string | undefined {
+  if (!node) return undefined
+  const suffix = ':' + key
+  const references = [...node.attributes].filter(
+    ([name]) => name !== 'xmlns' + suffix && name.endsWith(suffix) &&
+      isOfficeRelationshipNamespace(node.namespaces.get(name.slice(0, -suffix.length))),
+  )
+  if (references.length > 1) return undefined
+  const legacy = node.namespaces.has('r') ? undefined : node.attributes.get('r' + suffix)
+  return references[0]?.[1] ?? legacy
+}
+
+export function readDrawingPicture(anchor: ScopedElement) {
+  const picture = drawingChild(anchor, 'pic')
+  if (!picture) return undefined
+  const fill = drawingChild(picture, 'blipFill')
+  // Some legacy drawings put the blip directly under the picture.
+  const blip = drawingMainChild(fill ?? picture, 'blip')
+  return { picture, fill, blip }
+}
+
+export function pictureExtensionBlips(blip: ScopedElement | undefined): ScopedElement[] {
+  const list = drawingMainChild(blip, 'extLst')
+  if (!list) return []
+  return scopedChildren(list).filter(
+    (extension) => extension.local === 'ext' && extension.namespace === list.namespace,
+  ).flatMap(extension => scopedChildren(extension).filter(
+    (child) => child.local === 'svgBlip' && child.namespace === SVG_NS,
+  ))
+}
+
 export function readDrawingGraphicFrame(
   anchor: ScopedElement,
 ): { chartRelationshipId?: string | undefined } | undefined {
-  const frame = scopedChildren(anchor).find(
-    (node) => node.local === 'graphicFrame' && isDrawingChild(anchor, node),
-  )
+  const frame = drawingChild(anchor, 'graphicFrame')
   if (!frame) return undefined
-  const graphic = findNamespacedChild(frame, 'graphic', GRAPHIC_NAMESPACES, 'a')
-  const data = graphic && findNamespacedChild(graphic, 'graphicData', GRAPHIC_NAMESPACES, 'a')
+  const graphic = drawingMainChild(frame, 'graphic')
+  const data = drawingMainChild(graphic, 'graphicData')
   const chart = data && findNamespacedChild(data, 'chart', CHART_NAMESPACES, 'c')
-  if (!chart) return {}
-  const ids = [...chart.attributes].filter(
-    ([name]) => name !== 'xmlns:id' && name.endsWith(':id') &&
-      isOfficeRelationshipNamespace(chart.namespaces.get(name.slice(0, -3))),
-  )
-  if (ids.length > 1) return {}
-  const legacyId = chart.namespaces.has('r') ? undefined : chart.attributes.get('r:id')
-  return { chartRelationshipId: ids[0]?.[1] ?? legacyId }
+  return { chartRelationshipId: drawingRelationshipAttribute(chart, 'id') }
 }
 
 export interface DrawingAnchorEntry {

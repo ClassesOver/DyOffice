@@ -101,6 +101,34 @@ describe('applyVisualEdits', () => {
     expect(entries.has('xl/media/image1.png')).toBe(false)
   })
 
+  it('removes the picture media and its SVG fallback without touching foreign references', async () => {
+    const entries = packageWithDrawing()
+    entries.set(PATH, DRAWING
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:ref="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:f="urn:foreign" ')
+      .replace('<a:blip r:embed="rId8"/>',
+        `<f:blip ref:embed="foreignElement"/><a:blip f:embed="foreignAttribute" ref:embed='rId8'>` +
+        '<a:extLst><a:ext uri="svg"><svg:svgBlip xmlns:svg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" ref:embed="svgImage"/></a:ext></a:extLst>' +
+        '</a:blip>'))
+    const relsPath = 'xl/drawings/_rels/drawing1.xml.rels'
+    const parts = ['foreignElement', 'foreignAttribute', 'svgImage']
+    entries.set(relsPath, DRAWING_RELS.replace('</Relationships>', parts.map(id =>
+      `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${id}.svg"/>`,
+    ).join('') + '</Relationships>'))
+    for (const id of parts) entries.set(`xl/media/${id}.svg`, 'fixture')
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 1, remove: true }], new Set())
+
+    expect(entries.get(PATH)).not.toContain('<xdr:pic>')
+    expect(entries.get(relsPath)).not.toContain('rId8')
+    expect(entries.get(relsPath)).not.toContain('svgImage')
+    expect(entries.has('xl/media/image1.png')).toBe(false)
+    expect(entries.has('xl/media/svgImage.svg')).toBe(false)
+    for (const id of ['foreignElement', 'foreignAttribute']) {
+      expect(entries.get(relsPath)).toContain(id)
+      expect(entries.has(`xl/media/${id}.svg`)).toBe(true)
+    }
+  })
+
   it('keeps media shared by another anchor while removing only the unused relationship', async () => {
     const entries = packageWithDrawing()
     entries.set(

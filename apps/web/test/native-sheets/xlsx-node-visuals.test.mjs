@@ -500,7 +500,7 @@ test('resolves drawing, chart, and picture relationships by their declared names
   zip.file(rels, (await textOf(zip)(rels)).replace('</Relationships>',
     `<Relationship xmlns="${foreign}" Id="rId1" Type="${relationships}drawing" Target="../drawings/missing.xml"/></Relationships>`))
   await appendDrawing(zip, '<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>3</xdr:row></xdr:from>' +
-    '<xdr:ext cx="50" cy="60"/><xdr:pic><xdr:blipFill><a:blip p:embed="image" f:embed="wrong"/></xdr:blipFill></xdr:pic>' +
+    '<xdr:ext cx="50" cy="60"/><xdr:pic><xdr:blipFill><f:blip p:embed="wrong"/><a:blip p:embed="image" f:embed="wrong"/></xdr:blipFill></xdr:pic>' +
     '</xdr:oneCellAnchor>')
   zip.file(drawingPath, (await textOf(zip)(drawingPath))
     .replace('<xdr:wsDr ', `<xdr:wsDr ${declarations} `)
