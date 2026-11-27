@@ -264,6 +264,11 @@ function readPageSetup(children: readonly ScopedElement[]): SheetMetadata['pageS
     differentFirst:enabled(footer?.attributes.get('differentFirst'))||undefined,
     headerFooterFixedSize:disabled(footer?.attributes.get('scaleWithDoc'))||undefined,
   }
+  if (setup && enabled(setup.attributes.get('useFirstPageNumber'))) {
+    print.firstPageNumber=setup.attributes.has('firstPageNumber')
+      ? printInteger(setup,'firstPageNumber',0,0xffffffff)
+      : 1
+  }
   if (margins.every(value=>value!==undefined&&value<=10)) {
     print.margins={left:margins[0]!,right:margins[1]!,top:margins[2]!,bottom:margins[3]!,header:margins[4]!,footer:margins[5]!}
   }

@@ -46,6 +46,8 @@ export interface EffectivePageSetup {
   readonly margins: PrintMargins
   readonly printGridlines: boolean
   readonly printHeadings: boolean
+  /// Starting page number saved in the file, or undefined for automatic numbering.
+  readonly firstPageNumber?: number | undefined
   /// Plain A1 ranges to print ([] = the used range).
   readonly printAreas: readonly string[]
   /// Rows repeated at the top of every page ("1:2"), or null.
@@ -56,8 +58,7 @@ export interface EffectivePageSetup {
   /// The odd-page (default) header/footer.
   readonly header: HeaderFooterParts | null
   readonly footer: HeaderFooterParts | null
-  /// differentFirst: page 1's header/footer (blank halves print nothing),
-  /// or null when page 1 uses the default.
+  /// differentFirst: the sheet's first page header/footer, or null when it uses the default.
   readonly firstPage: HeaderFooterPair | null
   /// differentOddEven: even pages' header/footer, or null when off.
   readonly evenPages: HeaderFooterPair | null
@@ -226,6 +227,7 @@ export function resolveEffectivePageSetup(
     margins,
     printGridlines: journal.printGridlines ?? file?.printGridlines ?? false,
     printHeadings: journal.printHeadings ?? file?.printHeadings ?? false,
+    firstPageNumber: file?.firstPageNumber,
     printAreas: printArea,
     printTitles,
     printTitleColumns: mapTitleColumnsToScreen(

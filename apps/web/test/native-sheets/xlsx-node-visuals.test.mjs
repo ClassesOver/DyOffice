@@ -7,7 +7,7 @@ import test from 'node:test'
 import JSZip from 'jszip'
 import { applyChartStateEdit } from '@genoffice/xlsx-gateway/domain/chart-visual'
 import { changedPositions, reorderZ } from '../../../sheets/src/renderer/visual-arrange.ts'
-import { workbookFileSchema } from '../../../sheets/src/shared/desktop-api.ts'
+import { workbookFileSchema, workbookRangeResultSchema } from '../../../sheets/src/shared/desktop-api.ts'
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { readWorkbookVisuals } from '../../server/sheets/xlsx-node-visuals.ts'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
@@ -83,7 +83,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     '<Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>' +
     `<Override PartName="/${chartSheet}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>`))
   zip.file(chartSheet, `<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1" zoomScale="125" zoomToFit="1"/></sheetViews><headerFooter><oddHeader>&amp;L&amp;G</oddHeader></headerFooter><drawing r:id="rId1"/><legacyDrawingHF r:id="header"/>${extension}</chartsheet>`)
+    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1" zoomScale="125" zoomToFit="1"/></sheetViews><pageSetup firstPageNumber="8" useFirstPageNumber="1"/><headerFooter><oddHeader>&amp;L&amp;G</oddHeader></headerFooter><drawing r:id="rId1"/><legacyDrawingHF r:id="header"/>${extension}</chartsheet>`)
   zip.file(chartSheetRels, (await text('xl/worksheets/_rels/sheet1.xml.rels')).replace('</Relationships>',
     `<Relationship Id="header" Type="${relationships}vmlDrawing" Target="../drawings/chart-header.vml"/></Relationships>`))
   zip.file(headerVmlPath, headerVml)
@@ -91,7 +91,9 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     `<Relationship Id="logo" Type="${relationships}image" Target="../media/chart-header.png"/></Relationships>`)
   zip.file('xl/media/chart-header.png', Buffer.from(headerPng, 'base64'))
   const worksheet = 'xl/worksheets/sheet1.xml'
-  zip.file(worksheet, (await text(worksheet)).replace(/<drawing\b[^>]*\/>/, ''))
+  zip.file(worksheet, (await text(worksheet))
+    .replace(/<drawing\b[^>]*\/>/, '')
+    .replace('</worksheet>', '<pageSetup firstPageNumber="19" useFirstPageNumber="0"/></worksheet>'))
   zip.file(drawingPath, (await text(drawingPath))
     .replace(/<xdr:twoCellAnchor><xdr:from>[\s\S]*?<\/xdr:to>/,
       '<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9304587" cy="6077107"/>')
@@ -147,8 +149,10 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal(original.yAxis?.numFmt, '0.0')
   assert.equal(original.legend, 'right')
   const inspectHeaderPicture = async (input, sheetName = 'Chart') => {
-    const { pageSetup } = await runtime.sheetsNative.readRange(input, sheetName,
+    const range = await runtime.sheetsNative.readRange(input, sheetName,
       { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    const { pageSetup } = workbookRangeResultSchema.parse(range)
+    assert.equal(pageSetup.firstPageNumber, 8)
     assert.equal(pageSetup.headerFooterPictures?.length, 1)
     const [{ id, ...picture }] = pageSetup.headerFooterPictures
     assert.deepEqual(picture, { position: 'LH', widthPt: 72, heightPt: 36, mediaType: 'image/png' })
@@ -173,6 +177,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
   assert.equal(worksheetPrintRange.pageSetup.orientation, 'portrait')
   assert.equal(worksheetPrintRange.pageSetup.printGridlines, true)
+  assert.equal(worksheetPrintRange.pageSetup.firstPageNumber, undefined)
   const printedPackage = textOf(await JSZip.loadAsync(printSaved))
   const printXml = await printedPackage(chartSheet)
   assert.match(printXml, /<pageMargins\b[^>]*\/><pageSetup\b[^>]*\/><headerFooter>[\s\S]*?<\/headerFooter><drawing/)

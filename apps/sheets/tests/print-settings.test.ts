@@ -800,6 +800,29 @@ describe('layoutSheetPrint', () => {
     expect(pageVariant(second.headerFooter, 1, 5)).toBe('odd')
   })
 
+  it('uses the saved first page number for fields and odd/even headers', () => {
+    const document = layout(
+      tallWorksheet(120),
+      resolveEffectivePageSetup({}, {
+        firstPageNumber: 8,
+        differentFirst: true,
+        differentOddEven: true,
+        firstHeader: '&CStart &P of &N',
+        oddHeader: '&COdd &P of &N',
+        evenHeader: '&CEven &P of &N',
+      }, null),
+    )
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('Start 8 of 3')
+    expect(html).toContain('Odd 9 of 3')
+    expect(html).toContain('Even 10 of 3')
+
+    const selected = assemblePrintHtml([document], (page) => page === 2).html
+    expect(selected).toContain('Odd 9 of 3')
+    expect(selected).not.toContain('Start 8')
+    expect(selected).not.toContain('Even 10')
+  })
+
   it('puts the &G picture of each variant into its own header', () => {
     const pictures = new Map([
       ['LH', { dataUrl: 'data:image/png;base64,ODD', widthPt: 300, heightPt: 30 }],

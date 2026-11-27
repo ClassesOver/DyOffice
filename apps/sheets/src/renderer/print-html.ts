@@ -247,6 +247,7 @@ export interface SheetPrintDocument {
   /// Content scale actually applied (fit-to-page resolved).
   readonly scale: number
   readonly headerFooterScale: number
+  readonly firstPageNumber?: number | undefined
   readonly pictures: HeaderFooterPictures
   readonly headerFooter: SheetHeaderFooter
   readonly css: string
@@ -566,6 +567,7 @@ export function layoutSheetPrint(
     margins,
     scale,
     headerFooterScale: setup.headerFooterScaleWithDoc ? scale : 1,
+    firstPageNumber: setup.firstPageNumber,
     pictures,
     headerFooter: {
       odd: { header: setup.header, footer: setup.footer },
@@ -584,9 +586,8 @@ export interface AssembledPrintJob {
   readonly pages: readonly { readonly document: number; readonly page: number }[]
 }
 
-/// The full print document: pages numbered across every sheet (&P/&N), each
-/// page a paper-sized box with its header/footer; `include` keeps a subset
-/// of the job's pages (page numbers still count the whole job, like Excel).
+/// Assemble paper-sized pages with headers and footers. The `include`
+/// callback selects by physical position in the job.
 export function assemblePrintHtml(
   documents: readonly SheetPrintDocument[],
   include?: (jobPage: number) => boolean,
@@ -611,15 +612,18 @@ export function assemblePrintHtml(
     document.pages.forEach((record, pageIndex) => {
       jobPage += 1
       if (include && !include(jobPage)) return
+      const printedPage = document.firstPageNumber === undefined
+        ? jobPage
+        : document.firstPageNumber + pageIndex
       emitted.push({ document: documentIndex, page: pageIndex })
       pages.push(
         pageHtml(
           document,
           record,
-          jobPage,
+          printedPage,
           total,
           paperClass as string,
-          pageVariant(document.headerFooter, pageIndex, jobPage),
+          pageVariant(document.headerFooter, pageIndex, printedPage),
         ),
       )
     })
@@ -659,15 +663,14 @@ ${pageRules.join('\n')}
   return { html, pages: emitted }
 }
 
-/// differentFirst is the sheet's first page; differentOddEven follows the
-/// job-wide page number (the one &P prints).
+/// differentFirst uses the sheet's first page. differentOddEven follows &P.
 export function pageVariant(
   headerFooter: SheetHeaderFooter,
   sheetPageIndex: number,
-  jobPage: number,
+  printedPage: number,
 ): PageVariant {
   if (sheetPageIndex === 0 && headerFooter.first !== null) return 'first'
-  if (jobPage % 2 === 0 && headerFooter.even !== null) return 'even'
+  if (printedPage % 2 === 0 && headerFooter.even !== null) return 'even'
   return 'odd'
 }
 

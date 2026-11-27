@@ -1082,11 +1082,12 @@ export const workbookRangeResultSchema = z
           .optional(),
         printGridlines: z.boolean().optional(),
         printHeadings: z.boolean().optional(),
+        firstPageNumber: z.number().int().min(0).max(0xffffffff).optional(),
         /// Excel-encoded odd header/footer (&L/&C/&R sections, field codes).
         oddHeader: z.string().min(1).max(500).optional(),
         oddFooter: z.string().min(1).max(500).optional(),
         /// headerFooter/@differentOddEven and @differentFirst: even pages
-        /// print the even* texts, page 1 the first* texts.
+        /// print the even* texts, the sheet's first page the first* texts.
         differentOddEven: z.boolean().optional(),
         differentFirst: z.boolean().optional(),
         /// headerFooter/@scaleWithDoc="0": the header/footer keeps its size
