@@ -132,6 +132,7 @@ interface PrintCellStyle {
   readonly ht?: number
   readonly vt?: number
   readonly tb?: number
+  readonly tr?: { readonly a?: number; readonly v?: number } | null
   readonly bd?: Partial<
     Record<'t' | 'b' | 'l' | 'r' | 'tl_br' | 'bl_tr', { s?: number; cl?: { rgb?: string | null } | null } | null>
   > | null
@@ -517,6 +518,10 @@ export function layoutSheetPrint(
       : ''
     const { text, raw } = cellContentAt(data, row, column)
     const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
+    const horizontalAlign = cellHorizontalAlign(style, raw)
+    const orientation = text && style?.tr
+      ? orientedTextCss(style, horizontalAlign, mergedWidthPt ?? columnWidthPt(column), heightPt)
+      : undefined
     const gridlines = setup.printGridlines && !worksheetDraft &&
       (dataArea === null || (row <= dataArea.endRow && column <= dataArea.endColumn))
     const custom = (r: number | null, c: number | null, edge: 't' | 'b' | 'l' | 'r'): boolean =>
@@ -535,10 +540,11 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, raw, gridlines, blackAndWhite, rightToLeft, edges)}">` +
+      `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, horizontalAlign, gridlines, blackAndWhite, rightToLeft, edges)}">` +
       diagonals +
-      `<div class="c" style="height:${round(heightPt)}pt;align-items:${align}">` +
-      `<span${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div></td>`
+      `<div class="c${orientation ? ' oriented' : ''}" style="height:${round(heightPt)}pt;align-items:${align}">` +
+      `<span${orientation ? ` class="oriented-text" style="${orientation}"` : ''}` +
+      `${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div></td>`
     )
   }
 
@@ -766,6 +772,8 @@ table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 td, th { padding: 0; border: 0; overflow: hidden; font-size: 11pt; vertical-align: bottom; }
 td .c { display: flex; overflow: hidden; padding: 0 2pt; line-height: 1.2; }
 td .c > span { width: 100%; }
+td .c.oriented { position: relative; }
+td .c > .oriented-text { position: absolute; width: max-content; transform-origin: left top; }
 td.has-diagonal, td.has-diagonal > .c { position: relative; }
 .cell-diagonal { display: block; position: absolute; left: 0; transform-origin: left center; print-color-adjust: exact; }
 th.hd { background: #f1f1f1; color: #444; font-size: 8.5pt; font-weight: 400;
@@ -1193,11 +1201,58 @@ function mergeMaps(worksheet: PrintWorksheet, area: PrintArea) {
   return { anchors, covered }
 }
 
+type HorizontalAlignment = 'left' | 'center' | 'right'
+
+function cellHorizontalAlign(style: PrintCellStyle | null, rawValue: unknown): HorizontalAlignment {
+  if (style?.ht === 1) return 'left'
+  if (style?.ht === 2) return 'center'
+  if (style?.ht === 3 || typeof rawValue === 'number') return 'right'
+  return typeof rawValue === 'boolean' ? 'center' : 'left'
+}
+
+function orientedTextCss(
+  style: PrintCellStyle,
+  align: HorizontalAlignment,
+  widthPt: number,
+  heightPt: number,
+): string | undefined {
+  const stacked = style.tr?.v === 1
+  const angle = -(style.tr?.a ?? 0)
+  if (!stacked && (!Number.isFinite(angle) || angle === 0 || Math.abs(angle) > 90)) return undefined
+
+  const x = align === 'left' ? 0 : align === 'center' ? 0.5 : 1
+  const y = style.vt === 1 ? 0 : style.vt === 2 ? 0.5 : 1
+  const left = x === 0 ? '2pt' : x === 0.5 ? '50%' : 'calc(100% - 2pt)'
+  const position = `left:${left};top:${y * 100}%;`
+  if (stacked) {
+    return position +
+      `transform:translate(${-x * 100}%,${-y * 100}%);writing-mode:vertical-lr;text-orientation:upright` +
+      (style.tb === 3 ? ';max-height:100%' : '')
+  }
+
+  // The corner that controls the rotated bounding box changes with the
+  // sign of the angle. Translate on both sides of the rotation so the
+  // visual box aligns even when its text width is unknown until layout.
+  const radians = angle * Math.PI / 180
+  const cosine = Math.cos(radians)
+  const originX = angle > 0 ? y : 1 - y
+  const originY = angle > 0 ? 1 - x : x
+  const transform =
+    `translate(${round4((originX - x) * cosine * 100)}%,${round4((originY - y) * cosine * 100)}%) ` +
+    `rotate(${angle}deg) translate(${-originX * 100}%,${-originY * 100}%)`
+  const lineWidthPt = Math.max(1, Math.min(
+    (widthPt - 4) / cosine,
+    heightPt / Math.abs(Math.sin(radians)),
+  ))
+  return position + `transform:${transform}` +
+    (style.tb === 3 ? `;max-width:${round(lineWidthPt)}pt` : '')
+}
+
 /// Borders paint as inset shadows or background stripes so they do not
 /// change the planned cell geometry. Only the owning cell paints an edge.
 function cellCss(
   style: PrintCellStyle | null,
-  rawValue: unknown,
+  align: HorizontalAlignment,
   gridlines: boolean,
   blackAndWhite: boolean,
   rightToLeft: boolean,
@@ -1223,18 +1278,6 @@ function cellCss(
     )
   if (style?.cl?.rgb) rules.push(`color:${blackAndWhite ? '#000000' : cssColor(style.cl.rgb)}`)
   const fill = !blackAndWhite && style?.bg?.rgb ? cssColor(style.bg.rgb) : undefined
-  const align =
-    style?.ht === 1
-      ? 'left'
-      : style?.ht === 2
-        ? 'center'
-        : style?.ht === 3
-          ? 'right'
-          : typeof rawValue === 'number'
-            ? 'right'
-            : typeof rawValue === 'boolean'
-              ? 'center'
-              : 'left'
   const shadows: string[] = []
   const patternedBorders: string[] = []
   const edge = (

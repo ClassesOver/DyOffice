@@ -1069,6 +1069,32 @@ describe('layoutSheetPrint', () => {
     expect(monochrome).not.toMatch(/#ff0000|#208040/)
   })
 
+  it('prints rotated and stacked text with the saved alignment', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => {
+          if (row === 0 && column === 0) return { tr: { a: 45 }, ht: 3, vt: 2 }
+          if (row === 0 && column === 1) return { tr: { a: -90 }, ht: 2, vt: 1, tb: 3 }
+          if (row === 1 && column === 0) return { tr: { a: 0, v: 1 } }
+          return null
+        },
+      }),
+    }
+    const document = layout(worksheet, payloadSetup({ printAreas: ['A1:B2'] }))
+    const body = document.pages[0]?.body ?? ''
+    expect(body).toContain('left:calc(100% - 2pt);top:50%;')
+    expect(body).toContain('rotate(-45deg)')
+    expect(body).toContain('left:50%;top:0%;')
+    expect(body).toContain('rotate(90deg)')
+    expect(body).toContain('max-width:15pt')
+    expect(body).toContain('writing-mode:vertical-lr;text-orientation:upright')
+    expect(body).toContain('<span>B2</span>')
+    expect(body.match(/class="oriented-text"/g)).toHaveLength(3)
+  })
+
   it('preserves value alignment for titles outside the saved print area', () => {
     const values = [[0.25, '005'], [true, 12], [34, 99]]
     const display = [['25%', '005'], ['TRUE', '12'], ['34', '99']]
