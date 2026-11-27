@@ -323,16 +323,22 @@ export function layoutSheetPrint(
       }],
     }
   }
-  const areas =
+  const explicitAreas =
     options.selection !== undefined && options.selection !== null
       ? [parseArea(options.selection)]
-      : setup.printAreas.length > 0
-        ? setup.printAreas.map(parseArea)
-        : [usedArea(worksheet, drawings, rowHeightPt, columnWidthPt)]
+      : setup.printAreas.map(parseArea)
+  const dataArea = explicitAreas.length === 0
+    ? {
+        startRow: 0, startColumn: 0,
+        endRow: worksheet.getLastRow(), endColumn: worksheet.getLastColumn(),
+      }
+    : null
+  const areas = dataArea
+    ? [areaWithDrawings(dataArea, drawings, rowHeightPt, columnWidthPt)]
+    : explicitAreas
   const titleRows = setup.printTitles ? parseTitleRows(setup.printTitles) : null
   const titleColumns = setup.printTitleColumns ? parseTitleColumns(setup.printTitleColumns) : null
   const headings = setup.printHeadings
-  const gridlines = setup.printGridlines && !worksheetDraft
 
   let totalCells = 0
   for (const area of areas) {
@@ -470,6 +476,8 @@ export function layoutSheetPrint(
     const style = styleAt(row, column)
     const text = displayAt(data, row, column)
     const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
+    const gridlines = setup.printGridlines && !worksheetDraft &&
+      (dataArea === null || (row <= dataArea.endRow && column <= dataArea.endColumn))
     const custom = (r: number | null, c: number | null, edge: 't' | 'b' | 'l' | 'r'): boolean =>
       r !== null && c !== null && borderEdge(styleAt(r, c), edge) !== undefined
     const edges = {
@@ -957,14 +965,14 @@ export function buildSheetPrintPayload(
 }
 
 /// Excel's default print range covers the cells and the drawings over them.
-function usedArea(
-  worksheet: PrintWorksheet,
+function areaWithDrawings(
+  dataArea: PrintArea,
   visuals: readonly PrintVisual[],
   rowHeightPt: (row: number) => number,
   columnWidthPt: (column: number) => number,
 ): PrintArea {
-  let endRow = Math.max(worksheet.getLastRow(), 0)
-  let endColumn = Math.max(worksheet.getLastColumn(), 0)
+  let endRow = Math.max(dataArea.endRow, 0)
+  let endColumn = Math.max(dataArea.endColumn, 0)
   for (const visual of visuals) {
     const bottom = visualOffsetPt(visual.offsetYPx) + finitePt(visual.heightPx, 1) * 0.75
     const right = visualOffsetPt(visual.offsetXPx) + finitePt(visual.widthPx, 1) * 0.75
@@ -979,7 +987,7 @@ function usedArea(
       visualEndCell(visual.fromColumn, right, columnWidthPt, MAX_GRID_COLUMNS - 1),
     )
   }
-  return { startRow: 0, startColumn: 0, endRow, endColumn }
+  return { ...dataArea, endRow, endColumn }
 }
 
 function visualOffsetPt(offsetPx: number): number {

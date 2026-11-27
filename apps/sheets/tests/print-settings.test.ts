@@ -920,6 +920,22 @@ describe('layoutSheetPrint', () => {
     expect(whole.pages[0]?.body).toContain('style="left:82.5pt;top:18.75pt;width:150pt;height:48.75pt"')
     expect(whole.pages[0]?.body).toContain('B3')
 
+    const gridSetup = payloadSetup({ printGridlines: true })
+    const withGridlines = layout(worksheet, gridSetup, new Map(), visuals)
+    const styles = [...(withGridlines.pages[0]?.body ?? '').matchAll(/<td style="([^"]*)">/g)]
+    const griddedCells = styles.flatMap(([_, style], index) =>
+      style?.includes('#c0c0c0') ? [index] : [],
+    )
+    expect(griddedCells).toEqual([0, 1, 4, 5, 8, 9])
+    expect(styles[9]?.[1]).toContain('inset 0 -0.75pt 0 #c0c0c0,inset -0.75pt 0 0 #c0c0c0')
+
+    const printAreaSetup = { ...gridSetup, printAreas: ['A1:D5'] }
+    const printArea = layout(worksheet, printAreaSetup, new Map(), visuals)
+    const selection = layout(worksheet, gridSetup, new Map(), visuals, { selection: 'A1:D5' })
+    for (const document of [printArea, selection]) {
+      expect(document.pages[0]?.body.match(/box-shadow:/g)).toHaveLength(20)
+    }
+
     const paged = layout(worksheet, payloadSetup({}), new Map(), visuals, {
       breaks: { rowBreaks: [], colBreaks: [2] },
     })
