@@ -8,11 +8,10 @@ import type { WorkbookStyleEdit } from '../shared/edit-schemas.ts'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { rewriteChartReferences } from './xlsx-chart-references.ts'
 import { workbookNameParts } from './xlsx-defined-names.ts'
-import { rewriteX14DataValidations } from './xlsx-dv.ts'
+import { rewriteWorksheetValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
-import { findRootChild, rootChildren } from './xlsx-root-tail.ts'
-import { childElements, type ChildElement } from './xlsx-style-entries.ts'
+import { findRootChild } from './xlsx-root-tail.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
   applyPatches,
@@ -283,7 +282,7 @@ export function applyStructuralOps(
     if (!shift.swap) xml = materializeSharedGroupsTheShiftBreaks(xml, sheetName, shift, axis, true)
     const moveReference = (ref: string) => moveRefRange(ref, shift, axis)
     const moveFormula = (formula: string) => shiftFormulaText(formula, sheetName, shift, axis)
-    xml = shiftWorksheetRuleRanges(xml, moveReference)
+    xml = shiftProtectedRanges(xml, moveReference)
     xml = rewriteWorksheetHyperlinks(
       xml,
       (location) => shiftLocalHyperlinkLocation(location, sheetName, shift, axis),
@@ -297,7 +296,7 @@ export function applyStructuralOps(
     xml = shiftWorksheetMerges(xml, shift, axis)
     xml = transformWorksheetAutoFilters(xml, shift, axis)
     const moveSqref = (sqref: string) => shiftSqref(sqref, moveReference)
-    xml = rewriteX14DataValidations(xml, moveFormula, moveSqref)
+    xml = rewriteWorksheetValidations(xml, moveFormula, moveSqref)
     xml = rewriteWorksheetVisualReferences(xml, moveFormula, moveSqref)
     xml = shiftWorksheetPrintLayout(xml, shift, axis)
   }
@@ -735,21 +734,16 @@ export function shiftCrossSheetFormulas(
     const rewrite = (body: string): string =>
       escapeXmlText(shiftFormulaText(decodeEntities(body), editedSheetName, shift, axis, true))
     xml = rewriteWorksheetCore(xml, (core) =>
-      core
-        .replace(
-          CELL_FORMULA,
-          (_full, opening: string, body: string, closing: string) =>
-            opening + rewrite(body) + closing,
-        )
-        .replace(
-          /<(formula[12])>([\s\S]*?)<\/\1>/g,
-          (_full, tag: string, body: string) => `<${tag}>${rewrite(body)}</${tag}>`,
-        ),
+      core.replace(
+        CELL_FORMULA,
+        (_full, opening: string, body: string, closing: string) =>
+          opening + rewrite(body) + closing,
+      ),
     )
     const moveFormula = (formula: string) =>
       shiftFormulaText(formula, editedSheetName, shift, axis, true)
     xml = rewriteWorksheetHyperlinks(xml, moveFormula)
-    xml = rewriteX14DataValidations(xml, moveFormula)
+    xml = rewriteWorksheetValidations(xml, moveFormula)
     xml = rewriteWorksheetVisualReferences(xml, moveFormula)
   }
   return xml
@@ -1862,10 +1856,9 @@ function transformColDefinitions(xml: string, shift: Shift): string {
 // A self-closing shared follower must not consume the next formula's closing tag.
 const CELL_FORMULA = /(<f(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/f>)/g
 
-/// Rewrites `<f>` bodies plus shared/array formula `ref` attributes, and the
-/// `<formula1>`/`<formula2>` bodies of data validation rules.
+/// Rewrites cell formula bodies and shared/array formula `ref` attributes.
 function transformFormulas(xml: string, sheetName: string, shift: Shift, axis: Axis): string {
-  let result = xml.replace(
+  return xml.replace(
     CELL_FORMULA,
     (_full, opening: string, body: string, closing: string) => {
       const rewritten = escapeXmlText(
@@ -1885,12 +1878,7 @@ function transformFormulas(xml: string, sheetName: string, shift: Shift, axis: A
       return opening + rewritten + closing
     },
   )
-  result = result.replace(
-    /<(formula[12])>([\s\S]*?)<\/\1>/g,
-    (_full, tag: string, body: string) =>
-      `<${tag}>${escapeXmlText(shiftFormulaText(decodeEntities(body), sheetName, shift, axis))}</${tag}>`,
-  )
-  return result
+
 }
 
 function transformWorksheetAutoFilters(xml: string, shift: Shift, axis: Axis): string {
@@ -1911,51 +1899,22 @@ export function rewriteWorksheetCore(xml: string, rewrite: (fragment: string) =>
     : rewrite(xml)
 }
 
-function rewriteWorksheetSections(
-  xml: string,
-  names: readonly string[],
-  rewrite: (element: ChildElement, name: string) => string,
-): string {
-  const chunks: string[] = []
-  let start = 0
-  for (const section of rootChildren(xml, 'worksheet')) {
-    if (!names.includes(section.name)) continue
-    const [element] = childElements(xml.slice(section.start, section.end))
-    if (!element) continue
-    const updated = rewrite(element, section.name)
-    if (updated === element.xml) continue
-    chunks.push(xml.slice(start, section.start), updated)
-    start = section.end
-  }
-  if (!chunks.length) return xml
-  chunks.push(xml.slice(start))
-  return chunks.join('')
-}
-
 function rewriteRangeSection(
-  element: ChildElement | ScopedElement,
+  element: ScopedElement,
   entryName: string,
   rewriteOpening: (opening: string) => string | null,
-  updateCount = false,
 ): string {
   let body = element.inner
-  let count = 0
-  const children = 'namespace' in element
-    ? scopedChildren(element).filter((child) => isElement(child, entryName, element.namespace))
-    : childElements(element.inner).filter((child) => child.name.slice(child.name.lastIndexOf(':') + 1) === entryName)
+  const children = scopedChildren(element).filter(child => isElement(child, entryName, element.namespace))
   for (const child of children.reverse()) {
     const opening = rewriteOpening(child.opening)
-    if (opening !== null) count += 1
     if (opening === child.opening) continue
     const replacement = opening === null ? '' : opening + child.xml.slice(child.opening.length)
     body = body.slice(0, child.start) + replacement + body.slice(child.start + child.xml.length)
   }
   if (body === element.inner) return element.xml
   if (!body.trim()) return ''
-  const opening = updateCount
-    ? updateWorksheetTagAttribute(element.opening, 'count', String(count))
-    : element.opening
-  return opening + body + element.xml.slice(element.opening.length + element.inner.length)
+  return withBody(element, body)
 }
 
 export function rewriteWorksheetHyperlinks(
@@ -2023,22 +1982,14 @@ function shiftSqref(sqref: string, moveRef: (ref: string) => string | null): str
     : moved.join(' ')
 }
 
-function shiftWorksheetRuleRanges(xml: string, moveRef: (ref: string) => string | null): string {
-  if (!/protectedRanges|dataValidations/.test(xml)) return xml
-  const shiftOpening = (opening: string) =>
-    rewriteRangeAttribute(opening, 'sqref', (sqref) => shiftSqref(sqref, moveRef))
-  if (xml.includes('protectedRanges')) {
-    const ranges = worksheetChildren(xml).find((child) => child.local === 'protectedRanges')
-    if (ranges) {
-      const moved = rewriteRangeSection(ranges, 'protectedRange', shiftOpening)
-      if (moved !== ranges.xml) xml = applyPatches(xml, [patchElement(ranges, moved)])
-    }
-  }
-  return rewriteWorksheetSections(
-    xml,
-    ['dataValidations'],
-    (element) => rewriteRangeSection(element, 'dataValidation', shiftOpening, true),
+function shiftProtectedRanges(xml: string, moveRef: (ref: string) => string | null): string {
+  if (!xml.includes('protectedRanges')) return xml
+  const ranges = worksheetChildren(xml).find(child => child.local === 'protectedRanges')
+  if (!ranges) return xml
+  const moved = rewriteRangeSection(ranges, 'protectedRange', opening =>
+    rewriteRangeAttribute(opening, 'sqref', sqref => shiftSqref(sqref, moveRef)),
   )
+  return moved === ranges.xml ? xml : applyPatches(xml, [patchElement(ranges, moved)])
 }
 
 function shiftWorksheetPrintLayout(xml: string, shift: Shift, axis: Axis): string {

@@ -11,7 +11,7 @@ import {
 } from './xlsx-structure.ts'
 import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-references.ts'
 import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
-import { rewriteX14DataValidations } from './xlsx-dv.ts'
+import { rewriteWorksheetValidations } from './xlsx-dv.ts'
 import { ensureRelationshipNamespace, readRelationshipId, readRelationshipIdAttribute, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
@@ -134,7 +134,7 @@ export interface WorksheetRenameExemptions {
 }
 
 const WORKSHEET_FORMULA =
-  /(<(f|formula[12])(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/\2>)/g
+  /(<f(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/f>)/g
 const HYPERLINK_LOCATION = /^('(?:[^']|'')+'|[^'!]+)!([\s\S]*)$/
 function sheetNameLookup(renames: SheetEditPlan['renames']): SheetNameLookup {
   const names = new Map(renames.map(({ sheetName, newName }) => [sheetName.toLowerCase(), newName]))
@@ -208,7 +208,7 @@ function rewriteWorksheetReferences(
   let xml = rewriteWorksheetCore(worksheetXml, (core) =>
     core.replace(
       WORKSHEET_FORMULA,
-      (full, opening: string, _tag: string, body: string, closing: string) => {
+      (full, opening: string, body: string, closing: string) => {
         const formula = decodeEntities(body)
         const rewritten = rewriteFormula(formula)
         return rewritten === formula ? full : opening + escapeXmlText(rewritten) + closing
@@ -220,7 +220,7 @@ function rewriteWorksheetReferences(
       ? location
       : rewriteLocation(location),
   )
-  xml = rewriteX14DataValidations(xml, rewriteFormula)
+  xml = rewriteWorksheetValidations(xml, rewriteFormula)
   return rewriteWorksheetVisualReferences(
     xml,
     rewriteFormula,

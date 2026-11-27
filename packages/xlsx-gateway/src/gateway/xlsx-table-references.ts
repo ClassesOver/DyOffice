@@ -1,4 +1,4 @@
-import { rewriteX14DataValidations } from './xlsx-dv.ts'
+import { rewriteWorksheetValidations } from './xlsx-dv.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
@@ -12,8 +12,8 @@ import {
   type XmlPatch,
 } from './xlsx-worksheet-xml.ts'
 
-const formulaTags = /<(?:[\w.-]+:)?(?:f|formula[12]?|calculatedColumnFormula|totalsRowFormula)(?=[\s/>])/
-const worksheetFormulas = new Set(['f', 'formula1', 'formula2'])
+const formulaTags = /<(?:[\w.-]+:)?(?:f|calculatedColumnFormula|totalsRowFormula)(?=[\s/>])/
+const worksheetFormulas = new Set(['f'])
 const tableFormulas = new Set(['calculatedColumnFormula', 'totalsRowFormula'])
 
 export function rewriteTableReferencesInPart(
@@ -41,11 +41,12 @@ export function rewriteTableReferencesInPart(
       }
     } else if (formulaTags.test(node.inner)) {
       const bodyStart = start + node.opening.length
-      for (const child of scopedChildren(node)) stack.push({ node: child, start: bodyStart + child.start })
+      for (const child of scopedChildren(node))
+        stack.push({ node: child, start: bodyStart + child.start })
     }
   }
   const rewritten = applyPatches(xml, patches)
   return kind === 'worksheet'
-    ? rewriteWorksheetVisualReferences(rewriteX14DataValidations(rewritten, rewrite), rewrite)
+    ? rewriteWorksheetVisualReferences(rewriteWorksheetValidations(rewritten, rewrite), rewrite)
     : rewritten
 }

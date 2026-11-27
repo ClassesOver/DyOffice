@@ -130,6 +130,14 @@ export function applyDvRules(
           .map((element) => withNamespaces(element, root.namespaces))
           .filter((element) => isElement(element, 'dataValidations', ''))
       : []
+  const legacyContainer = legacy[0]
+  const legacyNamespaces = legacyContainer?.namespaces ?? root.namespaces
+  const legacyPrefix = prefixOf((legacyContainer ?? root).name)
+  const foreignEntries = [...legacy, ...trailing].flatMap((section) =>
+    scopedChildren(section)
+      .filter((entry) => !isElement(entry, 'dataValidation', root.namespace))
+      .map((entry) => qualifyMovedEntry(entry, entry.xml, legacyNamespaces)),
+  )
   const legacyEntries = [
     ...(replaced
       ? [...legacy, ...trailing].flatMap((section) =>
@@ -142,23 +150,21 @@ export function applyDvRules(
               const markup =
                 remaining === ref
                   ? entry.xml
-                  : entry.xml.replace(
-                      /\ssqref\s*=\s*(?:"[^"]*"|'[^']*')/,
-                      () => ` sqref="${escapeXmlAttribute(remaining)}"`,
-                    )
-              return [qualifyMovedEntry(entry, markup, root.namespaces)]
+                  : replaceValidationAttribute(entry.opening, 'sqref', remaining) +
+                    entry.xml.slice(entry.opening.length)
+              return [qualifyMovedEntry(entry, markup, legacyNamespaces)]
             }),
         )
       : []),
-    ...prepared
-      .filter((rule) => !rule.needsX14)
-      .map((rule) => legacyEntry(rule, prefixOf(root.name))),
+    ...prepared.filter((rule) => !rule.needsX14).map((rule) => legacyEntry(rule, legacyPrefix)),
   ]
-  const legacyTag = prefixOf(root.name) + 'dataValidations'
-  const legacyBlock =
-    legacyEntries.length > 0
-      ? `<${legacyTag} count="${legacyEntries.length}">${legacyEntries.join('')}</${legacyTag}>`
-      : ''
+  const legacyBody = [...legacyEntries, ...foreignEntries].join('')
+  const legacyTag = legacyPrefix + 'dataValidations'
+  const legacyBlock = !legacyBody
+    ? ''
+    : legacyContainer
+      ? withValidationCount(legacyContainer, legacyBody, legacyEntries.length)
+      : `<${legacyTag} count="${legacyEntries.length}">${legacyBody}</${legacyTag}>`
   if (legacy.length > 0) {
     legacy.forEach((section, index) =>
       patches.push(patchElement(section, index === 0 ? legacyBlock : '')),
@@ -375,55 +381,113 @@ function validationSections(extension: ScopedElement): ScopedElement[] {
   return scopedChildren(extension).filter((child) => isElement(child, 'dataValidations', X14_XMLNS))
 }
 
-/// Replay worksheet edits on the x14 rules in place, preserving aliases and
+/// Replays worksheet edits on legacy and x14 rules, preserving aliases and
 /// extension payloads. An empty target removes its validation.
-export function rewriteX14DataValidations(
+export function rewriteWorksheetValidations(
   xml: string,
   rewriteFormula: (formula: string) => string,
   rewriteSqref?: (sqref: string) => string | null,
 ): string {
-  if (!xml.includes('dataValidations') || !xml.includes('extLst')) return xml
+  if (!xml.includes('dataValidations')) return xml
   const root = worksheetRoot(xml)
   if (!root) return xml
-  const { list, extensions } = worksheetExtensions(root, scopedChildren(root))
-  if (!list) return xml
-  const patches: XmlPatch[] = []
-  for (const extension of extensions) {
-    if (extensionUri(extension) !== X14_DV_EXT_URI.toUpperCase()) continue
-    const sections = validationSections(extension).flatMap((section) => {
-      const entries = scopedChildren(section).filter((child) =>
-        isElement(child, 'dataValidation', X14_XMLNS),
+  const children = scopedChildren(root)
+  const patches = children
+    .filter((child) => isElement(child, 'dataValidations', root.namespace))
+    .flatMap((section) =>
+      rewriteValidationSection(section, (entry) =>
+        rewriteLegacyValidationEntry(entry, rewriteFormula, rewriteSqref),
+      ),
+    )
+  const { list, extensions } = worksheetExtensions(root, children)
+  if (list) {
+    const extended = extensions.flatMap((extension) => {
+      if (extensionUri(extension) !== X14_DV_EXT_URI.toUpperCase()) return []
+      const sections = validationSections(extension).flatMap((section) =>
+        rewriteValidationSection(section, (entry) =>
+          rewriteX14ValidationEntry(entry, rewriteFormula, rewriteSqref),
+        ),
       )
-      let count = entries.length
-      const changed = entries.flatMap((entry) => {
-        const rewritten = rewriteX14ValidationEntry(entry, rewriteFormula, rewriteSqref)
-        if (!rewritten) count -= 1
-        return rewritten === entry.xml ? [] : [patchElement(entry, rewritten)]
-      })
-      if (changed.length === 0) return []
-      const body = applyPatches(section.inner, changed)
-      if (!body.trim()) return [patchElement(section, '')]
-      const opening =
-        count === entries.length
-          ? section.opening
-          : section.opening.replace(XML_ATTRIBUTE, (attribute, prefix: string, name: string) => {
-              if (name !== 'count') return attribute
-              const quote = attribute.at(-1)
-              return `${prefix}${quote}${count}${quote}`
-            })
-      const markup = withBody(section, body)
-      return [patchElement(section, opening + markup.slice(section.opening.length))]
+      if (!sections.length) return []
+      const body = applyPatches(extension.inner, sections)
+      return [patchElement(extension, body.trim() ? withBody(extension, body) : '')]
     })
-    if (sections.length === 0) continue
-    const body = applyPatches(extension.inner, sections)
-    patches.push(patchElement(extension, body.trim() ? withBody(extension, body) : ''))
+    if (extended.length) {
+      const body = applyPatches(list.inner, extended)
+      patches.push(patchElement(list, body.trim() ? withBody(list, body) : ''))
+    }
   }
-  if (patches.length === 0) return xml
-  const body = applyPatches(list.inner, patches)
-  const worksheet = applyPatches(root.inner, [
-    patchElement(list, body.trim() ? withBody(list, body) : ''),
-  ])
-  return applyPatches(xml, [patchElement(root, withBody(root, worksheet))])
+  return patches.length
+    ? applyPatches(xml, [patchElement(root, withBody(root, applyPatches(root.inner, patches)))])
+    : xml
+}
+
+function rewriteValidationSection(
+  section: ScopedElement,
+  rewriteEntry: (entry: ScopedElement) => string,
+): XmlPatch[] {
+  const entries = scopedChildren(section).filter((child) =>
+    isElement(child, 'dataValidation', section.namespace),
+  )
+  let count = entries.length
+  const changed = entries.flatMap((entry) => {
+    const rewritten = rewriteEntry(entry)
+    if (!rewritten) count -= 1
+    return rewritten === entry.xml ? [] : [patchElement(entry, rewritten)]
+  })
+  if (!changed.length) return []
+  const body = applyPatches(section.inner, changed)
+  if (!body.trim()) return [patchElement(section, '')]
+  const markup =
+    count !== entries.length && (section.namespace !== X14_XMLNS || section.attributes.has('count'))
+      ? withValidationCount(section, body, count)
+      : withBody(section, body)
+  return [patchElement(section, markup)]
+}
+
+function replaceValidationAttribute(opening: string, attributeName: string, value: string): string {
+  return opening.replace(XML_ATTRIBUTE, (attribute, prefix: string, name: string) => {
+    if (name !== attributeName) return attribute
+    const quote = attribute.at(-1)
+    const escaped = escapeXmlAttribute(value)
+    return `${prefix}${quote}${quote === "'" ? escaped.replaceAll("'", '&apos;') : escaped}${quote}`
+  })
+}
+
+function withValidationCount(section: ScopedElement, body: string, count: number): string {
+  const opening = section.attributes.has('count')
+    ? replaceValidationAttribute(section.opening, 'count', String(count))
+    : section.opening.replace(/\/?>(?=$)/, (closing) => ` count="${count}"${closing}`)
+  return withBody(
+    { ...section, opening, xml: opening + section.xml.slice(section.opening.length) },
+    body,
+  )
+}
+
+function rewriteLegacyValidationEntry(
+  entry: ScopedElement,
+  rewriteFormula: (formula: string) => string,
+  rewriteSqref: ((sqref: string) => string | null) | undefined,
+): string {
+  const target = entry.attributes.get('sqref')
+  const moved = target && rewriteSqref ? rewriteSqref(target) : target
+  if (moved === null) return ''
+  const patches = scopedChildren(entry).flatMap((field) => {
+    if (
+      field.namespace !== entry.namespace ||
+      (field.local !== 'formula1' && field.local !== 'formula2')
+    )
+      return []
+    const original = elementText(field.inner)
+    const rewritten = rewriteFormula(original)
+    return rewritten === original
+      ? []
+      : [patchElement(field, withBody(field, escapeXmlText(rewritten)))]
+  })
+  const markup = patches.length ? withBody(entry, applyPatches(entry.inner, patches)) : entry.xml
+  return moved === undefined || moved === target
+    ? markup
+    : replaceValidationAttribute(entry.opening, 'sqref', moved) + markup.slice(entry.opening.length)
 }
 
 function rewriteX14ValidationEntry(
@@ -478,6 +542,12 @@ function rewriteExtendedValidations(
   const managed = extensions
     .filter((extension) => [dvUri, X14_CF_EXT_URI].includes(extensionUri(extension) ?? ''))
     .map((extension) => ({ extension, sections: validationSections(extension) }))
+  const ownerSection = managed.find(({ extension }) => extension === owner)?.sections[0]
+  const foreignEntries = ownerSection
+    ? scopedChildren(ownerSection)
+        .filter((entry) => !isElement(entry, 'dataValidation', X14_XMLNS))
+        .map((entry) => qualifyMovedEntry(entry, entry.xml, target))
+    : []
   const entries = [
     ...(replaced
       ? managed.flatMap(({ sections }) =>
@@ -508,24 +578,29 @@ function rewriteExtendedValidations(
       : []),
     ...prepared.map(x14Entry),
   ]
-  const block = entries.length
-    ? '<x14:dataValidations xmlns:x14="' +
-      X14_XMLNS +
-      '" xmlns:xm="' +
-      XM_XMLNS +
-      '" count="' +
-      entries.length +
-      '">' +
-      entries.join('') +
-      '</x14:dataValidations>'
-    : ''
+  const block =
+    entries.length || foreignEntries.length
+      ? '<x14:dataValidations xmlns:x14="' +
+        X14_XMLNS +
+        '" xmlns:xm="' +
+        XM_XMLNS +
+        '" count="' +
+        entries.length +
+        '">' +
+        entries.join('') +
+        foreignEntries.join('') +
+        '</x14:dataValidations>'
+      : ''
   const patches = managed.flatMap(({ extension, sections }) => {
     if (sections.length === 0 && extension !== owner) return []
+    const sectionPatches = sections.flatMap((section) =>
+      section === ownerSection
+        ? [patchElement(section, block)]
+        : rewriteValidationSection(section, () => ''),
+    )
     const body =
-      applyPatches(
-        extension.inner,
-        sections.map((section) => patchElement(section, '')),
-      ) + (extension === owner ? block : '')
+      applyPatches(extension.inner, sectionPatches) +
+      (extension === owner && !ownerSection ? block : '')
     return [patchElement(extension, body.trim() ? withBody(extension, body) : '')]
   })
   let appended = ''
