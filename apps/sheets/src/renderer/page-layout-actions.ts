@@ -507,6 +507,7 @@ export interface PrintOutputSettings {
 
 /// What the Print dialog needs from the App; built fresh per open.
 export interface PrintPreviewHost {
+  readonly browserPrintDialog?: boolean
   readonly setup: EffectivePageSetup
   readonly marginsPreset: 'normal' | 'wide' | 'narrow' | 'custom'
   readonly hasSelection: boolean
@@ -538,6 +539,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
   }
   const sheetId = worksheet.getSheetId()
   const journal = state?.editJournal.pageSetup.get(sheetId) ?? {}
+  const browserPrintDialog = window.desktopApi.browserPrintDialog === true
   const fileSetup = state?.sheetFilePageSetups.get(sheetId) ?? null
   const fileSheet = state?.file.sheets.find((sheet) => sheet.id === sheetId)
   const setup = resolveEffectivePageSetup(
@@ -576,6 +578,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     pages === null ? undefined : (page: number) => page >= pages.from && page <= pages.to
   return {
     setup,
+    browserPrintDialog,
     marginsPreset: journal.margins ?? (fileSetup?.margins === undefined ? 'normal' : 'custom'),
     hasSelection,
     chartSheet,
@@ -611,7 +614,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
         copies: output.copies,
         collate: output.collate,
       })
-      if (result.ok) return t('appPrintSent')
+      if (result.ok) return browserPrintDialog ? t('dlgPrintSystemDialog') : t('appPrintSent')
       return result.error === undefined ? t('appPrintCanceled') : t('appPrintFailed')
     },
     async exportPdf(job, pages) {
@@ -783,6 +786,11 @@ export async function handleExportPdf(ctx: PageLayoutContext, outPath?: string):
       ? await workbookPrintPayload(ctx, messages)
       : await activeSheetPrintPayload(ctx, messages)
     if (!payload) return false
+    if (!outPath && window.desktopApi.browserPrintDialog) {
+      const result = await window.desktopApi.printWorkbook(payload)
+      ctx.setMessage(result.ok ? t('dlgPrintSystemDialog') : t('appPdfExportFailed'))
+      return false // The browser does not report whether a file was saved.
+    }
     const result = await window.desktopApi.exportPdf({
       ...payload,
       ...(outPath ? { outPath } : {}),

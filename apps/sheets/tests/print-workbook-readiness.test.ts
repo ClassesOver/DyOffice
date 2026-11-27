@@ -221,6 +221,20 @@ describe('print and PDF workbook readiness coordination', () => {
     expect(messages).toContain('Exported D:/test.pdf.')
   })
 
+  it('opens the Web print dialog for PDF output without reporting a saved file', async () => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    const printWorkbook = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('window', { desktopApi: { browserPrintDialog: true, printWorkbook, exportPdf: exportPdfMock } })
+
+    expect(await handleExportPdf(createMockContext(state))).toBe(false)
+    expect(printWorkbook).toHaveBeenCalledOnce()
+    expect(printWorkbook.mock.calls[0]?.[0].html).toContain('class="page ')
+    expect(exportPdfMock).not.toHaveBeenCalled()
+    expect(messages).toContain('System print dialog…')
+  })
+
   it('Print of a streamed workbook preloads it first and opens the dialog host', async () => {
     const state = createMockState()
     const ctx = createMockContext(state)

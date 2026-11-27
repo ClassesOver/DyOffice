@@ -109,7 +109,7 @@ export interface PrintWorksheet {
     getColVisible(column: number): boolean
     getCell?(row: number, column: number): PrintConditionalCell | null | undefined
     getCellMatrix?(): {
-      getRow(row: number): Record<number, PrintCellData | null | undefined> | null | undefined
+      getRow?(row: number): Record<number, PrintCellData | null | undefined> | null | undefined
     }
   }
   getMergedRanges(): {
@@ -506,7 +506,7 @@ export function layoutSheetPrint(
 
   const cellContentAt = (data: (typeof areaData)[number], row: number, column: number) => {
     const { area } = data
-    const rich = extractRichText(matrix?.getRow(row)?.[column]?.p)
+    const rich = extractRichText(matrix?.getRow?.(row)?.[column]?.p)
     if (
       row >= area.startRow &&
       row <= area.endRow &&
@@ -540,7 +540,7 @@ export function layoutSheetPrint(
     const cached = centerAcrossRuns.get(row)
     if (cached) return cached
     const runs: { column: number; widthPt: number }[] = []
-    const cells = matrix?.getRow(row)
+    const cells = matrix?.getRow?.(row)
     if (cells) {
       for (const [key, cell] of Object.entries(cells)) {
         const end = cell?.custom?.[CENTER_ACROSS_END_KEY]
@@ -867,7 +867,7 @@ export function assemblePrintHtml(
     `<!doctype html><html lang="${htmlLang(lang)}"><head><meta charset="utf-8"><style>
 @page { margin: 0; }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: #fff; }
+html, body { margin: 0; padding: 0; background: #fff; print-color-adjust: exact; }
 body { font-family: Calibri, 'Helvetica Neue', Arial, ${printCjkFonts(lang)}, sans-serif; }
 .page { position: relative; overflow: hidden; background: #fff; break-after: page; }
 .page:last-child { break-after: auto; }

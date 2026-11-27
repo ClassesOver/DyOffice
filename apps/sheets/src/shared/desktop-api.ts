@@ -3429,6 +3429,8 @@ export interface McpCommandResult {
 }
 
 export interface DesktopApi {
+  /** Output is handled in the browser's print/save dialog. */
+  browserPrintDialog?: boolean
   /** Same-process Web bridge: no Electron structured-clone transfer required. */
   saveEditsInlineMaxBytes?: number | undefined
   /** open any shell-routed document path (an AI answer's filenav citation) */

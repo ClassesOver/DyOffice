@@ -265,38 +265,42 @@ export function PrintDialog({
         <header>{t('dlgPrintTitle')}</header>
         <div className="print-dialog-body">
           <div className="print-settings dialog-grid">
-            <label className="dialog-span">
-              {t('dlgPrintPrinter')}
-              <select value={deviceName} onChange={(event) => setDeviceName(event.target.value)}>
-                <option value={DEFAULT_PRINTER}>{t('dlgPrintDefaultPrinter')}</option>
-                {printers.map((printer) => (
-                  <option key={printer.name} value={printer.name}>
-                    {printer.displayName}
-                  </option>
-                ))}
-                <option value={SYSTEM_DIALOG}>{t('dlgPrintSystemDialog')}</option>
-              </select>
-            </label>
-            <label>
-              {t('dlgPrintCopies')}
-              <input
-                type="number"
-                min={1}
-                max={999}
-                value={copies}
-                onChange={(event) =>
-                  setCopies(Math.min(999, Math.max(1, Number(event.target.value) || 1)))
-                }
-              />
-            </label>
-            <label className="dialog-check">
-              <input
-                type="checkbox"
-                checked={collate}
-                onChange={(event) => setCollate(event.target.checked)}
-              />
-              {t('dlgPrintCollate')}
-            </label>
+            {!host.browserPrintDialog && (
+              <>
+                <label className="dialog-span">
+                  {t('dlgPrintPrinter')}
+                  <select value={deviceName} onChange={(event) => setDeviceName(event.target.value)}>
+                    <option value={DEFAULT_PRINTER}>{t('dlgPrintDefaultPrinter')}</option>
+                    {printers.map((printer) => (
+                      <option key={printer.name} value={printer.name}>
+                        {printer.displayName}
+                      </option>
+                    ))}
+                    <option value={SYSTEM_DIALOG}>{t('dlgPrintSystemDialog')}</option>
+                  </select>
+                </label>
+                <label>
+                  {t('dlgPrintCopies')}
+                  <input
+                    type="number"
+                    min={1}
+                    max={999}
+                    value={copies}
+                    onChange={(event) =>
+                      setCopies(Math.min(999, Math.max(1, Number(event.target.value) || 1)))
+                    }
+                  />
+                </label>
+                <label className="dialog-check">
+                  <input
+                    type="checkbox"
+                    checked={collate}
+                    onChange={(event) => setCollate(event.target.checked)}
+                  />
+                  {t('dlgPrintCollate')}
+                </label>
+              </>
+            )}
             <label className="dialog-span">
               {t('dlgPrintRange')}
               <select
@@ -528,20 +532,22 @@ export function PrintDialog({
           <button className="secondary" onClick={onClose}>
             {t('dlgCancel')}
           </button>
-          <button
-            className="secondary"
-            disabled={!canOutput}
-            onClick={() => void run((built) => host.exportPdf(built, pages))}
-          >
-            {t('dlgPrintToPdf')}
-          </button>
+          {!host.browserPrintDialog && (
+            <button
+              className="secondary"
+              disabled={!canOutput}
+              onClick={() => void run((built) => host.exportPdf(built, pages))}
+            >
+              {t('dlgPrintToPdf')}
+            </button>
+          )}
           <button
             className="primary-action"
             disabled={!canOutput}
             onClick={() =>
               void run((built) =>
                 host.print(built, {
-                  deviceName: deviceName === SYSTEM_DIALOG ? null : deviceName,
+                  deviceName: host.browserPrintDialog || deviceName === SYSTEM_DIALOG ? null : deviceName,
                   copies,
                   collate,
                   pages,
@@ -549,7 +555,7 @@ export function PrintDialog({
               )
             }
           >
-            {t('dlgPrintButton')}
+            {host.browserPrintDialog ? `${t('dlgPrintButton')} / ${t('dlgPrintToPdf')}` : t('dlgPrintButton')}
           </button>
         </div>
       </div>
