@@ -220,6 +220,97 @@ export function installedVisualFrames(sheetId: string): readonly InstalledVisual
   return installedFrames.get(sheetId) ?? []
 }
 
+export function measureWorkbookVisualFrame(
+  worksheet: UniverWorksheet,
+  visual: WorkbookVisualObject,
+): { frame: InstalledVisualFrame; framed: boolean } {
+  // An out-of-bounds anchor would throw in getRange and take every other
+  // visual down with it — clamp the display range to the sheet.
+  const maxRows = worksheet.getMaxRows()
+  const maxColumns = worksheet.getMaxColumns()
+  let fromRow = Math.min(visual.anchor.fromRow, maxRows - 1)
+  let fromColumn = Math.min(visual.anchor.fromColumn, maxColumns - 1)
+  let toRow = Math.min(visual.anchor.toRow, maxRows - 1)
+  let toColumn = Math.min(visual.anchor.toColumn, maxColumns - 1)
+  // Pixel-exact frame (Excel twoCellAnchor semantics): each marker is a
+  // cell plus an EMU offset inside it, so the box runs from the `from`
+  // marker to the `to` marker — not across the whole cell range.
+  const columnWidth = (index: number): number => Math.max(worksheet.getColumnWidth(index), 1)
+  const rowHeight = (index: number): number => Math.max(worksheet.getRowHeight(index), 1)
+  const rawX = markerFrom(fromColumn, visual.anchor.fromColumnOffset)
+  const rawY = markerFrom(fromRow, visual.anchor.fromRowOffset)
+  let marginX = visual.groupTransform ? rawX.offset : Math.max(0, rawX.offset)
+  let marginY = visual.groupTransform ? rawY.offset : Math.max(0, rawY.offset)
+  const explicitTo = visual.anchor.explicitTo === true
+  let width = markerSpan(
+    { index: fromColumn, offset: marginX },
+    clampExplicitTo(markerFrom(toColumn, visual.anchor.toColumnOffset), explicitTo, columnWidth),
+    columnWidth,
+  )
+  let height = markerSpan(
+    { index: fromRow, offset: marginY },
+    clampExplicitTo(markerFrom(toRow, visual.anchor.toRowOffset), explicitTo, rowHeight),
+    rowHeight,
+  )
+  if (visual.groupTransform) {
+    const fromX = walkMarker(rawX, 0, columnWidth, maxColumns - 1)
+    const fromY = walkMarker(rawY, 0, rowHeight, maxRows - 1)
+    fromColumn = fromX.index
+    fromRow = fromY.index
+    // Keep any part beyond the sheet origin in the float's geometry.
+    marginX = markerSpan({ index: fromColumn, offset: 0 }, rawX, columnWidth)
+    marginY = markerSpan({ index: fromRow, offset: 0 }, rawY, rowHeight)
+    toColumn = walkMarker(fromX, width + marginX - fromX.offset, columnWidth, maxColumns - 1).index
+    toRow = walkMarker(fromY, height + marginY - fromY.offset, rowHeight, maxRows - 1).index
+  }
+  // A rotated shape's anchor holds its rotated bounds while xfrm ext keeps
+  // the true frame; both share the same center. The float container clips
+  // (Univer overflow-hidden), so re-anchor it to the AABB of the rotated
+  // true frame — the component centers the ext box inside and rotates it.
+  if (visual.rotation && visual.frameWidth && visual.frameHeight && width > 0 && height > 0) {
+    const extWidth = visual.frameWidth / EMU_PER_PIXEL
+    const extHeight = visual.frameHeight / EMU_PER_PIXEL
+    const radians = (visual.rotation * Math.PI) / 180
+    const aabbWidth =
+      Math.abs(extWidth * Math.cos(radians)) + Math.abs(extHeight * Math.sin(radians))
+    const aabbHeight =
+      Math.abs(extWidth * Math.sin(radians)) + Math.abs(extHeight * Math.cos(radians))
+    const fromX = walkMarker(
+      { index: fromColumn, offset: marginX },
+      (width - aabbWidth) / 2,
+      columnWidth,
+      maxColumns - 1,
+    )
+    const fromY = walkMarker(
+      { index: fromRow, offset: marginY },
+      (height - aabbHeight) / 2,
+      rowHeight,
+      maxRows - 1,
+    )
+    fromColumn = fromX.index
+    fromRow = fromY.index
+    marginX = fromX.offset
+    marginY = fromY.offset
+    toColumn = walkMarker(fromX, aabbWidth, columnWidth, maxColumns - 1).index
+    toRow = walkMarker(fromY, aabbHeight, rowHeight, maxRows - 1).index
+    width = aabbWidth
+    height = aabbHeight
+  }
+  // Degenerate anchors (a zero marker span on BOTH axes): keep the legacy
+  // behavior of filling the clamped cell range. Any real span stays a
+  // marker frame with a 1px floor — tiny icons and hairlines (a line's
+  // thin axis spans 0) must not balloon to their cell range, which turned
+  // zero-height rules into cell-tall diagonals and icon parts into
+  // cell-sized blobs.
+  const framed = visual.groupTransform !== undefined || width > 0 || height > 0
+  const frameWidth = Math.max(width, 1)
+  const frameHeight = Math.max(height, 1)
+  return {
+    framed,
+    frame: { visual, fromRow, fromColumn, toRow, toColumn, marginX, marginY, width: frameWidth, height: frameHeight },
+  }
+}
+
 export function installWorkbookVisuals(
   runtime: UniverRuntime,
   file: VisualHost,
@@ -281,112 +372,21 @@ export function installWorkbookVisuals(
     if (visual.anchor.toColumn >= worksheet.getMaxColumns()) {
       worksheet.setColumnCount(visual.anchor.toColumn + 1)
     }
-    // An out-of-bounds anchor would throw in getRange and take every other
-    // visual down with it — clamp the display range to the sheet.
-    const maxRows = worksheet.getMaxRows()
-    const maxColumns = worksheet.getMaxColumns()
-    let fromRow = Math.min(visual.anchor.fromRow, maxRows - 1)
-    let fromColumn = Math.min(visual.anchor.fromColumn, maxColumns - 1)
-    let toRow = Math.min(visual.anchor.toRow, maxRows - 1)
-    let toColumn = Math.min(visual.anchor.toColumn, maxColumns - 1)
-    // Pixel-exact frame (Excel twoCellAnchor semantics): each marker is a
-    // cell plus an EMU offset inside it, so the box runs from the `from`
-    // marker to the `to` marker — not across the whole cell range.
-    const columnWidth = (index: number): number => Math.max(worksheet.getColumnWidth(index), 1)
-    const rowHeight = (index: number): number => Math.max(worksheet.getRowHeight(index), 1)
-    const rawX = markerFrom(fromColumn, visual.anchor.fromColumnOffset)
-    const rawY = markerFrom(fromRow, visual.anchor.fromRowOffset)
-    let marginX = visual.groupTransform ? rawX.offset : Math.max(0, rawX.offset)
-    let marginY = visual.groupTransform ? rawY.offset : Math.max(0, rawY.offset)
-    const explicitTo = visual.anchor.explicitTo === true
-    let width = markerSpan(
-      { index: fromColumn, offset: marginX },
-      clampExplicitTo(markerFrom(toColumn, visual.anchor.toColumnOffset), explicitTo, columnWidth),
-      columnWidth,
-    )
-    let height = markerSpan(
-      { index: fromRow, offset: marginY },
-      clampExplicitTo(markerFrom(toRow, visual.anchor.toRowOffset), explicitTo, rowHeight),
-      rowHeight,
-    )
-    if (visual.groupTransform) {
-      const fromX = walkMarker(rawX, 0, columnWidth, maxColumns - 1)
-      const fromY = walkMarker(rawY, 0, rowHeight, maxRows - 1)
-      fromColumn = fromX.index
-      fromRow = fromY.index
-      // Keep any part beyond the sheet origin in the float's geometry.
-      marginX = markerSpan({ index: fromColumn, offset: 0 }, rawX, columnWidth)
-      marginY = markerSpan({ index: fromRow, offset: 0 }, rawY, rowHeight)
-      toColumn = walkMarker(fromX, width + marginX - fromX.offset, columnWidth, maxColumns - 1).index
-      toRow = walkMarker(fromY, height + marginY - fromY.offset, rowHeight, maxRows - 1).index
-    }
-    // A rotated shape's anchor holds its rotated bounds while xfrm ext keeps
-    // the true frame; both share the same center. The float container clips
-    // (Univer overflow-hidden), so re-anchor it to the AABB of the rotated
-    // true frame — the component centers the ext box inside and rotates it.
-    if (visual.rotation && visual.frameWidth && visual.frameHeight && width > 0 && height > 0) {
-      const extWidth = visual.frameWidth / EMU_PER_PIXEL
-      const extHeight = visual.frameHeight / EMU_PER_PIXEL
-      const radians = (visual.rotation * Math.PI) / 180
-      const aabbWidth =
-        Math.abs(extWidth * Math.cos(radians)) + Math.abs(extHeight * Math.sin(radians))
-      const aabbHeight =
-        Math.abs(extWidth * Math.sin(radians)) + Math.abs(extHeight * Math.cos(radians))
-      const fromX = walkMarker(
-        { index: fromColumn, offset: marginX },
-        (width - aabbWidth) / 2,
-        columnWidth,
-        maxColumns - 1,
-      )
-      const fromY = walkMarker(
-        { index: fromRow, offset: marginY },
-        (height - aabbHeight) / 2,
-        rowHeight,
-        maxRows - 1,
-      )
-      fromColumn = fromX.index
-      fromRow = fromY.index
-      marginX = fromX.offset
-      marginY = fromY.offset
-      toColumn = walkMarker(fromX, aabbWidth, columnWidth, maxColumns - 1).index
-      toRow = walkMarker(fromY, aabbHeight, rowHeight, maxRows - 1).index
-      width = aabbWidth
-      height = aabbHeight
-    }
+    const { frame: geometry, framed } = measureWorkbookVisualFrame(worksheet, visual)
+    const { fromRow, fromColumn, toRow, toColumn, marginX, marginY, width: frameWidth, height: frameHeight } = geometry
     const range = worksheet.getRange(
       fromRow,
       fromColumn,
       Math.max(1, toRow + 1 - fromRow),
       Math.max(1, toColumn + 1 - fromColumn),
     )
-    // Degenerate anchors (a zero marker span on BOTH axes): keep the legacy
-    // behavior of filling the clamped cell range. Any real span stays a
-    // marker frame with a 1px floor — tiny icons and hairlines (a line's
-    // thin axis spans 0) must not balloon to their cell range, which turned
-    // zero-height rules into cell-tall diagonals and icon parts into
-    // cell-sized blobs.
-    const framed = visual.groupTransform !== undefined || width > 0 || height > 0
-    const frameWidth = Math.max(width, 1)
-    const frameHeight = Math.max(height, 1)
-    if (framed) {
-      frames.push({
-        visual,
-        fromRow,
-        fromColumn,
-        toRow,
-        toColumn,
-        marginX,
-        marginY,
-        width: frameWidth,
-        height: frameHeight,
-      })
-    }
+    if (framed) frames.push(geometry)
     // RTL sheets mirror the float too (Excel keeps logical anchors; the box
     // lands mirrored). Univer positions the DOM from the anchor cell's
     // mirrored left edge, so restate the margin as "mirrored box left minus
     // that edge": colWidth(from) - marginX - width.
     const rtl = worksheet.getSheet().getConfig().rightToLeft === BooleanNumber.TRUE
-    const anchoredMarginX = rtl ? columnWidth(fromColumn) - marginX - frameWidth : marginX
+    const anchoredMarginX = rtl ? Math.max(worksheet.getColumnWidth(fromColumn), 1) - marginX - frameWidth : marginX
     const layout = framed
       ? floatDomLayout({
           width: frameWidth,
@@ -695,7 +695,7 @@ function groupVisualLayout(
   }
 }
 
-function WorkbookVisual({
+export function WorkbookVisual({
   file,
   visual,
   chartEditing,
@@ -1669,10 +1669,11 @@ function ShapeVisual({
   const gradientId = `shape-fill-${shapeId}`
   const clipId = `shape-clip-${shapeId}`
   // a:blipFill: the image paints clipped to the geometry, under the stroke.
-  const { url: fillImage } = useWorkbookMediaUrl(
+  const { url: fillImage, unavailable: fillUnavailable } = useWorkbookMediaUrl(
     visual.fillMediaPath && file ? file.sessionId : undefined,
     visual.id,
   )
+  const pendingFill = Boolean(visual.fillMediaPath && file && !fillImage && !fillUnavailable)
   const type = visual.shapeType ?? ''
   const gradient = visual.fillGradient
   const customPath = visual.customPath
@@ -1898,6 +1899,7 @@ function ShapeVisual({
     return (
       <div
         className="xlsx-shape-drawn xlsx-shape-rotated"
+        data-print-pending={pendingFill || undefined}
         style={shapeTextScaleStyle(frame?.width)}
       >
         <div
@@ -1912,6 +1914,7 @@ function ShapeVisual({
   return (
     <div
       className="xlsx-shape-drawn"
+      data-print-pending={pendingFill || undefined}
       style={{
         ...shapeTextScaleStyle(frame?.width),
         ...(transforms.length ? { transform: transforms.join(' ') } : {}),
@@ -2264,7 +2267,7 @@ function ChartVisual({
           }
         }
         if (!retry) {
-          if (!cancelled && entries.size > 0) setHydration(entries)
+          if (!cancelled) setHydration(entries)
           return
         }
         await new Promise((resolve) => setTimeout(resolve, 900))
@@ -2325,11 +2328,12 @@ function ChartVisual({
   const figureStyle = groupStyle ? undefined : areaStyle
   const surfaceClass = groupStyle ? 'xlsx-chart xlsx-group-content' : 'xlsx-chart-content'
   const surfaceStyle = groupStyle ? { ...areaStyle, ...groupStyle } : undefined
+  const pendingPrintData = Boolean(needsHydration && readVector && hydration === null)
   if (!primarySeries) {
     // No cached points and nothing hydrated: Excel shows a silent empty
     // frame, never a diagnostic.
     return (
-      <figure className={figureClass} style={figureStyle}>
+      <figure className={figureClass} style={figureStyle} data-print-pending={pendingPrintData || undefined}>
         {groupStyle && <div className={surfaceClass} style={surfaceStyle} />}
       </figure>
     )
@@ -2402,6 +2406,7 @@ function ChartVisual({
     <figure
       className={figureClass}
       style={figureStyle}
+      data-print-pending={pendingPrintData || undefined}
       onClick={() => {
         if (selectedEl) setChartElementSelection(visualId, null)
       }}

@@ -500,7 +500,48 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
     }
   }
 
-  it('prints every visible sheet, each activated for its visuals, and restores the active one', async () => {
+  it('prints inactive sheet drawings with live edits and media without activating the sheet', async () => {
+    const h = headlessContext()
+    const state = h.ctx.lazyWorkbookRef.current!
+    const anchor = {
+      fromRow: 0, fromColumn: 0, toRow: 2, toColumn: 2,
+      fromRowOffset: 0, fromColumnOffset: 0, toRowOffset: 0, toColumnOffset: 0,
+    }
+    state.file.visuals = [
+      {
+        id: 'inactive-chart', sheetId: 'sheet-2', kind: 'chart', anchor,
+        chartPath: 'xl/charts/chart1.xml',
+        chart: { chartTypes: ['barChart'], title: 'Original chart',
+          series: [{ name: 'Revenue', categories: ['Jan'], values: [42] }] },
+      },
+      {
+        id: 'inactive-image', sheetId: 'sheet-2', kind: 'image', anchor,
+        altText: 'Printed logo',
+      },
+    ]
+    state.editJournal.chartEdits.set('xl/charts/chart1.xml', { title: 'Edited chart' })
+    const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jT4sAAAAASUVORK5CYII='
+    const readWorkbookMedia = vi.fn().mockResolvedValue({ mediaType: 'image/png', base64 })
+    Object.assign(window.desktopApi, { readWorkbookMedia })
+    const host = await openPrintPreviewHost(h.ctx)
+    if (!host) throw new Error('Print preview failed to open')
+    const job = await host.buildJob('workbook', {})
+    const html = assemblePrintHtml(job.documents).html
+    expect(html).toContain('Edited chart')
+    expect(html).toContain(`data:image/png;base64,${base64}`)
+    expect(readWorkbookMedia).toHaveBeenCalledWith({
+      sessionId: 'session-123', visualId: 'inactive-image',
+    })
+    expect(document.querySelector('[data-print-stage]')).toBeNull()
+    expect(await handleExportPdf(h.ctx, 'D:/book.pdf')).toBe(true)
+    const request = exportPdfMock.mock.calls[0]?.[0]
+    expect(request.html).toContain('Edited chart')
+    expect(request.html).toContain(`data:image/png;base64,${base64}`)
+    expect(h.sheet1.activate).not.toHaveBeenCalled()
+    expect(h.sheet2.activate).not.toHaveBeenCalled()
+  })
+
+  it('prints every visible sheet without changing its active tab', async () => {
     const h = headlessContext()
     expect(await handleExportPdf(h.ctx, 'D:/book.pdf')).toBe(true)
     const request = exportPdfMock.mock.calls[0]?.[0]
@@ -508,10 +549,8 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
     // one page block per sheet: the hidden third sheet is not in the file
     const pages = request.html.match(/<div class="page /g) ?? []
     expect(pages).toHaveLength(2)
-    // the non-active sheet was activated before its layout; the active one
-    // is re-activated once at the end (the restore), never inside the loop
-    expect(h.sheet2.activate).toHaveBeenCalledTimes(1)
-    expect(h.sheet1.activate).toHaveBeenCalledTimes(1)
+    expect(h.sheet2.activate).not.toHaveBeenCalled()
+    expect(h.sheet1.activate).not.toHaveBeenCalled()
     expect(messages).toContain('Exported D:/book.pdf.')
   })
 

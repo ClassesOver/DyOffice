@@ -28,7 +28,7 @@ import { COLOR_SCHEMES, FONT_SCHEMES, rethemeStyles, THEME_PRESETS } from './the
 import { settleFormulas } from './formula-settle'
 import { startFullLoad } from './full-load'
 import { fitsFullLoad, workbookCellCounts } from './load-budget'
-import { ensureSheetFileState, loadVisibleRange } from './univer-sync'
+import { ensureSheetFileState, loadVisibleRange, projectVisualEdits, readChartRangeVector } from './univer-sync'
 import {
   layoutSheetPrint,
   PrintError,
@@ -44,7 +44,7 @@ import {
   type EffectivePageSetup,
   type HeaderFooterPictureSlot,
 } from './print-settings'
-import { settleVisualNodes, snapshotPrintVisuals } from './print-visuals'
+import { settleVisualNodes, snapshotPrintVisuals, snapshotSheetVisuals } from './print-visuals'
 import { installedVisualFrames, type InstalledVisualFrame } from './WorkbookVisuals'
 import type { LazyWorkbookState, UniverRuntime } from './univer-state'
 
@@ -421,8 +421,7 @@ async function sheetPrintDocument(
   overrides: PageSetupJournalState,
   selection: string | null,
   now: Date,
-  /// Only the active sheet has installed float DOM to snapshot.
-  withVisuals: boolean,
+  useLiveVisuals: boolean,
 ): Promise<SheetPrintDocument> {
   const sheetId = worksheet.getSheetId()
   // A sheet the viewport never visited has no captured file state, so its
@@ -446,14 +445,32 @@ async function sheetPrintDocument(
   const pictures = state
     ? await loadHeaderFooterPictures(state.file.sessionId, setup.headerFooterPictures)
     : new Map<string, HeaderFooterPictureImage>()
-  const frames = withVisuals ? await settledVisualFrames(ctx, state, sheetId) : []
+  const runtime = ctx.univerRef.current
+  const visuals = !useLiveVisuals && state && runtime
+    ? await snapshotSheetVisuals(
+        document,
+        worksheet,
+        {
+          sessionId: state.file.sessionId,
+          visuals: [
+            ...projectVisualEdits(state.file.visuals, state.editJournal.visualEdits),
+            ...state.editJournal.visualAdds,
+          ].filter((visual) => visual.sheetId === sheetId),
+        },
+        {
+          edits: state.editJournal.chartEdits,
+          onEdit: () => undefined,
+          readVector: (chartPath, range) => readChartRangeVector(state, runtime, chartPath, range),
+        },
+      )
+    : snapshotPrintVisuals(document, await settledVisualFrames(ctx, state, sheetId))
   return layoutSheetPrint(
     worksheet as unknown as PrintWorksheet,
     setup,
     baseName,
     worksheet.getSheetName(),
     pictures,
-    snapshotPrintVisuals(document, frames),
+    visuals,
     {
       breaks: state ? effectivePageBreaks(state, sheetId) : null,
       selection,
@@ -693,10 +710,7 @@ async function activeSheetPrintPayload(
 }
 
 /// Every visible, non-removed sheet laid out in order: the headless export's
-/// PDF stands for the whole file, so a chart or table on any other sheet must
-/// print too. Each sheet is made active before its layout — floating visuals
-/// install for the active sheet only — and the originally active sheet is
-/// restored afterwards.
+/// PDF stands for the whole file, including drawings on inactive sheets.
 async function workbookPrintPayload(
   ctx: PageLayoutContext,
   messages: { readonly notLoaded: string; readonly preparing: string; readonly failed: string },
@@ -730,11 +744,9 @@ async function workbookPrintPayload(
   const now = new Date()
   const documents: SheetPrintDocument[] = []
   for (const sheet of sheets) {
-    if (sheet.getSheetId() !== activeId) sheet.activate()
     if (ctx.lazyWorkbookRef.current !== state) return null
-    documents.push(await sheetPrintDocument(ctx, state, sheet, {}, null, now, true))
+    documents.push(await sheetPrintDocument(ctx, state, sheet, {}, null, now, sheet.getSheetId() === activeId))
   }
-  if (activeId !== undefined) current.getSheetBySheetId(activeId)?.activate()
   const baseName = (state?.file.name ?? 'Book1').replace(/\.[^.]+$/, '')
   return printRequest(documents, `${baseName}.pdf`)
 }
