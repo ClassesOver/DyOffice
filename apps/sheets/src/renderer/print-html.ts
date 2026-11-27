@@ -133,14 +133,14 @@ interface PrintCellStyle {
   readonly vt?: number
   readonly tb?: number
   readonly bd?: Partial<
-    Record<'t' | 'b' | 'l' | 'r', { s?: number; cl?: { rgb?: string | null } | null } | null>
+    Record<'t' | 'b' | 'l' | 'r' | 'tl_br' | 'bl_tr', { s?: number; cl?: { rgb?: string | null } | null } | null>
   > | null
 }
 
 /// A NONE edge is the row/column-default blocker (NO_BORDER_STYLE), not a line.
 function borderEdge(
   style: PrintCellStyle | null | undefined,
-  key: 't' | 'b' | 'l' | 'r',
+  key: keyof NonNullable<PrintCellStyle['bd']>,
 ): NonNullable<NonNullable<PrintCellStyle['bd']>['t']> | undefined {
   const edge = style?.bd?.[key]
   return edge == null || edge.s === BorderStyleTypes.NONE ? undefined : edge
@@ -509,8 +509,12 @@ export function layoutSheetPrint(
     span: string,
     heightPt: number,
     near: Neighbours,
+    mergedWidthPt?: number,
   ): string => {
     const style = styleAt(row, column)
+    const diagonals = style?.bd?.tl_br || style?.bd?.bl_tr
+      ? cellDiagonalHtml(style, mergedWidthPt ?? columnWidthPt(column), heightPt, rightToLeft, blackAndWhite)
+      : ''
     const { text, raw } = cellContentAt(data, row, column)
     const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
     const gridlines = setup.printGridlines && !worksheetDraft &&
@@ -531,7 +535,8 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span} style="${cellCss(style, raw, gridlines, blackAndWhite, rightToLeft, edges)}">` +
+      `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, raw, gridlines, blackAndWhite, rightToLeft, edges)}">` +
+      diagonals +
       `<div class="c" style="height:${round(heightPt)}pt;align-items:${align}">` +
       `<span${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div></td>`
     )
@@ -602,6 +607,7 @@ export function layoutSheetPrint(
               ` rowspan="${spannedRows.length}" colspan="${spannedColumns.length}"`,
               spanned,
               { ...near, below: rowAfter(lastRow), rightOf: columnAfter(lastColumn) },
+              spannedColumns.reduce((sum, c) => sum + columnWidthPt(c), 0),
             ),
           )
           return
@@ -760,6 +766,8 @@ table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 td, th { padding: 0; border: 0; overflow: hidden; font-size: 11pt; vertical-align: bottom; }
 td .c { display: flex; overflow: hidden; padding: 0 2pt; line-height: 1.2; }
 td .c > span { width: 100%; }
+td.has-diagonal, td.has-diagonal > .c { position: relative; }
+.cell-diagonal { display: block; position: absolute; left: 0; transform-origin: left center; print-color-adjust: exact; }
 th.hd { background: #f1f1f1; color: #444; font-size: 8.5pt; font-weight: 400;
   text-align: center; vertical-align: middle;
   --heading-end: -0.75pt; --heading-start: 0.75pt;
@@ -1257,6 +1265,34 @@ function cellCss(
   rules.push(style?.tb === 3 ? 'white-space:pre-wrap;word-break:break-word' : 'white-space:pre')
   if (shadows.length > 0) rules.push(`box-shadow:${shadows.join(',')}`)
   return rules.join(';')
+}
+
+/// Draw the two diagonals behind the text. The line box uses the full
+/// printed cell extent, including any merged rows and columns.
+function cellDiagonalHtml(
+  style: PrintCellStyle,
+  widthPt: number,
+  heightPt: number,
+  rightToLeft: boolean,
+  blackAndWhite: boolean,
+): string {
+  const lengthPt = round(Math.hypot(widthPt, heightPt))
+  const angle = round4(Math.atan2(heightPt, widthPt))
+  const lines: string[] = []
+  for (const descending of [true, false]) {
+    const border = borderEdge(style, descending === rightToLeft ? 'bl_tr' : 'tl_br')
+    if (!border) continue
+    const color = blackAndWhite ? '#000000' : cssColor(border.cl?.rgb ?? '#000000')
+    const lineWidthPt = printBorderWidthPt(border.s)
+    const background = borderBackground(border.s, lineWidthPt, color, 'top') ?? color
+    const topPt = descending ? 0 : round(heightPt)
+    const rotation = descending ? angle : -angle
+    lines.push(
+      `<span class="cell-diagonal" aria-hidden="true" style="top:${topPt}pt;width:${lengthPt}pt;height:${lineWidthPt}pt;` +
+        `transform:translateY(-50%) rotate(${rotation}rad);background:${background}"></span>`,
+    )
+  }
+  return lines.join('')
 }
 
 function cssColor(rgb: string): string {

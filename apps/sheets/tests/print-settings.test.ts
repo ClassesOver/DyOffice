@@ -1039,6 +1039,36 @@ describe('layoutSheetPrint', () => {
     expect(monochrome).not.toMatch(/#ff0000|#208040|#0000ff|#fff0b0/)
   })
 
+  it('spans diagonal borders across a printed merge and mirrors their direction', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getMergedRanges: () => [
+        { getRow: () => 0, getColumn: () => 0, getWidth: () => 2, getHeight: () => 2 },
+      ],
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => ({
+          bd: {
+            tl_br: { s: BorderStyleTypes.DOTTED, cl: { rgb: '#ff0000' } },
+            bl_tr: { s: BorderStyleTypes.DOUBLE, cl: { rgb: '#208040' } },
+          },
+        }),
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:B2'] })
+    const body = layout(worksheet, setup).pages[0]?.body ?? ''
+    expect(body.match(/class="cell-diagonal"/g)).toHaveLength(2)
+    expect(body).toContain('top:0pt;width:152.97pt;height:0.75pt;transform:translateY(-50%) rotate(0.1974rad);background:repeating-linear-gradient(to right,#ff0000')
+    expect(body).toContain('top:30pt;width:152.97pt;height:2.25pt;transform:translateY(-50%) rotate(-0.1974rad);background:linear-gradient(to bottom,#208040')
+
+    const rtl = layout(worksheet, setup, new Map(), undefined, { rightToLeft: true })
+    expect(rtl.pages[0]?.body).toContain('rotate(-0.1974rad);background:repeating-linear-gradient(to right,#ff0000')
+    const monochrome = layout(worksheet, { ...setup, blackAndWhite: true }).pages[0]?.body ?? ''
+    expect(monochrome).toContain('linear-gradient(to bottom,#000000')
+    expect(monochrome).not.toMatch(/#ff0000|#208040/)
+  })
+
   it('preserves value alignment for titles outside the saved print area', () => {
     const values = [[0.25, '005'], [true, 12], [34, 99]]
     const display = [['25%', '005'], ['TRUE', '12'], ['34', '99']]
