@@ -1083,6 +1083,8 @@ export const workbookRangeResultSchema = z
           .optional(),
         printGridlines: z.boolean().optional(),
         printHeadings: z.boolean().optional(),
+        horizontalCentered: z.boolean().optional(),
+        verticalCentered: z.boolean().optional(),
         firstPageNumber: z.number().int().min(0).max(0xffffffff).optional(),
         /// Excel-encoded odd header/footer (&L/&C/&R sections, field codes).
         oddHeader: z.string().min(1).max(500).optional(),

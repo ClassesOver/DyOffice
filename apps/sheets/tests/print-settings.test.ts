@@ -463,6 +463,8 @@ function payloadSetup(overrides: Partial<EffectivePageSetup>): EffectivePageSetu
     margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
     printGridlines: false,
     printHeadings: false,
+    horizontalCentered: false,
+    verticalCentered: false,
     printAreas: [],
     printTitles: null,
     printTitleColumns: null,
@@ -508,6 +510,35 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it.each([
+    { horizontalCentered: true, verticalCentered: false, left: 3.86, top: 0.5 },
+    { horizontalCentered: false, verticalCentered: true, left: 1, top: 5.19 },
+    { horizontalCentered: true, verticalCentered: true, left: 3.86, top: 5.19 },
+  ])('centers scaled worksheet content on the enabled axes ($left, $top)', ({
+    horizontalCentered, verticalCentered, left, top,
+  }) => {
+    const setup = resolveEffectivePageSetup({}, {
+      scale: 50,
+      horizontalCentered,
+      verticalCentered,
+      margins: { left: 1, right: 0.5, top: 0.5, bottom: 1.5, header: 0.3, footer: 0.3 },
+      oddHeader: '&CReport',
+    }, null)
+    const html = assemblePrintHtml([layout(fakeWorksheet(), setup)]).html
+    expect(html).toContain(`class="content" style="left:${left}in;top:${top}in;`)
+    expect(html).toContain('class="hf" style="left:1in;right:0.5in;top:0.3in;')
+  })
+
+  it('keeps oversized rows at the printable margin while centering the other axis', () => {
+    const worksheet = { ...fakeWorksheet(), getRowHeight: () => 1_200 }
+    const setup = resolveEffectivePageSetup({}, {
+      horizontalCentered: true,
+      verticalCentered: true,
+    }, null)
+    const html = assemblePrintHtml([layout(worksheet, setup)]).html
+    expect(html.match(/class="content" style="left:3.09in;top:0.75in;/g)).toHaveLength(3)
+  })
+
   it('prints worksheet pages in the order saved in the file', () => {
     const options = { breaks: { rowBreaks: [1], colBreaks: [1] } }
     const starts = (pageOrder?: 'downThenOver' | 'overThenDown') =>

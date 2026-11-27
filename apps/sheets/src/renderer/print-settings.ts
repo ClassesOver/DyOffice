@@ -47,6 +47,8 @@ export interface EffectivePageSetup {
   readonly margins: PrintMargins
   readonly printGridlines: boolean
   readonly printHeadings: boolean
+  readonly horizontalCentered: boolean
+  readonly verticalCentered: boolean
   /// Starting page number saved in the file, or undefined for automatic numbering.
   readonly firstPageNumber?: number | undefined
   /// Plain A1 ranges to print ([] = the used range).
@@ -229,6 +231,8 @@ export function resolveEffectivePageSetup(
     margins,
     printGridlines: journal.printGridlines ?? file?.printGridlines ?? false,
     printHeadings: journal.printHeadings ?? file?.printHeadings ?? false,
+    horizontalCentered: file?.horizontalCentered ?? false,
+    verticalCentered: file?.verticalCentered ?? false,
     firstPageNumber: file?.firstPageNumber,
     printAreas: printArea,
     printTitles,

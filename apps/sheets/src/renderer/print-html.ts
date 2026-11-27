@@ -230,6 +230,8 @@ export interface SheetPrintOptions {
 export interface SheetPrintPageRecord {
   readonly body: string
   readonly page: PrintPage
+  readonly offsetLeftIn: number
+  readonly offsetTopIn: number
 }
 
 /// The sheet's header/footer texts by page variant (null variant = off).
@@ -556,9 +558,18 @@ export function layoutSheetPrint(
     // §17.5.2): without an explicit width Chromium falls back to content-based
     // auto layout and the colgroup's saved column widths are lost (text-bearing
     // columns inflate, empty ones shrink). The width is the colgroup sum.
-    const tableWidthPt = round(originLeft + bodyWidthPt)
-    const table = `<table style="width:${tableWidthPt}pt">${colgroup}<thead>${head.join('')}</thead><tbody>${body.join('')}</tbody></table>`
-    return { body: table + overlayLayer, page }
+    const tableWidthPt = originLeft + bodyWidthPt
+    const table = `<table style="width:${round(tableWidthPt)}pt">${colgroup}<thead>${head.join('')}</thead><tbody>${body.join('')}</tbody></table>`
+    return {
+      body: table + overlayLayer,
+      page,
+      offsetLeftIn: setup.horizontalCentered
+        ? Math.max(0, printableWidthPt - tableWidthPt * scale) / 72 / 2
+        : 0,
+      offsetTopIn: setup.verticalCentered
+        ? Math.max(0, printableHeightPt - (originTop + bodyHeightPt) * scale) / 72 / 2
+        : 0,
+    }
   })
 
   return {
@@ -720,8 +731,10 @@ function pageHtml(
   return (
     `<div class="page ${paperClass}" style="width:${paper.widthIn}in;height:${paper.heightIn}in">` +
     header +
-    `<div class="content" style="left:${round(margins.left)}in;top:${round(margins.top)}in;` +
-    `width:${round(contentWidthIn)}in;height:${round(contentHeightIn)}in">` +
+    `<div class="content" style="left:${round(margins.left + record.offsetLeftIn)}in;` +
+    `top:${round(margins.top + record.offsetTopIn)}in;` +
+    `width:${round(contentWidthIn - record.offsetLeftIn)}in;` +
+    `height:${round(contentHeightIn - record.offsetTopIn)}in">` +
     `<div style="zoom:${round4(document.scale)};position:relative">${record.body}</div></div>` +
     footer +
     `</div>`

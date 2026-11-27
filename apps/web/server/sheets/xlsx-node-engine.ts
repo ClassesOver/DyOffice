@@ -262,6 +262,8 @@ function readPageSetup(children: readonly ScopedElement[]): SheetMetadata['pageS
     fitToPage:enabled(pageProperties?.attributes.get('fitToPage'))||undefined,
     printGridlines:enabled(options?.attributes.get('gridLines'))||undefined,
     printHeadings:enabled(options?.attributes.get('headings'))||undefined,
+    horizontalCentered:enabled(options?.attributes.get('horizontalCentered'))||undefined,
+    verticalCentered:enabled(options?.attributes.get('verticalCentered'))||undefined,
     differentOddEven:enabled(footer?.attributes.get('differentOddEven'))||undefined,
     differentFirst:enabled(footer?.attributes.get('differentFirst'))||undefined,
     headerFooterFixedSize:disabled(footer?.attributes.get('scaleWithDoc'))||undefined,

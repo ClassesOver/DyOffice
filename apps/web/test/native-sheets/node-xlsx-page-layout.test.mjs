@@ -59,22 +59,30 @@ test('Web XLSX saves view and print settings without changing other worksheet st
           )
           .replace(
             '<drawing ',
-            "<pageSetup orientation = 'portrait' scale='75' paperSize='9' pageOrder='overThenDown' xmlns:audit='urn:test' audit:note=\"orientation='portrait' >\"/><drawing ",
+            "<printOptions horizontalCentered='1' verticalCentered='true'/>" +
+              "<pageSetup orientation = 'portrait' scale='75' paperSize='9' pageOrder='overThenDown' xmlns:audit='urn:test' audit:note=\"orientation='portrait' >\"/><drawing ",
           ),
       )
       assert.equal((await native.inspect(bytes)).sheets[0].showGridLines, false)
-      assert.equal((await pageSetup(bytes)).pageOrder, 'overThenDown')
+      const initial = await pageSetup(bytes)
+      assert.equal(initial.pageOrder, 'overThenDown')
+      assert.equal(initial.horizontalCentered, true)
+      assert.equal(initial.verticalCentered, true)
       const saved = await save(bytes, {
         showGridlines: true,
         zoomScale: 100,
         orientation: 'landscape',
         scale: 100,
+        printGridlines: true,
       })
       const xml = await sheetXml(saved)
       assert.equal(XMLValidator.validate(xml), true)
       assert.ok(xml.includes(`audit:note="orientation='portrait' >"`))
       const layout = await pageSetup(saved)
       assert.equal(layout.pageOrder, 'overThenDown')
+      assert.equal(layout.horizontalCentered, true)
+      assert.equal(layout.verticalCentered, true)
+      assert.equal(layout.printGridlines, true)
       assert.deepEqual(
         [layout.orientation, layout.paperSize, layout.scale],
         ['landscape', 9, undefined],
