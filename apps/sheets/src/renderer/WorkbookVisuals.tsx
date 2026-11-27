@@ -294,8 +294,10 @@ export function installWorkbookVisuals(
     // marker to the `to` marker — not across the whole cell range.
     const columnWidth = (index: number): number => Math.max(worksheet.getColumnWidth(index), 1)
     const rowHeight = (index: number): number => Math.max(worksheet.getRowHeight(index), 1)
-    let marginX = Math.max(0, visual.anchor.fromColumnOffset / EMU_PER_PIXEL)
-    let marginY = Math.max(0, visual.anchor.fromRowOffset / EMU_PER_PIXEL)
+    const rawX = markerFrom(fromColumn, visual.anchor.fromColumnOffset)
+    const rawY = markerFrom(fromRow, visual.anchor.fromRowOffset)
+    let marginX = visual.groupTransform ? rawX.offset : Math.max(0, rawX.offset)
+    let marginY = visual.groupTransform ? rawY.offset : Math.max(0, rawY.offset)
     const explicitTo = visual.anchor.explicitTo === true
     let width = markerSpan(
       { index: fromColumn, offset: marginX },
@@ -307,6 +309,17 @@ export function installWorkbookVisuals(
       clampExplicitTo(markerFrom(toRow, visual.anchor.toRowOffset), explicitTo, rowHeight),
       rowHeight,
     )
+    if (visual.groupTransform) {
+      const fromX = walkMarker(rawX, 0, columnWidth, maxColumns - 1)
+      const fromY = walkMarker(rawY, 0, rowHeight, maxRows - 1)
+      fromColumn = fromX.index
+      fromRow = fromY.index
+      // Keep any part beyond the sheet origin in the float's geometry.
+      marginX = markerSpan({ index: fromColumn, offset: 0 }, rawX, columnWidth)
+      marginY = markerSpan({ index: fromRow, offset: 0 }, rawY, rowHeight)
+      toColumn = walkMarker(fromX, width + marginX - fromX.offset, columnWidth, maxColumns - 1).index
+      toRow = walkMarker(fromY, height + marginY - fromY.offset, rowHeight, maxRows - 1).index
+    }
     // A rotated shape's anchor holds its rotated bounds while xfrm ext keeps
     // the true frame; both share the same center. The float container clips
     // (Univer overflow-hidden), so re-anchor it to the AABB of the rotated
@@ -352,7 +365,7 @@ export function installWorkbookVisuals(
     // thin axis spans 0) must not balloon to their cell range, which turned
     // zero-height rules into cell-tall diagonals and icon parts into
     // cell-sized blobs.
-    const framed = width > 0 || height > 0
+    const framed = visual.groupTransform !== undefined || width > 0 || height > 0
     const frameWidth = Math.max(width, 1)
     const frameHeight = Math.max(height, 1)
     if (framed) {
@@ -665,6 +678,23 @@ export interface ShapeFrame {
   readonly height: number
 }
 
+function groupVisualLayout(
+  transform: WorkbookVisualObject['groupTransform'],
+  frame: ShapeFrame | undefined,
+) {
+  if (!transform || !frame) return undefined
+  const width = transform.width / EMU_PER_PIXEL
+  const height = transform.height / EMU_PER_PIXEL
+  return {
+    frame: { width, height },
+    style: {
+      width: `${((width || 1) / frame.width) * 100}cqw`,
+      height: `${((height || 1) / frame.height) * 100}cqh`,
+      transform: `translate(-50%, -50%) matrix(${transform.matrix.join(', ')}, 0, 0)`,
+    },
+  }
+}
+
 function WorkbookVisual({
   file,
   visual,
@@ -676,6 +706,8 @@ function WorkbookVisual({
   readonly chartEditing?: ChartEditing | undefined
   readonly frame?: ShapeFrame | undefined
 }): React.JSX.Element {
+  const group = groupVisualLayout(visual.groupTransform, frame)
+  const localFrame = group?.frame ?? frame
   if (visual.kind === 'chart' && visual.chart) {
     if (chartEditing && isGroupedChart(visual)) {
       return (
@@ -683,7 +715,8 @@ function WorkbookVisual({
           visual={visual}
           chart={visual.chart}
           chartEditing={chartEditing}
-          frame={frame}
+          frame={localFrame}
+          groupStyle={group?.style}
         />
       )
     }
@@ -693,14 +726,12 @@ function WorkbookVisual({
         visualId={visual.id}
         chartPath={visual.chartPath}
         chartEditing={chartEditing}
-        frame={frame}
+        frame={localFrame}
+        groupStyle={group?.style}
         flipH={visual.flipH}
         flipV={visual.flipV}
       />
     )
-  }
-  if (visual.kind === 'image') {
-    return <ImageVisual file={file} visual={visual} frame={frame} />
   }
   if (visual.kind === 'ole') {
     return <OleVisual file={file} visual={visual} />
@@ -708,7 +739,15 @@ function WorkbookVisual({
   if (visual.kind === 'slicer') {
     return <SlicerVisual visual={visual} />
   }
-  return <ShapeVisual file={file} visual={visual} frame={frame} />
+  const content =
+    visual.kind === 'image'
+      ? <ImageVisual file={file} visual={visual} frame={localFrame} />
+      : <ShapeVisual file={file} visual={visual} frame={localFrame} />
+  return group ? (
+    <div className="xlsx-group-viewport">
+      <div className="xlsx-group-content" style={group.style}>{content}</div>
+    </div>
+  ) : content
 }
 
 function GroupedChartVisual({
@@ -716,11 +755,13 @@ function GroupedChartVisual({
   chart,
   chartEditing,
   frame,
+  groupStyle,
 }: {
   readonly visual: WorkbookVisualObject
   readonly chart: ChartMetadata
   readonly chartEditing: ChartEditing
   readonly frame?: ShapeFrame | undefined
+  readonly groupStyle?: React.CSSProperties | undefined
 }): React.JSX.Element {
   const isSelected = useIsSelected(visual.id)
   const [editorRequest, setEditorRequest] = useState(0)
@@ -760,6 +801,7 @@ function GroupedChartVisual({
         chartPath={visual.chartPath}
         chartEditing={chartEditing}
         frame={frame}
+        groupStyle={groupStyle}
         flipH={visual.flipH}
         flipV={visual.flipV}
         openEditorSignal={editorRequest}
@@ -1659,8 +1701,8 @@ function ShapeVisual({
   // An unflipped OOXML line runs top-left → bottom-right; flips mirror the
   // endpoints (the gallery preview draws ascending, which is the flipV form).
   const isStraightLine = type === 'line' || type === 'straightConnector1'
-  const lineX0 = visual.flipH ? boxWidth : 0
-  const lineY0 = visual.flipV ? boxHeight : 0
+  const lineX0 = visual.groupTransform?.width === 0 ? boxWidth / 2 : visual.flipH ? boxWidth : 0
+  const lineY0 = visual.groupTransform?.height === 0 ? boxHeight / 2 : visual.flipV ? boxHeight : 0
   // Same geometry source as the gallery previews (and the other apps'
   // renderers), so every insertable preset draws its real silhouette.
   // custGeom paths keep their own coordinate space and scale into the box.
@@ -2100,6 +2142,7 @@ function ChartVisual({
   chartPath,
   chartEditing,
   frame,
+  groupStyle,
   onRemove,
   flipH,
   flipV,
@@ -2111,6 +2154,7 @@ function ChartVisual({
   readonly chartEditing?: ChartEditing | undefined
   /// Unzoomed frame size; the rendered figure over it is the sheet zoom.
   readonly frame?: ShapeFrame | undefined
+  readonly groupStyle?: React.CSSProperties | undefined
   readonly onRemove?: (() => void) | undefined
   readonly flipH?: boolean | undefined
   readonly flipV?: boolean | undefined
@@ -2244,6 +2288,7 @@ function ChartVisual({
     bodyRef,
     frame?.width,
     `${chart.chartTypes.join()}|${pendingEdit?.chartType ?? ''}|${primarySeries !== undefined}`,
+    groupStyle !== undefined,
   )
   // The chart area fill sits under the HTML legend too; the file's axis or
   // title text color (else light ink on a dark fill) stays readable on it
@@ -2264,10 +2309,18 @@ function ChartVisual({
   // Reflect the drawing while leaving the chart's editor controls upright.
   const contentTransform =
     flipH || flipV ? `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})` : undefined
+  const figureClass = groupStyle ? 'xlsx-chart xlsx-chart-viewport' : 'xlsx-chart'
+  const figureStyle = groupStyle ? undefined : areaStyle
+  const surfaceClass = groupStyle ? 'xlsx-chart xlsx-group-content' : 'xlsx-chart-content'
+  const surfaceStyle = groupStyle ? { ...areaStyle, ...groupStyle } : undefined
   if (!primarySeries) {
     // No cached points and nothing hydrated: Excel shows a silent empty
     // frame, never a diagnostic.
-    return <figure className="xlsx-chart" style={areaStyle} />
+    return (
+      <figure className={figureClass} style={figureStyle}>
+        {groupStyle && <div className={surfaceClass} style={surfaceStyle} />}
+      </figure>
+    )
   }
   const types = chart.chartTypes
   const isDoughnut = types.includes('doughnutChart')
@@ -2335,8 +2388,8 @@ function ChartVisual({
   const plotAreaFill = chart.plotAreaFill
   return (
     <figure
-      className="xlsx-chart"
-      style={areaStyle}
+      className={figureClass}
+      style={figureStyle}
       onClick={() => {
         if (selectedEl) setChartElementSelection(visualId, null)
       }}
@@ -2377,154 +2430,156 @@ function ChartVisual({
           onCancel={() => setIsEditing(false)}
         />
       )}
-      {chart.title !== '' && (
-        <figcaption
-          className={selectedEl?.kind === 'title' ? 'chart-el-selected' : undefined}
-          style={{
-            transform: contentTransform,
-            ...(chart.titleStyle?.size ? { fontSize: `${chart.titleStyle.size}pt` } : {}),
-            ...(chart.titleStyle?.bold === false ? { fontWeight: 400 } : {}),
-            ...(chart.titleStyle?.color ? { color: chart.titleStyle.color } : {}),
-          }}
-          onClick={
-            selectElement
-              ? (event) => {
-                  event.stopPropagation()
-                  selectElement({ kind: 'title' })
-                }
-              : undefined
-          }
-        >
-          {chart.title}
-        </figcaption>
-      )}
-      <div
-        className={`chart-body chart-legend-${chart.legend ?? 'default'}`}
-        ref={bodyRef}
-        style={{ transform: contentTransform }}
-      >
-        {isPie ? (
-          <PieChart
-            series={primarySeries}
-            isDoughnut={isDoughnut}
-            legend={chart.legend}
-            dataLabels={chart.dataLabels}
-            dataLabelPosition={chart.dataLabelPosition}
-            dataLabelFormat={chart.dataLabelFormat}
-            dataLabelStyle={chart.dataLabelStyle}
-            holeSizePct={chart.holeSizePct}
-            categoryFormat={categoryFormat}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isRadar ? (
-          <RadarChart
-            seriesList={populated}
-            dataLabels={chart.dataLabels}
-            categoryFormat={categoryFormat}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            valueAxis={valueScaleInput}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isScatter ? (
-          <ScatterChart
-            seriesList={populated}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            xAxis={chart.xAxis}
-            scatterStyle={chart.scatterStyle}
-            categoryFormat={categoryFormat}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isArea ? (
-          <AreaChart
-            seriesList={populated}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            grouping={chart.grouping}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            categoryFormat={categoryFormat}
-            categoryHidden={categoryAxisHidden}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isLine ? (
-          <LineChart
-            seriesList={populated}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            grouping={chart.grouping}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            categoryFormat={categoryFormat}
-            categoryHidden={categoryAxisHidden}
-            lineMarkers={chart.lineMarkers}
-            dispBlanksAs={chart.dispBlanksAs}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : (
-          <BarChart
-            seriesList={isCombo ? comboBars : populated}
-            seriesIndices={barSeriesIdx}
-            categorySeries={isCombo ? comboCategorySeries(populated) : undefined}
-            isHorizontal={chart.barDirection === 'bar'}
-            lineSeriesList={isCombo ? comboLines : undefined}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            dataLabelPosition={chart.dataLabelPosition}
-            dataLabelFormat={chart.dataLabelFormat}
-            dataLabelStyle={chart.dataLabelStyle}
-            grouping={chart.grouping}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            secondaryAxis={chart.secondaryYAxis}
-            gapWidthPct={chart.gapWidthPct}
-            categoryFormat={categoryFormat}
-            categoryReversed={(isHorizontalBar ? chart.yAxis : chart.xAxis)?.reversed === true}
-            categoryHidden={categoryAxisHidden}
-            lineMarkers={chart.lineMarkers}
-            dispBlanksAs={chart.dispBlanksAs}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
+      <div className={surfaceClass} style={surfaceStyle}>
+        {chart.title !== '' && (
+          <figcaption
+            className={selectedEl?.kind === 'title' ? 'chart-el-selected' : undefined}
+            style={{
+              transform: contentTransform,
+              ...(chart.titleStyle?.size ? { fontSize: `${chart.titleStyle.size}pt` } : {}),
+              ...(chart.titleStyle?.bold === false ? { fontWeight: 400 } : {}),
+              ...(chart.titleStyle?.color ? { color: chart.titleStyle.color } : {}),
+            }}
+            onClick={
+              selectElement
+                ? (event) => {
+                    event.stopPropagation()
+                    selectElement({ kind: 'title' })
+                  }
+                : undefined
+            }
+          >
+            {chart.title}
+          </figcaption>
         )}
-        {!isPie &&
-          chart.legend !== 'none' &&
-          (chart.legend !== undefined || populated.length > 1) && (
-            <SeriesLegend
+        <div
+          className={`chart-body chart-legend-${chart.legend ?? 'default'}`}
+          ref={bodyRef}
+          style={{ transform: contentTransform }}
+        >
+          {isPie ? (
+            <PieChart
+              series={primarySeries}
+              isDoughnut={isDoughnut}
+              legend={chart.legend}
+              dataLabels={chart.dataLabels}
+              dataLabelPosition={chart.dataLabelPosition}
+              dataLabelFormat={chart.dataLabelFormat}
+              dataLabelStyle={chart.dataLabelStyle}
+              holeSizePct={chart.holeSizePct}
+              categoryFormat={categoryFormat}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isRadar ? (
+            <RadarChart
               seriesList={populated}
-              lineSwatches={legendUsesLineSwatches(types)}
-              lineSwatchIndices={isCombo ? comboLineIdx : undefined}
-              selected={selectedEl?.kind === 'legend'}
-              onSelect={
-                selectElement
-                  ? (event) => {
-                      event.stopPropagation()
-                      selectElement({ kind: 'legend' })
-                    }
-                  : undefined
-              }
+              dataLabels={chart.dataLabels}
+              categoryFormat={categoryFormat}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              valueAxis={valueScaleInput}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isScatter ? (
+            <ScatterChart
+              seriesList={populated}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              xAxis={chart.xAxis}
+              scatterStyle={chart.scatterStyle}
+              categoryFormat={categoryFormat}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isArea ? (
+            <AreaChart
+              seriesList={populated}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              grouping={chart.grouping}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              categoryFormat={categoryFormat}
+              categoryHidden={categoryAxisHidden}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isLine ? (
+            <LineChart
+              seriesList={populated}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              grouping={chart.grouping}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              categoryFormat={categoryFormat}
+              categoryHidden={categoryAxisHidden}
+              lineMarkers={chart.lineMarkers}
+              dispBlanksAs={chart.dispBlanksAs}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : (
+            <BarChart
+              seriesList={isCombo ? comboBars : populated}
+              seriesIndices={barSeriesIdx}
+              categorySeries={isCombo ? comboCategorySeries(populated) : undefined}
+              isHorizontal={chart.barDirection === 'bar'}
+              lineSeriesList={isCombo ? comboLines : undefined}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              dataLabelPosition={chart.dataLabelPosition}
+              dataLabelFormat={chart.dataLabelFormat}
+              dataLabelStyle={chart.dataLabelStyle}
+              grouping={chart.grouping}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              secondaryAxis={chart.secondaryYAxis}
+              gapWidthPct={chart.gapWidthPct}
+              categoryFormat={categoryFormat}
+              categoryReversed={(isHorizontalBar ? chart.yAxis : chart.xAxis)?.reversed === true}
+              categoryHidden={categoryAxisHidden}
+              lineMarkers={chart.lineMarkers}
+              dispBlanksAs={chart.dispBlanksAs}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
             />
           )}
+          {!isPie &&
+            chart.legend !== 'none' &&
+            (chart.legend !== undefined || populated.length > 1) && (
+              <SeriesLegend
+                seriesList={populated}
+                lineSwatches={legendUsesLineSwatches(types)}
+                lineSwatchIndices={isCombo ? comboLineIdx : undefined}
+                selected={selectedEl?.kind === 'legend'}
+                onSelect={
+                  selectElement
+                    ? (event) => {
+                        event.stopPropagation()
+                        selectElement({ kind: 'legend' })
+                      }
+                    : undefined
+                }
+              />
+            )}
+        </div>
       </div>
       {menu && chartEditing && (
         <VisualContextMenu
@@ -2788,19 +2843,21 @@ function useChartTextBox(
   bodyRef: React.RefObject<HTMLDivElement | null>,
   frameWidth: number | undefined,
   chartKey: string,
+  groupTransformed: boolean,
 ): ChartTextBox | undefined {
   const [box, setBox] = useState<ChartTextBox | undefined>(undefined)
   useEffect(() => {
     const body = bodyRef.current
     const svg = body?.querySelector('svg.chart-svg')
-    const figure = body?.parentElement
+    const figure = body?.closest('.xlsx-chart')
     if (!body || !svg || typeof ResizeObserver === 'undefined') return undefined
     const measure = (): void => {
       const rect = svg.getBoundingClientRect()
-      const zoom = frameWidth && figure ? figure.getBoundingClientRect().width / frameWidth || 1 : 1
+      const framePixels = groupTransformed ? figure?.clientWidth : figure?.getBoundingClientRect().width
+      const zoom = frameWidth && framePixels ? framePixels / frameWidth : 1
       const next = {
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
+        width: groupTransformed ? svg.clientWidth : Math.round(rect.width),
+        height: groupTransformed ? svg.clientHeight : Math.round(rect.height),
         zoom: Number(zoom.toFixed(3)),
       }
       setBox((previous) =>
@@ -2817,7 +2874,7 @@ function useChartTextBox(
     if (figure) observer.observe(figure)
     measure()
     return () => observer.disconnect()
-  }, [bodyRef, frameWidth, chartKey])
+  }, [bodyRef, frameWidth, chartKey, groupTransformed])
   return box
 }
 

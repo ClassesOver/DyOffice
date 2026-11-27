@@ -786,6 +786,21 @@ const visualObjectSchema = z
     /// anchor stores rotated bounds, centered on the shape center).
     frameWidth: z.number().finite().positive().optional(),
     frameHeight: z.number().finite().positive().optional(),
+    /// The composed transform of a child of a rotated group. The anchor
+    /// is its axis-aligned bounds, and width/height are local EMU extents.
+    groupTransform: z
+      .object({
+        matrix: z.tuple([
+          z.number().finite(),
+          z.number().finite(),
+          z.number().finite(),
+          z.number().finite(),
+        ]),
+        width: z.number().finite().nonnegative(),
+        height: z.number().finite().nonnegative(),
+      })
+      .strict()
+      .optional(),
     /// Save-side edit locator: the drawing part this visual lives in and its
     /// anchor index within that part (document order, skipped anchors counted).
     drawingPath: z

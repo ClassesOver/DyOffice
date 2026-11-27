@@ -7,6 +7,7 @@ import {
   clearVisualSelection,
   getChartElementSelection,
   installWorkbookVisuals,
+  installedVisualFrames,
   selectedVisualIds,
 } from '../src/renderer/WorkbookVisuals'
 import type { createUniver } from '../src/renderer/create-univer'
@@ -72,11 +73,29 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
     flipH: false,
     flipV: false,
   }
+  const rotated: WorkbookVisualObject = {
+    ...grouped,
+    id: 'rotated',
+    chartPath: 'xl/charts/chart3.xml',
+    flipH: undefined,
+    flipV: undefined,
+    groupTransform: { matrix: [0, 1, 1, 0], width: 1905000, height: 952500 },
+    anchor: {
+      fromRow: 2,
+      fromColumn: 3,
+      fromRowOffset: -28575,
+      fromColumnOffset: -19050,
+      toRow: 2,
+      toColumn: 3,
+      toRowOffset: 1876425,
+      toColumnOffset: 933450,
+    },
+  }
   const editAnchor = vi.fn()
   const editChart = vi.fn()
   const scope = installWorkbookVisuals(
     runtime,
-    { sessionId: 'session', visuals: [grouped, regular] },
+    { sessionId: 'session', visuals: [grouped, regular, rotated] },
     'sheet-1',
     { edits: new Map(), onEdit: editChart },
     { onEdit: editAnchor },
@@ -89,8 +108,27 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
       root.render([
         createElement(components.get('xlsx-session-grouped')!, { key: grouped.id }),
         createElement(components.get('xlsx-session-regular')!, { key: regular.id }),
+        createElement(components.get('xlsx-session-rotated')!, { key: rotated.id }),
       ])
     })
+    expect(
+      installedVisualFrames('sheet-1').find((frame) => frame.visual.id === rotated.id),
+    ).toMatchObject({
+      fromRow: 1,
+      fromColumn: 2,
+      marginX: 62,
+      marginY: 17,
+      width: 100,
+      height: 200,
+    })
+    const rotatedFigure = container.querySelector<HTMLElement>(
+      '[data-print-visual="rotated"] figure',
+    )!
+    const surface = rotatedFigure.querySelector<HTMLElement>('.xlsx-group-content')!
+    expect(surface.style.transform).toBe('translate(-50%, -50%) matrix(0, 1, 1, 0, 0, 0)')
+    expect(surface.contains(rotatedFigure.querySelector('.chart-edit-button'))).toBe(false)
+    act(() => surface.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })))
+    expect(selectedVisualIds()).toEqual([rotated.id])
     const figure = container.querySelector<HTMLElement>('[data-print-visual="grouped"] figure')!
     const title = figure.querySelector('figcaption')!
     expect(figure.style.flexDirection).toBe('column-reverse')

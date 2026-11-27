@@ -726,7 +726,7 @@ fn expands_group_children_through_child_space() {
         &HashMap::new(),
         &mut visuals,
         0,
-        (false, false),
+        GroupMapping::default(),
     )
     .unwrap();
     assert_eq!(visuals.len(), 1, "hidden child must be skipped");
@@ -744,6 +744,61 @@ fn expands_group_children_through_child_space() {
         child.drawing_index.is_none(),
         "group children are read-only"
     );
+}
+
+#[test]
+fn rotates_a_nested_group_before_parent_scaling() {
+    let xml = format!(
+        r#"<xdr:wsDr {XDR}><xdr:grpSp>
+          <xdr:grpSpPr><a:xfrm><a:ext cx="400" cy="200"/>
+            <a:chOff x="0" y="0"/><a:chExt cx="200" cy="200"/></a:xfrm></xdr:grpSpPr>
+          <xdr:grpSp>
+            <xdr:grpSpPr><a:xfrm rot="5400000" flipV="true">
+              <a:off x="100" y="50"/><a:ext cx="80" cy="40"/>
+              <a:chOff x="0" y="0"/><a:chExt cx="80" cy="40"/></a:xfrm></xdr:grpSpPr>
+            <xdr:sp><xdr:spPr><a:xfrm><a:off x="10" y="5"/><a:ext cx="20" cy="10"/></a:xfrm>
+              <a:prstGeom prst="rightArrow"/></xdr:spPr></xdr:sp>
+          </xdr:grpSp>
+        </xdr:grpSp></xdr:wsDr>"#
+    );
+    let document = Document::parse(&xml).unwrap();
+    let group = direct_child(document.root_element(), "grpSp").unwrap();
+    let anchor = DrawingAnchor {
+        from_row: 2,
+        from_column: 1,
+        from_row_offset: 0,
+        from_column_offset: 0,
+        to_row: 2,
+        to_column: 1,
+        to_row_offset: 0,
+        to_column_offset: 0,
+        explicit_to: false,
+        absolute: false,
+    };
+    let mut visuals = Vec::new();
+    expand_group(
+        group,
+        &anchor,
+        (0.0, 0.0, 400.0, 200.0),
+        "visual-1",
+        &mut 0,
+        "sheet1",
+        &ColorContext::default(),
+        "xl/drawings/drawing1.xml",
+        &HashMap::new(),
+        &mut visuals,
+        0,
+        GroupMapping::default(),
+    )
+    .unwrap();
+    let child = &visuals[0];
+    assert_eq!(child.anchor.from_column_offset, 250);
+    assert_eq!(child.anchor.to_column_offset, 270);
+    assert_eq!(child.anchor.from_row_offset, 40);
+    assert_eq!(child.anchor.to_row_offset, 60);
+    let transform = child.group_transform.as_ref().unwrap();
+    assert_eq!(transform.matrix, [0.0, 1.0, 2.0, 0.0]);
+    assert_eq!((transform.width, transform.height), (20.0, 10.0));
 }
 
 #[test]
@@ -801,7 +856,7 @@ fn expands_group_chart_children_with_their_part_path() {
         &relationships,
         &mut visuals,
         0,
-        (false, false),
+        GroupMapping::default(),
     )
     .unwrap();
     assert_eq!(visuals.len(), 1);
@@ -2228,7 +2283,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         &relationships,
         &mut visuals,
         0,
-        (false, false),
+        GroupMapping::default(),
     )
     .unwrap();
     assert_eq!(visuals.len(), 2);

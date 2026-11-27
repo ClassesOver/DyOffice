@@ -231,7 +231,7 @@ pub(crate) fn read_drawing(
                     &relationships,
                     &mut visuals,
                     0,
-                    (false, false),
+                    GroupMapping::default(),
                 )?;
             }
             continue;
@@ -281,6 +281,7 @@ pub(crate) fn read_drawing(
                 rotation: None,
                 frame_width: None,
                 frame_height: None,
+                group_transform: None,
                 nv_id: None,
                 drawing_path: Some(drawing_path.to_owned()),
                 drawing_index: Some(index),
@@ -341,6 +342,7 @@ pub(crate) fn read_drawing(
                 rotation: None,
                 frame_width: None,
                 frame_height: None,
+                group_transform: None,
                 nv_id: None,
                 drawing_path: Some(drawing_path.to_owned()),
                 drawing_index: Some(index),
@@ -394,6 +396,7 @@ pub(crate) fn read_drawing(
                 rotation: None,
                 frame_width: None,
                 frame_height: None,
+                group_transform: None,
                 nv_id: None,
                 drawing_path: None,
                 drawing_index: None,
@@ -719,6 +722,7 @@ pub(crate) fn shape_visual(
                 rotation,
                 frame_width,
                 frame_height,
+                group_transform: None,
                 nv_id,
                 drawing_path: Some(drawing_path.to_owned()),
                 drawing_index,
@@ -869,13 +873,76 @@ fn xfrm_flipped(xfrm: Option<Node<'_, '_>>, attribute: &str) -> bool {
         .is_some_and(|value| value == "1" || value == "true")
 }
 
-fn apply_group_reflection(
+type DrawingMatrix = [f64; 4];
+
+#[derive(Clone, Copy)]
+pub(crate) struct GroupMapping {
+    matrix: DrawingMatrix,
+    x: f64,
+    y: f64,
+    rotated: bool,
+}
+
+impl Default for GroupMapping {
+    fn default() -> Self {
+        Self {
+            matrix: [1.0, 0.0, 0.0, 1.0],
+            x: 0.0,
+            y: 0.0,
+            rotated: false,
+        }
+    }
+}
+
+impl GroupMapping {
+    fn point(self, x: f64, y: f64) -> (f64, f64) {
+        let [a, b, c, d] = self.matrix;
+        (self.x + a * x + c * y, self.y + b * x + d * y)
+    }
+}
+
+fn xfrm_radians(xfrm: Option<Node<'_, '_>>) -> f64 {
+    xfrm.and_then(|node| node.attribute("rot"))
+        .and_then(|value| value.parse::<i32>().ok())
+        .map_or(0.0, |angle| {
+            f64::from(angle % 21_600_000) * std::f64::consts::PI / 10_800_000.0
+        })
+}
+
+fn drawing_orientation(xfrm: Option<Node<'_, '_>>, radians: f64) -> DrawingMatrix {
+    let (sin, cos) = radians.sin_cos();
+    let clean = |value: f64| if value.abs() < 1e-12 { 0.0 } else { value };
+    let flip_x = if xfrm_flipped(xfrm, "flipH") { -1.0 } else { 1.0 };
+    let flip_y = if xfrm_flipped(xfrm, "flipV") { -1.0 } else { 1.0 };
+    [
+        clean(cos * flip_x),
+        clean(sin * flip_x),
+        clean(-sin * flip_y),
+        clean(cos * flip_y),
+    ]
+}
+
+fn multiply_drawing_matrices([a, b, c, d]: DrawingMatrix, [e, f, g, h]: DrawingMatrix) -> DrawingMatrix {
+    [a * e + c * f, b * e + d * f, a * g + c * h, b * g + d * h]
+}
+
+fn apply_group_transform(
     visual: &mut VisualObject,
     flip_h: bool,
     flip_v: bool,
     width: f64,
     height: f64,
+    transform: Option<GroupChildTransform>,
 ) {
+    if let Some(transform) = transform {
+        visual.group_transform = Some(transform);
+        visual.flip_h = false;
+        visual.flip_v = false;
+        visual.rotation = None;
+        visual.frame_width = None;
+        visual.frame_height = None;
+        return;
+    }
     visual.flip_h ^= flip_h;
     visual.flip_v ^= flip_v;
     if let Some(rotation) = &mut visual.rotation {
@@ -889,10 +956,8 @@ fn apply_group_reflection(
 }
 
 /// Flatten a grpSp into per-child visuals. `group_box` is the group's frame
-/// as (x, y, width, height) in EMU relative to the anchor's `from` marker;
-/// children map from the group's chOff/chExt space onto that box. Child
-/// anchors encode the box as offsets within the from cell, which the
-/// renderer's marker walk resolves across real row/column sizes.
+/// as (x, y, width, height) in the parent group's child coordinate space.
+/// The outermost frame is relative to the anchor's `from` marker.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn expand_group(
     group: Node<'_, '_>,
@@ -906,7 +971,7 @@ pub(crate) fn expand_group(
     relationships: &HashMap<String, Relationship>,
     visuals: &mut Vec<VisualObject>,
     depth: usize,
-    inherited_flip: (bool, bool),
+    parent: GroupMapping,
 ) -> Result<(), SidecarError> {
     // A stack overflow is not a panic — catch_unwind cannot stop the process
     // abort, and the file itself decides how deep this recursion goes. Excel
@@ -918,14 +983,34 @@ pub(crate) fn expand_group(
     }
     let (box_x, box_y, box_width, box_height) = group_box;
     let xfrm = group_xfrm(group);
-    let flip_h = inherited_flip.0 ^ xfrm_flipped(xfrm, "flipH");
-    let flip_v = inherited_flip.1 ^ xfrm_flipped(xfrm, "flipV");
+    let radians = xfrm_radians(xfrm);
+    let rotated = parent.rotated || radians != 0.0;
     let ch_off_x = xfrm_value(xfrm, "chOff", "x").unwrap_or(0.0);
     let ch_off_y = xfrm_value(xfrm, "chOff", "y").unwrap_or(0.0);
-    let ch_ext_x = xfrm_value(xfrm, "chExt", "cx").filter(|value| *value > 0.0);
-    let ch_ext_y = xfrm_value(xfrm, "chExt", "cy").filter(|value| *value > 0.0);
-    let scale_x = box_width / ch_ext_x.unwrap_or(box_width);
-    let scale_y = box_height / ch_ext_y.unwrap_or(box_height);
+    let ch_ext_x = xfrm_value(xfrm, "chExt", "cx")
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(box_width);
+    let ch_ext_y = xfrm_value(xfrm, "chExt", "cy")
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(box_height);
+    let scale_x = box_width / ch_ext_x;
+    let scale_y = box_height / ch_ext_y;
+    let [a, b, c, d] = drawing_orientation(xfrm, radians);
+    let matrix = multiply_drawing_matrices(
+        parent.matrix,
+        [a * scale_x, b * scale_x, c * scale_y, d * scale_y],
+    );
+    let (center_x, center_y) = parent.point(box_x + box_width / 2.0, box_y + box_height / 2.0);
+    let source_x = ch_off_x + ch_ext_x / 2.0;
+    let source_y = ch_off_y + ch_ext_y / 2.0;
+    let world = GroupMapping {
+        matrix,
+        x: center_x - matrix[0] * source_x - matrix[2] * source_y,
+        y: center_y - matrix[1] * source_x - matrix[3] * source_y,
+        rotated,
+    };
+    let flip_h = matrix[0] < 0.0;
+    let flip_v = matrix[3] < 0.0;
     for child in group.children() {
         let is_group = child.has_tag_name("grpSp");
         let is_shape = child.has_tag_name("sp") || child.has_tag_name("cxnSp");
@@ -951,43 +1036,70 @@ pub(crate) fn expand_group(
         ) else {
             continue;
         };
-        let x = (off_x - ch_off_x) * scale_x;
-        let y = (off_y - ch_off_y) * scale_y;
-        let width = ext_x * scale_x;
-        let height = ext_y * scale_y;
-        let child_box = (
-            box_x + if flip_h { box_width - x - width } else { x },
-            box_y + if flip_v { box_height - y - height } else { y },
-            width,
-            height,
-        );
-        if is_group {
-            expand_group(
-                child,
-                anchor,
-                child_box,
-                visual_id,
-                counter,
-                sheet_id,
-                colors,
-                drawing_path,
-                relationships,
-                visuals,
-                depth + 1,
-                (flip_h, flip_v),
-            )?;
+        if ![off_x, off_y, ext_x, ext_y].into_iter().all(f64::is_finite)
+            || ext_x < 0.0
+            || ext_y < 0.0
+        {
             continue;
         }
+        if is_group {
+            if ext_x > 0.0 && ext_y > 0.0 {
+                expand_group(
+                    child,
+                    anchor,
+                    (off_x, off_y, ext_x, ext_y),
+                    visual_id,
+                    counter,
+                    sheet_id,
+                    colors,
+                    drawing_path,
+                    relationships,
+                    visuals,
+                    depth + 1,
+                    world,
+                )?;
+            }
+            continue;
+        }
+        let child_matrix = if rotated {
+            multiply_drawing_matrices(
+                matrix,
+                drawing_orientation(child_xfrm, xfrm_radians(child_xfrm)),
+            )
+        } else {
+            matrix
+        };
+        let (center_x, center_y) = world.point(off_x + ext_x / 2.0, off_y + ext_y / 2.0);
+        let width = child_matrix[0].abs() * ext_x + child_matrix[2].abs() * ext_y;
+        let height = child_matrix[1].abs() * ext_x + child_matrix[3].abs() * ext_y;
+        if ![center_x, center_y, width, height]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            continue;
+        }
+        let transform = rotated.then_some(GroupChildTransform {
+            matrix: child_matrix,
+            width: ext_x,
+            height: ext_y,
+        });
         let child_anchor = DrawingAnchor {
             from_row: anchor.from_row,
             from_column: anchor.from_column,
-            from_row_offset: anchor.from_row_offset + child_box.1.round() as i64,
-            from_column_offset: anchor.from_column_offset + child_box.0.round() as i64,
+            from_row_offset: anchor
+                .from_row_offset
+                .saturating_add((center_y - height / 2.0).round() as i64),
+            from_column_offset: anchor
+                .from_column_offset
+                .saturating_add((center_x - width / 2.0).round() as i64),
             to_row: anchor.from_row,
             to_column: anchor.from_column,
-            to_row_offset: anchor.from_row_offset + (child_box.1 + child_box.3).round() as i64,
-            to_column_offset: anchor.from_column_offset
-                + (child_box.0 + child_box.2).round() as i64,
+            to_row_offset: anchor
+                .from_row_offset
+                .saturating_add((center_y + height / 2.0).round() as i64),
+            to_column_offset: anchor
+                .from_column_offset
+                .saturating_add((center_x + width / 2.0).round() as i64),
             explicit_to: false,
             absolute: false,
         };
@@ -1011,7 +1123,7 @@ pub(crate) fn expand_group(
                 None,
             );
             apply_anchor_properties(&mut shape, child, relationships);
-            apply_group_reflection(&mut shape, flip_h, flip_v, width, height);
+            apply_group_transform(&mut shape, flip_h, flip_v, width, height, transform);
             visuals.push(shape);
             continue;
         }
@@ -1028,7 +1140,7 @@ pub(crate) fn expand_group(
             else {
                 continue;
             };
-            visuals.push(VisualObject {
+            let mut chart = VisualObject {
                 id: child_id,
                 sheet_id: sheet_id.to_owned(),
                 kind: "chart".into(),
@@ -1050,8 +1162,8 @@ pub(crate) fn expand_group(
                 line_width: None,
                 line_dash: None,
                 line_cap: None,
-                flip_h: flip_h ^ xfrm_flipped(child_xfrm, "flipH"),
-                flip_v: flip_v ^ xfrm_flipped(child_xfrm, "flipV"),
+                flip_h: xfrm_flipped(child_xfrm, "flipH"),
+                flip_v: xfrm_flipped(child_xfrm, "flipV"),
                 text_color: None,
                 text_anchor: None,
                 text_vert_overflow: None,
@@ -1062,13 +1174,16 @@ pub(crate) fn expand_group(
                 rotation: None,
                 frame_width: None,
                 frame_height: None,
+                group_transform: None,
                 nv_id: None,
                 drawing_path: Some(drawing_path.to_owned()),
                 drawing_index: None,
                 alt_text: None,
                 edit_as: None,
                 hyperlink: None,
-            });
+            };
+            apply_group_transform(&mut chart, flip_h, flip_v, width, height, transform);
+            visuals.push(chart);
             continue;
         }
         let Some(blip_node) = picture_blip(child) else {
@@ -1114,6 +1229,7 @@ pub(crate) fn expand_group(
             rotation: None,
             frame_width: None,
             frame_height: None,
+            group_transform: None,
             nv_id: None,
             drawing_path: Some(drawing_path.to_owned()),
             drawing_index: None,
@@ -1124,7 +1240,7 @@ pub(crate) fn expand_group(
         // Group children have no anchor of their own: the pic element is the
         // scope, and its xfrm ext is in child space, so the frame rescales.
         apply_anchor_properties(&mut picture, child, relationships);
-        apply_group_reflection(&mut picture, flip_h, flip_v, width, height);
+        apply_group_transform(&mut picture, flip_h, flip_v, width, height, transform);
         visuals.push(picture);
     }
     Ok(())

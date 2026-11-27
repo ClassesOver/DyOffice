@@ -721,9 +721,29 @@ function readPicture(
 }
 
 type GroupBox = { x: number; y: number; width: number; height: number }
+type DrawingMatrix = NonNullable<WorkbookVisualObject['groupTransform']>['matrix']
+type DrawingTransform = { matrix: DrawingMatrix; x: number; y: number }
 const groupTransform = (node: XmlElement) => child(drawingMainPart(node, 'grpSpPr'), 'xfrm')
 const transformValue = (transform: XmlElement | undefined, part: string, key: string) => integer(attribute(child(transform, part), key))
 const groupChildTags = new Set(['grpSp', 'sp', 'cxnSp', 'pic', 'graphicFrame'])
+
+function drawingOrientation(transform: XmlElement | undefined): DrawingMatrix {
+  const radians = ((finite(attribute(transform, 'rot')) ?? 0) % 21_600_000) * Math.PI / 10_800_000
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const flipX = trueAttribute(transform, 'flipH') ? -1 : 1
+  const flipY = trueAttribute(transform, 'flipV') ? -1 : 1
+  return [
+    Math.abs(cos) < 1e-12 ? 0 : cos * flipX,
+    Math.abs(sin) < 1e-12 ? 0 : sin * flipX,
+    Math.abs(sin) < 1e-12 ? 0 : -sin * flipY,
+    Math.abs(cos) < 1e-12 ? 0 : cos * flipY,
+  ]
+}
+
+function multiplyDrawingMatrices([a, b, c, d]: DrawingMatrix, [e, f, g, h]: DrawingMatrix): DrawingMatrix {
+  return [a * e + c * f, b * e + d * f, a * g + c * h, b * g + d * h]
+}
 
 function groupedChartRelationshipId(frame: XmlElement): string | undefined {
   const graphic = child({ ...frame, drawingMainOnly: true }, 'graphic')
@@ -743,17 +763,32 @@ async function readGroupVisuals(
   const height = transformValue(rootTransform, 'ext', 'cy')
   if (width === undefined || height === undefined || width <= 0 || height <= 0) return groupVisuals
   let ordinal = 0
-  async function expand(node: XmlElement, box: GroupBox, depth: number, parentFlipH: boolean, parentFlipV: boolean) {
+  async function expand(node: XmlElement, box: GroupBox, depth: number, parent: DrawingTransform, parentRotated: boolean) {
     const transform = groupTransform(node)
-    if (depth > 32 || finite(attribute(transform, 'rot'))) return
-    const flipH = parentFlipH !== trueAttribute(transform, 'flipH')
-    const flipV = parentFlipV !== trueAttribute(transform, 'flipV')
+    if (depth > 32) return
+    const rotated = parentRotated || (finite(attribute(transform, 'rot')) ?? 0) % 21_600_000 !== 0
     const originX = transformValue(transform, 'chOff', 'x') ?? 0
     const originY = transformValue(transform, 'chOff', 'y') ?? 0
-    const extentX = transformValue(transform, 'chExt', 'cx') ?? 0
-    const extentY = transformValue(transform, 'chExt', 'cy') ?? 0
-    const scaleX = extentX > 0 ? box.width / extentX : 1
-    const scaleY = extentY > 0 ? box.height / extentY : 1
+    const extentX = transformValue(transform, 'chExt', 'cx')
+    const extentY = transformValue(transform, 'chExt', 'cy')
+    const childWidth = extentX !== undefined && extentX > 0 ? extentX : box.width
+    const childHeight = extentY !== undefined && extentY > 0 ? extentY : box.height
+    const scaleX = box.width / childWidth
+    const scaleY = box.height / childHeight
+    const [a, b, c, d] = drawingOrientation(transform)
+    const matrix = multiplyDrawingMatrices(parent.matrix, [a * scaleX, b * scaleX, c * scaleY, d * scaleY])
+    const [e, f, g, h] = parent.matrix
+    const localCenterX = box.x + box.width / 2
+    const localCenterY = box.y + box.height / 2
+    const sourceCenterX = originX + childWidth / 2
+    const sourceCenterY = originY + childHeight / 2
+    const world = {
+      matrix,
+      x: parent.x + e * localCenterX + g * localCenterY - matrix[0] * sourceCenterX - matrix[2] * sourceCenterY,
+      y: parent.y + f * localCenterX + h * localCenterY - matrix[1] * sourceCenterX - matrix[3] * sourceCenterY,
+    }
+    const flipH = matrix[0] < 0
+    const flipV = matrix[3] < 0
     for (const entry of children(node)) {
       if (!groupChildTags.has(entry.tag) || !isSheetDrawingChild(node, entry)) continue
       const propertiesTag = entry.tag === 'pic' ? 'nvPicPr' : entry.tag === 'graphicFrame' ? 'nvGraphicFramePr' : undefined
@@ -768,27 +803,24 @@ async function readGroupVisuals(
       const width = transformValue(transform, 'ext', 'cx')
       const height = transformValue(transform, 'ext', 'cy')
       if (x === undefined || y === undefined || width === undefined || height === undefined || width < 0 || height < 0) continue
-      const offsetX = (x - originX) * scaleX
-      const offsetY = (y - originY) * scaleY
-      const childBox = {
-        x: box.x + (flipH ? box.width - offsetX - width * scaleX : offsetX),
-        y: box.y + (flipV ? box.height - offsetY - height * scaleY : offsetY),
-        width: width * scaleX,
-        height: height * scaleY,
-      }
       if (nested) {
-        if (childBox.width > 0 && childBox.height > 0) await expand(entry, childBox, depth + 1, flipH, flipV)
+        if (width > 0 && height > 0) await expand(entry, { x, y, width, height }, depth + 1, world, rotated)
         continue
       }
+      const childMatrix = rotated ? multiplyDrawingMatrices(matrix, drawingOrientation(transform)) : matrix
+      const centerX = world.x + matrix[0] * (x + width / 2) + matrix[2] * (y + height / 2)
+      const centerY = world.y + matrix[1] * (x + width / 2) + matrix[3] * (y + height / 2)
+      const boundWidth = Math.abs(childMatrix[0]) * width + Math.abs(childMatrix[2]) * height
+      const boundHeight = Math.abs(childMatrix[1]) * width + Math.abs(childMatrix[3]) * height
       const id = `${base.id}-${++ordinal}`
       const { fromRow, fromColumn, fromRowOffset, fromColumnOffset } = base.anchor
       const anchor = {
         fromRow, fromColumn,
-        fromRowOffset: fromRowOffset + Math.round(childBox.y),
-        fromColumnOffset: fromColumnOffset + Math.round(childBox.x),
+        fromRowOffset: fromRowOffset + Math.round(centerY - boundHeight / 2),
+        fromColumnOffset: fromColumnOffset + Math.round(centerX - boundWidth / 2),
         toRow: fromRow, toColumn: fromColumn,
-        toRowOffset: fromRowOffset + Math.round(childBox.y + childBox.height),
-        toColumnOffset: fromColumnOffset + Math.round(childBox.x + childBox.width),
+        toRowOffset: fromRowOffset + Math.round(centerY + boundHeight / 2),
+        toColumnOffset: fromColumnOffset + Math.round(centerX + boundWidth / 2),
       }
       if (![anchor.fromRowOffset, anchor.fromColumnOffset, anchor.toRowOffset, anchor.toColumnOffset].every(Number.isSafeInteger)) continue
       // The save gateway edits physical anchors. A child has no independent anchor.
@@ -802,6 +834,14 @@ async function readGroupVisuals(
         : entry.tag === 'pic' ? readPicture(entry, childBase, references)
           : readShape(entry, childBase, theme, references)
       if (!visual) continue
+      if (rotated) {
+        groupVisuals.push({
+          ...visual, flipH: undefined, flipV: undefined, rotation: undefined,
+          frameWidth: undefined, frameHeight: undefined,
+          groupTransform: { matrix: childMatrix, width, height },
+        })
+        continue
+      }
       const localFlipH = visual.kind === 'chart' ? trueAttribute(transform, 'flipH') : visual.flipH === true
       const localFlipV = visual.kind === 'chart' ? trueAttribute(transform, 'flipV') : visual.flipV === true
       // A single reflection reverses the handedness of a child's rotation.
@@ -809,13 +849,13 @@ async function readGroupVisuals(
         ...visual, flipH: flipH !== localFlipH, flipV: flipV !== localFlipV,
         ...(visual.rotation ? {
           rotation: flipH !== flipV ? -visual.rotation : visual.rotation,
-          frameWidth: childBox.width || undefined,
-          frameHeight: childBox.height || undefined,
+          frameWidth: boundWidth || undefined,
+          frameHeight: boundHeight || undefined,
         } : {}),
       })
     }
   }
-  await expand(group, { x: 0, y: 0, width, height }, 0, false, false)
+  await expand(group, { x: 0, y: 0, width, height }, 0, { matrix: [1, 0, 0, 1], x: 0, y: 0 }, false)
   return groupVisuals
 }
 

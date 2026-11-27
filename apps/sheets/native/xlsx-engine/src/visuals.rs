@@ -555,6 +555,8 @@ pub struct VisualObject {
     pub frame_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_transform: Option<GroupChildTransform>,
     /// xdr:cNvPr/@id — pairs a drawing fallback shape with its worksheet
     /// <oleObject shapeId=…>. Engine-internal, never serialized.
     #[serde(skip)]
@@ -574,6 +576,15 @@ pub struct VisualObject {
     /// cNvPr/a:hlinkClick target resolved through the drawing rels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hyperlink: Option<String>,
+}
+
+/// The anchor stores the transformed bounds. The matrix maps the local
+/// extents into the sheet, with both boxes centered on the same point.
+#[derive(Clone, Debug, Serialize)]
+pub struct GroupChildTransform {
+    pub matrix: [f64; 4],
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -952,6 +963,7 @@ pub fn read_visual_objects(
                 rotation: None,
                 frame_width: None,
                 frame_height: None,
+                group_transform: None,
                 nv_id: None,
                 // No edit locator on purpose: an OLE object lives in the
                 // worksheet's <oleObjects>, its embedding part and the legacy

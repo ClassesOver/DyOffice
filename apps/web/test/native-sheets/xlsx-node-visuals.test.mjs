@@ -883,6 +883,28 @@ test('saves layer order across reorder and removal commands', { timeout: 120_000
   assert.equal((await textOf(await JSZip.loadAsync(bytes))(drawingPath)).split(comment).length, 4)
 })
 
+test('rotates a nested group in the parent coordinate space', async () => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  await appendDrawing(zip, `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="400000" cy="200000"/><xdr:grpSp>
+      <xdr:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="400000" cy="200000"/><a:chOff x="0" y="0"/><a:chExt cx="200000" cy="200000"/></a:xfrm></xdr:grpSpPr>
+      <xdr:grpSp>
+        <xdr:grpSpPr><a:xfrm rot="5400000" flipV="true"><a:off x="100000" y="50000"/><a:ext cx="80000" cy="40000"/><a:chOff x="0" y="0"/><a:chExt cx="80000" cy="40000"/></a:xfrm></xdr:grpSpPr>
+        <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="91" name="Rotated group child"/></xdr:nvSpPr>
+          <xdr:spPr><a:xfrm><a:off x="10000" y="5000"/><a:ext cx="20000" cy="10000"/></a:xfrm><a:prstGeom prst="rightArrow"/></xdr:spPr>
+        </xdr:sp>
+      </xdr:grpSp>
+    </xdr:grpSp><xdr:clientData/></xdr:oneCellAnchor>`)
+  const visuals = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet))
+  const shape = visuals.find(visual => visual.name === 'Rotated group child')
+  assert.ok(shape)
+  assert.deepEqual(shape.anchor, {
+    fromRow: 2, fromColumn: 1, fromRowOffset: 40000, fromColumnOffset: 250000,
+    toRow: 2, toColumn: 1, toRowOffset: 60000, toColumnOffset: 270000,
+  })
+  assert.deepEqual(shape.groupTransform, { matrix: [0, 1, 2, 0], width: 20000, height: 10000 })
+})
+
 test('places nested group shapes and straight connectors with read-only child locators', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   await appendDrawing(zip, `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>1000</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>2000</xdr:rowOff></xdr:from>
@@ -999,6 +1021,18 @@ test('places nested group shapes and straight connectors with read-only child lo
   })
   assert.deepEqual([reflectedChart.flipH, reflectedChart.flipV], [false, true])
 
+  const reflectedDrawing = await textOf(zip)(drawingPath)
+  zip.file(drawingPath, reflectedDrawing.replace(
+    '<a:xfrm flipH="1"><a:off x="0" y="0"/><a:ext cx="400000"',
+    '<a:xfrm flipH="1" rot="1800000"><a:off x="0" y="0"/><a:ext cx="400000"',
+  ))
+  const rotated = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet, theme))
+  const rotatedChart = rotated.find(visual => visual.id === chart.id)
+  const rotatedPicture = rotated.find(visual => visual.id === picture.id)
+  assert.ok(rotatedChart?.groupTransform)
+  assert.ok(rotatedPicture?.groupTransform)
+  assert.notEqual(rotatedChart.groupTransform.matrix[1], 0)
+
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-group-image-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   await buildSheetsGateway(join(directory, 'gateway.mjs'))
@@ -1015,11 +1049,11 @@ test('places nested group shapes and straight connectors with read-only child lo
   const savedVisuals = (await runtime.sheetsNative.inspect(saved)).visuals
   const savedChart = savedVisuals.find(visual => visual.id === chart.id)
   assert.equal(savedChart.chart.title, 'Edited chart in group')
-  assert.deepEqual(savedChart.anchor, reflectedChart.anchor)
-  assert.deepEqual([savedChart.flipH, savedChart.flipV], [false, true])
+  assert.deepEqual(savedChart.anchor, rotatedChart.anchor)
+  assert.deepEqual(savedChart.groupTransform, rotatedChart.groupTransform)
   assert.equal(savedVisuals.find(visual => visual.id === standalone.id).chart.title, standalone.chart.title)
   const savedPicture = savedVisuals.find(visual => visual.id === picture.id)
-  assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(reflectedPicture)))
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(rotatedPicture)))
   assert.deepEqual(await runtime.sheetsNative.readMedia(saved, picture.id), {
     mediaType: 'image/svg+xml', base64: Buffer.from(svg).toString('base64'),
   })
