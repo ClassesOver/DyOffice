@@ -871,6 +871,16 @@ describe('layoutSheetPrint', () => {
     expect(selected).not.toContain('Even 10')
   })
 
+  it('renders a total page offset in the footer when printing a page subset', () => {
+    const setup = resolveEffectivePageSetup({}, {
+      firstPageNumber: 8,
+      oddFooter: '&RPage &P of &N+7',
+    }, null)
+    const document = layout(tallWorksheet(120), setup)
+    const selected = assemblePrintHtml([document], (page) => page === 2).html
+    expect(selected).toContain('Page 9 of 10</span>')
+  })
+
   it('puts the &G picture of each variant into its own header', () => {
     const pictures = new Map([
       ['LH', { dataUrl: 'data:image/png;base64,ODD', widthPt: 300, heightPt: 30 }],

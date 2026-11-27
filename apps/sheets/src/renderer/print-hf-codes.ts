@@ -58,16 +58,21 @@ export function expandHeaderFooterCodes(text: string, fields: HeaderFooterFields
       code = named
       length = close + 1 - index
     }
-    // &P+n / &P-n offsets the page number.
-    let pageOffset = 0
-    if (code === 'P') {
-      const offset = /^([+-])(\d{1,4})/.exec(text.slice(index + length))
-      if (offset) {
-        pageOffset = Number(offset[2]) * (offset[1] === '-' ? -1 : 1)
-        length += offset[0].length
+    if (code === 'P' || code === 'N') {
+      let value = code === 'P' ? fields.page : fields.total
+      const suffix = /^[+-]\d+/.exec(text.slice(index + length))?.[0]
+      if (suffix !== undefined) {
+        const offset = Number(suffix)
+        if (Number.isSafeInteger(offset) && Number.isSafeInteger(value + offset)) {
+          value += offset
+          length += suffix.length
+        }
       }
+      out += String(value)
+      index += length
+      continue
     }
-    const expanded = expandCode(code, fields, pageOffset)
+    const expanded = expandCode(code, fields)
     if (expanded === null) {
       out += `&${next}`
       index += 2
@@ -79,12 +84,8 @@ export function expandHeaderFooterCodes(text: string, fields: HeaderFooterFields
   return out
 }
 
-function expandCode(code: string, fields: HeaderFooterFields, pageOffset: number): string | null {
+function expandCode(code: string, fields: HeaderFooterFields): string | null {
   switch (code) {
-    case 'P':
-      return String(fields.page + pageOffset)
-    case 'N':
-      return String(fields.total)
     case 'D':
       return fields.date.toLocaleDateString()
     case 'T':
