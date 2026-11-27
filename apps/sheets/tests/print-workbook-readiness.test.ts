@@ -179,7 +179,7 @@ describe('print and PDF workbook readiness coordination', () => {
     expect(output).toContain('<oddHeader>&amp;LUpdated&amp;C&amp;BReport&amp;B</oddHeader>')
     expect(output).toContain(originalFooter)
     expect(resolveEffectivePageSetup(changes[0] ?? {}, { oddHeader, oddFooter }, null).header)
-      .toEqual({ left: 'Updated', center: 'Report' })
+      .toEqual({ left: 'Updated', center: '&BReport&B' })
 
     const reopened = await openHeaderFooterEditor(ctx)
     if (reopened === null) throw new Error('Header and footer editor did not reopen')

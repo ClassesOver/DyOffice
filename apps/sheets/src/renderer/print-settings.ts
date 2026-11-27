@@ -8,6 +8,7 @@ import { columnIndex, columnLabel, parseRange } from '@genoffice/xlsx-gateway/do
 import { encodeHeaderFooterSections } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import type { WorkbookPagePrintSettings } from '../shared/desktop-api'
 import type { HeaderFooterParts, PageSetupJournalState, StructuralJournalOp } from './edit-journal'
+import { matchHeaderFooterFormat } from './print-hf-codes'
 import { fileRangeToScreenRange, fileToScreen } from './view-transform'
 
 export interface PrintMargins {
@@ -199,15 +200,15 @@ export function resolveEffectivePageSetup(
         : mapTitleRowsToScreen(printTitleRowsFromFormula(names?.printTitles), ops)
   // Use the same encoding for pending edits as on save.
   const decodeOptional = (encoded: string | undefined): HeaderFooterParts | null =>
-    encoded === undefined ? null : decodeHeaderFooter(encoded)
+    encoded === undefined ? null : decodeHeaderFooter(encoded, true)
   const header =
     journal.header === undefined
       ? decodeOptional(file?.oddHeader)
-      : journal.header && decodeHeaderFooter(encodeHeaderFooterSections(journal.header))
+      : journal.header && decodeHeaderFooter(encodeHeaderFooterSections(journal.header), true)
   const footer =
     journal.footer === undefined
       ? decodeOptional(file?.oddFooter)
-      : journal.footer && decodeHeaderFooter(encodeHeaderFooterSections(journal.footer))
+      : journal.footer && decodeHeaderFooter(encodeHeaderFooterSections(journal.footer), true)
   // The session edits the odd header/footer only.
   const firstPage =
     file?.differentFirst === true
@@ -346,12 +347,8 @@ function normaliseArea(reference: string): string {
   )
 }
 
-/// Formatting toggles and codes the layout cannot render; any other &X is literal text.
-const STRIPPED_CODES = new Set(['B', 'I', 'U', 'S', 'E', 'X', 'Y', 'Z', 'O', 'H'])
-
-/// Excel's encoded header/footer → left/center/right parts. The editor keeps
-/// formatting codes for saving. Print layout keeps fields and strips the
-/// formatting codes it cannot render. Unmarked text goes in the center.
+/// Excel's encoded header/footer → left/center/right parts. Unmarked text
+/// goes in the center. Editing and printing both keep the original codes.
 export function decodeHeaderFooter(
   encoded: string,
   preserveFormatting = false,
@@ -376,35 +373,20 @@ export function decodeHeaderFooter(
       index += 2
       continue
     }
-    const start = index
-    // &"Font Name,Style" — consume the whole quoted spec.
-    if (next === '"') {
-      const close = encoded.indexOf('"', index + 2)
-      index = close === -1 ? encoded.length : close + 1
-      if (preserveFormatting) sections[current] += encoded.slice(start, index)
-      continue
-    }
-    // &nn font size.
-    if (/[0-9]/.test(next)) {
-      index += 2
-      while (index < encoded.length && /[0-9]/.test(encoded[index] ?? '')) index += 1
-      if (preserveFormatting) sections[current] += encoded.slice(start, index)
+    const format = matchHeaderFooterFormat(encoded, index)
+    if (format !== null) {
+      if (preserveFormatting) sections[current] += format[0]
+      index += format[0].length
       continue
     }
     const code = next.toUpperCase()
-    // &K followed by an RRGGBB or theme color spec.
-    if (code === 'K') {
-      index += 8
-      if (preserveFormatting) sections[current] += encoded.slice(start, index)
-      continue
-    }
     if (code === 'L' || code === 'C' || code === 'R') {
       current = code
       index += 2
       continue
     }
-    if (preserveFormatting || !STRIPPED_CODES.has(code)) {
-      sections[current] += preserveFormatting ? encoded.slice(start, start + 2) : `&${code}`
+    if (preserveFormatting || code !== 'Z') {
+      sections[current] += preserveFormatting ? encoded.slice(index, index + 2) : `&${code}`
     }
     index += 2
   }

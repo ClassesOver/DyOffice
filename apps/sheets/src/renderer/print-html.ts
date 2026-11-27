@@ -12,7 +12,7 @@ import { columnIndex, columnLabel } from '@genoffice/xlsx-gateway/domain/cell-ad
 
 import type { WorkbookExportPdfRequest } from '../shared/desktop-api'
 import type { HeaderFooterParts } from './edit-journal'
-import { expandHeaderFooterCodes } from './print-hf-codes'
+import { expandHeaderFooterCodes, headerFooterRuns } from './print-hf-codes'
 import {
   bodyColumns,
   bodyRows,
@@ -652,7 +652,7 @@ body { font-family: Calibri, 'Helvetica Neue', Arial, ${printCjkFonts(lang)}, sa
 .page:last-child { break-after: auto; }
 .content { position: absolute; overflow: hidden; }
 .hf { position: absolute; display: flex; color: #000; }
-.hf span { flex: 1; min-width: 0; white-space: pre-wrap; }
+.hf > span { flex: 1; min-width: 0; white-space: pre-wrap; }
 .hf img { vertical-align: bottom; }
 table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 td, th { padding: 0; border: 0; overflow: hidden; font-size: 11pt; vertical-align: bottom; }
@@ -800,14 +800,34 @@ export function renderHeaderFooterSection(
   picture?: HeaderFooterPictureImage,
   scale = 1,
 ): string {
-  const expanded = expandHeaderFooterCodes(text, {
-    ...fields,
-    picture: picture ? PICTURE_MARK : '',
-  })
-  return expanded
-    .split(PICTURE_MARK)
-    .map(escapeHtml)
-    .join(picture ? pictureHtml(picture, scale) : '')
+  const image = picture ? pictureHtml(picture, scale) : ''
+  const expandedFields = { ...fields, picture: picture ? PICTURE_MARK : '' }
+  let html = ''
+  for (const run of headerFooterRuns(text)) {
+    const expanded = expandHeaderFooterCodes(run.text, expandedFields)
+    if (expanded === '') continue
+    let content = expanded.split(PICTURE_MARK).map(escapeHtml).join(image)
+    const { fontFamily, fontSizePt, color, bold, italic, underline, strike, baseline } = run.style
+    const css: string[] = []
+    if (fontFamily) {
+      const safeFamily = fontFamily.replace(/[\r\n\f]/g, ' ').replaceAll('\\', '\\\\')
+      css.push(`font-family:"${safeFamily}"`)
+    }
+    if (fontSizePt !== undefined) css.push(`font-size:${round(fontSizePt * scale)}pt`)
+    if (color) css.push(`color:${color}`)
+    if (bold) css.push('font-weight:bold')
+    if (italic) css.push('font-style:italic')
+    if (underline === 'double') {
+      css.push('text-decoration-line:underline', 'text-decoration-style:double')
+      if (strike) content = `<s>${content}</s>`
+    } else if (underline || strike) {
+      const lines = [underline && 'underline', strike && 'line-through'].filter(Boolean)
+      css.push(`text-decoration-line:${lines.join(' ')}`)
+    }
+    if (baseline) content = `<${baseline}>${content}</${baseline}>`
+    html += css.length === 0 ? content : `<span style="${escapeAttribute(css.join(';'))}">${content}</span>`
+  }
+  return html
 }
 
 /// The picture at its declared size times the print scale (points → CSS px

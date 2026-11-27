@@ -384,6 +384,29 @@ describe('renderHeaderFooterSection', () => {
     expect(renderHeaderFooterSection('Seite &P von &N', fields)).toBe('Seite 3 von 7')
   })
 
+  it('renders formatted runs and applies font size to expanded fields', () => {
+    const html = renderHeaderFooterSection(
+      'Page &"Calibri,Bold Italic"&20&KAA4400&P&"-,Regular" of &N',
+      fields,
+      undefined,
+      0.5,
+    )
+    expect(html).toBe(
+      'Page <span style="font-family:&quot;Calibri&quot;;font-size:10pt;color:#AA4400;' +
+        'font-weight:bold;font-style:italic">3</span>' +
+        '<span style="font-family:&quot;Calibri&quot;;font-size:10pt;color:#AA4400"> of 7</span>',
+    )
+  })
+
+  it('applies style toggles without consuming escaped formatting codes', () => {
+    const html = renderHeaderFooterSection('&BA&B &&B &U&S<&S&U &X2&X', fields)
+    expect(html).toBe(
+      '<span style="font-weight:bold">A</span> &amp;B ' +
+        '<span style="text-decoration-line:underline line-through">&lt;</span> ' +
+        '<sup>2</sup>',
+    )
+  })
+
   it('resolves static codes and escapes markup', () => {
     const html = renderHeaderFooterSection('&A <&F> && more', {
       ...fields,
@@ -510,6 +533,17 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it('renders styles from saved headers and pending footer edits', () => {
+    const setup = resolveEffectivePageSetup(
+      { footer: { right: '&IPages &N&I' } },
+      { oddHeader: '&C&BReport&B', scale: 75 },
+      null,
+    )
+    const html = assemblePrintHtml([layout(fakeWorksheet(), setup)]).html
+    expect(html).toContain('<span style="font-weight:bold">Report</span>')
+    expect(html).toContain('<span style="font-style:italic">Pages 1</span>')
+  })
+
   it.each([
     { horizontalCentered: true, verticalCentered: false, left: 3.86, top: 0.5 },
     { horizontalCentered: false, verticalCentered: true, left: 1, top: 5.19 },
