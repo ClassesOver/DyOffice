@@ -92,7 +92,7 @@ test('pairing asks for the server address only when a standalone token needs it'
   }
 })
 
-test('a delivered thumbnail opens in the right preview only on click',async()=>{
+test('workspace files stay with DSH and only DyOffice links receive an embedded editor',async()=>{
   const slots=new Map(),opened=[]
   const react={createElement:(component,props,...children)=>({component,props,children}),useEffect:f=>f(),useState:x=>[x,()=>{}]}
   runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{URL,window:{location:{href:'http://localhost/'},__ModuleLoader__:{load({factory}){
@@ -106,17 +106,12 @@ test('a delivered thumbnail opens in the right preview only on click',async()=>{
   const turn={turn:1,end:{time:Date.now()},data:{get:()=>({presented:[{path:'one.docx'},{path:'two.pdf'},{path:'one.docx'}]})}}
   const props={turn,sessionId:'session-test',openFile:path=>opened.push(path),t:k=>k}
   const render=slots.get('conversation.chat.turnTail')
-  const result=render(props);render(props)
+  assert.equal(render(props),null)
   assert.deepEqual(opened,[])
-  assert.equal(result.children.length,2)
-  const second=result.children[1],button=second.component(second.props)
-  assert.equal(new URL(button.children[0].props.src).searchParams.get('snapshot'),'two.pdf')
-  button.props.onClick()
-  assert.deepEqual(opened,['two.pdf'])
   const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
   const url='http://localhost/dyoffice-preview?edit='+id
   const step={finalNode:{},blocks:[{kind:'text',text:'[其他站点](https://other.example/dyoffice-preview?edit='+id+') [读书会.docx]('+url+')'}]}
-  const message={...turn,data:new Map(),steps:[{data:new Map([['assistant-step',step]])}]}
+  const message={...turn,steps:[{data:new Map([['assistant-step',step]])}]}
   const inline=render({...props,turn:message})
   assert.equal(inline.children.length,1)
   assert.equal(inline.children[0].props.url,url)

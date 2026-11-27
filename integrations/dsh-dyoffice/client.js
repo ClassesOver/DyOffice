@@ -694,6 +694,7 @@ window.__ModuleLoader__.load({
           return ()=>window.removeEventListener?.('storage',onStorage)
         })
         ctx.on('conversation/route-message', ({sessionId,text,attachmentCount})=>{
+          if(attachmentCount)return
           const fileId=officeSessions.get(sessionId), entry=collaboration.read()?.get(fileId)
           if(!entry?.topic || entry.ended || entry.disconnected || entry.syncState!=='live')return
           if(!['saved','planning','writing','saving'].includes(entry.state))return
@@ -701,7 +702,7 @@ window.__ModuleLoader__.load({
           if(editor?.fileId!==fileId || editor.popup.closed)return
           const reject=message=>({kind:'error',text:t(message)})
           if(entry.state==='planning')return reject('officeBusy')
-          if(attachmentCount || !text.trim() || text.length>4000)return reject('officeTextOnly')
+          if(!text.trim() || text.length>4000)return reject('officeTextOnly')
           if(entry.state!=='saved' || ['pending','answering','reconciling'].includes(entry.turns.at(-1)?.state))return reject('officeBusy')
           const id=crypto.randomUUID()
           updateCollaboration(fileId,current=>({...current,turns:[...current.turns.slice(-19),{id,question:text,state:'pending'}]}))
@@ -733,13 +734,6 @@ window.__ModuleLoader__.load({
         ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
           name: 'sidebar.right.pane.tab', key: id, locale: namespace,
         }, props => h(Preview, {...props, createdDocuments:channelSelection, creationStatus, editorWindows, collaboration, updateCollaboration, connectionStatus}))))
-        function FileThumbnail({sessionId,path,openFile,t}){
-          const url=previewUrl();url.searchParams.set('session',sessionId);url.searchParams.set('snapshot',path)
-          const [failed,setFailed]=useState(false)
-          return h('button',{type:'button',title:t('previewRight'),onClick:()=>openFile(path),style:{display:'grid',gap:6,padding:8,maxWidth:260,textAlign:'start',cursor:'pointer'}},
-            !failed&&h('img',{src:url.href,alt:t('snapshot'),loading:'lazy',onError:()=>setFailed(true),style:{maxWidth:'100%',maxHeight:180,objectFit:'contain'}}),
-            h('strong',null,path.split('/').at(-1)),h('small',null,t(failed?'snapshotUnavailable':'previewRight')))
-        }
         function ChatDocument({url,name,t}){
           const [mounted,setMounted]=useState(false)
           return h('details',{className:'dsh-chat-document',onToggle:event=>{if(event.currentTarget.open)setMounted(true)}},
@@ -749,9 +743,7 @@ window.__ModuleLoader__.load({
         }
         ctx.effect(()=>ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({
           name:'conversation.chat.turnTail',id:'dyoffice-snapshot',locale:namespace,
-        },function SnapshotTail({turn,sessionId,openFile,t}){
-          const data=turn.data.get('deliverables')
-          const paths=[...(data?.presented??[]),...(data?.produced??[])].map(file=>file.path)
+        },function DocumentTail({turn,t}){
           const blocks=(turn.steps??[]).map(step=>step.data.get('assistant-step')).filter(step=>step?.finalNode).at(-1)?.blocks??[]
           const documents=new Map()
           for(const block of blocks)if(block.kind==='text'){
@@ -765,13 +757,7 @@ window.__ModuleLoader__.load({
               }catch{/* Relative paths are handled by the file preview. */}
             }
           }
-          if(!paths.some(path=>typeof path==='string'&&/\.(docx|xlsx|pptx|pdf)$/iu.test(path))){
-            for(const block of blocks)if(block.kind==='text')for(const match of block.text.matchAll(/\[[^\]\n]*\]\(<?([^<>\n)]+?\.(?:docx|xlsx|pptx|pdf))>?\)/giu)){
-              try{const path=decodeURIComponent(match[1].replace(/^sandbox:(?=\/[^/])/iu,''));if(!/^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(path))paths.push(path)}catch{}
-            }
-          }
-          const files=[...new Set(paths.filter(path=>typeof path==='string'&&/\.(docx|xlsx|pptx|pdf)$/iu.test(path)))].slice(0,4)
-          return documents.size||files.length?h('div',null,...Array.from(documents,([url,name])=>h(ChatDocument,{key:url,url,name,t})),...files.map(path=>h(FileThumbnail,{key:path,path,sessionId,openFile,t}))):null
+          return documents.size ? h('div',null,...Array.from(documents,([url,name])=>h(ChatDocument,{key:url,url,name,t}))) : null
         })))
         ctx.effect(() => ctx.slots.inject('conversation.chat.commandview', () => ctx.slots.register({
           name:'conversation.chat.commandview', key:'dyoffice', locale:namespace,
