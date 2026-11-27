@@ -59,7 +59,7 @@ test('Web XLSX saves view and print settings without changing other worksheet st
           )
           .replace(
             '<drawing ',
-            "<printOptions horizontalCentered='1' verticalCentered='true'/>" +
+            "<printOptions horizontalCentered='1' verticalCentered='true' gridLines='1' gridLinesSet='0'/>" +
               "<pageSetup orientation = 'portrait' scale='75' paperSize='9' pageOrder='overThenDown' xmlns:audit='urn:test' audit:note=\"orientation='portrait' >\"/><drawing ",
           ),
       )
@@ -68,6 +68,7 @@ test('Web XLSX saves view and print settings without changing other worksheet st
       assert.equal(initial.pageOrder, 'overThenDown')
       assert.equal(initial.horizontalCentered, true)
       assert.equal(initial.verticalCentered, true)
+      assert.equal(initial.printGridlines, undefined)
       const saved = await save(bytes, {
         showGridlines: true,
         zoomScale: 100,

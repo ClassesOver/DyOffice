@@ -79,6 +79,13 @@ describe('applyPageSetupState', () => {
     expect(patched.match(/<printOptions gridLines="1"/g)).toHaveLength(2)
   })
 
+  it('restores the gridLinesSet default when enabling print gridlines', () => {
+    const xml =
+      '<worksheet><sheetData/><printOptions gridLines="1" gridLinesSet="false" headings="1"/></worksheet>'
+    const patched = applyPageSetupState(xml, { sheetName: 'S', printGridlines: true })
+    expect(patched).toContain('<printOptions gridLines="1" headings="1"/>')
+  })
+
   it('writes fit-to-page: pageSetUpPr plus fitToWidth/fitToHeight', () => {
     const xml = applyPageSetupState(BARE, {
       sheetName: 'S',

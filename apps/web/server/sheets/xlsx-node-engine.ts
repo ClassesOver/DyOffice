@@ -262,7 +262,8 @@ function readPageSetup(children: readonly ScopedElement[], chartSheet = false): 
     fitToPage:enabled(pageProperties?.attributes.get('fitToPage'))||undefined,
     blackAndWhite:enabled(setup?.attributes.get('blackAndWhite'))||undefined,
     draft:enabled(setup?.attributes.get('draft'))||undefined,
-    printGridlines:enabled(options?.attributes.get('gridLines'))||undefined,
+    printGridlines:(enabled(options?.attributes.get('gridLines')) &&
+      !disabled(options?.attributes.get('gridLinesSet')))||undefined,
     printHeadings:enabled(options?.attributes.get('headings'))||undefined,
     horizontalCentered:enabled(options?.attributes.get('horizontalCentered'))||undefined,
     verticalCentered:enabled(options?.attributes.get('verticalCentered'))||undefined,

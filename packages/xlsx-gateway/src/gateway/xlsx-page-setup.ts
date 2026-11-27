@@ -401,7 +401,10 @@ export function applyPageSetupState(worksheetXml: string, state: SheetPageSetupS
 
   const edits = new Map<PrintElement, PrintElementEdit>()
   const printOptions: Record<string, string | null> = {}
-  if (state.printGridlines !== undefined) printOptions.gridLines = state.printGridlines ? '1' : null
+  if (state.printGridlines !== undefined) {
+    printOptions.gridLines = state.printGridlines ? '1' : null
+    if (state.printGridlines) printOptions.gridLinesSet = null // The schema defaults it to true.
+  }
   if (state.printHeadings !== undefined) printOptions.headings = state.printHeadings ? '1' : null
   if (Object.keys(printOptions).length > 0)
     edits.set('printOptions', mergePrintAttributes(printOptions))
