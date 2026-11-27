@@ -863,6 +863,33 @@ describe('layoutSheetPrint', () => {
     expect(html).not.toContain('A1')
   })
 
+  it('mirrors the worksheet grid and drawing positions for right-to-left printing', () => {
+    const setup = payloadSetup({
+      printAreas: ['B1:B2'],
+      printTitleColumns: 'A:A',
+      printHeadings: true,
+      printGridlines: true,
+      header: { left: 'Left header', right: 'Right header' },
+    })
+    const visuals = {
+      visuals: [{
+        id: 'logo', fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+        offsetXPx: 10, offsetYPx: 0, widthPx: 30, heightPx: 12,
+        html: '<img alt="Title logo">',
+      }],
+      css: '',
+    }
+    const document = layout(fakeWorksheet(), setup, new Map(), visuals, { rightToLeft: true })
+    const { body, offsetLeftIn } = document.pages[0]!
+    expect(body).toContain('<table dir="rtl" style="width:174pt">')
+    expect(body).toContain('class="pv" style="left:120pt;top:0pt;width:22.5pt;')
+    expect(body).toContain('inset 0.75pt 0 0 #c0c0c0')
+    expect(offsetLeftIn).toBeCloseTo(6.87 - 174 / 72)
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('<span>Left header</span>')
+    expect(html).toContain('<span style="text-align:right">Right header</span>')
+  })
+
   it('emits one page per print area', () => {
     const document = layout(fakeWorksheet(), payloadSetup({ printAreas: ['A1:A1', 'B2:B2'] }))
     expect(document.pages).toHaveLength(2)

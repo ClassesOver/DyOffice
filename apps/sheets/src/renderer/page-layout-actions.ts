@@ -45,6 +45,7 @@ import {
   type HeaderFooterPictureSlot,
 } from './print-settings'
 import { settleVisualNodes, snapshotPrintVisuals, snapshotSheetVisuals } from './print-visuals'
+import { sheetIsRightToLeft } from './sheet-rtl-view'
 import { installedVisualFrames, type InstalledVisualFrame } from './WorkbookVisuals'
 import type { LazyWorkbookState, UniverRuntime } from './univer-state'
 
@@ -477,6 +478,7 @@ async function sheetPrintDocument(
     visuals,
     {
       chartSheet,
+      rightToLeft: journal.rightToLeft ?? fileSheet?.rightToLeft ?? sheetIsRightToLeft(worksheet),
       breaks: state ? effectivePageBreaks(state, sheetId) : null,
       selection,
       now,

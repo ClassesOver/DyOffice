@@ -224,6 +224,7 @@ export function paperGeometry(
 
 export interface SheetPrintOptions {
   readonly chartSheet?: boolean
+  readonly rightToLeft?: boolean
   /// Manual page breaks (0-based index of the row/column that starts a page).
   readonly breaks?: { rowBreaks: readonly number[]; colBreaks: readonly number[] } | null
   /// Print this A1 range instead of the sheet's print area (Excel's "Print Selection").
@@ -277,6 +278,7 @@ export function layoutSheetPrint(
   // On worksheets draft quality suppresses graphics. On chart sheets the
   // same attribute describes printer quality, and the drawing is the page.
   const worksheetDraft = setup.draft && !options.chartSheet
+  const rightToLeft = options.rightToLeft === true
   const blackAndWhite = setup.blackAndWhite || worksheetDraft
   const drawings = worksheetDraft ? [] : visuals.visuals
   const sheet = worksheet.getSheet?.()
@@ -493,8 +495,9 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span} style="${cellCss(style, rawAt(data, row, column), gridlines, blackAndWhite, edges)}">` +
-      `<div class="c" style="height:${round(heightPt)}pt;align-items:${align}"><span>${escapeHtml(text)}</span></div></td>`
+      `<td${span} style="${cellCss(style, rawAt(data, row, column), gridlines, blackAndWhite, rightToLeft, edges)}">` +
+      `<div class="c" style="height:${round(heightPt)}pt;align-items:${align}">` +
+      `<span${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div></td>`
     )
   }
 
@@ -589,6 +592,7 @@ export function layoutSheetPrint(
     const originTop = headingHeightPt + titleRowsHeightPt
     const bodyWidthPt = pageColumns.reduce((sum, c) => sum + columnWidthPt(c), 0)
     const bodyHeightPt = pageRows.reduce((sum, r) => sum + rowHeightPt(r), 0)
+    const tableWidthPt = originLeft + bodyWidthPt
     const overlayLayer = drawings.length > 0
       ? printDrawingOverlays(
           drawings,
@@ -596,20 +600,19 @@ export function layoutSheetPrint(
           printBands(printedRows, rowHeightPt, headingHeightPt),
           columnWidthPt,
           rowHeightPt,
+          rightToLeft ? tableWidthPt : undefined,
         )
       : ''
     // table-layout:fixed is ignored while the table's width is auto (CSS 2.1
     // §17.5.2): without an explicit width Chromium falls back to content-based
     // auto layout and the colgroup's saved column widths are lost (text-bearing
     // columns inflate, empty ones shrink). The width is the colgroup sum.
-    const tableWidthPt = originLeft + bodyWidthPt
-    const table = `<table style="width:${round(tableWidthPt)}pt">${colgroup}<thead>${head.join('')}</thead><tbody>${body.join('')}</tbody></table>`
+    const table = `<table${rightToLeft ? ' dir="rtl"' : ''} style="width:${round(tableWidthPt)}pt">${colgroup}<thead>${head.join('')}</thead><tbody>${body.join('')}</tbody></table>`
+    const spareWidthIn = Math.max(0, printableWidthPt - tableWidthPt * scale) / 72
     return {
       body: table + overlayLayer,
       page,
-      offsetLeftIn: setup.horizontalCentered
-        ? Math.max(0, printableWidthPt - tableWidthPt * scale) / 72 / 2
-        : 0,
+      offsetLeftIn: setup.horizontalCentered ? spareWidthIn / 2 : rightToLeft ? spareWidthIn : 0,
       offsetTopIn: setup.verticalCentered
         ? Math.max(0, printableHeightPt - (originTop + bodyHeightPt) * scale) / 72 / 2
         : 0,
@@ -723,11 +726,13 @@ td .c { display: flex; overflow: hidden; padding: 0 2pt; line-height: 1.2; }
 td .c > span { width: 100%; }
 th.hd { background: #f1f1f1; color: #444; font-size: 8.5pt; font-weight: 400;
   text-align: center; vertical-align: middle;
-  box-shadow: inset -0.75pt 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7; }
-th.hd-top { box-shadow: inset -0.75pt 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7, inset 0 0.75pt 0 #b7b7b7; }
-th.hd-left { box-shadow: inset -0.75pt 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7, inset 0.75pt 0 0 #b7b7b7; }
-th.hd-top.hd-left { box-shadow: inset -0.75pt 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7,
-  inset 0 0.75pt 0 #b7b7b7, inset 0.75pt 0 0 #b7b7b7; }
+  --heading-end: -0.75pt; --heading-start: 0.75pt;
+  box-shadow: inset var(--heading-end) 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7; }
+table[dir="rtl"] th.hd { --heading-end: 0.75pt; --heading-start: -0.75pt; }
+th.hd-top { box-shadow: inset var(--heading-end) 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7, inset 0 0.75pt 0 #b7b7b7; }
+th.hd-left { box-shadow: inset var(--heading-end) 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7, inset var(--heading-start) 0 0 #b7b7b7; }
+th.hd-top.hd-left { box-shadow: inset var(--heading-end) 0 0 #b7b7b7, inset 0 -0.75pt 0 #b7b7b7,
+  inset 0 0.75pt 0 #b7b7b7, inset var(--heading-start) 0 0 #b7b7b7; }
 .ov { position: absolute; overflow: hidden; }
 .pv { position: absolute; overflow: hidden; }
 .xlsx-print-visual { display: block; width: 100%; height: 100%; }
@@ -1094,6 +1099,7 @@ function printDrawingOverlays(
   rows: readonly PrintBand[],
   columnWidthPt: (column: number) => number,
   rowHeightPt: (row: number) => number,
+  mirrorWidthPt?: number,
 ): string {
   const layers: string[] = []
   for (const row of rows) {
@@ -1108,11 +1114,16 @@ function printDrawingOverlays(
         const y = drawingOffsetInBand(
           row, visual.fromRow, visualOffsetPt(visual.offsetYPx), heightPx * 0.75, rowHeightPt,
         )
-        if (x !== undefined && y !== undefined)
-          overlays.push(visualOverlayHtml(visual, x, y, widthPx, heightPx))
+        if (x !== undefined && y !== undefined) {
+          const left = mirrorWidthPt === undefined ? x : column.sizePt - x - widthPx * 0.75
+          overlays.push(visualOverlayHtml(visual, left, y, widthPx, heightPx))
+        }
       }
       if (overlays.length === 0) continue
-      const style = `left:${round(column.positionPt)}pt;top:${round(row.positionPt)}pt;width:${round(column.sizePt)}pt;height:${round(row.sizePt)}pt`
+      const left = mirrorWidthPt === undefined
+        ? column.positionPt
+        : mirrorWidthPt - column.positionPt - column.sizePt
+      const style = `left:${round(left)}pt;top:${round(row.positionPt)}pt;width:${round(column.sizePt)}pt;height:${round(row.sizePt)}pt`
       layers.push(`<div class="ov" style="${style}">${overlays.join('')}</div>`)
     }
   }
@@ -1150,6 +1161,7 @@ function cellCss(
   rawValue: unknown,
   gridlines: boolean,
   blackAndWhite: boolean,
+  rightToLeft: boolean,
   edges: { top: boolean; bottom: boolean; left: boolean; right: boolean },
 ): string {
   const rules: string[] = []
@@ -1204,8 +1216,8 @@ function cellCss(
   }
   edge('t', edges.top, (width) => `0 ${width}pt`)
   edge('b', edges.bottom, (width) => `0 -${width}pt`)
-  edge('l', edges.left, (width) => `${width}pt 0`)
-  edge('r', edges.right, (width) => `-${width}pt 0`)
+  edge('l', edges.left, (width) => `${rightToLeft ? -width : width}pt 0`)
+  edge('r', edges.right, (width) => `${rightToLeft ? width : -width}pt 0`)
   if (shadows.length > 0) rules.push(`box-shadow:${shadows.join(',')}`)
   return rules.join(';')
 }
