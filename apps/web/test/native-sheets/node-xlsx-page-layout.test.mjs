@@ -325,6 +325,9 @@ test('Web XLSX saves view and print settings without changing other worksheet st
       assert.equal(clearedSheet.printArea, undefined)
       assert.equal(clearedSheet.printTitles, undefined)
       assert.match(await workbookXml(cleared), /<definedName name="Revenue">/)
+
+      const replacedAfterClear = await save(bytes, { printTitles: '3:4', clearPrintTitleColumns: true })
+      assert.equal((await info(replacedAfterClear)).printTitles, "'Acceptance'!$3:$4")
     },
   )
 

@@ -239,10 +239,10 @@ export function resolveEffectivePageSetup(
     firstPageNumber: file?.firstPageNumber,
     printAreas: printArea,
     printTitles,
-    printTitleColumns: mapTitleColumnsToScreen(
-      printTitleColumnsFromFormula(names?.printTitles),
-      ops,
-    ),
+    printTitleColumns:
+      journal.printTitles === null || journal.clearPrintTitleColumns
+        ? null
+        : mapTitleColumnsToScreen(printTitleColumnsFromFormula(names?.printTitles), ops),
     header,
     footer,
     firstPage,

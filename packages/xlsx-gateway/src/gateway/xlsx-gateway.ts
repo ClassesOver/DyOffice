@@ -2074,12 +2074,16 @@ export async function planCellEditsToXlsx(
   // assertAddedSheetsKeepRenamedNames).
   const renamedTo = new Map(sheetPlan?.renames.map((rename) => [rename.sheetName, rename.newName]))
   const printAreas = pageSetupStates
-    .filter((state) => state.printArea !== undefined || state.printTitles !== undefined || state.clearPrintTitleRows)
+    .filter((state) =>
+      state.printArea !== undefined || state.printTitles !== undefined ||
+      state.clearPrintTitleRows || state.clearPrintTitleColumns,
+    )
     .map((state) => ({
       sheetName: renamedTo.get(state.sheetName) ?? state.sheetName,
       printArea: state.printArea,
       printTitles: state.printTitles,
       clearPrintTitleRows: state.clearPrintTitleRows,
+      clearPrintTitleColumns: state.clearPrintTitleColumns,
     }))
   if (printAreas.length > 0) {
     workbookXml = applyPrintAreas(workbookXml, printAreas)

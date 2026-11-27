@@ -47,6 +47,7 @@ export interface SheetPageSetupState {
   readonly printArea?: string | null | undefined
   readonly printTitles?: string | null | undefined
   readonly clearPrintTitleRows?: true | undefined
+  readonly clearPrintTitleColumns?: true | undefined
   readonly frozenRows?: number | undefined
   readonly frozenColumns?: number | undefined
   /// Printed header/footer; null clears that half, undefined keeps it.
@@ -466,13 +467,14 @@ export function applyPrintAreas(
     printArea?: string | null | undefined
     printTitles?: string | null | undefined
     clearPrintTitleRows?: true | undefined
+    clearPrintTitleColumns?: true | undefined
   }[],
 ): string {
   let xml = workbookXml
   // Parse elements instead of pattern-matching serialized XML: attribute
   // order and entity encoding vary by producer.
   const sheetOrder = parseSheetElements(xml).map((element) => element.name)
-  for (const { sheetName, printArea, printTitles, clearPrintTitleRows } of areas) {
+  for (const { sheetName, printArea, printTitles, clearPrintTitleRows, clearPrintTitleColumns } of areas) {
     const sheetIndex = sheetOrder.indexOf(sheetName)
     if (sheetIndex === -1) {
       throw new PageSetupError(`Sheet "${sheetName}" was not found in the workbook.`)
@@ -486,20 +488,14 @@ export function applyPrintAreas(
         printArea === null ? null : `${quoted}!${toAbsoluteRange(printArea)}`,
       )
     }
-    if (printTitles !== undefined || clearPrintTitleRows) {
-      const columns =
-        clearPrintTitleRows && printTitles === undefined
-          ? existingTitleSpans(xml, sheetIndex).cols
-          : undefined
+    if (printTitles !== undefined || clearPrintTitleRows || clearPrintTitleColumns) {
       xml = setSheetScopedName(
         xml,
         '_xlnm.Print_Titles',
         sheetIndex,
-        typeof printTitles === 'string'
-          ? titleReference(xml, quoted, sheetIndex, printTitles)
-          : columns === undefined
-            ? null
-            : `${quoted}!${columns}`,
+        printTitles === null
+          ? null
+          : titleReference(xml, quoted, sheetIndex, printTitles, clearPrintTitleRows, clearPrintTitleColumns),
       )
     }
   }
@@ -564,17 +560,18 @@ function titleReference(
   workbookXml: string,
   quoted: string,
   sheetIndex: number,
-  titles: string,
-): string {
-  const incoming = parseTitleSpans(titles)
+  titles: string | undefined,
+  clearRows = false,
+  clearColumns = false,
+): string | null {
+  const incoming = titles === undefined ? {} : parseTitleSpans(titles)
   const kept = existingTitleSpans(workbookXml, sheetIndex)
-  const rows = incoming.rows ?? kept.rows
-  const cols = incoming.cols ?? kept.cols
+  const rows = incoming.rows ?? (clearRows ? undefined : kept.rows)
+  const cols = incoming.cols ?? (clearColumns ? undefined : kept.cols)
   const spans: string[] = []
   if (cols !== undefined) spans.push(`${quoted}!${cols}`)
   if (rows !== undefined) spans.push(`${quoted}!${rows}`)
-  if (spans.length === 0) throw new PageSetupError(`Invalid print titles "${titles}".`)
-  return spans.join(',')
+  return spans.length > 0 ? spans.join(',') : null
 }
 
 function parseTitleSpans(titles: string): { rows?: string; cols?: string } {

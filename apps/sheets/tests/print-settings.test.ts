@@ -207,11 +207,12 @@ describe('resolveEffectivePageSetup', () => {
         margins: { left: 1, right: 1, top: 1, bottom: 1, header: 0.5, footer: 0.5 },
         oddHeader: '&CFile Header',
       },
-      { printArea: "'S'!$A$1:$K$84", printTitles: "'S'!$1:$2" },
+      { printArea: "'S'!$A$1:$K$84", printTitles: "'S'!$A:$B,'S'!$1:$2" },
     )
     expect(setup.orientation).toBe('portrait')
     expect(setup.printAreas).toEqual(['B2:C3'])
     expect(setup.printTitles).toBeNull()
+    expect(setup.printTitleColumns).toBeNull()
     expect(setup.header).toBeNull()
     expect(setup.margins.left).toBe(0.25)
   })
@@ -247,6 +248,22 @@ describe('resolveEffectivePageSetup', () => {
 
     expect(setup.printTitles).toBeNull()
     expect(setup.printTitleColumns).toBe('A:B')
+  })
+
+  it('keeps title columns cleared when the user sets new title rows before saving', () => {
+    const journal = createEditJournal()
+    const fileNames = { printTitles: "'S'!$A:$B,'S'!$5:$6" }
+    recordPageSetup(journal, 'sheet-1', { printTitles: '3:4' })
+    const [replaceRows] = toSavePageSetupStates(journal)
+    expect(resolveEffectivePageSetup(replaceRows ?? {}, null, fileNames).printTitleColumns)
+      .toBe('A:B')
+
+    recordPageSetup(journal, 'sheet-1', { printTitles: null })
+    recordPageSetup(journal, 'sheet-1', { printTitles: '1:1' })
+    const [pending] = toSavePageSetupStates(journal)
+    const setup = resolveEffectivePageSetup(pending ?? {}, null, fileNames)
+    expect(setup.printTitles).toBe('1:1')
+    expect(setup.printTitleColumns).toBeNull()
   })
 
   it('defaults fitToWidth/fitToHeight to one page when the file only sets fitToPage', () => {

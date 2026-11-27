@@ -301,6 +301,8 @@ export interface PageSetupJournalState {
   printTitles?: string | null
   /// A structural edit deleted the pending title rows. Keep saved title columns.
   clearPrintTitleRows?: true
+  /// The user cleared both axes before setting new title rows.
+  clearPrintTitleColumns?: true
   /// Frozen pane counts (0/0 = unfrozen); saved as sheetView <pane>.
   frozenRows?: number
   frozenColumns?: number
@@ -397,7 +399,11 @@ export function recordPageSetup(
   mutationAdmission(journal).assertWritable()
   const state = journal.pageSetup.get(sheetId) ?? {}
   const next = { ...state, ...patch }
-  if (patch.printTitles !== undefined) delete next.clearPrintTitleRows
+  if (patch.printTitles !== undefined) {
+    delete next.clearPrintTitleRows
+    if (patch.printTitles === null) delete next.clearPrintTitleColumns
+    else if (state.printTitles === null) next.clearPrintTitleColumns = true
+  }
   journal.pageSetup.set(sheetId, next)
 }
 

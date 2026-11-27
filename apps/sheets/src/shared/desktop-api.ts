@@ -1533,6 +1533,7 @@ export const workbookPageSetupStateSchema = z
     printTitles: z.union([z.string().regex(/^\d{1,7}:\d{1,7}$/), z.null()]).optional(),
     /// A structural edit removed the pending repeat rows. Keep file-backed repeat columns.
     clearPrintTitleRows: z.literal(true).optional(),
+    clearPrintTitleColumns: z.literal(true).optional(),
     /// Frozen pane counts; both present together, 0/0 removes the pane.
     frozenRows: z.number().int().min(0).max(1_048_575).optional(),
     frozenColumns: z.number().int().min(0).max(16_383).optional(),
