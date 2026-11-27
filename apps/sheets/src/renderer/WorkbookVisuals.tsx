@@ -982,6 +982,25 @@ export function markerSpan(
   return span + (from.index <= to.index ? cells : -cells)
 }
 
+/// Keep an edited absolute anchor in sheet coordinates even after walking
+/// its corners through visible rows and columns.
+export function toAbsoluteAnchor(
+  anchor: WorkbookVisualObject['anchor'],
+  columnWidth: (index: number) => number,
+  rowHeight: (index: number) => number,
+): WorkbookVisualObject['anchor'] {
+  const origin = markerFrom(0, 0)
+  const offset = (index: number, emu: number, sizeOf: (index: number) => number) =>
+    Math.round(markerSpan(origin, markerFrom(index, emu), sizeOf) * EMU_PER_PIXEL)
+  return {
+    absolute: true, fromColumn: 0, fromRow: 0, toColumn: 0, toRow: 0,
+    fromColumnOffset: offset(anchor.fromColumn, anchor.fromColumnOffset, columnWidth),
+    fromRowOffset: offset(anchor.fromRow, anchor.fromRowOffset, rowHeight),
+    toColumnOffset: offset(anchor.toColumn, anchor.toColumnOffset, columnWidth),
+    toRowOffset: offset(anchor.toRow, anchor.toRowOffset, rowHeight),
+  }
+}
+
 function EditableShapeVisual({
   file,
   visual,
@@ -1173,7 +1192,7 @@ function EditableShapeVisual({
         height: Math.max(1, Math.round(extHeight * EMU_PER_PIXEL)),
       }
     }
-    const next = {
+    const markers = {
       fromRow: fromY.index,
       fromColumn: fromX.index,
       fromRowOffset: Math.round(fromY.offset * EMU_PER_PIXEL),
@@ -1183,6 +1202,7 @@ function EditableShapeVisual({
       toRowOffset: Math.round(toY.offset * EMU_PER_PIXEL),
       toColumnOffset: Math.round(toX.offset * EMU_PER_PIXEL),
     }
+    const next = anchor.absolute ? toAbsoluteAnchor(markers, columnWidth, rowHeight) : markers
     if (
       next.fromRow === anchor.fromRow &&
       next.fromColumn === anchor.fromColumn &&

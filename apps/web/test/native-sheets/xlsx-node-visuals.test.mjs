@@ -489,14 +489,17 @@ test('resolves an embedded picture without mislabeling unsupported or external d
   })
 })
 
-test('saves a picture transform with an alternate DrawingML prefix', { timeout: 120_000 }, async t => {
+test('saves picture transforms and absolute drawing coordinates', { timeout: 120_000 }, async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const extension = '<v:cache><a:xfrm rot="123"><a:ext cx="7" cy="8"/></a:xfrm></v:cache>'
   await appendDrawing(zip, `<xdr:oneCellAnchor xmlns:d="${mainNs}" xmlns:v="urn:example:cache" xmlns:r="${relationships.slice(0, -1)}">` +
     '<xdr:from><xdr:col>1</xdr:col><xdr:row>3</xdr:row></xdr:from><xdr:ext cx="300" cy="400"/>' +
     '<xdr:pic><xdr:blipFill><d:blip r:embed="photo"/></xdr:blipFill>' +
     `<xdr:spPr>${extension}<d:xfrm rot='60000'><d:ext cx="100" cy="200"></d:ext></d:xfrm></xdr:spPr>` +
-    '</xdr:pic></xdr:oneCellAnchor>')
+    '</xdr:pic></xdr:oneCellAnchor>' +
+    '<xdr:absoluteAnchor><xdr:pos x="12345" y="23456"/><xdr:ext cx="34567" cy="45678"/>' +
+    '<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="99" name="Absolute shape"/></xdr:nvSpPr>' +
+    '<xdr:spPr><a:prstGeom prst="rect"/></xdr:spPr></xdr:sp><xdr:clientData/></xdr:absoluteAnchor>')
   zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>',
     `<Relationship Id="photo" Type="${relationships}image" Target="../media/photo.png"/></Relationships>`))
   zip.file('xl/media/photo.png', 'fixture')
@@ -514,13 +517,21 @@ test('saves a picture transform with an alternate DrawingML prefix', { timeout: 
   const { visuals } = await runtime.sheetsNative.inspect(source)
   const photo = visuals.find(visual => visual.kind === 'image')
   assert.equal(photo.rotation, 1)
+  const absolute = visuals.find(visual => visual.name === 'Absolute shape')
+  assert.equal(absolute.anchor.absolute, true)
   const edit = sheetsSaveRequest(photo.sheetId, [])
   edit.visualEdits = [{ drawingPath, drawingIndex: photo.drawingIndex, rotation: 90,
     flipH: true, frameSize: { width: 555, height: 333 },
-    anchor: photo.anchor, anchorSize: { width: 333, height: 555 } }]
+    anchor: photo.anchor, anchorSize: { width: 333, height: 555 } },
+  { drawingPath, drawingIndex: absolute.drawingIndex,
+    anchor: { ...absolute.anchor, fromColumnOffset: 150000, fromRowOffset: 240000,
+      toColumnOffset: 240000, toRowOffset: 440000 },
+    anchorSize: { width: 90000, height: 200000 } }]
   const plan = await runtime.sheetsWorkbookPlanner(source, edit)
   const { bytes } = await runtime.sheetsNative.savePlan(source, plan)
-  const updated = (await runtime.sheetsNative.inspect(bytes)).visuals.find(visual => visual.kind === 'image')
+  const reopened = (await runtime.sheetsNative.inspect(bytes)).visuals
+  const updated = reopened.find(visual => visual.kind === 'image')
+  assert.deepEqual(reopened.find(visual => visual.name === 'Absolute shape').anchor, edit.visualEdits[1].anchor)
   assert.deepEqual([updated.rotation, updated.flipH, updated.frameWidth, updated.frameHeight], [90, true, 555, 333])
   assert.equal(updated.anchor.toColumnOffset - updated.anchor.fromColumnOffset, 333)
   assert.equal(updated.anchor.toRowOffset - updated.anchor.fromRowOffset, 555)

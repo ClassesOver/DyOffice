@@ -893,6 +893,7 @@ pub(crate) fn expand_group(
             to_column_offset: anchor.from_column_offset
                 + (child_box.0 + child_box.2).round() as i64,
             explicit_to: false,
+            absolute: false,
         };
         *counter += 1;
         let child_id = format!("{visual_id}-{counter}");
@@ -1113,6 +1114,7 @@ pub(crate) fn parse_anchor(anchor: Node<'_, '_>) -> Option<DrawingAnchor> {
             to_row_offset: y + cy,
             to_column_offset: x + cx,
             explicit_to: false,
+            absolute: true,
         });
     };
     let from_row = marker_value(from, "row")?;
@@ -1130,6 +1132,7 @@ pub(crate) fn parse_anchor(anchor: Node<'_, '_>) -> Option<DrawingAnchor> {
             to_row_offset: marker_signed_value(to, "rowOff").unwrap_or(0),
             to_column_offset: marker_signed_value(to, "colOff").unwrap_or(0),
             explicit_to: true,
+            absolute: false,
         });
     }
     // oneCellAnchor: the size lives in xdr:ext (EMU). Encode it as offsets
@@ -1152,6 +1155,7 @@ pub(crate) fn parse_anchor(anchor: Node<'_, '_>) -> Option<DrawingAnchor> {
             to_row_offset: from_row_offset + cy,
             to_column_offset: from_column_offset + cx,
             explicit_to: false,
+            absolute: false,
         }),
         _ => Some(DrawingAnchor {
             from_row,
@@ -1163,6 +1167,7 @@ pub(crate) fn parse_anchor(anchor: Node<'_, '_>) -> Option<DrawingAnchor> {
             to_row_offset: 0,
             to_column_offset: 0,
             explicit_to: false,
+            absolute: false,
         }),
     }
 }

@@ -168,6 +168,8 @@ pub struct DrawingAnchor {
     /// offsets past the edge and must keep walking.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub explicit_to: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub absolute: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1270,6 +1272,7 @@ pub(crate) fn parse_vml_anchor(text: &str) -> Option<DrawingAnchor> {
         to_row_offset: to_row_px * EMU_PER_PIXEL,
         to_column_offset: to_column_px * EMU_PER_PIXEL,
         explicit_to: true,
+        absolute: false,
     })
 }
 

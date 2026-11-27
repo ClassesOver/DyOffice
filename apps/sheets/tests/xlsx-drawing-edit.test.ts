@@ -738,6 +738,24 @@ describe('applyVisualEdits', () => {
     expect(entries.get('xl/worksheets/sheet1.xml')).toContain('<drawing')
   })
 
+  it('moves and resizes an absolute anchor while preserving its format and extensions', async () => {
+    const drawing = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">' +
+      '<xdr:absoluteAnchor xmlns:v="urn:vendor"><v:pos x="1" y="2"/><xdr:pos x="3" y="4" v:keep="yes"/>' +
+      '<xdr:ext cx="50" cy="60"/><xdr:sp/><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>'
+    const entries = new Map([[PATH, drawing]])
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0,
+      anchor: {
+        absolute: true, fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+        fromColumnOffset: 90000, fromRowOffset: 150000, toColumnOffset: 180000, toRowOffset: 350000,
+      },
+      anchorSize: { width: 90000, height: 200000 },
+    }], new Set())
+    expect(entries.get(PATH)).toContain(
+      '<v:pos x="1" y="2"/><xdr:pos x="90000" y="150000" v:keep="yes"/><xdr:ext cx="90000" cy="200000"/>',
+    )
+  })
+
   it('fails closed on non-chart graphic frames, absolute anchors, and bad indexes', async () => {
     const frame = new Map(packageWithDrawing())
     frame.set(PATH, DRAWING.replace(/<c:chart\b[^>]*\/>/, '<a:tbl/>'))

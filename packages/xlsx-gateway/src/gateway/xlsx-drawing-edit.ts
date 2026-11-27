@@ -576,11 +576,23 @@ function moveVisualAnchor(
   anchor: NonNullable<WorkbookVisualEdit['anchor']>,
   size: WorkbookVisualEdit['anchorSize'],
 ): string {
-  if (element.local === 'absoluteAnchor') {
-    throw new VisualEditError('This visual uses an absolute anchor — moving it is not supported.')
-  }
   const markers = scopedChildren(element).filter((child) => isDrawingChild(element, child))
   const writes: XmlPatch[] = []
+  if (element.local !== 'twoCellAnchor' && size) {
+    const extent = markers.find((child) => child.local === 'ext')
+    if (!extent) throw new VisualEditError('Drawing anchor has no extent.')
+    writes.push(resizeExtent(extent, size))
+  }
+  if (element.local === 'absoluteAnchor') {
+    const position = markers.find(child => child.local === 'pos')
+    if (!position || !anchor.absolute || anchor.fromRow || anchor.fromColumn || anchor.toRow || anchor.toColumn) {
+      throw new VisualEditError('An absolute anchor needs its position relative to the sheet origin.')
+    }
+    const x = updateWorksheetTagAttribute(position.opening, 'x', String(anchor.fromColumnOffset))
+    const opening = updateWorksheetTagAttribute(x, 'y', String(anchor.fromRowOffset))
+    writes.push(patchElement(position, opening + position.xml.slice(position.opening.length)))
+    return withBody(element, applyPatches(element.inner, writes))
+  }
   for (const kind of ['from', 'to'] as const) {
     if (kind === 'to' && element.local !== 'twoCellAnchor') break
     const mark = markers.find((child) => child.local === kind)
@@ -610,11 +622,6 @@ function moveVisualAnchor(
     }
     for (const [start, xml] of missing) coordinates.push({ start, length: 0, xml })
     writes.push(patchElement(mark, withBody(mark, applyPatches(mark.inner, coordinates))))
-  }
-  if (element.local === 'oneCellAnchor' && size) {
-    const extent = markers.find((child) => child.local === 'ext')
-    if (!extent) throw new VisualEditError('Drawing anchor has no extent.')
-    writes.push(resizeExtent(extent, size))
   }
   return withBody(element, applyPatches(element.inner, writes))
 }

@@ -14,6 +14,7 @@ import {
   updateVisualAdd,
   toSaveVisualAdds,
 } from '../src/renderer/edit-journal'
+import { anchorForBox } from '../src/renderer/visual-geometry'
 import { changedPositions, reorderZ } from '../src/renderer/visual-arrange'
 import { projectVisualEdits } from '../src/renderer/univer-sync'
 import {
@@ -213,6 +214,20 @@ describe('recordVisualEdit', () => {
         anchor: moved,
       },
     ])
+  })
+
+  it('keeps absolute coordinates when arranging across different row and column sizes', () => {
+    const anchor = anchorForBox({ x: 35, y: 70, width: 12, height: 17 }, {
+      columnWidth: index => index === 0 ? 30 : 50,
+      rowHeight: index => index === 0 ? 60 : 25,
+      maxColumn: 8,
+      maxRow: 8,
+    }, true)
+    expect(anchor).toEqual({
+      absolute: true, fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+      fromColumnOffset: 35 * 9525, fromRowOffset: 70 * 9525,
+      toColumnOffset: 47 * 9525, toRowOffset: 87 * 9525,
+    })
   })
 
   it('preserves a resized anchor extent when the visual is moved again before saving', () => {

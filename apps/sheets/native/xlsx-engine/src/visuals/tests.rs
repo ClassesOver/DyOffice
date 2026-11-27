@@ -528,6 +528,7 @@ fn shape_with_blip_fill_keeps_geometry_and_carries_fill_media() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let visual = shape_visual(
         document.root_element(),
@@ -595,6 +596,7 @@ fn parses_absolute_anchor_as_offsets_from_origin() {
         .find(|node| node.has_tag_name("absoluteAnchor"))
         .unwrap();
     let anchor = parse_anchor(anchor_node).unwrap();
+    assert!(anchor.absolute);
     assert_eq!(anchor.from_row, 0);
     assert_eq!(anchor.from_column, 0);
     assert_eq!(anchor.from_column_offset, 1_440_000);
@@ -637,6 +639,7 @@ fn expands_group_children_through_child_space() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let mut visuals = Vec::new();
     let mut counter = 0;
@@ -702,6 +705,7 @@ fn expands_group_chart_children_with_their_part_path() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let relationships = HashMap::from([(
         "rId7".to_owned(),
@@ -765,6 +769,7 @@ fn rotated_shape_reports_true_frame_extent() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let visual = shape_visual(
         shape,
@@ -805,6 +810,7 @@ fn text_box_visual(body_pr: &str) -> VisualObject {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: true,
+        absolute: false,
     };
     shape_visual(
         shape,
@@ -1638,6 +1644,7 @@ fn blip_fill_shape_never_falls_back_to_style_fill_ref() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: true,
+        absolute: false,
     };
     let relationships = HashMap::from([(
         "rId1".to_owned(),
@@ -1677,6 +1684,7 @@ fn unit_anchor() -> DrawingAnchor {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: true,
+        absolute: false,
     }
 }
 
@@ -2121,6 +2129,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let mut visuals = Vec::new();
     let mut counter = 0;

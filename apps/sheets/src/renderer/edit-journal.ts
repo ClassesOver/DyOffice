@@ -1564,6 +1564,7 @@ function shiftVisualAnchor(
   anchor: WorkbookVisualObject['anchor'],
   shift: RowColumnShift,
 ): WorkbookVisualObject['anchor'] {
+  if (anchor.absolute) return anchor
   if (shift.swap) {
     // Judged as a pair: only anchors fully inside one swapped block move;
     // anchors outside or spanning the blocks stay, straddles stay untouched

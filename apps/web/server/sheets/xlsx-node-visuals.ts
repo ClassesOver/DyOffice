@@ -492,12 +492,13 @@ function readAnchor<Node>(
 }
 
 function readDrawingAnchor(node: ScopedElement): Anchor | undefined {
-  return readAnchor(
+  const anchor = readAnchor(
     node,
     drawingChild,
     field => field && elementText(field.inner),
     (field, key) => field?.attributes.get(key),
   )
+  return anchor && node.local === 'absoluteAnchor' ? { ...anchor, absolute: true } : anchor
 }
 
 export function visualMediaType(path: string): string | undefined {

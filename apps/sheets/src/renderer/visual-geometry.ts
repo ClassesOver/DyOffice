@@ -4,7 +4,7 @@
  */
 import type { WorkbookVisualObject } from '../shared/desktop-api'
 import type { ArrangeBox } from './visual-arrange'
-import { EMU_PER_PIXEL, markerFrom, markerSpan, walkMarker, type InstalledVisualFrame } from './WorkbookVisuals'
+import { EMU_PER_PIXEL, markerFrom, markerSpan, toAbsoluteAnchor, walkMarker, type InstalledVisualFrame } from './WorkbookVisuals'
 
 export interface SheetMetrics {
   readonly columnWidth: (index: number) => number
@@ -73,6 +73,7 @@ export function cellOrigin(
 export function anchorForBox(
   box: { x: number; y: number; width: number; height: number },
   metrics: SheetMetrics,
+  absolute?: true,
 ): WorkbookVisualObject['anchor'] {
   const fromX = walkMarker(
     markerFrom(0, 0),
@@ -83,7 +84,7 @@ export function anchorForBox(
   const fromY = walkMarker(markerFrom(0, 0), Math.max(0, box.y), metrics.rowHeight, metrics.maxRow)
   const toX = walkMarker(fromX, Math.max(1, box.width), metrics.columnWidth, metrics.maxColumn)
   const toY = walkMarker(fromY, Math.max(1, box.height), metrics.rowHeight, metrics.maxRow)
-  return {
+  const anchor = {
     fromRow: fromY.index,
     fromColumn: fromX.index,
     fromRowOffset: Math.round(fromY.offset * EMU_PER_PIXEL),
@@ -93,6 +94,7 @@ export function anchorForBox(
     toRowOffset: Math.round(toY.offset * EMU_PER_PIXEL),
     toColumnOffset: Math.round(toX.offset * EMU_PER_PIXEL),
   }
+  return absolute ? toAbsoluteAnchor(anchor, metrics.columnWidth, metrics.rowHeight) : anchor
 }
 
 export function anchorSizeInEmu(anchor: WorkbookVisualObject['anchor'], metrics: SheetMetrics) {

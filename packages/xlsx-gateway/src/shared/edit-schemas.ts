@@ -34,6 +34,8 @@ export const drawingAnchorSchema = z
     /// of walking past it like synthesized oneCellAnchor/absoluteAnchor
     /// encodings.
     explicitTo: z.boolean().optional(),
+    /// Absolute anchors store both corners as sheet-origin offsets.
+    absolute: z.literal(true).optional(),
   })
   .strict()
 
@@ -309,7 +311,7 @@ export const workbookVisualEditSchema = z
     drawingIndex: z.number().int().nonnegative().max(10_000),
     remove: z.literal(true).optional(),
     anchor: drawingAnchorSchema.optional(),
-    /// New occupied size in EMU for a one-cell anchor, sent with its markers.
+    /// New occupied size in EMU for a one-cell or absolute anchor, sent with its position.
     anchorSize: drawingExtentSchema.optional(),
     /// New xfrm ext in EMU — sent with `anchor` when a rotated shape is
     /// resized (its anchor stores the rotated AABB, not the true frame).

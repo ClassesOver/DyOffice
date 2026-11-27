@@ -390,7 +390,9 @@ function arrangeSelection(
   )
   for (const move of moves) {
     const box = boxes.find((candidate) => candidate.id === move.id)!
-    if (!journalAnchor(state, move.id, anchorForBox({ ...box, x: move.x, y: move.y }, metrics))) {
+    const absolute = frames.find(frame => frame.visual.id === move.id)?.visual.anchor.absolute
+    const anchor = anchorForBox({ ...box, x: move.x, y: move.y }, metrics, absolute)
+    if (!journalAnchor(state, move.id, anchor)) {
       for (const [id, snapshot] of snapshots) restoreVisualJournal(state, id, undefined, snapshot)
       ctx.setMessage(t('appVisualNoMove'))
       return
@@ -438,6 +440,7 @@ export function frameChangeEdit(
       height: aabb.height,
     },
     metrics,
+    visual.anchor.absolute,
   )
   return {
     anchor,
