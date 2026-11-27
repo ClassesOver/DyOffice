@@ -1513,6 +1513,8 @@ function EditableShapeVisual({
           chartPath={visual.chartPath}
           chartEditing={chartEditing}
           frame={frame}
+          flipH={visual.flipH}
+          flipV={visual.flipV}
           onRemove={() => {
             onEdit(visual.id, { remove: true })
             clearVisualSelection(visual.id)

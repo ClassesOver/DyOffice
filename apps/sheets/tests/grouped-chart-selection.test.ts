@@ -70,8 +70,8 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
     id: 'regular',
     chartPath: 'xl/charts/chart2.xml',
     drawingIndex: 1,
-    flipH: false,
-    flipV: false,
+    flipH: true,
+    flipV: true,
   }
   const rotated: WorkbookVisualObject = {
     ...grouped,
@@ -135,6 +135,11 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
     expect(title.style.transform).toBe('scale(-1, -1)')
     expect(figure.querySelector<HTMLElement>('.chart-body')!.style.transform).toBe('scale(-1, -1)')
     expect(figure.querySelector<HTMLElement>('.chart-edit-button')!.style.transform).toBe('')
+    const regularFigure = container.querySelector<HTMLElement>('[data-print-visual="regular"] figure')!
+    expect(regularFigure.style.flexDirection).toBe('column-reverse')
+    expect(regularFigure.querySelector('figcaption')!.style.transform).toBe('scale(-1, -1)')
+    expect(regularFigure.querySelector<HTMLElement>('.chart-body')!.style.transform).toBe('scale(-1, -1)')
+    expect(regularFigure.querySelector<HTMLElement>('.chart-edit-button')!.style.transform).toBe('')
     act(() => {
       title.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }))
       title.click()
@@ -156,6 +161,7 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
         .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, shiftKey: true }))
     })
     expect(selectedVisualIds()).toEqual([regular.id])
+    expect(container.querySelector('[data-print-visual="regular"] .shape-handle')).not.toBeNull()
 
     act(() => figure.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2 })))
     expect(selectedVisualIds()).toEqual([grouped.id])
