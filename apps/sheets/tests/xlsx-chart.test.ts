@@ -716,6 +716,24 @@ describe('applyChartEdit series data', () => {
     }
   })
 
+  it('refreshes multi-level category details on the same range and retains outer groups', () => {
+    const groupLevels = '<c:lvl><c:pt idx="0"><c:v>North &amp; West</c:v></c:pt></c:lvl>' +
+      '<c:lvl><c:pt idx="0"><c:v>All regions</c:v></c:pt></c:lvl>'
+    const ref = 'Data!$A$2:$C$3'
+    const source = BAR_CHART.replace('<c:cat/>',
+      `<c:cat><c:multiLvlStrRef><c:f>${ref}</c:f><c:multiLvlStrCache><c:ptCount val="2"/>` +
+      '<c:lvl><c:pt idx="0"><c:v>January</c:v></c:pt></c:lvl>' + groupLevels +
+      '</c:multiLvlStrCache></c:multiLvlStrRef></c:cat>')
+    const updated = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, categoriesRef: ref, categories: ['Jan & Feb', 'March'] }],
+    })
+    expect(updated).toContain(`<c:multiLvlStrRef><c:f>${ref}</c:f>` +
+      '<c:multiLvlStrCache><c:ptCount val="2"/><c:lvl>' +
+      '<c:pt idx="0"><c:v>Jan &amp; Feb</c:v></c:pt><c:pt idx="1"><c:v>March</c:v></c:pt></c:lvl>' +
+      groupLevels + '</c:multiLvlStrCache>')
+  })
+
   it('rewrites name, values, and categories with refs and caches', () => {
     const xml = applyChartEdit(AXIS_CHART, {
       chartPath: 'xl/charts/chart1.xml',

@@ -998,17 +998,20 @@ function setSeriesData(
             : `<c:cat><c:numRef><c:f>${catRefXml}</c:f>` +
               `<c:numCache>${data}</c:numCache></c:numRef></c:cat>`
       } else {
-        const points =
-          `<c:ptCount val="${categories.length}"/>` +
-          categories
-            .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
-            .join('')
+        const count = `<c:ptCount val="${categories.length}"/>`
+        const points = categories
+          .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
+          .join('')
+        const multilevel = sameCategoryRef
+          ? refreshMultiLevelCategoryCache(previousCat, count, points)
+          : undefined
         // c:f is mandatory inside strRef, so ref-less data must be a literal.
-        cat =
+        cat = multilevel ?? (
           catRefXml === undefined
-            ? `<c:cat><c:strLit>${points}</c:strLit></c:cat>`
+            ? `<c:cat><c:strLit>${count}${points}</c:strLit></c:cat>`
             : `<c:cat><c:strRef><c:f>${catRefXml}</c:f>` +
-              `<c:strCache>${points}</c:strCache></c:strRef></c:cat>`
+              `<c:strCache>${count}${points}</c:strCache></c:strRef></c:cat>`
+        )
       }
       if (previousCat !== '') {
         next = next.replace(catPattern, () => cat)
@@ -1070,6 +1073,23 @@ function setSeriesData(
   })
   if (!found) throw new ChartEditError(`Chart has no series with index ${entry.index}.`)
   return result
+}
+
+/// A flat refresh for the current range supplies only the innermost labels.
+function refreshMultiLevelCategoryCache(catXml: string, count: string, points: string): string | undefined {
+  const [cat] = childElements(catXml)
+  if (!cat) return undefined
+  const ref = childElements(cat.inner).find(child => child.name === 'c:multiLvlStrRef')
+  if (!ref) return undefined
+  const cache = childElements(ref.inner).find(child => child.name === 'c:multiLvlStrCache')
+  if (!cache) return undefined
+  const detail = childElements(cache.inner).find(child => child.name === 'c:lvl')
+  const body = detail ? replaceChildMarkup(cache.inner, detail, withBody(detail, points))
+    : insertAfterLastChild(cache.inner, ['c:ptCount'], `<c:lvl>${points}</c:lvl>`)
+  const oldCount = childElements(body).find(child => child.name === 'c:ptCount')
+  const newCache = withBody(cache, oldCount ? replaceChildMarkup(body, oldCount, count) : count + body)
+  const newRef = withBody(ref, replaceChildMarkup(ref.inner, cache, newCache))
+  return withBody(cat, replaceChildMarkup(cat.inner, ref, newRef))
 }
 
 /// Scatter X data (c:xVal): categories numericized, a non-numeric entry

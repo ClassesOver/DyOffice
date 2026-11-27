@@ -546,6 +546,11 @@ export function applyChartStateEdit(
           ? mergePointExplosions(series.pointExplosions, edit.pointExplosions)
           : series.pointExplosions
       const data = edit.series?.find((entry) => entry.index === index)
+      const sameCategoryRange = series.categoriesRef !== undefined &&
+        (data?.categoriesRef === undefined || data.categoriesRef === series.categoriesRef)
+      const categories = sameCategoryRange && data?.categories?.length === 0
+        ? undefined
+        : data?.categories
       return {
         ...series,
         // A type conversion lands on one plot group — stale combo tags
@@ -563,10 +568,10 @@ export function applyChartStateEdit(
         // New values are dense numbers — stale blank markers must not
         // survive them.
         ...(data?.values === undefined ? {} : { values: data.values, blanks: undefined }),
-        // Replacing the categories orphans the parsed outer-level spans.
-        ...(data?.categories === undefined
+        // Refreshing the same range replaces its detail labels only.
+        ...(categories === undefined
           ? {}
-          : { categories: data.categories, categoryGroups: undefined }),
+          : { categories, categoryGroups: sameCategoryRange ? series.categoryGroups : undefined }),
         ...(data?.valuesRef === undefined ? {} : { valuesRef: data.valuesRef }),
         ...(data?.categoriesRef === undefined ? {} : { categoriesRef: data.categoriesRef }),
       }

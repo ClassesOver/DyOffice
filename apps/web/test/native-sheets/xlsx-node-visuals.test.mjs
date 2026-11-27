@@ -409,7 +409,7 @@ function chartWithCategoryLevels(inner, outer) {
   </c:plotArea></c:chart></c:chartSpace>`
 }
 
-test('opens sparse multi-level category bands and keeps them after a chart title edit', { timeout: 120_000 }, async t => {
+test('preserves multi-level category bands when saving refreshed chart labels', { timeout: 120_000 }, async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   zip.file(chartPath, chartWithCategoryLevels(
     '<c:pt idx="3"><c:v>Apr</c:v></c:pt><c:pt idx="0"><c:v>Jan</c:v></c:pt><c:pt idx="2"><c:v>Mar</c:v></c:pt>',
@@ -437,12 +437,16 @@ test('opens sparse multi-level category bands and keeps them after a chart title
   ])
 
   const request = sheetsSaveRequest('sheet-1', [])
-  request.chartEdits = [{ chartPath, title: 'Regional revenue' }]
+  const categories = ['Jan', '', 'March', 'Apr']
+  request.chartEdits = [{ chartPath, title: 'Regional revenue',
+    series: [{ index: 0, categoriesRef: series.categoriesRef, categories }] }]
   const plan = await runtime.sheetsWorkbookPlanner(bytes, request)
   const saved = (await runtime.sheetsNative.savePlan(bytes, plan)).bytes
   const reopened = await inspect(saved)
   assert.equal(reopened.title, 'Regional revenue')
-  assert.deepEqual(reopened.series, chart.series)
+  assert.deepEqual(reopened.series, [{ ...series, categories }])
+  const xml = await textOf(await JSZip.loadAsync(saved))(chartPath)
+  assert.ok(xml.includes('<c:lvl><c:pt idx="0"><c:v>All regions</c:v></c:pt></c:lvl>'))
 })
 
 test('remaps compacted category bands and omits bands with ambiguous members', async () => {
