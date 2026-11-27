@@ -3,7 +3,7 @@ import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/share
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import {
-  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingMainName, readDrawingGraphicFrame, SVG_BLIP_NAMESPACE,
+  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingChartName, isDrawingMainName, readDrawingGraphicFrame, SVG_BLIP_NAMESPACE,
 } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
 import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
@@ -728,16 +728,25 @@ const supportedGroupTransform = (transform: XmlElement | undefined) =>
   !finite(attribute(transform, 'rot')) && !trueAttribute(transform, 'flipH') && !trueAttribute(transform, 'flipV')
 const groupChildTags = new Set(['grpSp', 'sp', 'cxnSp', 'pic', 'graphicFrame'])
 
-function readGroupVisuals(
+function groupedChartRelationshipId(frame: XmlElement): string | undefined {
+  const graphic = child({ ...frame, drawingMainOnly: true }, 'graphic')
+  const data = child(graphic, 'graphicData')
+  if (!data) return undefined
+  const chart = elements(data.tokens, data.namespaces).find(node => isDrawingChartName(node.name, node.namespace))
+  return relationshipAttribute(chart, 'id')
+}
+
+async function readGroupVisuals(
   group: XmlElement, base: VisualBase, theme: readonly string[], references: DrawingReferences,
-): WorkbookVisualObject[] {
+  loadChart: (relationshipId: string | undefined, base: VisualBase) => Promise<WorkbookVisualObject | undefined>,
+): Promise<WorkbookVisualObject[]> {
   const groupVisuals: WorkbookVisualObject[] = []
   const rootTransform = groupTransform(group)
   const width = transformValue(rootTransform, 'ext', 'cx')
   const height = transformValue(rootTransform, 'ext', 'cy')
   if (width === undefined || height === undefined || width <= 0 || height <= 0) return groupVisuals
   let ordinal = 0
-  function expand(node: XmlElement, box: GroupBox, depth: number) {
+  async function expand(node: XmlElement, box: GroupBox, depth: number) {
     const transform = groupTransform(node)
     if (depth > 32 || !supportedGroupTransform(transform)) return
     const originX = transformValue(transform, 'chOff', 'x') ?? 0
@@ -748,10 +757,9 @@ function readGroupVisuals(
     const scaleY = extentY > 0 ? box.height / extentY : 1
     for (const entry of children(node)) {
       if (!groupChildTags.has(entry.tag) || !isSheetDrawingChild(node, entry)) continue
-      const picProperties = entry.tag === 'pic' ? sheetDrawingChild(entry, 'nvPicPr') : undefined
-      const nonvisual = entry.tag === 'pic'
-        ? picProperties && sheetDrawingChild(picProperties, 'cNvPr')
-        : first(entry, 'cNvPr')
+      const propertiesTag = entry.tag === 'pic' ? 'nvPicPr' : entry.tag === 'graphicFrame' ? 'nvGraphicFramePr' : undefined
+      const properties = propertiesTag && sheetDrawingChild(entry, propertiesTag)
+      const nonvisual = propertiesTag ? properties && sheetDrawingChild(properties, 'cNvPr') : first(entry, 'cNvPr')
       if (trueAttribute(nonvisual, 'hidden')) continue
       const nested = entry.tag === 'grpSp'
       const transform = nested ? groupTransform(entry)
@@ -768,11 +776,10 @@ function readGroupVisuals(
         height: height * scaleY,
       }
       if (nested) {
-        if (childBox.width > 0 && childBox.height > 0) expand(entry, childBox, depth + 1)
+        if (childBox.width > 0 && childBox.height > 0) await expand(entry, childBox, depth + 1)
         continue
       }
       const id = `${base.id}-${++ordinal}`
-      if (entry.tag === 'graphicFrame') continue
       const { fromRow, fromColumn, fromRowOffset, fromColumnOffset } = base.anchor
       const anchor = {
         fromRow, fromColumn,
@@ -789,13 +796,14 @@ function readGroupVisuals(
         name: attribute(nonvisual, 'name'), altText: attribute(nonvisual, 'descr') || undefined,
         hyperlink: drawingHyperlink(relationshipAttribute(child(nonvisual, 'hlinkClick'), 'id'), references.relationships),
       }
-      const visual = entry.tag === 'pic'
-        ? readPicture(entry, childBase, references, childBox)
-        : readShape(entry, childBase, theme, references)
+      const visual = entry.tag === 'graphicFrame'
+        ? await loadChart(groupedChartRelationshipId(entry), childBase)
+        : entry.tag === 'pic' ? readPicture(entry, childBase, references, childBox)
+          : readShape(entry, childBase, theme, references)
       if (visual) groupVisuals.push(visual)
     }
   }
-  expand(group, { x: 0, y: 0, width, height }, 0)
+  await expand(group, { x: 0, y: 0, width, height }, 0)
   return groupVisuals
 }
 
@@ -1021,6 +1029,12 @@ export async function readWorkbookVisuals(
       const drawingXml = await read(drawingPath)
       const drawingRels = await readRelationships(read, drawingPath)
       const references = { relationships: drawingRels, part: drawingPath, hasPart }
+      const loadChart = async (relationshipId: string | undefined, base: VisualBase): Promise<WorkbookVisualObject | undefined> => {
+        const chartPath = internalTarget(drawingRels, drawingPath, relationshipId, 'chart')
+        if (!chartPath || !WORKBOOK_CHART_PATH.test(chartPath) || !hasPart(chartPath)) return undefined
+        const chart = readChart(await read(chartPath), theme, lookup)
+        return chart ? { ...base, kind: 'chart', chartPath, chart } : undefined
+      }
       for (const [drawingIndex, slot] of [...drawingAnchorElements(drawingXml)].entries()) {
         const id = `visual-${++ordinal}`
         if (drawingIndex > 10_000) break
@@ -1052,15 +1066,13 @@ export async function readWorkbookVisuals(
         const base = { id, sheetId, anchor, name, drawingPath, drawingIndex, editAs, altText, ...(hyperlink ? { hyperlink } : {}) }
         const group = sheetDrawingChild(entry, 'grpSp')
         if (group) {
-          for (const shape of readGroupVisuals(group, base, theme, references)) result.push(shape)
+          for (const child of await readGroupVisuals(group, base, theme, references, loadChart)) result.push(child)
           continue
         }
         const graphicFrame = readDrawingGraphicFrame(slot.element)
         if (graphicFrame) {
-          const chartPath = internalTarget(drawingRels, drawingPath, graphicFrame.chartRelationshipId, 'chart')
-          if (!chartPath || !WORKBOOK_CHART_PATH.test(chartPath) || !hasPart(chartPath)) continue
-          const chart = readChart(await read(chartPath), theme, lookup)
-          if (chart) result.push({ ...base, kind: 'chart', chartPath, chart })
+          const visual = await loadChart(graphicFrame.chartRelationshipId, base)
+          if (visual) result.push(visual)
           continue
         }
         if (shapeNode) {

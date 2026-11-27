@@ -906,19 +906,32 @@ test('places nested group shapes and straight connectors with read-only child lo
           </a:ext></a:extLst></a:blip><a:srcRect l="10000"/></xdr:blipFill>
           <xdr:spPr><a:xfrm rot="5400000" flipV="1"><a:off x="65000" y="65000"/><a:ext cx="20000" cy="10000"/></a:xfrm></xdr:spPr>
         </xdr:pic>
+        <xdr:graphicFrame xmlns:r="${relationships.slice(0, -1)}" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+            xmlns:f="urn:foreign">
+          <xdr:nvGraphicFramePr><xdr:cNvPr id="96" name="Grouped chart"/></xdr:nvGraphicFramePr>
+          <xdr:xfrm><a:off x="60000" y="80000"/><a:ext cx="20000" cy="15000"/></xdr:xfrm>
+          <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+            <f:chart r:id="foreign"/><c:chart r:id="groupChart"/>
+          </a:graphicData></a:graphic>
+        </xdr:graphicFrame>
       </xdr:grpSp>
     </xdr:grpSp><xdr:clientData/></xdr:oneCellAnchor>`)
   const mediaPath = 'xl/media/group.svg'
+  const nestedChartPath = 'xl/charts/group.xml'
+  zip.file(nestedChartPath, await textOf(zip)(chartPath))
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
   zip.file(mediaPath, svg)
   zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>',
-    `<Relationship Id="vector" Type="${relationships}image" Target="../media/group.svg"/></Relationships>`))
+    `<Relationship Id="vector" Type="${relationships}image" Target="../media/group.svg"/>` +
+    `<Relationship Id="groupChart" Type="${relationships}chart" Target="../charts/group.xml"/>` +
+    `<Relationship Id="foreign" Type="${relationships}chart" Target="../charts/chart1.xml"/></Relationships>`))
   zip.file('[Content_Types].xml', (await textOf(zip)('[Content_Types].xml')).replace('</Types>',
-    '<Default Extension="svg" ContentType="image/svg+xml"/></Types>'))
+    '<Default Extension="svg" ContentType="image/svg+xml"/>' +
+    `<Override PartName="/${nestedChartPath}" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>`))
   const theme = ['#FFFFFF', '#000000', '#EEEEEE', '#111111', '#4472C4']
   const visuals = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet, theme))
-  assert.deepEqual(visuals.map(({ id }) => id), ['visual-1', 'visual-2-1', 'visual-2-2', 'visual-2-3'])
-  const [, ellipse, line, picture] = visuals
+  assert.deepEqual(visuals.map(({ id }) => id), ['visual-1', 'visual-2-1', 'visual-2-2', 'visual-2-3', 'visual-2-4'])
+  const [standalone, ellipse, line, picture, chart] = visuals
   assert.equal(ellipse.kind, 'shape')
   assert.equal(ellipse.name, 'Ellipse')
   assert.equal(ellipse.shapeType, 'ellipse')
@@ -952,6 +965,16 @@ test('places nested group shapes and straight connectors with read-only child lo
     toRow: 2, toColumn: 1, toRowOffset: 97000, toColumnOffset: 271000,
   })
 
+  assert.equal(chart.kind, 'chart')
+  assert.equal(chart.name, 'Grouped chart')
+  assert.equal(chart.drawingIndex, undefined)
+  assert.equal(chart.chartPath, nestedChartPath)
+  assert.deepEqual(chart.chart.series, standalone.chart.series)
+  assert.deepEqual(chart.anchor, {
+    fromRow: 2, fromColumn: 1, fromRowOffset: 102000, fromColumnOffset: 221000,
+    toRow: 2, toColumn: 1, toRowOffset: 117000, toColumnOffset: 261000,
+  })
+
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-group-image-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   await buildSheetsGateway(join(directory, 'gateway.mjs'))
@@ -963,8 +986,12 @@ test('places nested group shapes and straight connectors with read-only child lo
   t.after(() => runtime.close())
   const bytes = await zip.generateAsync({ type: 'nodebuffer' })
   const request = sheetsSaveRequest(picture.sheetId, [{ row: 1, column: 0, value: 22, writeValue: true }])
+  request.chartEdits = [{ chartPath: chart.chartPath, title: 'Edited chart in group' }]
   const saved = (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
-  const savedPicture = (await runtime.sheetsNative.inspect(saved)).visuals.find(visual => visual.id === picture.id)
+  const savedVisuals = (await runtime.sheetsNative.inspect(saved)).visuals
+  assert.equal(savedVisuals.find(visual => visual.id === chart.id).chart.title, 'Edited chart in group')
+  assert.equal(savedVisuals.find(visual => visual.id === standalone.id).chart.title, standalone.chart.title)
+  const savedPicture = savedVisuals.find(visual => visual.id === picture.id)
   assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(picture)))
   assert.deepEqual(await runtime.sheetsNative.readMedia(saved, picture.id), {
     mediaType: 'image/svg+xml', base64: Buffer.from(svg).toString('base64'),

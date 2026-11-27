@@ -31,18 +31,9 @@ export function isDrawingChild(parent: ScopedElement, node: ScopedElement): bool
   )
 }
 
-function findNamespacedChild(
-  parent: ScopedElement,
-  local: string,
-  namespaces: ReadonlySet<string>,
-  legacyPrefix: string,
-): ScopedElement | undefined {
-  return scopedChildren(parent).find(
-    (child) => child.local === local &&
-      (child.namespace === undefined
-        ? child.name === `${legacyPrefix}:${local}`
-        : namespaces.has(child.namespace)),
-  )
+export function isDrawingChartName(name: string, namespace: string | undefined): boolean {
+  return namespace === undefined ? name === 'c:chart'
+    : name.slice(name.indexOf(':') + 1) === 'chart' && CHART_NAMESPACES.has(namespace)
 }
 
 export function drawingChild(parent: ScopedElement | undefined, local: string): ScopedElement | undefined {
@@ -125,7 +116,7 @@ export function readDrawingGraphicFrame(
   if (!frame) return undefined
   const graphic = drawingMainChild(frame, 'graphic')
   const data = drawingMainChild(graphic, 'graphicData')
-  const chart = data && findNamespacedChild(data, 'chart', CHART_NAMESPACES, 'c')
+  const chart = data && scopedChildren(data).find(node => isDrawingChartName(node.name, node.namespace))
   return { chartRelationshipId: drawingRelationshipAttribute(chart, 'id') }
 }
 
