@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { crc32 } from 'node:zlib'
 import JSZip from 'jszip'
 import {XMLParser,type X2jOptions} from 'fast-xml-parser'
+import {sparklineEntries,sparklineTarget,worksheetSparklineGroups} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sparkline.ts'
 import {readWorksheetValidations} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-dv.ts'
 import {parseSheetElements,parseRelationships,parseWorkbookTabIndex,relationshipIdsMatch,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
@@ -110,15 +111,9 @@ type ZipText=(path:string)=>Promise<string>
 type XmlElement={ [name: `@_${string}`]: string|undefined }
 const metadataXmlOptions:X2jOptions={
   ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
-  cdataPropName:'#cdata',
-  // The scoped worksheet reader handles the grid and its row metadata.
-  stopNodes:['worksheet.sheetData'],
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
-    'worksheet.extLst.ext',
-    'worksheet.extLst.ext.sparklineGroups.sparklineGroup',
-    'worksheet.extLst.ext.sparklineGroups.sparklineGroup.sparklines.sparkline',
   ].includes(path),
 }
 const metadataXml=new XMLParser(metadataXmlOptions)
@@ -197,44 +192,29 @@ function sizeValue(raw:string|undefined){
   return raw?.trim()&&Number.isFinite(n)&&n>=0?n:undefined
 }
 
-type ElementText = string | { '#text'?: string; '#cdata'?: string }
-function elementText(node: ElementText | undefined): string {
-  if (typeof node === 'string') return decodeAttribute(node)
-  return decodeAttribute(node?.['#text']??'') + (node?.['#cdata']??'')
-}
-
-type SparklineExtension = XmlElement & {
-  sparklineGroups?: { sparklineGroup?: (XmlElement & {
-    colorSeries?: XmlElement
-    colorNegative?: XmlElement
-    sparklines?: { sparkline?: { f?: ElementText; sqref?: ElementText }[] }
-  })[] }
-}
-
-const sparklineExtension = '{05c60535-1f16-4fd2-b633-f4f36f0b64e0}'
-function readSparklines(extensions: readonly SparklineExtension[], resolveColor: ResolveColor): SheetMetadata['sparklines'] {
+function readSparklines(children: readonly ScopedElement[], resolveColor: ResolveColor): SheetMetadata['sparklines'] {
   const result: SheetMetadata['sparklines'] = []
-  for (const extension of extensions) {
-    if (attribute(extension, 'uri')?.toLowerCase() !== sparklineExtension) continue
-    for (const group of extension.sparklineGroups?.sparklineGroup ?? []) {
-      const cells: SheetMetadata['sparklines'][number]['cells'] = []
-      for (const item of group.sparklines?.sparkline ?? []) {
-        const sourceRef = elementText(item.f).trim()
-        const cell = (elementText(item.sqref).trim().split(/\s+/, 1)[0] ?? '').replaceAll('$', '').toUpperCase()
-        if (!sourceRef || !parseA1(cell)) continue
-        cells.push({ cell, sourceRef })
-        if (cells.length === 500) break
-      }
-      if (!cells.length) continue
-      const kind = attribute(group, 'type')
-      result.push({
-        type: kind === 'column' || kind === 'stacked' ? kind : 'line',
-        color: resolveColor(group.colorSeries).rgb,
-        negativeColor: resolveColor(group.colorNegative).rgb,
-        cells,
-      })
-      if (result.length === 100) return result
+  for (const group of worksheetSparklineGroups(children)) {
+    const cells: SheetMetadata['sparklines'][number]['cells'] = []
+    for (const item of sparklineEntries(group)) {
+      const fields = scopedChildren(item)
+      const formula = fields.find(field => isElement(field, 'f', XM_XMLNS))
+      const sourceRef = formula && worksheetElementText(formula.inner).trim()
+      const cell = sparklineTarget(fields)
+      if (!sourceRef || !cell) continue
+      cells.push({ cell, sourceRef })
+      if (cells.length === 500) break
     }
+    if (!cells.length) continue
+    const kind = group.attributes.get('type')
+    const colors = scopedChildren(group)
+    result.push({
+      type: kind === 'column' || kind === 'stacked' ? kind : 'line',
+      color: scopedColor(colors.find(color => isElement(color, 'colorSeries', X14_XMLNS)), resolveColor),
+      negativeColor: scopedColor(colors.find(color => isElement(color, 'colorNegative', X14_XMLNS)), resolveColor),
+      cells,
+    })
+    if (result.length === 100) break
   }
   return result
 }
@@ -318,7 +298,7 @@ function cfText(element: ScopedElement | undefined): string {
   return element ? worksheetElementText(element.inner) : ''
 }
 
-function cfColor(element: ScopedElement | undefined, resolveColor: ResolveColor): string | undefined {
+function scopedColor(element: ScopedElement | undefined, resolveColor: ResolveColor): string | undefined {
   const attrs = element && Object.fromEntries([...element.attributes].map(([name, value]) => [`@_${name}`, value]))
   return resolveColor(attrs).rgb
 }
@@ -369,7 +349,7 @@ function mergeEnhancedDataBar(rule: SheetConditionalRule, twin: ScopedElement, r
   const axis = twin.attributes.get('axisPosition')
   const gradient = twin.attributes.get('gradient')
   const showValue = twin.attributes.get('showValue')
-  const fillColor = cfColor(cfChildren(twin, 'fillColor')[0], resolveColor)
+  const fillColor = scopedColor(cfChildren(twin, 'fillColor')[0], resolveColor)
   const cfvos = readCfThresholds(cfChildren(twin, 'cfvo'), rule.cfvos)
   return {
     ...rule,
@@ -377,9 +357,9 @@ function mergeEnhancedDataBar(rule: SheetConditionalRule, twin: ScopedElement, r
     colors: fillColor === undefined ? rule.colors : [fillColor],
     showValue: showValue === undefined ? rule.showValue : !disabled(showValue),
     axisPosition: axis === 'automatic' || axis === 'middle' || axis === 'none' ? axis : undefined,
-    axisColor: cfColor(cfChildren(twin, 'axisColor')[0], resolveColor),
+    axisColor: scopedColor(cfChildren(twin, 'axisColor')[0], resolveColor),
     gradient: gradient === undefined ? undefined : !disabled(gradient),
-    negativeColor: cfColor(cfChildren(twin, 'negativeFillColor')[0], resolveColor),
+    negativeColor: scopedColor(cfChildren(twin, 'negativeFillColor')[0], resolveColor),
     negativeSameAsPositive: !disabled(twin.attributes.get('negativeBarColorSameAsPositive')),
     minLength: Math.min(100, cfInteger(twin, 'minLength') ?? 0),
     maxLength: Math.min(100, cfInteger(twin, 'maxLength') ?? 100),
@@ -407,7 +387,7 @@ function readConditionalRules(
       const colorNodes = cfChildren(payload, 'color')
       const thresholdNodes = cfChildren(payload, 'cfvo')
       const colors = colorNodes.flatMap(color => {
-        const rgb = cfColor(color, resolveColor)
+        const rgb = scopedColor(color, resolveColor)
         return rgb ? [rgb] : []
       })
       const cfvos = readCfThresholds(thresholdNodes)
@@ -443,7 +423,6 @@ function readConditionalRules(
 }
 function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:ReadonlyMap<string,string>):Omit<SheetMetadata,'comments'|'tables'>{
   let rowExtent=0
-  const worksheet=metadataXml.parse(xml).worksheet
   const children=worksheetChildren(xml)
   const dimension=sheetArea(children.find(child=>child.local==='dimension')?.attributes.get('ref'))
   const sheetData=children.find(child=>child.local==='sheetData')
@@ -535,7 +514,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   return {sheetProtection,protectedRanges,...readAutoFilter(children.find(child=>child.local==='autoFilter')),rows,rowExtent,columnWidths:columns,merges,conditionalRules,hyperlinks,
     ...(dimension?{dimension}:{}),
     dataValidations:readDataValidations(xml),
-    sparklines:readSparklines(worksheet?.extLst?.ext??[],resolveColor),
+    sparklines:readSparklines(children,resolveColor),
     rowBreaks:readManualBreaks(children.find(child=>child.local==='rowBreaks'),MAX_GRID_ROWS-1),
     colBreaks:readManualBreaks(children.find(child=>child.local==='colBreaks'),MAX_GRID_COLUMNS-1),
     pageSetup:readPageSetup(children),

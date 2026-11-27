@@ -1,4 +1,4 @@
-import { SPARKLINE_EXT_URI } from './xlsx-sparkline.ts'
+import { sparklineTarget, SPARKLINE_EXT_URI } from './xlsx-sparkline.ts'
 import {
   elementText,
   escapeXmlAttribute,
@@ -153,10 +153,8 @@ function rewriteSparklineGroups(
         items,
         (sparkline) => {
           if (!isElement(sparkline, 'sparkline', X14_XMLNS)) return sparkline.xml
-          const target =
-            preservedSources &&
-            scopedChildren(sparkline).find((field) => isElement(field, 'sqref', XM_XMLNS))
-          const preserved = target && preservedSources?.get(elementText(target.inner))
+          const target = preservedSources && sparklineTarget(scopedChildren(sparkline))
+          const preserved = target && preservedSources?.get(target)
           return rewriteTargetedEntry(sparkline, rewriteRange, (field) =>
             rewriteFormulaElement(
               field,

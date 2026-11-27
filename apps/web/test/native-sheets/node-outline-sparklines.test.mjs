@@ -13,11 +13,13 @@ import { sheetsSaveRequest } from '../helpers/sheets-request.mjs'
 
 const inputFile = new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url)
 const worksheetPart = 'xl/worksheets/sheet1.xml'
+const foreignSparkline = '<x14:sparkline xmlns:x14="urn:example:foreign"><xm:f>Acceptance!B2:B3</xm:f><xm:sqref>E2</xm:sqref></x14:sparkline>'
 const sparkline = `<extLst><ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">
   <x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
     <x14:sparklineGroup type="column"><x14:colorSeries rgb="FF123456"/><x14:colorNegative rgb="FFAA0000"/>
       <x14:sparklines>
         <x14:sparkline><xm:f><![CDATA['Acceptance'!$A$2:$A$3]]></xm:f><xm:sqref>D2</xm:sqref></x14:sparkline>
+        ${foreignSparkline}
         <x14:sparkline><xm:f>Acceptance!A2:A3</xm:f><xm:sqref>not-a-cell</xm:sqref></x14:sparkline>
       </x14:sparklines>
     </x14:sparklineGroup>
@@ -128,6 +130,22 @@ test('Node XLSX reopens worksheet outlines and existing sparklines after a value
     ).value,
     101,
   )
+
+  await t.test('adds a real sparkline on a target used by an unrelated element', async () => {
+    const sparklineRequest = sheetsSaveRequest(sheet.id, [])
+    sparklineRequest.sparklineAdditions = [{
+      sheetId: sheet.id, type: 'line', cells: [{ cell: 'E2', sourceRef: 'Acceptance!C2:C3' }],
+    }]
+    const plan = await runtime.sheetsWorkbookPlanner(saved, sparklineRequest)
+    const result = (await native.savePlan(saved, plan)).bytes
+    const xml = await (await JSZip.loadAsync(result)).file(worksheetPart).async('string')
+    assert.ok(xml.includes(foreignSparkline))
+    const metadata = (await native.inspect(result, undefined, true)).sheets[0]
+    assert.deepEqual(metadata.sparklines.flatMap(group => group.cells), [
+      { cell: 'D2', sourceRef: "'Acceptance'!$A$2:$A$3" },
+      { cell: 'E2', sourceRef: 'Acceptance!C2:C3' },
+    ])
+  })
 
   await t.test('reads and saves only SpreadsheetML column layout and outline settings', async () => {
     const foreign = 'xmlns="urn:example:layout"'

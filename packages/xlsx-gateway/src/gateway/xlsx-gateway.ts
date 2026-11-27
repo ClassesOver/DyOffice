@@ -163,6 +163,7 @@ import {
 } from './xlsx-redaction.ts'
 import {
   applySparklineAdditions,
+  sparklineCellAddress,
   type SheetSparklineAddition,
   type SparklineGroupAdd,
 } from './xlsx-sparkline.ts'
@@ -1936,7 +1937,7 @@ export async function planCellEditsToXlsx(
         for (const cell of group.cells) {
           if (cell.sourceAddedSheetName === undefined) continue
           const source = checkedAddedSheetReference(cell.sourceAddedSheetName, cell.sourceRef)
-          preservedOnWorksheet(worksheetPath).sparklineSources.set(cell.cell, source)
+          preservedOnWorksheet(worksheetPath).sparklineSources.set(sparklineCellAddress(cell.cell), source)
         }
       }
       touchedEntries.add(worksheetPath)
