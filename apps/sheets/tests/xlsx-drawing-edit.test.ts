@@ -398,6 +398,27 @@ describe('applyVisualEdits', () => {
     expect(touched.has('[Content_Types].xml')).toBe(true)
   })
 
+  it('deletes the chart selected by an inherited relationship alias and preserves a foreign chart target', async () => {
+    const entries = packageWithDrawing()
+    entries.set(PATH, DRAWING
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:ref="http://purl.oclc.org/ooxml/officeDocument/relationships" xmlns:f="urn:foreign" ')
+      .replace('<c:chart ', '<f:chart xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="decoy"/><c:chart ')
+      .replace(/xmlns:r="[^"]+" r:id="rId7"/, "ref:id='rId7' r:id='decoy' xmlns:r='urn:foreign'"))
+    const relsPath = 'xl/drawings/_rels/drawing1.xml.rels'
+    entries.set(relsPath, DRAWING_RELS.replace('</Relationships>',
+      '<Relationship Id="decoy" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" ' +
+      'Target="../charts/decoy.xml"/></Relationships>'))
+    entries.set('xl/charts/decoy.xml', '<c:chartSpace/>')
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+
+    expect(entries.get(PATH)).not.toContain('<xdr:graphicFrame')
+    expect(entries.get(relsPath)).not.toContain('rId7')
+    expect(entries.get(relsPath)).toContain('decoy')
+    expect(entries.has('xl/charts/chart3.xml')).toBe(false)
+    expect(entries.has('xl/charts/decoy.xml')).toBe(true)
+  })
+
   it('recursively collects chart-owned style, color, embedding, theme, and media parts', async () => {
     const entries = packageWithDrawing()
     entries.set(

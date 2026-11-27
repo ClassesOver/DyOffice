@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser'
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
-import { drawingAnchorElements, isDrawingChild } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
+import { drawingAnchorElements, isDrawingChild, readDrawingGraphicFrame } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
 import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import { relsPathFor, resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
@@ -975,9 +975,9 @@ export async function readWorkbookVisuals(
           for (const shape of readGroupShapes(group, base, theme, references)) result.push(shape)
           continue
         }
-        const chartNode = first(child(entry, 'graphicFrame'), 'chart')
-        if (chartNode) {
-          const chartPath = internalTarget(drawingRels, drawingPath, relationshipAttribute(chartNode, 'id'), 'chart')
+        const graphicFrame = readDrawingGraphicFrame(slot.element)
+        if (graphicFrame) {
+          const chartPath = internalTarget(drawingRels, drawingPath, graphicFrame.chartRelationshipId, 'chart')
           if (!chartPath || !/^xl\/charts\/.+\.xml$/.test(chartPath) || !hasPart(chartPath)) continue
           const chart = readChart(await read(chartPath), theme, lookup)
           if (chart) result.push({ ...base, kind: 'chart', chartPath, chart })

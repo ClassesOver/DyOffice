@@ -12,7 +12,7 @@ import {
   solidFillXml,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
-import { drawingAnchorElements, isDrawingChild } from './xlsx-drawing-anchors.ts'
+import { drawingAnchorElements, isDrawingChild, readDrawingGraphicFrame } from './xlsx-drawing-anchors.ts'
 import { hasXmlAttributeValue, readRelationshipId } from './xlsx-namespace.ts'
 import {
   findRelationshipsRoot,
@@ -413,16 +413,15 @@ function applyOneEdit(
   const p = prefixOf(element.name)
   const kind = element.local
   if (edit.remove) {
-    // A chart's graphicFrame anchor cascades: its rel, part, and override
-    // are collected here and removed after the drawing XML is final.
-    if (anchorXml.includes(`<${p}graphicFrame`)) {
-      const relId = /<(?:[A-Za-z_][\w.-]*:)?chart\b[^>]*\br:id="([^"]+)"/.exec(anchorXml)?.[1]
+    const frame = readDrawingGraphicFrame(element)
+    if (frame) {
+      const relId = frame.chartRelationshipId
       if (!relId) {
         throw new VisualEditError(
           'This graphic frame is not a chart — deleting it is not supported.',
         )
       }
-      removedRelationships.push({ id: relId, kind: 'chart' })
+      removedRelationships.push({ id: escapeXmlAttribute(relId), kind: 'chart' })
     } else if (anchorXml.includes(`<${p}pic`)) {
       for (const match of anchorXml.matchAll(/\s[\w.-]+:(?:embed|link)="([^"]+)"/g)) {
         const id = match[1]

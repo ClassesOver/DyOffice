@@ -1,9 +1,18 @@
+import { isOfficeRelationshipNamespace } from './xlsx-namespace.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { scopedChildren, withNamespaces, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 const DRAWING_NAMESPACES = new Set([
   'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
   'http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing',
+])
+const GRAPHIC_NAMESPACES = new Set([
+  'http://schemas.openxmlformats.org/drawingml/2006/main',
+  'http://purl.oclc.org/ooxml/drawingml/main',
+])
+const CHART_NAMESPACES = new Set([
+  'http://schemas.openxmlformats.org/drawingml/2006/chart',
+  'http://purl.oclc.org/ooxml/drawingml/chart',
 ])
 const MARKUP_COMPATIBILITY_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 const anchorNames = new Set(['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor'])
@@ -19,6 +28,40 @@ export function isDrawingChild(parent: ScopedElement, node: ScopedElement): bool
     node.namespace === parent.namespace &&
     (parent.namespace !== undefined || node.name.startsWith('xdr:'))
   )
+}
+
+function findNamespacedChild(
+  parent: ScopedElement,
+  local: string,
+  namespaces: ReadonlySet<string>,
+  legacyPrefix: string,
+): ScopedElement | undefined {
+  return scopedChildren(parent).find(
+    (child) => child.local === local &&
+      (child.namespace === undefined
+        ? child.name === `${legacyPrefix}:${local}`
+        : namespaces.has(child.namespace)),
+  )
+}
+
+export function readDrawingGraphicFrame(
+  anchor: ScopedElement,
+): { chartRelationshipId?: string | undefined } | undefined {
+  const frame = scopedChildren(anchor).find(
+    (node) => node.local === 'graphicFrame' && isDrawingChild(anchor, node),
+  )
+  if (!frame) return undefined
+  const graphic = findNamespacedChild(frame, 'graphic', GRAPHIC_NAMESPACES, 'a')
+  const data = graphic && findNamespacedChild(graphic, 'graphicData', GRAPHIC_NAMESPACES, 'a')
+  const chart = data && findNamespacedChild(data, 'chart', CHART_NAMESPACES, 'c')
+  if (!chart) return {}
+  const ids = [...chart.attributes].filter(
+    ([name]) => name !== 'xmlns:id' && name.endsWith(':id') &&
+      isOfficeRelationshipNamespace(chart.namespaces.get(name.slice(0, -3))),
+  )
+  if (ids.length > 1) return {}
+  const legacyId = chart.namespaces.has('r') ? undefined : chart.attributes.get('r:id')
+  return { chartRelationshipId: ids[0]?.[1] ?? legacyId }
 }
 
 export interface DrawingAnchorEntry {

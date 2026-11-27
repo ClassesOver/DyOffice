@@ -466,7 +466,7 @@ test('resolves drawing, chart, and picture relationships by their declared names
   zip.file(drawingPath, (await textOf(zip)(drawingPath))
     .replace('<xdr:wsDr ', `<xdr:wsDr ${declarations} `)
     .replace(/<c:chart([^>]*)\br:id="([^"]+)"\/>/,
-      (_, attrs, id) => `<c:chart${attrs} p:id="${id}" f:id="wrong"/>`))
+      (_, attrs, id) => `<f:chart p:id="wrong"/><c:chart${attrs} p:id="${id}" f:id="wrong"/>`))
   zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>',
     `<Relationship Id="image" Type="${relationships}image" Target="../media/actual.png"/>` +
     `<Relationship xmlns="${foreign}" Id="image" Type="${relationships}image" Target="../media/decoy.png"/></Relationships>`))
