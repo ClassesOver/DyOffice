@@ -3,6 +3,7 @@ import {
   SHEET_PROTECTION_PERMISSIONS,
   type SheetProtectionPermission,
 } from '../gateway/xlsx-protection.ts'
+import { WORKBOOK_CHART_PATH } from '../shared/workbook-chart-path.ts'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import {
   normalizePivotPageFields,
@@ -298,7 +299,7 @@ const editChartSchema = z.object({
   op: z.literal('edit_chart'),
   chartPath: z
     .string()
-    .regex(/^(xl\/charts\/[A-Za-z0-9._-]+\.xml|(added|demo)-chart-[A-Za-z0-9._-]+)$/),
+    .regex(new RegExp(WORKBOOK_CHART_PATH.source + '|^(?:added|demo)-chart-[A-Za-z0-9._-]+$', 'u')),
   title: z.string().max(255).optional(),
   chartType: z.enum(['column', 'bar', 'line', 'area', 'pie', 'doughnut']).optional(),
   /** series index ("0"-based, as string) → #RRGGBB */

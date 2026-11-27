@@ -187,6 +187,45 @@ test('imports the acceptance chart with a usable anchor, series cache, and edita
   assert.deepEqual(JSON.parse(JSON.stringify(visual)), native.meta.visuals[0])
 })
 
+test('edits and deletes a chart in a package subdirectory', { timeout: 120_000 }, async t => {
+  const book = await JSZip.loadAsync(await readFile(fixture))
+  const nestedChart = 'xl/charts/reports/Revenue 零.xml'
+  const encodedChart = 'xl/charts/reports/Revenue%20%E9%9B%B6.xml'
+  const contentTypes = '[Content_Types].xml'
+  book.file(nestedChart, await textOf(book)(chartPath))
+  book.remove(chartPath)
+  book.file(contentTypes, (await textOf(book)(contentTypes)).replace(chartPath, encodedChart))
+  book.file(drawingRels, (await textOf(book)(drawingRels)).replace('../charts/chart1.xml',
+    '../' + encodedChart.slice('xl/'.length)))
+  const source = await book.generateAsync({ type: 'nodebuffer' })
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-nested-chart-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const save = async (input, request) =>
+    (await runtime.sheetsNative.savePlan(input, await runtime.sheetsWorkbookPlanner(input, request))).bytes
+
+  const { sheets: [sheet], visuals: [chart] } = await runtime.sheetsNative.inspect(source)
+  assert.equal(chart.chartPath, nestedChart)
+  const edit = sheetsSaveRequest(sheet.id, [])
+  edit.chartEdits = [{ chartPath: chart.chartPath, title: 'Quarterly revenue' }]
+  const updated = await save(source, edit)
+  assert.equal((await runtime.sheetsNative.inspect(updated)).visuals[0].chart.title, 'Quarterly revenue')
+
+  const remove = sheetsSaveRequest(sheet.id, [])
+  remove.visualEdits = [{ drawingPath: chart.drawingPath, drawingIndex: chart.drawingIndex, remove: true }]
+  const deleted = await save(updated, remove)
+  assert.deepEqual((await runtime.sheetsNative.inspect(deleted)).visuals, [])
+  const deletedZip = await JSZip.loadAsync(deleted)
+  assert.equal(deletedZip.file(nestedChart), null)
+  assert.ok(!(await textOf(deletedZip)(contentTypes)).includes(encodedChart))
+})
+
 test('duplicates a worksheet with an independently editable embedded chart', { timeout: 120_000 }, async t => {
   const book = await JSZip.loadAsync(await readFile(fixture))
   const sheet = 'xl/worksheets/sheet1.xml'

@@ -20,6 +20,7 @@ import type {
   WorkbookStyleEdit,
   WorkbookVisualEdit,
 } from '../shared/edit-schemas.ts'
+import { WORKBOOK_CHART_PATH } from '../shared/workbook-chart-path.ts'
 import { finiteDecimalCellValue } from '../shared/decimal-cell-value.ts'
 import { spillsDynamicArray, withFutureFunctionMarkers } from './future-functions.ts'
 import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
@@ -1118,7 +1119,7 @@ async function applyExternalLinkOps(
   }
   // chart ranges reference cells — and thus links — outside the sheet part
   for (const path of await pkg.paths()) {
-    if (!/^xl\/charts\/[^/]+\.xml$/.test(path)) continue
+    if (!WORKBOOK_CHART_PATH.test(path)) continue
     const xml = await pkg.readText(path)
     const transformed = transformChartForLinkBreak(xml, broken)
     if (transformed !== xml) {
@@ -1473,7 +1474,7 @@ export async function planCellEditsToXlsx(
     for (const path of await pkg.paths()) {
       const isOtherSheet =
         path.startsWith('xl/worksheets/') && path.endsWith('.xml') && path !== editedPath
-      const isChart = path.startsWith('xl/charts/') && path.endsWith('.xml')
+      const isChart = WORKBOOK_CHART_PATH.test(path)
       if (!isOtherSheet && !isChart) continue
       // A sheet with its own pending edits lives in worksheetXmls — shift that
       // copy, or the final write-back would overwrite this pass.
@@ -2410,7 +2411,7 @@ async function applySheetPlanToPackage(
     (path) => /^xl\/worksheets\/[^/]+\.xml$/.test(path) && !removedPathSet.has(path),
   )
   const chartPaths = packagePaths.filter(
-    (path) => path.startsWith('xl/charts/') && path.endsWith('.xml'),
+    (path) => WORKBOOK_CHART_PATH.test(path),
   )
   const pivotCacheDefinitionPaths = plan.renames.length > 0 || plan.removals.length > 0
     ? await pivotCachePartPaths(pkg, packagePaths)

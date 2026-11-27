@@ -3,6 +3,7 @@
 /// located by the sidecar's (drawingPath, drawingIndex) pair — the index
 /// counts every anchor element in document order, matching visuals.rs.
 
+import { WORKBOOK_CHART_PATH } from '../shared/workbook-chart-path.ts'
 import type { WorkbookVisualEdit } from '../shared/edit-schemas.ts'
 import {
   appendRelationship,
@@ -196,7 +197,7 @@ async function cleanupRemovedAnchorRelationships(
     if (relationship.external) continue
     const targetPath = resolveRelTarget(drawingPath, relationship.target)
     if (kind === 'chart') {
-      if (!/^xl\/charts\/[^/]+\.xml$/.test(targetPath) || !(await pkg.has(targetPath))) {
+      if (!WORKBOOK_CHART_PATH.test(targetPath) || !(await pkg.has(targetPath))) {
         throw new VisualEditError('The deleted chart relationship has an invalid package target.')
       }
       roots.push({ path: targetPath, recursive: true })

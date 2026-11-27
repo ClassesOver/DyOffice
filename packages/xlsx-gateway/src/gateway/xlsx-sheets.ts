@@ -729,11 +729,25 @@ export function removePartOverride(contentTypesXml: string, partPath: string): s
   const root = findTypesRoot(contentTypesXml)
   if (!root) return contentTypesXml
   const name = root.name.slice(0, -'Types'.length) + 'Override'
-  const entry = childElements(root.inner).find((element) => {
-    if (element.name !== name) return false
-    const part = readWorksheetTagAttribute(element.opening, 'PartName')
-    return part !== undefined && decodeAttribute(part) === `/${partPath}`
-  })
+  const expected = '/' + partPath
+  let literalMatch
+  let entry
+  for (const element of childElements(root.inner)) {
+    if (element.name !== name) continue
+    const raw = readWorksheetTagAttribute(element.opening, 'PartName')
+    if (raw === undefined) continue
+    const part = decodeAttribute(raw)
+    if (part === expected) literalMatch ??= element
+    try {
+      if (decodeURIComponent(part) === expected) {
+        entry = element
+        break
+      }
+    } catch {
+      // Tolerate a producer's literal percent sign in a part name.
+    }
+  }
+  entry ??= literalMatch
   if (!entry) return contentTypesXml
   const start = root.start + root.opening.length + entry.start
   return contentTypesXml.slice(0, start) + contentTypesXml.slice(start + entry.xml.length)

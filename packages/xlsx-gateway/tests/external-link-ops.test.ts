@@ -188,7 +188,9 @@ describe('planCellEditsToXlsx externalLinkOps', () => {
 
 /// The dependent workbook plus the two carriers outside the sheet parts that
 /// the app path used to skip: a defined name and a chart range.
-async function namedChartBuffer(names: string, chartF: string): Promise<Buffer> {
+async function namedChartBuffer(
+  names: string, chartF: string, chartPath = 'xl/charts/chart1.xml',
+): Promise<Buffer> {
   const zip = await JSZip.loadAsync(await dependentBuffer())
   const workbook = await zip.file('xl/workbook.xml')!.async('string')
   zip.file(
@@ -199,7 +201,7 @@ async function namedChartBuffer(names: string, chartF: string): Promise<Buffer> 
     ),
   )
   zip.file(
-    'xl/charts/chart1.xml',
+    chartPath,
     XML_DECL +
       '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numRef><c:f>' +
       chartF +
@@ -219,6 +221,13 @@ describe('planCellEditsToXlsx externalLinkOps: defined names and charts', () => 
     expect(workbook).toContain('<definedName name="NameOnLink">[1]Sheet1!$A$1</definedName>')
     const chart = await zip.file('xl/charts/chart1.xml')!.async('string')
     expect(chart).toContain('<c:f>[1]Sheet1!$A$1:$A$3</c:f>')
+  })
+
+  it('renumbers external references in chart parts under subdirectories', async () => {
+    const chartPath = 'xl/charts/reports/chart1.xml'
+    const source = await namedChartBuffer('', '[2]Sheet1!$A$1:$A$3', chartPath)
+    const zip = await apply(source, await plan(source, [], { broken: [1], retargets: [] }))
+    expect(await zip.file(chartPath)!.async('string')).toContain('<c:f>[1]Sheet1!$A$1:$A$3</c:f>')
   })
 
   it('refuses a break a defined name still references', async () => {

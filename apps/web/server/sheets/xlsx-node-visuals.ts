@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser'
+import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/shared/workbook-chart-path.ts'
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import { drawingAnchorElements, isDrawingChild, readDrawingGraphicFrame } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
@@ -978,7 +979,7 @@ export async function readWorkbookVisuals(
         const graphicFrame = readDrawingGraphicFrame(slot.element)
         if (graphicFrame) {
           const chartPath = internalTarget(drawingRels, drawingPath, graphicFrame.chartRelationshipId, 'chart')
-          if (!chartPath || !/^xl\/charts\/.+\.xml$/.test(chartPath) || !hasPart(chartPath)) continue
+          if (!chartPath || !WORKBOOK_CHART_PATH.test(chartPath) || !hasPart(chartPath)) continue
           const chart = readChart(await read(chartPath), theme, lookup)
           if (chart) result.push({ ...base, kind: 'chart', chartPath, chart })
           continue

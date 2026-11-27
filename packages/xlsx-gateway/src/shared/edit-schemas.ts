@@ -1,6 +1,8 @@
 // Zod schemas and limits shared by the xlsx gateway and the sheets app IPC surface.
 import { z } from 'zod'
 
+import { WORKBOOK_CHART_PATH } from './workbook-chart-path.ts'
+
 import { PATTERN_TYPES } from '../domain/style-color.ts'
 
 export const richRunSchema = z
@@ -165,7 +167,7 @@ export const CHART_CATEGORY_WIRE_MAX = 1_024
 export const workbookChartEditSchema = z
   .object({
     /// Constrained to the charts directory — the renderer chooses the path.
-    chartPath: z.string().regex(/^xl\/charts\/[A-Za-z0-9._-]+\.xml$/),
+    chartPath: z.string().regex(WORKBOOK_CHART_PATH),
     title: z.string().max(CHART_TEXT_WIRE_MAX).optional(),
     chartType: z.enum(['column', 'bar', 'line', 'area', 'pie', 'doughnut']).optional(),
     seriesColors: z.record(z.string().regex(/^[0-9]{1,3}$/), hexColorSchema).optional(),

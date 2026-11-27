@@ -8,6 +8,7 @@ import type {
   GenSparkAccountStatus,
 } from '@genoffice/ai-provider'
 import type { ProjectApi } from '@genoffice/project-store'
+import { WORKBOOK_CHART_PATH } from '@genoffice/xlsx-gateway/shared/workbook-chart-path'
 import type {
   AttachmentAddResult,
   AttachmentImageResult,
@@ -3011,7 +3012,7 @@ function parseSaveRequest(input: WorkbookSaveRequest): WorkbookSaveRequest {
     if (
       !isRecord(chartEdit) ||
       typeof chartEdit.chartPath !== 'string' ||
-      !/^xl\/charts\/[A-Za-z0-9._-]+\.xml$/.test(chartEdit.chartPath) ||
+      !WORKBOOK_CHART_PATH.test(chartEdit.chartPath) ||
       (chartEdit.title !== undefined &&
         (typeof chartEdit.title !== 'string' || chartEdit.title.length > 255)) ||
       (chartEdit.chartType !== undefined &&
