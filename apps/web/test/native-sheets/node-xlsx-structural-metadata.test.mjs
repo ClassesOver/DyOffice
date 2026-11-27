@@ -192,6 +192,35 @@ test(
       },
     )
     await t.test(
+      'reads and updates only worksheet protection and permission ranges',
+      async () => {
+        const foreign = 'xmlns="urn:example:protection"'
+        const protection = `<sheetProtection ${foreign} sheet="0" insertRows="1"/>`
+        const ranges = `<protectedRanges ${foreign}><protectedRange name="Foreign" sqref="I5"/></protectedRanges>`
+        const child = `<protectedRange ${foreign} name="Other" sqref="H4"/>`
+        const input = await book((xml) => beforeDrawing(xml, protection +
+          "<sheetProtection sheet='1' insertRows='0'/>" + ranges +
+          `<protectedRanges>${child}<protectedRange name="Inputs" sqref="B2:C3"/></protectedRanges>`))
+        const initial = await read(input)
+        assert.equal(initial.sheetProtection.protected, true)
+        assert.equal(initial.sheetProtection.allow.insertRows, true)
+        assert.deepEqual(initial.protectedRanges, [{ name: 'Inputs', sqref: 'B2:C3', hasPassword: false }])
+        const moved = await save(input, { structuralOps: [insert[0]] })
+        assert.deepEqual((await read(moved)).protectedRanges, [{ name: 'Inputs', sqref: 'B3:C4', hasPassword: false }])
+        const edited = await save(moved, {
+          protectedRangeStates: [{ sheetId: 'sheet-1', ranges: [{ name: 'Updated inputs', sqref: 'C3' }] }],
+          sheetProtections: [{ sheetId: 'sheet-1', protected: false }],
+        })
+        const after = await read(edited)
+        assert.equal(after.sheetProtection, null)
+        assert.deepEqual(after.protectedRanges, [{ name: 'Updated inputs', sqref: 'C3', hasPassword: false }])
+        for (const output of [moved, edited]) {
+          const xml = await (await JSZip.loadAsync(output)).file(sheet).async('string')
+          for (const preserved of [protection, ranges, child]) assert.ok(xml.includes(preserved))
+        }
+      },
+    )
+    await t.test(
       'moves the quoted conditional formatting target and formula together',
       async () => {
         const fixture = (q) =>

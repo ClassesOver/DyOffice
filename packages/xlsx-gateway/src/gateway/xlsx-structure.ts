@@ -2028,12 +2028,17 @@ function shiftWorksheetRuleRanges(xml: string, moveRef: (ref: string) => string 
   if (!/protectedRanges|conditionalFormatting|dataValidations/.test(xml)) return xml
   const shiftOpening = (opening: string) =>
     rewriteRangeAttribute(opening, 'sqref', (sqref) => shiftSqref(sqref, moveRef))
+  if (xml.includes('protectedRanges')) {
+    const ranges = worksheetChildren(xml).find((child) => child.local === 'protectedRanges')
+    if (ranges) {
+      const moved = rewriteRangeSection(ranges, 'protectedRange', shiftOpening)
+      if (moved !== ranges.xml) xml = applyPatches(xml, [patchElement(ranges, moved)])
+    }
+  }
   return rewriteWorksheetSections(
     xml,
-    ['conditionalFormatting', 'dataValidations', 'protectedRanges'],
+    ['conditionalFormatting', 'dataValidations'],
     (element, name) => {
-      if (name === 'protectedRanges')
-        return rewriteRangeSection(element, 'protectedRange', shiftOpening)
       if (name === 'dataValidations')
         return rewriteRangeSection(element, 'dataValidation', shiftOpening, true)
       const opening = shiftOpening(element.opening)

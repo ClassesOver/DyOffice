@@ -10,7 +10,7 @@ import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/sr
 import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
 import {parseRange} from '../../../../packages/xlsx-gateway/src/domain/cell-address.ts'
 import {childElements,resolvedStyleEntries} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
-import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
+import {parseSheetProtectionAttributes,protectedRangeHasCredentials} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
@@ -128,7 +128,6 @@ const metadataXmlOptions:X2jOptions={
     'worksheet.extLst.ext',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup.sparklines.sparkline',
-    'worksheet.protectedRanges.protectedRange',
   ].includes(path),
 }
 const metadataXml=new XMLParser(metadataXmlOptions)
@@ -451,14 +450,15 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   const children=worksheetChildren(xml)
   const dimension=sheetArea(children.find(child=>child.local==='dimension')?.attributes.get('ref'))
   const sheetData=children.find(child=>child.local==='sheetData')
-  const element=worksheet?.sheetProtection
-  const parsed=element===undefined?null:parseSheetProtectionAttributes(name=>attribute(element,name))
+  const protection=children.find(child=>child.local==='sheetProtection')
+  const parsed=protection ? parseSheetProtectionAttributes(name=>protection.attributes.get(name)) : null
   const protectedRanges:SheetMetadata['protectedRanges']=[]
-  for(const range of worksheet?.protectedRanges?.protectedRange??[]){
-    const name=attribute(range,'name'),sqref=attribute(range,'sqref')
+  const rangeList=children.find(child=>child.local==='protectedRanges')
+  for(const range of rangeList ? scopedChildren(rangeList) : []){
+    if(!isElement(range,'protectedRange',rangeList?.namespace))continue
+    const name=range.attributes.get('name'),sqref=range.attributes.get('sqref')
     if(name===undefined||sqref===undefined)continue
-    protectedRanges.push({name,sqref,hasPassword:attribute(range,'password')!==undefined||attribute(range,'hashValue')!==undefined||
-      attribute(range,'securityDescriptor')!==undefined||range.securityDescriptor!==undefined})
+    protectedRanges.push({name,sqref,hasPassword:protectedRangeHasCredentials(range)})
   }
   const sheetProtection=parsed&&{
     protected:parsed.protected,allow:parsed.allow,hasPassword:parsed.password!==null,
