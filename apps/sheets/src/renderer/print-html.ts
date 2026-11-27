@@ -273,6 +273,11 @@ export function layoutSheetPrint(
   visuals: PrintVisualSnapshot = { visuals: [], css: '' },
   options: SheetPrintOptions = {},
 ): SheetPrintDocument {
+  // On worksheets draft quality suppresses graphics. On chart sheets the
+  // same attribute describes printer quality, and the drawing is the page.
+  const worksheetDraft = setup.draft && !options.chartSheet
+  const blackAndWhite = setup.blackAndWhite || worksheetDraft
+  const drawings = worksheetDraft ? [] : visuals.visuals
   const sheet = worksheet.getSheet?.()
   const rowHeightPt = (row: number): number =>
     sheet && !sheet.getRowVisible(row) ? 0 : finitePt(worksheet.getRowHeight(row), 20) * 0.75
@@ -289,20 +294,20 @@ export function layoutSheetPrint(
     fileName,
     paper,
     margins,
-    blackAndWhite: setup.blackAndWhite,
+    blackAndWhite,
     headerFooterTheme: options.headerFooterTheme,
     firstPageNumber: setup.firstPageNumber,
-    pictures,
+    pictures: worksheetDraft ? new Map() : pictures,
     headerFooter: {
       odd: { header: setup.header, footer: setup.footer },
       first: setup.firstPage,
       even: setup.evenPages,
     },
-    css: visuals.css,
+    css: worksheetDraft ? '' : visuals.css,
     now: options.now ?? new Date(),
   }
   if (options.chartSheet) {
-    const { body, scale } = layoutChartSheet(visuals.visuals, rowHeightPt, columnWidthPt, {
+    const { body, scale } = layoutChartSheet(drawings, rowHeightPt, columnWidthPt, {
       widthPt: printableWidthPt,
       heightPt: printableHeightPt,
     })
@@ -323,11 +328,11 @@ export function layoutSheetPrint(
       ? [parseArea(options.selection)]
       : setup.printAreas.length > 0
         ? setup.printAreas.map(parseArea)
-        : [usedArea(worksheet, visuals.visuals, rowHeightPt, columnWidthPt)]
+        : [usedArea(worksheet, drawings, rowHeightPt, columnWidthPt)]
   const titleRows = setup.printTitles ? parseTitleRows(setup.printTitles) : null
   const titleColumns = setup.printTitleColumns ? parseTitleColumns(setup.printTitleColumns) : null
   const headings = setup.printHeadings
-  const gridlines = setup.printGridlines
+  const gridlines = setup.printGridlines && !worksheetDraft
 
   let totalCells = 0
   for (const area of areas) {
@@ -481,7 +486,7 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span} style="${cellCss(style, rawAt(data, row, column), gridlines, setup.blackAndWhite, edges)}">` +
+      `<td${span} style="${cellCss(style, rawAt(data, row, column), gridlines, blackAndWhite, edges)}">` +
       `<div class="c" style="height:${round(heightPt)}pt;align-items:${align}"><span>${escapeHtml(text)}</span></div></td>`
     )
   }
@@ -579,7 +584,7 @@ export function layoutSheetPrint(
     const bodyHeightPt = pageRows.reduce((sum, r) => sum + rowHeightPt(r), 0)
     const pageLeft = data.columnOffset.get(page.colStart) ?? 0
     const pageTop = data.rowOffset.get(page.rowStart) ?? 0
-    const overlays = visuals.visuals
+    const overlays = drawings
       .map((visual) => {
         const left = data.columnOffset.get(visual.fromColumn)
         const top = data.rowOffset.get(visual.fromRow)

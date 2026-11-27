@@ -50,6 +50,7 @@ export interface EffectivePageSetup {
   readonly printGridlines: boolean
   readonly printHeadings: boolean
   readonly blackAndWhite: boolean
+  readonly draft: boolean
   readonly horizontalCentered: boolean
   readonly verticalCentered: boolean
   /// Starting page number saved in the file, or undefined for automatic numbering.
@@ -231,6 +232,7 @@ export function resolveEffectivePageSetup(
     printGridlines: journal.printGridlines ?? file?.printGridlines ?? false,
     printHeadings: journal.printHeadings ?? file?.printHeadings ?? false,
     blackAndWhite: file?.blackAndWhite ?? false,
+    draft: file?.draft ?? false,
     horizontalCentered: file?.horizontalCentered ?? false,
     verticalCentered: file?.verticalCentered ?? false,
     firstPageNumber: file?.firstPageNumber,

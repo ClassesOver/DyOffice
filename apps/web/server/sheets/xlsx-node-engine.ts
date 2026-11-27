@@ -261,6 +261,7 @@ function readPageSetup(children: readonly ScopedElement[]): SheetMetadata['pageS
     fitToWidth:printInteger(setup,'fitToWidth',0,32_767),fitToHeight:printInteger(setup,'fitToHeight',0,32_767),
     fitToPage:enabled(pageProperties?.attributes.get('fitToPage'))||undefined,
     blackAndWhite:enabled(setup?.attributes.get('blackAndWhite'))||undefined,
+    draft:enabled(setup?.attributes.get('draft'))||undefined,
     printGridlines:enabled(options?.attributes.get('gridLines'))||undefined,
     printHeadings:enabled(options?.attributes.get('headings'))||undefined,
     horizontalCentered:enabled(options?.attributes.get('horizontalCentered'))||undefined,

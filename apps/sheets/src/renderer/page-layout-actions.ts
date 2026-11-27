@@ -442,28 +442,32 @@ async function sheetPrintDocument(
     state?.editJournal.structuralOps.get(sheetId) ?? [],
   )
   const baseName = (state?.file.name ?? 'Book1').replace(/\.[^.]+$/, '')
-  const pictures = state
+  const chartSheet = fileSheet?.chartSheet === true
+  const printGraphics = chartSheet || !setup.draft
+  const pictures = state && printGraphics
     ? await loadHeaderFooterPictures(state.file.sessionId, setup.headerFooterPictures)
     : new Map<string, HeaderFooterPictureImage>()
   const runtime = ctx.univerRef.current
-  const visuals = (!useLiveVisuals || fileSheet?.chartSheet) && state && runtime
-    ? await snapshotSheetVisuals(
-        document,
-        worksheet,
-        {
-          sessionId: state.file.sessionId,
-          visuals: [
-            ...projectVisualEdits(state.file.visuals, state.editJournal.visualEdits),
-            ...state.editJournal.visualAdds,
-          ].filter((visual) => visual.sheetId === sheetId),
-        },
-        {
-          edits: state.editJournal.chartEdits,
-          onEdit: () => undefined,
-          readVector: (chartPath, range) => readChartRangeVector(state, runtime, chartPath, range),
-        },
-      )
-    : snapshotPrintVisuals(document, await settledVisualFrames(ctx, state, sheetId))
+  const visuals = !printGraphics
+    ? undefined
+    : (!useLiveVisuals || chartSheet) && state && runtime
+      ? await snapshotSheetVisuals(
+          document,
+          worksheet,
+          {
+            sessionId: state.file.sessionId,
+            visuals: [
+              ...projectVisualEdits(state.file.visuals, state.editJournal.visualEdits),
+              ...state.editJournal.visualAdds,
+            ].filter((visual) => visual.sheetId === sheetId),
+          },
+          {
+            edits: state.editJournal.chartEdits,
+            onEdit: () => undefined,
+            readVector: (chartPath, range) => readChartRangeVector(state, runtime, chartPath, range),
+          },
+        )
+      : snapshotPrintVisuals(document, await settledVisualFrames(ctx, state, sheetId))
   return layoutSheetPrint(
     worksheet as unknown as PrintWorksheet,
     setup,
@@ -472,7 +476,7 @@ async function sheetPrintDocument(
     pictures,
     visuals,
     {
-      chartSheet: fileSheet?.chartSheet === true,
+      chartSheet,
       breaks: state ? effectivePageBreaks(state, sheetId) : null,
       selection,
       now,

@@ -512,6 +512,7 @@ function payloadSetup(overrides: Partial<EffectivePageSetup>): EffectivePageSetu
     printGridlines: false,
     printHeadings: false,
     blackAndWhite: false,
+    draft: false,
     horizontalCentered: false,
     verticalCentered: false,
     printAreas: [],
@@ -559,6 +560,44 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it('keeps draft worksheet text and custom borders while skipping drawings and printed gridlines', () => {
+    const worksheet = {
+      ...fakeWorksheet(),
+      getRange: () => ({
+        getDisplayValues: () => [['Draft text']],
+        getValues: () => [['Draft text']],
+        getCellStyleData: () => ({
+          cl: { rgb: '#FF0000' },
+          bg: { rgb: '#FFFF00' },
+          bd: { b: { s: 1, cl: { rgb: '#00FF00' } } },
+        }),
+      }),
+    } as PrintWorksheet
+    const setup = resolveEffectivePageSetup({}, {
+      draft: true,
+      printGridlines: true,
+      oddHeader: '&L&G&CReport',
+    }, null)
+    const pictures = new Map([['LH', { dataUrl: 'data:image/png;base64,AAAA', widthPt: 10, heightPt: 10 }]])
+    const drawings: PrintVisualSnapshot = {
+      visuals: [{
+        id: 'far-picture', fromRow: 40, fromColumn: 20, toRow: 45, toColumn: 25,
+        offsetXPx: 0, offsetYPx: 0, widthPx: 200, heightPx: 100,
+        html: '<img alt="Far picture">',
+      }],
+      css: '',
+    }
+    const printed = layout(worksheet, setup, pictures, drawings)
+    const html = assemblePrintHtml([printed]).html
+    expect(printed.pages).toHaveLength(1)
+    expect(printed.pages[0]?.body).toContain('Draft text')
+    expect(printed.pages[0]?.body).toContain('box-shadow:inset 0 -0.75pt 0 #000000')
+    expect(printed.pages[0]?.body).not.toContain('#c0c0c0')
+    expect(printed.pages[0]?.body).not.toContain('background:')
+    expect(html).toContain('Report')
+    expect(html).not.toContain('<img ')
+  })
+
   it('prints black-and-white cells without colored fills and keeps color on other sheets', () => {
     const worksheet = {
       ...fakeWorksheet(),
@@ -591,6 +630,7 @@ describe('layoutSheetPrint', () => {
       paperSize: 9,
       scale: 100,
       blackAndWhite: true,
+      draft: true,
       firstPageNumber: 8,
       oddFooter: '&RPage &P of &N',
     }, null)
