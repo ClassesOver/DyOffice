@@ -515,7 +515,8 @@ fn shape_with_blip_fill_keeps_geometry_and_carries_fill_media() {
         "rId1".to_owned(),
         Relationship {
             target: "../media/image1.png".into(),
-            relationship_type: String::new(),
+            relationship_type: "image".to_owned(),
+            external: false,
         },
     )]);
     let anchor = DrawingAnchor {
@@ -548,6 +549,76 @@ fn shape_with_blip_fill_keeps_geometry_and_carries_fill_media() {
         Some("xl/media/image1.png")
     );
     assert_eq!(visual.fill_media_type.as_deref(), Some("image/png"));
+}
+
+#[test]
+fn drawing_media_uses_internal_svg_when_the_primary_image_is_unavailable() {
+    let drawing_path = "xl/drawings/drawing1.xml";
+    let extension = |id: &str| format!(
+        r#"<a:extLst><a:ext uri="svg"><f:svgBlip r:embed="raster"/><v:svgBlip r:embed="{id}"/></a:ext></a:extLst>"#
+    );
+    let picture = |id: u32, name: &str, raster: &str, vector: &str| format!(
+        r#"<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{id}" name="{name}"/></xdr:nvPicPr>
+        <xdr:blipFill><a:blip r:embed="{raster}">{}</a:blip></xdr:blipFill></xdr:pic>"#,
+        extension(vector),
+    );
+    let anchor = |object: String| format!(
+        r#"<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>
+        <xdr:ext cx="1000" cy="2000"/>{object}</xdr:oneCellAnchor>"#
+    );
+    let shape = format!(
+        r#"<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="4" name="Shape"/></xdr:nvSpPr>
+        <xdr:spPr><a:prstGeom prst="heart"/><a:blipFill><a:blip>{}</a:blip></a:blipFill></xdr:spPr></xdr:sp>"#,
+        extension("vector"),
+    );
+    let drawing = format!(
+        r#"<xdr:wsDr {XDR} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        xmlns:v="http://schemas.microsoft.com/office/drawing/2016/SVG/main" xmlns:f="urn:foreign">{}{}{}{}</xdr:wsDr>"#,
+        anchor(picture(1, "Fallback", "missing", "vector")),
+        anchor(picture(2, "Raster", "raster", "vector")),
+        anchor(picture(3, "External", "missing", "external")),
+        anchor(shape),
+    );
+    let rel = |id: &str, file: &str, mode: &str| format!(
+        r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{file}" {mode}/>"#
+    );
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}{}{}{}<Relationship xmlns="urn:foreign" Id="vector" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/outside.svg"/></Relationships>"#,
+        rel("missing", "missing.png", ""),
+        rel("raster", "raster.png", ""),
+        rel("vector", "vector.svg", ""),
+        rel("external", "outside.svg", r#"TargetMode="External""#),
+    );
+    let (_dir, path) = crate::tests::open_fixture(&[
+        (drawing_path, &drawing),
+        ("xl/drawings/_rels/drawing1.xml.rels", &rels),
+        ("xl/media/raster.png", "png"),
+        ("xl/media/vector.svg", "<svg/>"),
+        ("xl/media/outside.svg", "<svg/>"),
+    ]);
+    let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
+    let objects = read_drawing(
+        &mut archive,
+        drawing_path,
+        "sheet-1",
+        0,
+        &ColorContext::default(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &mut SourceFormats::default(),
+    )
+    .unwrap();
+    let images = objects.iter().map(|object| {
+        (object.name.as_deref(), object.media_path.as_deref(), object.fill_media_path.as_deref())
+    }).collect::<Vec<_>>();
+    assert_eq!(
+        images,
+        vec![
+            (Some("Fallback"), Some("xl/media/vector.svg"), None),
+            (Some("Raster"), Some("xl/media/raster.png"), None),
+            (Some("Shape"), None, Some("xl/media/vector.svg")),
+        ],
+    );
 }
 
 #[test]
@@ -712,6 +783,7 @@ fn expands_group_chart_children_with_their_part_path() {
         Relationship {
             target: "../charts/chart1.xml".to_owned(),
             relationship_type: String::new(),
+            external: false,
         },
     )]);
     let mut visuals = Vec::new();
@@ -1650,7 +1722,8 @@ fn blip_fill_shape_never_falls_back_to_style_fill_ref() {
         "rId1".to_owned(),
         Relationship {
             target: "../media/image1.png".to_owned(),
-            relationship_type: String::new(),
+            relationship_type: "image".to_owned(),
+            external: false,
         },
     )]);
     let visual = shape_visual(
@@ -2110,6 +2183,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         Relationship {
             target: "../media/image1.png".to_owned(),
             relationship_type: "image".to_owned(),
+            external: false,
         },
     );
     relationships.insert(
@@ -2117,6 +2191,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         Relationship {
             target: "https://example.com".to_owned(),
             relationship_type: "hyperlink".to_owned(),
+            external: false,
         },
     );
     let anchor = DrawingAnchor {
@@ -2185,6 +2260,7 @@ fn anchor_properties_read_edit_as_alt_text_hyperlink_and_picture_xfrm() {
         Relationship {
             target: "https://example.com".to_owned(),
             relationship_type: "hyperlink".to_owned(),
+            external: false,
         },
     );
     let mut picture = text_box_visual("");

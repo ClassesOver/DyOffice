@@ -92,6 +92,75 @@ pub(crate) fn parse_text_paragraphs(
         .collect()
 }
 
+const DRAWINGML_MAIN: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const STRICT_DRAWINGML_MAIN: &str = "http://purl.oclc.org/ooxml/drawingml/main";
+const SVG_BLIP_NS: &str = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
+
+fn drawing_main_children<'a, 'input>(
+    parent: Node<'a, 'input>,
+    tag: &'static str,
+) -> impl Iterator<Item = Node<'a, 'input>> {
+    parent.children().filter(move |child| {
+        child.has_tag_name(tag)
+            && matches!(child.tag_name().namespace(), Some(DRAWINGML_MAIN | STRICT_DRAWINGML_MAIN))
+    })
+}
+
+fn picture_blip<'a, 'input>(picture: Node<'a, 'input>) -> Option<Node<'a, 'input>> {
+    let fill = picture.children().find(|child| {
+        child.has_tag_name("blipFill") && child.tag_name().namespace() == picture.tag_name().namespace()
+    });
+    drawing_main_children(fill.unwrap_or(picture), "blip").next()
+}
+
+fn is_image_relationship(relationship: &Relationship) -> bool {
+    relationship.relationship_type.rsplit('/').next() == Some("image")
+}
+
+fn drawing_image_path(drawing_path: &str, relationship: &Relationship) -> Option<String> {
+    if relationship.external || !is_image_relationship(relationship) {
+        return None;
+    }
+    let path = resolve_part_target(drawing_path, &relationship.target).ok()?;
+    media_type_for_path(&path)?;
+    Some(path)
+}
+
+fn embedded_drawing_image(
+    node: Node<'_, '_>,
+    drawing_path: &str,
+    relationships: &HashMap<String, Relationship>,
+) -> Option<String> {
+    let mut ids = node.attributes().filter(|attribute| {
+        attribute.name() == "embed"
+            && matches!(
+                attribute.namespace(),
+                Some("http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                    | "http://purl.oclc.org/ooxml/officeDocument/relationships")
+            )
+    });
+    let id = ids.next()?.value();
+    if ids.next().is_some() {
+        return None;
+    }
+    drawing_image_path(drawing_path, relationships.get(id)?)
+}
+
+fn blip_media_path(
+    blip: Node<'_, '_>,
+    drawing_path: &str,
+    relationships: &HashMap<String, Relationship>,
+) -> Option<String> {
+    embedded_drawing_image(blip, drawing_path, relationships).or_else(|| {
+        drawing_main_children(blip, "extLst")
+            .flat_map(|list| drawing_main_children(list, "ext"))
+            .flat_map(|extension| extension.children())
+            .filter(|node| node.has_tag_name((SVG_BLIP_NS, "svgBlip")))
+            .filter_map(|node| embedded_drawing_image(node, drawing_path, relationships))
+            .find(|path| media_type_for_path(path) == Some("image/svg+xml"))
+    })
+}
+
 pub(crate) fn read_drawing(
     archive: &mut ZipArchive<File>,
     drawing_path: &str,
@@ -104,7 +173,12 @@ pub(crate) fn read_drawing(
 ) -> Result<Vec<VisualObject>, SidecarError> {
     let xml = read_xml(archive, drawing_path)?;
     let document = parse_document(&xml, drawing_path)?;
-    let relationships = read_relationships(archive, drawing_path)?;
+    let mut relationships = read_relationships(archive, drawing_path)?;
+    relationships.retain(|_, relationship| {
+        !is_image_relationship(relationship)
+            || drawing_image_path(drawing_path, relationship)
+                .is_some_and(|path| crate::zip_entry(archive, &path).is_ok())
+    });
     let mut visuals = Vec::new();
     for (index, anchor_node) in document
         .descendants()
@@ -221,16 +295,7 @@ pub(crate) fn read_drawing(
             .descendants()
             .find(|node| node.has_tag_name("pic"))
         {
-            let Some(blip_node) = pic_node
-                .descendants()
-                .find(|node| node.has_tag_name("blip"))
-            else {
-                continue;
-            };
-            let Some(id) = relationship_id(blip_node) else {
-                continue;
-            };
-            let Some(relationship) = relationships.get(&id) else {
+            let Some(blip_node) = picture_blip(pic_node) else {
                 continue;
             };
             // Excel draws nothing for a picture whose anchor collapses to a
@@ -238,7 +303,9 @@ pub(crate) fn read_drawing(
             if anchor_is_zero_extent(&anchor) {
                 continue;
             }
-            let media_path = resolve_part_target(drawing_path, &relationship.target)?;
+            let Some(media_path) = blip_media_path(blip_node, drawing_path, &relationships) else {
+                continue;
+            };
             visuals.push(VisualObject {
                 id: visual_id,
                 sheet_id: sheet_id.to_owned(),
@@ -489,14 +556,10 @@ pub(crate) fn shape_visual(
                 shape_sppr.and_then(|sppr| area_fill_color(sppr, colors))
             };
             let fill_blip = shape_sppr
-                .and_then(|sppr| sppr.children().find(|node| node.has_tag_name("blipFill")))
-                .and_then(|fill| fill.descendants().find(|node| node.has_tag_name("blip")));
+                .and_then(|sppr| drawing_main_children(sppr, "blipFill").next())
+                .and_then(|fill| drawing_main_children(fill, "blip").next());
             let fill_media_path = fill_blip
-                .and_then(relationship_id)
-                .and_then(|id| relationships.get(&id))
-                .and_then(|relationship| {
-                    resolve_part_target(drawing_path, &relationship.target).ok()
-                });
+                .and_then(|blip| blip_media_path(blip, drawing_path, relationships));
             let fill_media_opacity = fill_media_path
                 .as_ref()
                 .and(fill_blip)
@@ -974,19 +1037,15 @@ pub(crate) fn expand_group(
             });
             continue;
         }
-        let Some(blip_node) = child.descendants().find(|node| node.has_tag_name("blip")) else {
-            continue;
-        };
-        let Some(id) = relationship_id(blip_node) else {
-            continue;
-        };
-        let Some(relationship) = relationships.get(&id) else {
+        let Some(blip_node) = picture_blip(child) else {
             continue;
         };
         if anchor_is_zero_extent(&child_anchor) {
             continue;
         }
-        let media_path = resolve_part_target(drawing_path, &relationship.target)?;
+        let Some(media_path) = blip_media_path(blip_node, drawing_path, relationships) else {
+            continue;
+        };
         let mut picture = VisualObject {
             id: child_id,
             sheet_id: sheet_id.to_owned(),

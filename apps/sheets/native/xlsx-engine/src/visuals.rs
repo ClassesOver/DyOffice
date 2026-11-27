@@ -620,6 +620,7 @@ pub struct SheetVisualSource {
 pub(crate) struct Relationship {
     pub(crate) target: String,
     pub(crate) relationship_type: String,
+    pub(crate) external: bool,
 }
 
 #[derive(Clone, Default)]
@@ -1922,15 +1923,19 @@ pub(crate) fn read_relationships(
         return Ok(HashMap::new());
     };
     let document = parse_document(&xml, &relationship_path)?;
-    Ok(document
-        .descendants()
-        .filter(|node| node.has_tag_name("Relationship"))
+    let root = document.root_element();
+    Ok(root
+        .children()
+        .filter(|node| {
+            node.has_tag_name("Relationship") && node.tag_name().namespace() == root.tag_name().namespace()
+        })
         .filter_map(|node| {
             Some((
                 node.attribute("Id")?.to_owned(),
                 Relationship {
                     target: node.attribute("Target")?.to_owned(),
                     relationship_type: node.attribute("Type").unwrap_or_default().to_owned(),
+                    external: node.attribute("TargetMode") == Some("External"),
                 },
             ))
         })
