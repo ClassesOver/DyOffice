@@ -245,13 +245,32 @@ describe('applyChartEdit series colors', () => {
     )
   })
 
-  it('replaces an existing spPr', () => {
+  it('replaces the authored series fill', () => {
     const xml = applyChartEdit(BAR_CHART, {
       chartPath: 'xl/charts/chart1.xml',
       seriesColors: { 1: '#00AA55' },
     })
     expect(xml).toContain('<a:srgbClr val="00AA55"/>')
     expect(xml).not.toContain('112233')
+  })
+
+  it('recolors a series while preserving line and marker styling', () => {
+    const stroke = '<a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="010203"/></a:solidFill>' +
+      '<a:prstDash val="dash"/><a:round/></a:ln>'
+    const marker = '<c:marker><c:symbol val="diamond"/><c:spPr>' +
+      '<a:solidFill><a:srgbClr val="445566"/></a:solidFill></c:spPr></c:marker>'
+    const source = SCATTER_CHART.replace('<c:xVal>', '<c:spPr>' + stroke + '<a:effectLst/></c:spPr>' + marker + '<c:xVal>')
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      seriesColors: { 0: '#0099CC' },
+    })
+    expect(xml).toContain(stroke.replace('010203', '0099CC') + '<a:effectLst/></c:spPr>' + marker)
+    const noOutline = source.replace(stroke, '<a:ln w="19050"><a:noFill /></a:ln>')
+    const recolored = applyChartEdit(noOutline, {
+      chartPath: 'xl/charts/chart1.xml',
+      seriesColors: { 0: '#0099CC' },
+    })
+    expect(recolored).toContain('<a:ln w="19050"><a:noFill /></a:ln>')
   })
 
   it('fails closed on a missing series index', () => {
@@ -355,6 +374,20 @@ describe('applyChartEdit point colors', () => {
     expect(xml).toContain('<c:explosion val="5"/>')
     // the line fill inside a:ln stays untouched
     expect(xml).toContain('<a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>')
+    expect(xml.match(/<c:dPt>/g)).toHaveLength(1)
+  })
+
+  it('updates the direct point fill without recoloring its marker', () => {
+    const marker = '<c:marker><c:symbol val="circle"/><c:spPr>' +
+      '<a:solidFill><a:srgbClr val="445566"/></a:solidFill></c:spPr></c:marker>'
+    const source = PIE_WITH_DPT.replace('<c:idx val="1"/>', "<c:idx val='1' />" + marker)
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      pointColors: { 0: { 1: '#112233' } },
+    })
+    expect(xml).toContain(marker)
+    expect(xml).toContain('<a:srgbClr val="112233"/>')
+    expect(xml).not.toContain('ABCDEF')
     expect(xml.match(/<c:dPt>/g)).toHaveLength(1)
   })
 

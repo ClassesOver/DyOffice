@@ -466,10 +466,13 @@ test('remaps compacted category bands and omits bands with ambiguous members', a
   assert.equal((await series(north + south, outer.replace(' idx="2"', ''))).categoryGroups, undefined)
 })
 
-test('keeps scatter X and Y caches separate and saves edits to the Y axis', async t => {
+test('keeps scatter X and Y caches separate and saves axis and color edits', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
+  const strokeStyle = '<a:prstDash val="dash"/><a:round/>'
   zip.file(chartPath, `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="${mainNs}"><c:chart><c:plotArea>
     <c:scatterChart><c:scatterStyle val="lineMarker"/><c:ser><c:tx><c:v>Observations</c:v></c:tx>
+      <c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="010203"/></a:solidFill>${strokeStyle}</a:ln></c:spPr>
+      <c:marker><c:symbol val="diamond"/></c:marker>
       <c:xVal><c:numRef><c:f>'Data Sheet'!$C$2:$C$3</c:f><c:numCache><c:formatCode>0.00</c:formatCode><c:pt idx="0"><c:v>0.1</c:v></c:pt><c:pt idx="1"><c:v>7.2</c:v></c:pt></c:numCache></c:numRef></c:xVal>
       <c:yVal><c:numRef><c:f>'Data Sheet'!$D$2:$D$3</c:f><c:numCache><c:pt idx="0"><c:v>20</c:v></c:pt><c:pt idx="1"><c:v>40</c:v></c:pt></c:numCache></c:numRef></c:yVal>
     </c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart>
@@ -499,15 +502,25 @@ test('keeps scatter X and Y caches separate and saves edits to the Y axis', asyn
   t.after(() => runtime.close())
   const source = await zip.generateAsync({ type: 'nodebuffer' })
   const request = sheetsSaveRequest('sheet-1', [])
-  request.chartEdits = [{ chartPath, axisTitles: { value: 'Measured Y' }, valueAxis: { max: 80 }, gridlines: true }]
+  request.chartEdits = [{
+    chartPath,
+    axisTitles: { value: 'Measured Y' },
+    valueAxis: { max: 80 },
+    gridlines: true,
+    seriesColors: { 0: '#0099CC' },
+  }]
   const saved = (await runtime.sheetsNative.savePlan(source, await runtime.sheetsWorkbookPlanner(source, request))).bytes
   const [{ chart: edited }] = (await runtime.sheetsNative.inspect(saved)).visuals
   assert.deepEqual(edited.xAxis, JSON.parse(JSON.stringify(chart.xAxis)))
   assert.equal(edited.yAxis.title, 'Measured Y')
   assert.equal(edited.yAxis.majorGridlines, true)
   assert.deepEqual(edited.valueAxis, { min: 10, max: 80 })
+  assert.equal(edited.series[0].lineColor, '#0099CC')
+  assert.equal(edited.series[0].lineWidth, chart.series[0].lineWidth)
+  assert.equal(edited.series[0].marker, 'diamond')
   const savedXml = await textOf(await JSZip.loadAsync(saved))(chartPath)
   assert.equal(savedXml.match(/<c:max\b/g).length, 2)
+  assert.ok(savedXml.includes(strokeStyle))
 })
 
 test('resolves an embedded picture without mislabeling unsupported or external drawing objects', async () => {

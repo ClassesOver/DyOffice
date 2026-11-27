@@ -433,26 +433,15 @@ function setPointExplosions(chartXml: string, points: Record<string, number>): s
 }
 
 function upsertPointExplosion(serXml: string, pointIndex: number, pct: number): string {
+  const [series] = childElements(serXml)
+  if (!series) throw new ChartEditError('Chart has no series to update.')
   const element = `<c:explosion val="${pct}"/>`
-  const dPts = [...serXml.matchAll(/<c:dPt>[\s\S]*?<\/c:dPt>/g)]
-  for (const dPt of dPts) {
-    const idx = Number(/<c:idx val="([0-9]+)"\/>/.exec(dPt[0])?.[1])
-    if (idx !== pointIndex) continue
-    const pattern = /<c:explosion val="[^"]*"\/>/
-    let patched: string
-    if (pattern.test(dPt[0])) {
-      patched = dPt[0].replace(pattern, () => element)
-    } else {
-      // CT_DPt order: idx, invertIfNegative, marker, bubble3D, explosion, spPr.
-      const anchor = /<c:spPr[\s/>]|<c:pictureOptions[\s/>]|<c:extLst[\s/>]/.exec(dPt[0])
-      const at = anchor ? anchor.index : dPt[0].lastIndexOf('</c:dPt>')
-      patched = dPt[0].slice(0, at) + element + dPt[0].slice(at)
-    }
-    return serXml.slice(0, dPt.index) + patched + serXml.slice(dPt.index + dPt[0].length)
-  }
-  const created = `<c:dPt><c:idx val="${pointIndex}"/><c:bubble3D val="0"/>${element}</c:dPt>`
-  const insertAt = dPtInsertionIndex(serXml, dPts, pointIndex)
-  return serXml.slice(0, insertAt) + created + serXml.slice(insertAt)
+  const body = upsertChartPoint(series.inner, pointIndex, element, inner => {
+    const existing = childElements(inner).find(child => child.name === 'c:explosion')
+    return existing ? replaceChildMarkup(inner, existing, element)
+      : insertAfterLastChild(inner, POINT_HEADER, element)
+  })
+  return withBody(series, body)
 }
 
 const REPLACEABLE_PLOTS: readonly string[] = [
@@ -1337,36 +1326,78 @@ function sanitizeSeries(serXml: string, forPie: boolean): string {
   return forPie ? cleaned.replace(/<c:trendline>[\s\S]*?<\/c:trendline>/g, '') : cleaned
 }
 
-/// Sets a series' solid color (fill + line, so bars and lines both take it).
-function setSeriesColor(chartXml: string, seriesIndex: number, color: string): string {
-  const argb = color.slice(1).toUpperCase()
-  const spPr =
-    `<c:spPr><a:solidFill><a:srgbClr val="${argb}"/></a:solidFill>` +
-    `<a:ln><a:solidFill><a:srgbClr val="${argb}"/></a:solidFill></a:ln></c:spPr>`
-  const seriesPattern = /<c:ser>[\s\S]*?<\/c:ser>/g
-  let found = false
-  // Document position, not c:idx: the sidecar numbers series by document
-  // order, so a file whose c:idx values are shuffled must still edit the
-  // series the UI showed as N.
-  let position = -1
-  const result = chartXml.replace(seriesPattern, (serXml) => {
-    position += 1
-    if (position !== seriesIndex) return serXml
-    found = true
-    // The series-level spPr precedes any c:dPt; don't clobber a point's spPr.
-    const dPtAt = serXml.indexOf('<c:dPt>')
-    const scope = dPtAt === -1 ? serXml : serXml.slice(0, dPtAt)
-    const replaced = scope.replace(/<c:spPr>[\s\S]*?<\/c:spPr>/, () => spPr)
-    if (replaced !== scope) return replaced + (dPtAt === -1 ? '' : serXml.slice(dPtAt))
-    // No spPr yet: schema order puts it right after c:tx (or c:order when
-    // the series has no name element).
-    const anchor = /<c:tx>[\s\S]*?<\/c:tx>/.exec(serXml) ?? /<c:order val="[0-9]+"\/>/.exec(serXml)
-    if (!anchor) throw new ChartEditError('Chart series is missing idx/order structure.')
-    const insertAt = anchor.index + anchor[0].length
-    return serXml.slice(0, insertAt) + spPr + serXml.slice(insertAt)
+/// Series indices follow the document order of the plots and their series.
+function editChartSeries(
+  chartXml: string,
+  seriesIndex: number,
+  edit: (inner: string) => string,
+): string {
+  return editChartContents(chartXml, inner => {
+    const plotArea = childElements(inner).find(child => child.name === 'c:plotArea')
+    if (!plotArea) throw new ChartEditError('Chart part has no plot area.')
+    let remaining = seriesIndex
+    for (const plot of childElements(plotArea.inner)) {
+      if (!plot.name.startsWith('c:') || !plot.name.endsWith('Chart')) continue
+      const series = childElements(plot.inner).filter(child => child.name === 'c:ser')
+      const match = series[remaining]
+      if (match) {
+        const updatedPlot = withBody(
+          plot,
+          replaceChildMarkup(plot.inner, match, withBody(match, edit(match.inner))),
+        )
+        return replaceChildMarkup(
+          inner, plotArea, withBody(plotArea, replaceChildMarkup(plotArea.inner, plot, updatedPlot)),
+        )
+      }
+      remaining -= series.length
+    }
+    throw new ChartEditError(`Chart has no series with index ${seriesIndex}.`)
   })
-  if (!found) throw new ChartEditError(`Chart has no series with index ${seriesIndex}.`)
-  return result
+}
+
+function solidChartFill(color: string): string {
+  return `<a:solidFill><a:srgbClr val="${color.slice(1).toUpperCase()}"/></a:solidFill>`
+}
+
+const DRAWING_FILL_NAMES = ['a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill']
+const POINT_HEADER = ['c:idx', 'c:invertIfNegative', 'c:marker', 'c:bubble3D']
+const POINT_SHAPE_HEADER = [...POINT_HEADER, 'c:explosion']
+const POINT_SUCCESSORS = ['c:dLbls', 'c:trendline', 'c:errBars', 'c:cat', 'c:val', 'c:xVal', 'c:yVal']
+
+function replaceDrawingFill(inner: string, fill: string, leading: readonly string[]): string {
+  const existing = childElements(inner).find(child => DRAWING_FILL_NAMES.includes(child.name))
+  return existing ? replaceChildMarkup(inner, existing, fill) : insertAfterLastChild(inner, leading, fill)
+}
+
+function patchChartShapePaint(
+  inner: string,
+  fill: string,
+  leading: readonly string[],
+  recolorLine: boolean,
+): string {
+  const existing = childElements(inner).find(child => child.name === 'c:spPr')
+  let shape = replaceDrawingFill(existing?.inner ?? '', fill, ['a:xfrm', 'a:prstGeom', 'a:custGeom'])
+  if (recolorLine) {
+    const line = childElements(shape).find(child => child.name === 'a:ln')
+    if (!line) {
+      shape = insertAfterLastChild(shape, DRAWING_FILL_NAMES, `<a:ln>${fill}</a:ln>`)
+    } else if (!childElements(line.inner).some(child => child.name === 'a:noFill')) {
+      // Recolor the outline without enabling a deliberately hidden line.
+      shape = replaceChildMarkup(shape, line, withBody(line, replaceDrawingFill(line.inner, fill, [])))
+    }
+  }
+  return existing ? replaceChildMarkup(inner, existing, withBody(existing, shape))
+    : insertAfterLastChild(inner, leading, `<c:spPr>${shape}</c:spPr>`)
+}
+
+/// Sets a series' solid fill and visible line color.
+function setSeriesColor(chartXml: string, seriesIndex: number, color: string): string {
+  return editChartSeries(chartXml, seriesIndex, inner => {
+    if (!childElements(inner).some(child => ['c:spPr', 'c:tx', 'c:order'].includes(child.name))) {
+      throw new ChartEditError('Chart series is missing idx/order structure.')
+    }
+    return patchChartShapePaint(inner, solidChartFill(color), ['c:tx', 'c:order'], true)
+  })
 }
 
 /// Per-point fills via c:dPt on the series at the given document position.
@@ -1375,80 +1406,40 @@ function setPointColors(
   seriesIndex: number,
   points: Record<string, string>,
 ): string {
-  const seriesPattern = /<c:ser>[\s\S]*?<\/c:ser>/g
-  let found = false
-  let position = -1
-  const result = chartXml.replace(seriesPattern, (serXml) => {
-    position += 1
-    if (position !== seriesIndex) return serXml
-    found = true
-    let next = serXml
-    const entries = Object.entries(points)
-      .map(([point, color]) => [Number(point), color] as const)
-      .sort((a, b) => a[0] - b[0])
-    for (const [point, color] of entries) {
-      next = upsertPointColor(next, point, color)
-    }
-    return next
-  })
-  if (!found) throw new ChartEditError(`Chart has no series with index ${seriesIndex}.`)
-  return result
+  const entries = Object.entries(points).map(([point, color]) => [Number(point), color] as const)
+    .sort((a, b) => a[0] - b[0])
+  return editChartSeries(chartXml, seriesIndex, inner =>
+    entries.reduce((series, [point, color]) => upsertPointColor(series, point, color), inner))
 }
 
-function upsertPointColor(serXml: string, pointIndex: number, color: string): string {
-  const fill = `<a:solidFill><a:srgbClr val="${color.slice(1).toUpperCase()}"/></a:solidFill>`
-  const dPts = [...serXml.matchAll(/<c:dPt>[\s\S]*?<\/c:dPt>/g)]
-  for (const dPt of dPts) {
-    const idx = Number(/<c:idx val="([0-9]+)"\/>/.exec(dPt[0])?.[1])
-    if (idx !== pointIndex) continue
-    return (
-      serXml.slice(0, dPt.index) +
-      patchPointFill(dPt[0], fill) +
-      serXml.slice(dPt.index + dPt[0].length)
-    )
-  }
-  const element =
-    `<c:dPt><c:idx val="${pointIndex}"/><c:bubble3D val="0"/>` + `<c:spPr>${fill}</c:spPr></c:dPt>`
-  const insertAt = dPtInsertionIndex(serXml, dPts, pointIndex)
-  return serXml.slice(0, insertAt) + element + serXml.slice(insertAt)
+function upsertPointColor(inner: string, pointIndex: number, color: string): string {
+  const fill = solidChartFill(color)
+  return upsertChartPoint(inner, pointIndex, `<c:spPr>${fill}</c:spPr>`, body =>
+    patchChartShapePaint(body, fill, POINT_SHAPE_HEADER, false))
 }
 
-/// Where a new dPt with this idx belongs: ascending among existing dPt
-/// entries, otherwise before dLbls/cat/val.
-function dPtInsertionIndex(
-  serXml: string,
-  dPts: readonly RegExpExecArray[],
+function upsertChartPoint(
+  inner: string,
   pointIndex: number,
-): number {
-  let insertAt = -1
-  for (const dPt of dPts) {
-    const idx = Number(/<c:idx val="([0-9]+)"\/>/.exec(dPt[0])?.[1])
-    if (idx > pointIndex) return dPt.index
-    insertAt = dPt.index + dPt[0].length
-  }
-  if (insertAt !== -1) return insertAt
-  const anchor = /<c:dLbls[>/]|<c:cat[>/]|<c:val[>/]|<c:xVal[>/]/.exec(serXml)
+  initial: string,
+  edit: (body: string) => string,
+): string {
+  const children = childElements(inner)
+  const points = children.filter(child => child.name === 'c:dPt').map(point => {
+    const idx = childElements(point.inner).find(child => child.name === 'c:idx')
+    const value = idx && withNamespaces(idx, new Map()).attributes.get('val')
+    return { point, index: value && /^\d+$/.test(value.trim()) ? Number(value) : NaN }
+  })
+  const existing = points.find(point => point.index === pointIndex)?.point
+  if (existing) return replaceChildMarkup(inner, existing, withBody(existing, edit(existing.inner)))
+  const element =
+    `<c:dPt><c:idx val="${pointIndex}"/><c:bubble3D val="0"/>${initial}</c:dPt>`
+  const following = points.find(point => point.index > pointIndex)?.point
+  const previous = points.at(-1)?.point
+  if (!following && previous) return replaceChildMarkup(inner, previous, previous.xml + element)
+  const anchor = following ?? children.find(child => POINT_SUCCESSORS.includes(child.name))
   if (!anchor) throw new ChartEditError('Chart series has no data element to anchor a point.')
-  return anchor.index
-}
-
-/// Existing dPt: swap only the spPr fill, keeping every other child.
-function patchPointFill(dPtXml: string, fill: string): string {
-  const spPrMatch = /<c:spPr>([\s\S]*?)<\/c:spPr>/.exec(dPtXml)
-  if (!spPrMatch || spPrMatch[1] === undefined) {
-    const anchor = /<c:pictureOptions[\s/>]|<c:extLst[\s/>]/.exec(dPtXml)
-    const insertAt = anchor ? anchor.index : dPtXml.lastIndexOf('</c:dPt>')
-    return dPtXml.slice(0, insertAt) + `<c:spPr>${fill}</c:spPr>` + dPtXml.slice(insertAt)
-  }
-  const inner = spPrMatch[1]
-  // Only touch the shape fill, never a fill nested inside a:ln.
-  const lnAt = inner.search(/<a:ln[\s>]/)
-  const head = lnAt === -1 ? inner : inner.slice(0, lnAt)
-  const tail = lnAt === -1 ? '' : inner.slice(lnAt)
-  const fillPattern =
-    /<a:noFill\/>|<a:solidFill>[\s\S]*?<\/a:solidFill>|<a:gradFill[\s\S]*?<\/a:gradFill>|<a:pattFill[\s\S]*?<\/a:pattFill>|<a:blipFill[\s\S]*?<\/a:blipFill>|<a:grpFill\/>/
-  const nextHead = fillPattern.test(head) ? head.replace(fillPattern, () => fill) : head + fill
-  return dPtXml.replace(spPrMatch[0], () => `<c:spPr>${nextHead}${tail}</c:spPr>`)
+  return replaceChildMarkup(inner, anchor, element + anchor.xml)
 }
 
 function escapeXmlText(input: string): string {
