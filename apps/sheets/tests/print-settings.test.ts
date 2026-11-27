@@ -386,7 +386,7 @@ describe('renderHeaderFooterSection', () => {
 
   it('renders formatted runs and applies font size to expanded fields', () => {
     const html = renderHeaderFooterSection(
-      'Page &"Calibri,Bold Italic"&20&KAA4400&P&"-,Regular" of &N',
+      'Page &"Calibri,Bold Italic"&20&KAA4400&P&"Calibri,Regular" of &N',
       fields,
       undefined,
       0.5,
@@ -395,6 +395,31 @@ describe('renderHeaderFooterSection', () => {
       'Page <span style="font-family:&quot;Calibri&quot;;font-size:10pt;color:#AA4400;' +
         'font-weight:bold;font-style:italic">3</span>' +
         '<span style="font-family:&quot;Calibri&quot;;font-size:10pt;color:#AA4400"> of 7</span>',
+    )
+  })
+
+  it('resolves workbook theme colors, their tints and both theme font faces', () => {
+    const html = renderHeaderFooterSection(
+      '&"+" &K00+000Title&"-,Regular"&K04-050Body &P&K01+100!',
+      fields,
+      undefined,
+      1,
+      {
+        colors: ['#FAF9F8', '#1D1D1D', '#DDDDDD', '#212121', '#808080'],
+        fonts: { major: 'Cambria', minor: 'Arial' },
+      },
+    )
+    expect(html).toBe(
+      '<span style="font-family:&quot;Cambria&quot;"> </span>' +
+        '<span style="font-family:&quot;Cambria&quot;;color:#FAF9F8">Title</span>' +
+        '<span style="font-family:&quot;Arial&quot;;color:#404040">Body 3</span>' +
+        '<span style="font-family:&quot;Arial&quot;;color:#FFFFFF">!</span>',
+    )
+  })
+
+  it('uses the default theme palette when the workbook does not carry one', () => {
+    expect(renderHeaderFooterSection('&K04+000Title', fields)).toBe(
+      '<span style="color:#4472C4">Title</span>',
     )
   })
 

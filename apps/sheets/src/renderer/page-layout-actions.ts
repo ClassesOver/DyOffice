@@ -454,7 +454,12 @@ async function sheetPrintDocument(
     worksheet.getSheetName(),
     pictures,
     snapshotPrintVisuals(document, frames),
-    { breaks: state ? effectivePageBreaks(state, sheetId) : null, selection, now },
+    {
+      breaks: state ? effectivePageBreaks(state, sheetId) : null,
+      selection,
+      now,
+      headerFooterTheme: { colors: state?.file.themeColors, fonts: state?.file.themeFonts },
+    },
   )
 }
 

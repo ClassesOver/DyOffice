@@ -2,6 +2,8 @@
 /// stored `&X` forms and the `&[Page]`-style names the Excel UI shows; an
 /// unknown code is kept as the literal text Excel prints.
 
+import { resolveStyleColor, THEME_SLOT_NAMES } from '@genoffice/xlsx-gateway/domain/style-color'
+
 export interface HeaderFooterFields {
   readonly page: number
   readonly total: number
@@ -11,6 +13,11 @@ export interface HeaderFooterFields {
   readonly filePath?: string | undefined
   /// Replaces `&G` (the section picture); nothing when absent.
   readonly picture?: string | undefined
+}
+
+export interface HeaderFooterTheme {
+  readonly colors?: readonly string[] | undefined
+  readonly fonts?: { readonly major: string; readonly minor: string } | undefined
 }
 
 const NAMED_CODES: Record<string, string> = {
@@ -41,7 +48,7 @@ interface HeaderFooterStyle {
   baseline?: 'sup' | 'sub'
 }
 
-export function* headerFooterRuns(text: string): Iterable<{
+export function* headerFooterRuns(text: string, theme?: HeaderFooterTheme): Iterable<{
   text: string
   style: Readonly<HeaderFooterStyle>
 }> {
@@ -63,8 +70,13 @@ export function* headerFooterRuns(text: string): Iterable<{
     if (font !== undefined) {
       const separator = font.lastIndexOf(',')
       const family = (separator === -1 ? font : font.slice(0, separator)).trim()
-      if (family === '+' || (family === '-' && separator === -1)) delete style.fontFamily
-      else if (family !== '' && family !== '-') style.fontFamily = family
+      if (family === '+' || family === '-') {
+        const face = family === '+' ? theme?.fonts?.major : theme?.fonts?.minor
+        if (face) style.fontFamily = face
+        else delete style.fontFamily
+      } else if (family !== '') {
+        style.fontFamily = family
+      }
       const face = separator === -1 ? '' : font.slice(separator + 1).trim().toLowerCase()
       if (/^(regular|bold|italic|bold italic|italic bold)$/.test(face)) {
         style.bold = face.includes('bold')
@@ -73,8 +85,15 @@ export function* headerFooterRuns(text: string): Iterable<{
     } else if (size !== undefined && Number(size) > 0) {
       style.fontSizePt = Number(size)
     } else if (color !== undefined) {
-      if (/^[0-9a-f]{6}$/i.test(color)) style.color = `#${color.toUpperCase()}`
-      else delete style.color
+      if (/^[0-9a-f]{6}$/i.test(color)) {
+        style.color = `#${color.toUpperCase()}`
+      } else {
+        // Stored theme indexes use the same zero-based palette order as cell styles.
+        const slot = Math.min(Number(color.slice(0, 2)), THEME_SLOT_NAMES.length - 1)
+        const percent = Number(color.slice(color[2] === '.' ? 3 : 2))
+        const tint = Math.max(-100, Math.min(100, percent)) / 100
+        style.color = resolveStyleColor({ theme: slot, tint }, theme?.colors)
+      }
     } else {
       const code = toggle?.toUpperCase()
       switch (code) {

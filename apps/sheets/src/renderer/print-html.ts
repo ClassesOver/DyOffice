@@ -12,7 +12,7 @@ import { columnIndex, columnLabel } from '@genoffice/xlsx-gateway/domain/cell-ad
 
 import type { WorkbookExportPdfRequest } from '../shared/desktop-api'
 import type { HeaderFooterParts } from './edit-journal'
-import { expandHeaderFooterCodes, headerFooterRuns } from './print-hf-codes'
+import { expandHeaderFooterCodes, headerFooterRuns, type HeaderFooterTheme } from './print-hf-codes'
 import {
   bodyColumns,
   bodyRows,
@@ -224,6 +224,7 @@ export interface SheetPrintOptions {
   /// Print this A1 range instead of the sheet's print area (Excel's "Print Selection").
   readonly selection?: string | null
   readonly now?: Date
+  readonly headerFooterTheme?: HeaderFooterTheme
 }
 
 /// One laid-out page before the job-wide numbering is known.
@@ -249,6 +250,7 @@ export interface SheetPrintDocument {
   /// Content scale actually applied (fit-to-page resolved).
   readonly scale: number
   readonly headerFooterScale: number
+  readonly headerFooterTheme?: HeaderFooterTheme | undefined
   readonly firstPageNumber?: number | undefined
   readonly pictures: HeaderFooterPictures
   readonly headerFooter: SheetHeaderFooter
@@ -579,6 +581,7 @@ export function layoutSheetPrint(
     margins,
     scale,
     headerFooterScale: setup.headerFooterScaleWithDoc ? scale : 1,
+    headerFooterTheme: options.headerFooterTheme,
     firstPageNumber: setup.firstPageNumber,
     pictures,
     headerFooter: {
@@ -769,7 +772,7 @@ const PICTURE_MARK = '￼'
 export function headerFooterHtml(
   parts: HeaderFooterParts,
   kind: 'header' | 'footer',
-  document: Pick<SheetPrintDocument, 'margins' | 'headerFooterScale'>,
+  document: Pick<SheetPrintDocument, 'margins' | 'headerFooterScale' | 'headerFooterTheme'>,
   fields: { page: number; total: number; date: Date; fileName: string; sheetName: string },
   pictures: SectionPictures = {},
 ): string {
@@ -778,7 +781,7 @@ export function headerFooterHtml(
   const sectionPicture = [pictures.left, pictures.center, pictures.right]
   const scale = document.headerFooterScale
   const rendered = sections.map((text, index) =>
-    renderHeaderFooterSection(text, fields, sectionPicture[index], scale),
+    renderHeaderFooterSection(text, fields, sectionPicture[index], scale, document.headerFooterTheme),
   )
   const { margins } = document
   const edge =
@@ -799,18 +802,22 @@ export function renderHeaderFooterSection(
   fields: { page: number; total: number; date: Date; fileName: string; sheetName: string },
   picture?: HeaderFooterPictureImage,
   scale = 1,
+  theme?: HeaderFooterTheme,
 ): string {
   const image = picture ? pictureHtml(picture, scale) : ''
   const expandedFields = { ...fields, picture: picture ? PICTURE_MARK : '' }
   let html = ''
-  for (const run of headerFooterRuns(text)) {
+  for (const run of headerFooterRuns(text, theme)) {
     const expanded = expandHeaderFooterCodes(run.text, expandedFields)
     if (expanded === '') continue
     let content = expanded.split(PICTURE_MARK).map(escapeHtml).join(image)
     const { fontFamily, fontSizePt, color, bold, italic, underline, strike, baseline } = run.style
     const css: string[] = []
     if (fontFamily) {
-      const safeFamily = fontFamily.replace(/[\r\n\f]/g, ' ').replaceAll('\\', '\\\\')
+      const safeFamily = fontFamily
+        .replace(/[\r\n\f]/g, ' ')
+        .replaceAll('\\', '\\\\')
+        .replaceAll('"', '\\"')
       css.push(`font-family:"${safeFamily}"`)
     }
     if (fontSizePt !== undefined) css.push(`font-size:${round(fontSizePt * scale)}pt`)

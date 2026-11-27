@@ -11,6 +11,7 @@ import { createEditJournal, toSavePageSetupStates } from '../src/renderer/edit-j
 import { startFullLoad } from '../src/renderer/full-load'
 import { workbookCellCounts } from '../src/renderer/load-budget'
 import { setModuleLang } from '../src/renderer/i18n/locale'
+import { assemblePrintHtml } from '../src/renderer/print-html'
 import { resolveEffectivePageSetup } from '../src/renderer/print-settings'
 import { fullLoadGate } from '../src/renderer/reorder-gate'
 import type { LazyWorkbookState, UniverRuntime } from '../src/renderer/univer-state'
@@ -186,6 +187,24 @@ describe('print and PDF workbook readiness coordination', () => {
     expect(reopened.header).toEqual({ left: 'Updated', center: '&BReport&B' })
     expect(reopened.apply({ header: reopened.header, footer: null })).toBeNull()
     expect(toSavePageSetupStates(state.editJournal)[0]?.footer).toBeNull()
+  })
+
+  it('prints saved header and footer references with the current workbook theme', async () => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.file.themeColors = ['#FFFFFF', '#000000', '#EEEEEE', '#333333', '#234567']
+    state.file.themeFonts = { major: 'Georgia', minor: 'Verdana' }
+    state.sheetProtections.set('sheet-1', null)
+    state.sheetFilePageSetups.set('sheet-1', {
+      oddHeader: '&C&"+"&K04+000Report',
+      oddFooter: '&R&"-"Page &P',
+    })
+    const host = await openPrintPreviewHost(createMockContext(state))
+    if (host === null) throw new Error('Print preview failed to open')
+    const job = await host.buildJob('active', {})
+    const html = assemblePrintHtml(job.documents).html
+    expect(html).toContain('<span style="font-family:&quot;Georgia&quot;;color:#234567">Report</span>')
+    expect(html).toContain('<span style="font-family:&quot;Verdana&quot;">Page 1</span>')
   })
 
   it('PDF export of a streamed workbook preloads it first and exports', async () => {
