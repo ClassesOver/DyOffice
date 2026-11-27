@@ -2491,6 +2491,7 @@ function ChartVisual({
               valueAxis={valueScaleInput}
               xAxis={chart.xAxis}
               scatterStyle={chart.scatterStyle}
+              dispBlanksAs={chart.dispBlanksAs}
               categoryFormat={categoryFormat}
               textBox={textBox}
               categoryAxis={categoryAxisText}
@@ -4980,6 +4981,22 @@ function formatScatterTick(value: number, format: string | undefined): string {
   return String(Number(value.toPrecision(4)))
 }
 
+function smoothChartPath(points: readonly (readonly [number, number])[]): string {
+  const first = points[0]!
+  let path = `M${first.join(',')}`
+  for (let index = 1; index < points.length; index++) {
+    const start = points[index - 1]!
+    const end = points[index]!
+    const before = points[index - 2] ?? start
+    const after = points[index + 1] ?? end
+    // Convert the neighboring-point tangents to cubic Bézier controls.
+    const firstControl = start.map((value, axis) => value + (end[axis]! - before[axis]!) / 6)
+    const secondControl = end.map((value, axis) => value - (after[axis]! - start[axis]!) / 6)
+    path += ` C${firstControl.join(',')} ${secondControl.join(',')} ${end.join(',')}`
+  }
+  return path
+}
+
 export function ScatterChart({
   seriesList,
   axisTitles,
@@ -4988,6 +5005,7 @@ export function ScatterChart({
   valueAxis,
   xAxis,
   scatterStyle,
+  dispBlanksAs,
   categoryFormat,
   textBox,
   categoryAxis,
@@ -5015,18 +5033,18 @@ export function ScatterChart({
       }
     | undefined
   readonly scatterStyle?: string | undefined
+  readonly dispBlanksAs?: ChartMetadata['dispBlanksAs']
   readonly categoryFormat?: string | undefined
 } & ChartElementProps): React.JSX.Element {
-  const styleWantsLines = scatterStyle === 'line' || scatterStyle === 'lineMarker' ||
-    scatterStyle === 'smooth' || scatterStyle === 'smoothMarker'
+  const styleWantsSmooth = scatterStyle === 'smooth' || scatterStyle === 'smoothMarker'
+  const styleWantsLines = styleWantsSmooth || scatterStyle === 'line' || scatterStyle === 'lineMarker'
   const styleWantsMarkers = scatterStyle !== 'none' && scatterStyle !== 'line' && scatterStyle !== 'smooth'
   const points = seriesList.map((series) => {
     const xValues = series.categories.map((value, index) => {
       const parsed = Number.parseFloat(value)
       return Number.isFinite(parsed) ? parsed : index
     })
-    // Blank cache slots are 0 fillers, not data — Excel plots no point.
-    const blankSet = new Set(series.blanks ?? [])
+    const blankSet = new Set(dispBlanksAs === 'zero' ? undefined : series.blanks)
     const marker = series.marker ?? (styleWantsMarkers ? 'circle' : 'none')
     return { series, xValues, blankSet, marker }
   })
@@ -5057,6 +5075,27 @@ export function ScatterChart({
       valueAxis?.labelSize ?? AXIS_LABEL_PT,
     ),
   )
+  const renderStroke = (series: ChartSeries, xValues: readonly number[], seriesIndex: number) => {
+    const stroke = lineStroke(series, seriesIndex)
+    if (!styleWantsLines || stroke === null) return null
+    const attrs = {
+      fill: 'none',
+      stroke,
+      strokeWidth: series.lineWidth ?? 2,
+      onClick: onElement ? (event: React.MouseEvent<SVGElement>) => {
+        event.stopPropagation()
+        onElement({ kind: 'series', seriesIndex })
+      } : undefined,
+    }
+    const segments = lineSegments(series.values.length, series.blanks, dispBlanksAs ?? 'span')
+    return segments.map((segment) => {
+      if (segment.length < 2) return null
+      const coordinates = segment.map(index => [plotX(xValues[index] ?? 0), plotY(series.values[index]!)] as const)
+      return (series.smooth ?? styleWantsSmooth) && coordinates.length > 2
+        ? <path key={segment[0]} d={smoothChartPath(coordinates)} {...attrs} />
+        : <polyline key={segment[0]} points={coordinates.map(point => point.join(',')).join(' ')} {...attrs} />
+    })
+  }
   return (
     <svg
       className="chart-svg"
@@ -5116,31 +5155,7 @@ export function ScatterChart({
       ))}
       {points.map(({ series, xValues, blankSet, marker }, seriesIndex) => (
         <g key={seriesIndex}>
-          {styleWantsLines && series.lineColor !== 'none' && series.values.length > 1 && (
-            <polyline
-              points={series.values
-                .map((value, index) =>
-                  blankSet.has(index) ? null : `${plotX(xValues[index] ?? 0)},${plotY(value)}`,
-                )
-                .filter((point) => point !== null)
-                .join(' ')}
-              fill="none"
-              stroke={
-                series.lineColor && series.lineColor !== 'none'
-                  ? series.lineColor
-                  : seriesColor(series, seriesIndex)
-              }
-              strokeWidth={series.lineWidth ?? 2}
-              onClick={
-                onElement
-                  ? (event) => {
-                      event.stopPropagation()
-                      onElement({ kind: 'series', seriesIndex })
-                    }
-                  : undefined
-              }
-            />
-          )}
+          {renderStroke(series, xValues, seriesIndex)}
           {marker !== 'none' &&
             series.values.map((value, index) =>
               blankSet.has(index) ? null : (

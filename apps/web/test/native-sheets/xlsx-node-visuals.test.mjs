@@ -480,13 +480,16 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
       <c:marker><c:symbol val="diamond"/></c:marker>
       <c:xVal><c:numRef><c:f>'Data Sheet'!$C$2:$C$3</c:f><c:numCache><c:formatCode>0.00</c:formatCode><c:pt idx="0"><c:v>0.1</c:v></c:pt><c:pt idx="1"><c:v>7.2</c:v></c:pt></c:numCache></c:numRef></c:xVal>
       <c:yVal><c:numRef><c:f>'Data Sheet'!$D$2:$D$3</c:f><c:numCache><c:pt idx="0"><c:v>20</c:v></c:pt><c:pt idx="1"><c:v>40</c:v></c:pt></c:numCache></c:numRef></c:yVal>
+      <c:smooth val="1"/>
     </c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart>
     <c:valAx><c:axId val="1"/><c:scaling><c:max val="9"/><c:min val="0"/></c:scaling><c:axPos val="b"/></c:valAx>
     <c:valAx><c:axId val="2"/><c:scaling><c:max val="50" /><c:min val="10"/></c:scaling><c:axPos val="l"/></c:valAx>
-    </c:plotArea></c:chart></c:chartSpace>`)
+    </c:plotArea><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>`)
   const [{ chart }] = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet))
   assert.deepEqual(chart.chartTypes, ['scatterChart'])
   assert.equal(chart.scatterStyle, 'lineMarker')
+  assert.equal(chart.dispBlanksAs, 'gap')
+  assert.equal(chart.series[0].smooth, true)
   assert.deepEqual(chart.series[0].categories, ['0.1', '7.2'])
   assert.deepEqual(chart.series[0].values, [20, 40])
   assert.equal(chart.series[0].categoriesRef, "'Data Sheet'!$C$2:$C$3")
@@ -527,6 +530,8 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
   assert.equal(edited.series[0].lineColor, previewSeries.lineColor)
   assert.equal(edited.series[0].lineWidth, chart.series[0].lineWidth)
   assert.equal(edited.series[0].marker, 'diamond')
+  assert.equal(edited.series[0].smooth, true)
+  assert.equal(edited.dispBlanksAs, 'gap')
   assert.deepEqual(edited.series[0].categories, ['1.25', '7.5'])
   assert.equal(edited.series[0].categoriesRef, chart.series[0].categoriesRef)
   assert.equal(edited.series[0].categoryFormat, '0.00')

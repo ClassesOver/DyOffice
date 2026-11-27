@@ -31,4 +31,24 @@ describe('scatter series styling', () => {
     expect(render('marker', 'circle')).not.toContain('<polyline')
     expect(render('marker', 'circle').match(/<circle/g)).toHaveLength(2)
   })
+
+  it('draws smooth plot and series strokes while honoring an explicit straight series', () => {
+    const zigzag = { ...series, categories: ['1', '2', '3'], values: [3, 7, 5] }
+    const chart = (scatterStyle: string, smooth?: boolean) => renderToStaticMarkup(createElement(ScatterChart, {
+      scatterStyle, seriesList: [{ ...zigzag, smooth, lineColor: '#10253F', lineWidth: 4 }],
+    }))
+    expect(chart('smoothMarker')).toMatch(/<path d="M[^\"]+C[^\"]+" fill="none" stroke="#10253F" stroke-width="4"/)
+    expect(chart('line', true)).toMatch(/<path d="M[^\"]+C/)
+    expect(chart('smooth', false)).toContain('<polyline')
+  })
+
+  it('separates gaps, spans missing cells, and draws zero-valued points when requested', () => {
+    const sparse = { ...series, categories: ['1', '2', '3', '4', '5'], values: [3, 5, 0, 2, 4], blanks: [2] }
+    const chart = (dispBlanksAs: 'gap' | 'span' | 'zero') => renderToStaticMarkup(createElement(ScatterChart, {
+      scatterStyle: 'lineMarker', dispBlanksAs, seriesList: [sparse],
+    }))
+    expect([...chart('gap').matchAll(/<polyline points="([^"]+)"/g)].map(match => match[1]?.split(' ').length)).toEqual([2, 2])
+    expect([...chart('span').matchAll(/<polyline points="([^"]+)"/g)].map(match => match[1]?.split(' ').length)).toEqual([4])
+    expect(chart('zero').match(/<circle/g) ?? []).toHaveLength(5)
+  })
 })
