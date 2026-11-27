@@ -475,6 +475,8 @@ test('remaps compacted category bands and omits bands with ambiguous members', a
 
 test('keeps scatter X and Y caches separate and saves axis and color edits', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
+  const flippedDrawing = (await textOf(zip)(drawingPath)).replace('<xdr:xfrm>', '<xdr:xfrm flipH="1" flipV="true">')
+  zip.file(drawingPath, flippedDrawing)
   const strokeStyle = '<a:prstDash val="dash"/><a:round/>'
   zip.file(chartPath, `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="${mainNs}"><c:chart><c:plotArea>
     <c:scatterChart><c:scatterStyle val="lineMarker"/><c:ser><c:tx><c:v>Observations</c:v></c:tx>
@@ -487,7 +489,9 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
     <c:valAx><c:axId val="1"/><c:scaling><c:max val="9"/><c:min val="0"/></c:scaling><c:axPos val="b"/></c:valAx>
     <c:valAx><c:axId val="2"/><c:scaling><c:max val="50" /><c:min val="10"/></c:scaling><c:axPos val="l"/></c:valAx>
     </c:plotArea><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>`)
-  const [{ chart }] = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet))
+  const [visual] = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet))
+  const { chart } = visual
+  assert.deepEqual([visual.flipH, visual.flipV], [true, true])
   assert.deepEqual(chart.chartTypes, ['scatterChart'])
   assert.equal(chart.scatterStyle, 'lineMarker')
   assert.equal(chart.dispBlanksAs, 'gap')
@@ -524,7 +528,10 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
   }]
   const [previewSeries] = applyChartStateEdit(chart, request.chartEdits[0]).series
   const saved = (await runtime.sheetsNative.savePlan(source, await runtime.sheetsWorkbookPlanner(source, request))).bytes
-  const [{ chart: edited }] = (await runtime.sheetsNative.inspect(saved)).visuals
+  const [savedVisual] = (await runtime.sheetsNative.inspect(saved)).visuals
+  const edited = savedVisual.chart
+  assert.deepEqual([savedVisual.flipH, savedVisual.flipV], [true, true])
+  assert.equal(await textOf(await JSZip.loadAsync(saved))(drawingPath), flippedDrawing)
   assert.deepEqual(edited.xAxis, JSON.parse(JSON.stringify(chart.xAxis)))
   assert.equal(edited.yAxis.title, 'Measured Y')
   assert.equal(edited.yAxis.majorGridlines, true)

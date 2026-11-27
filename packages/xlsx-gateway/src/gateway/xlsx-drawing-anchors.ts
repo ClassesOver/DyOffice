@@ -111,13 +111,20 @@ export function pictureExtensionBlips(blip: ScopedElement | undefined): ScopedEl
 
 export function readDrawingGraphicFrame(
   anchor: ScopedElement,
-): { chartRelationshipId?: string | undefined } | undefined {
+): { chartRelationshipId?: string | undefined; flipH: boolean; flipV: boolean } | undefined {
   const frame = drawingChild(anchor, 'graphicFrame')
   if (!frame) return undefined
   const graphic = drawingMainChild(frame, 'graphic')
   const data = drawingMainChild(graphic, 'graphicData')
   const chart = data && scopedChildren(data).find(node => isDrawingChartName(node.name, node.namespace))
-  return { chartRelationshipId: drawingRelationshipAttribute(chart, 'id') }
+  const transform = drawingChild(frame, 'xfrm')
+  const flipH = transform?.attributes.get('flipH')
+  const flipV = transform?.attributes.get('flipV')
+  return {
+    chartRelationshipId: drawingRelationshipAttribute(chart, 'id'),
+    flipH: flipH === '1' || flipH === 'true',
+    flipV: flipV === '1' || flipV === 'true',
+  }
 }
 
 export interface DrawingAnchorEntry {

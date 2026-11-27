@@ -1248,7 +1248,11 @@ export async function readWorkbookVisuals(
         const graphicFrame = readDrawingGraphicFrame(slot.element)
         if (graphicFrame) {
           const visual = await loadChart(graphicFrame.chartRelationshipId, base)
-          if (visual) result.push(visual)
+          if (visual) result.push({
+            ...visual,
+            ...(graphicFrame.flipH ? { flipH: true } : {}),
+            ...(graphicFrame.flipV ? { flipV: true } : {}),
+          })
           continue
         }
         if (shapeNode) {

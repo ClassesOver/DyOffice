@@ -247,6 +247,10 @@ pub(crate) fn read_drawing(
                 continue;
             };
             let chart_path = resolve_part_target(drawing_path, &relationship.target)?;
+            let transform = chart_node
+                .ancestors()
+                .find(|node| node.has_tag_name("graphicFrame"))
+                .and_then(|frame| direct_child(frame, "xfrm"));
             visuals.push(VisualObject {
                 id: visual_id,
                 sheet_id: sheet_id.to_owned(),
@@ -269,8 +273,8 @@ pub(crate) fn read_drawing(
                 line_width: None,
                 line_dash: None,
                 line_cap: None,
-                flip_h: false,
-                flip_v: false,
+                flip_h: xfrm_flipped(transform, "flipH"),
+                flip_v: xfrm_flipped(transform, "flipV"),
                 text_color: None,
                 text_anchor: None,
                 text_vert_overflow: None,
