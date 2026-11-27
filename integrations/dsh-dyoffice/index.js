@@ -5,7 +5,6 @@ import {activeStates, connectOffice, officeSettings,storeOfficeToken, route, uui
 
 export const inject = ['commands', 'llm', 'skills', 'workingDirectory', 'tools']
 
-const maxSourceBytes = 10 * 1024 * 1024
 const previewLimit = 100
 const digest = /^[a-f0-9]{64}$/u
 
@@ -42,21 +41,11 @@ function createdPreviews(config) {
   }
 }
 
-async function sendSnapshot(kit, extension, source, response, signal) {
-  const result = await kit.renderImages({
-    extension, ...(extension === 'xlsx' ? {} : {pages:[1]}), dpi:48,
-    maxImages:extension === 'xlsx' ? 8 : 1, maxDimension:2048, maxPixels:2800000, maxBytes:1600000, source,
-  }, signal)
-  if (!result.images[0]) throw Error('No page')
-  response.writeHead(200, {'Content-Type':'image/png','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'})
-  response.end(Buffer.from(result.images[0].png))
-}
-
 const DYOFFICE_USAGE = [
   '直接在聊天里说你想做什么，例如：',
-  '“帮我写一份读书会活动策划，保存成 Word。”',
+  '“帮我写一份 Word 读书会活动策划，给我在线编辑链接。”',
   '“打开刚才创建的文档。”',
-  '“建一张空白 Excel 表，命名为活动预算。”',
+  '“在 DyOffice 建一张空白 Excel 表，命名为活动预算。”',
 ].join('\n')
 
 export function parseDyOfficeCommand(rawInput) {
@@ -153,25 +142,6 @@ function createHandler(config, authorizationRequests, createdDocument, creations
         response.writeHead(303,{'Location':office.origin+'/dsh-edit'+(frame?'?dshEmbed=1':'')+'#'+ticket,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
         return response.end()
       } catch(error){return send(error.status??502,{error:'edit_unavailable'})}
-    }
-    if(request.method==='GET'&&query.has('snapshot')){
-      const path=query.get('snapshot'),session=query.get('session')
-      const extension=path?.match(/\.(docx|xlsx|pptx|pdf)$/iu)?.[1].toLowerCase()
-      if(!extension||path.length>4096||!session||session.length>256)return send(400,{error:'invalid_file'})
-      const signal=AbortSignal.timeout(30000),files=ctx.get('workspaceFiles'),kit=ctx.get('officeKit')
-      if(!files||!kit)return send(503,{error:'renderer_unavailable'})
-      try{
-        const scope=await files.scopeOf(session,signal)
-        const file=await files.readBytes(scope,path,{range:{offset:0,length:1}},signal)
-        if(!Number.isSafeInteger(file.bytes)||file.bytes>maxSourceBytes)return send(413,{error:'file_too_large'})
-        await sendSnapshot(kit,extension,{key:JSON.stringify([session,scope.workspaceRoot,file.absolutePath]),version:file.version,bytes:file.bytes,async read(signal,limit){
-            if(file.bytes>limit)throw Error('File exceeds limit')
-            const data=await files.readBytes(scope,path,{},signal)
-            if(data.version!==file.version||data.absolutePath!==file.absolutePath||data.data.byteLength!==file.bytes)throw Error('File changed')
-            return {bytes:data.data,version:data.version}
-          }},response,signal)
-        return
-      }catch{return send(404,{error:'snapshot_unavailable'})}
     }
     if (request.method === 'POST' && query.has('review')) {
       const fileId = query.get('review'), created = createdDocument.get(fileId), job = created?.writing, revision = query.get('revision')
@@ -372,7 +342,7 @@ export function apply(ctx, config) {
   }
   ctx.tools?.register({
     name: 'dyoffice_document',
-    description: 'Use for natural-language requests to open the current DyOffice channel document, reopen the most recently created document, or create a Word, Excel, PowerPoint, or PDF document. When the user asks you to write a document (such as a report, letter, or plan), write the complete content in the user’s language, then create a Word document with that text in body. Omit body for blank documents. Use the returned filename as the clickable Markdown link text. Never ask for an authorization code in chat; the plugin prompts privately.',
+    description: 'Open or create an online document when the user requests DyOffice, the current channel document, or a shared editable document link. For an attachment, workspace path, downloadable file, or ordinary Office file creation with no online destination, use DSH native Office. Use one destination per request unless the user explicitly wants both. When writing an online Word document, supply its complete content in body. Omit body for blank documents. Use the returned filename as the clickable Markdown link text. Never ask for an authorization code in chat; the plugin prompts privately.',
     parameters: {type:'object',additionalProperties:false,required:['action'],properties:{
       action: {type:'string', enum:['open','open_recent','create']},
       format: {type:'string', enum:['docx','xlsx','pptx','pdf'], description:'Required when creating a document. Writing a body is supported for Word (docx).'},
