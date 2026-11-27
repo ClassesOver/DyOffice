@@ -429,7 +429,7 @@ export function layoutSheetPrint(
     }
   })
 
-  const displayAt = (data: (typeof areaData)[number], row: number, column: number): string => {
+  const cellContentAt = (data: (typeof areaData)[number], row: number, column: number) => {
     const { area } = data
     if (
       row >= area.startRow &&
@@ -437,21 +437,20 @@ export function layoutSheetPrint(
       column >= area.startColumn &&
       column <= area.endColumn
     ) {
-      return data.display[row - area.startRow]?.[column - area.startColumn] ?? ''
+      const rowIndex = row - area.startRow
+      const columnIndex = column - area.startColumn
+      return {
+        text: data.display[rowIndex]?.[columnIndex] ?? '',
+        raw: data.raw[rowIndex]?.[columnIndex],
+      }
     }
-    return hasCell(row, column) ? cellDisplay(worksheet, row, column) : ''
-  }
-  const rawAt = (data: (typeof areaData)[number], row: number, column: number): unknown => {
-    const { area } = data
-    if (
-      row >= area.startRow &&
-      row <= area.endRow &&
-      column >= area.startColumn &&
-      column <= area.endColumn
-    ) {
-      return data.raw[row - area.startRow]?.[column - area.startColumn]
+    // Titles can print outside the cached area. Read the same raw value and
+    // formatted text there without loading the intervening cells.
+    const range = hasCell(row, column) ? worksheet.getRange(row, column, 1, 1) : null
+    return {
+      text: range?.getDisplayValues()[0]?.[0] ?? '',
+      raw: range?.getValues()[0]?.[0],
     }
-    return undefined
   }
 
   const styleAt = (row: number, column: number): PrintCellStyle | null =>
@@ -475,7 +474,7 @@ export function layoutSheetPrint(
     near: Neighbours,
   ): string => {
     const style = styleAt(row, column)
-    const text = displayAt(data, row, column)
+    const { text, raw } = cellContentAt(data, row, column)
     const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
     const gridlines = setup.printGridlines && !worksheetDraft &&
       (dataArea === null || (row <= dataArea.endRow && column <= dataArea.endColumn))
@@ -495,7 +494,7 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span} style="${cellCss(style, rawAt(data, row, column), gridlines, blackAndWhite, rightToLeft, edges)}">` +
+      `<td${span} style="${cellCss(style, raw, gridlines, blackAndWhite, rightToLeft, edges)}">` +
       `<div class="c" style="height:${round(heightPt)}pt;align-items:${align}">` +
       `<span${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div></td>`
     )
@@ -1147,10 +1146,6 @@ function mergeMaps(worksheet: PrintWorksheet, area: PrintArea) {
     }
   }
   return { anchors, covered }
-}
-
-function cellDisplay(worksheet: PrintWorksheet, row: number, column: number): string {
-  return worksheet.getRange(row, column, 1, 1).getDisplayValues()[0]?.[0] ?? ''
 }
 
 /// Borders paint as inset shadows (no layout share, unlike CSS borders, so

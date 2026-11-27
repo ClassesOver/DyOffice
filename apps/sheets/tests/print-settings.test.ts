@@ -1009,6 +1009,38 @@ describe('layoutSheetPrint', () => {
     expect(cropped).toContain('<thead><tr style="height:15pt"><td rowspan="1" colspan="3"')
   })
 
+  it('preserves value alignment for titles outside the saved print area', () => {
+    const values = [[0.25, '005'], [true, 12], [34, 99]]
+    const display = [['25%', '005'], ['TRUE', '12'], ['34', '99']]
+    const worksheet: PrintWorksheet = {
+      ...fakeWorksheet(),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        getDisplayValues: () =>
+          display.slice(row, row + rows).map((cells) => cells.slice(column, column + columns)),
+        getValues: () =>
+          values.slice(row, row + rows).map((cells) => cells.slice(column, column + columns)),
+        getCellStyleData: () => row === 2 && column === 0 ? { ht: 1 } : null,
+      }),
+    }
+    const setup = resolveEffectivePageSetup({}, null, {
+      printArea: "'S'!$B$2:$B$3",
+      printTitles: "'S'!$1:$1,'S'!$A:$A",
+    })
+    const document = layout(worksheet, setup, new Map(), undefined, {
+      breaks: { rowBreaks: [2], colBreaks: [] },
+    })
+    expect(document.pages).toHaveLength(2)
+    const alignment = document.pages.map(({ body }) =>
+      Object.fromEntries([...body.matchAll(
+        /<td style="text-align:(right|left|center);[^"]*"><div class="c"[^>]*><span>([^<]*)<\/span>/g,
+      )].map(([, align, text]) => [text, align])),
+    )
+    expect(alignment).toEqual([
+      { '25%': 'right', '005': 'left', TRUE: 'center', '12': 'right' },
+      { '25%': 'right', '005': 'left', '34': 'left', '99': 'right' },
+    ])
+  })
+
   it('places floating visuals at their anchor and widens the used range to cover them', () => {
     const visual = {
       id: 'v1',
