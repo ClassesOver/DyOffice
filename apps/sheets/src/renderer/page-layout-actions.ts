@@ -6,6 +6,7 @@
  * page-layout view), everything lands in the saved file.
  */
 import { isMetafileMime, metafileToDataUrl } from '@genoffice/docx-engine/metafile'
+import { iconMap } from '@univerjs/preset-sheets-conditional-formatting'
 import type { PrinterInfo, WorkbookExportPdfRequest } from '../shared/desktop-api'
 import type { FWorksheet } from '@univerjs/sheets/facade'
 import type { WorkbookOperation } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
@@ -478,6 +479,7 @@ async function sheetPrintDocument(
     visuals,
     {
       chartSheet,
+      conditionalIcons: iconMap,
       rightToLeft: journal.rightToLeft ?? fileSheet?.rightToLeft ?? sheetIsRightToLeft(worksheet),
       breaks: state ? effectivePageBreaks(state, sheetId) : null,
       selection,

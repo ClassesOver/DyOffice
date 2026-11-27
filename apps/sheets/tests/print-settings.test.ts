@@ -1187,6 +1187,40 @@ describe('layoutSheetPrint', () => {
     expect(mono).not.toContain('#ff0000')
   })
 
+  it('prints evaluated conditional data bars and icon sets with their show-value rules', () => {
+    const base = fakeWorksheet()
+    const icon = 'data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E'
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getSheet: () => ({
+        getRowVisible: () => true,
+        getColVisible: () => true,
+        getCell: (_, column) => column === 0
+          ? { dataBar: { startPoint: 40, value: -50, color: '#cc0000', isGradient: true, isShowValue: false } }
+          : { iconSet: { iconType: '3Arrows', iconId: '1', isShowValue: true } },
+      }),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getDisplayValues: () => [['-15', '22'].slice(column, column + columns)],
+        getValues: () => [[-15, 22].slice(column, column + columns)],
+        getCellStyleData: () => null,
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:B1'] })
+    const options = { conditionalIcons: { '3Arrows': ['', icon] } }
+    const body = layout(worksheet, setup, new Map(), undefined, options).pages[0]?.body ?? ''
+    expect(body).toContain('class="cell-data-bar"')
+    expect(body).toContain('left:15.9pt;width:14.4pt;background:linear-gradient(to left,#cc0000,#ffffff)')
+    expect(body).not.toContain('>-15<')
+    expect(body).toContain(`class="cell-condition-icon" src="${icon}"`)
+    expect(body).toContain('padding-left:14.75pt')
+    expect(body).toContain('>22<')
+
+    const rtl = layout(worksheet, setup, new Map(), undefined, { ...options, rightToLeft: true })
+    expect(rtl.pages[0]?.body).toContain('left:44.7pt;width:14.4pt;background:linear-gradient(to right,#cc0000,#ffffff)')
+    expect(rtl.pages[0]?.body).toContain('padding-right:14.75pt')
+  })
+
   it('preserves value alignment for titles outside the saved print area', () => {
     const values = [[0.25, '005'], [true, 12], [34, 99]]
     const display = [['25%', '005'], ['TRUE', '12'], ['34', '99']]

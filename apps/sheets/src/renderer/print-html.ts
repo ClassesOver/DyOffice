@@ -63,6 +63,8 @@ const GRIDLINE_PT = 0.75
 const HEADING_ROW_HEIGHT_PT = 14
 const HEADING_COLUMN_WIDTH_PT = 24
 const CELL_TEXT_INSET_PT = 2
+const CONDITIONAL_INSET_PT = 1.5
+const CONDITIONAL_ICON_PT = 11.25
 /// Header/footer text size before scaleWithDoc applies.
 const HEADER_FOOTER_FONT_SIZE_PT = 9
 
@@ -105,6 +107,7 @@ export interface PrintWorksheet {
   getSheet?(): {
     getRowVisible(row: number): boolean
     getColVisible(column: number): boolean
+    getCell?(row: number, column: number): PrintConditionalCell | null | undefined
     getCellMatrix?(): {
       getRow(row: number): Record<number, PrintCellData | null | undefined> | null | undefined
     }
@@ -132,6 +135,22 @@ interface PrintCellData {
   readonly v?: unknown
   readonly p?: unknown
   readonly f?: string | null
+}
+
+interface PrintConditionalCell {
+  readonly dataBar?: {
+    readonly color: string
+    readonly value: number
+    readonly startPoint: number
+    readonly isGradient: boolean
+    readonly isShowValue: boolean
+  }
+  readonly iconSet?: {
+    readonly iconType: string
+    readonly iconId: string
+    readonly isShowValue: boolean
+  }
+  readonly fontRenderExtension?: { readonly isSkip?: boolean }
 }
 
 /// The IStyleData fields the layout reads (all optional in Univer).
@@ -279,6 +298,7 @@ export function paperGeometry(
 export interface SheetPrintOptions {
   readonly chartSheet?: boolean
   readonly rightToLeft?: boolean
+  readonly conditionalIcons?: Readonly<Record<string, readonly string[]>>
   /// Manual page breaks (0-based index of the row/column that starts a page).
   readonly breaks?: { rowBreaks: readonly number[]; colBreaks: readonly number[] } | null
   /// Print this A1 range instead of the sheet's print area (Excel's "Print Selection").
@@ -513,6 +533,8 @@ export function layoutSheetPrint(
 
   const styleAt = (row: number, column: number): PrintCellStyle | null =>
     hasCell(row, column) ? worksheet.getRange(row, column).getCellStyleData() : null
+  const conditionalAt = (row: number, column: number, text: string) =>
+    text && hasCell(row, column) ? sheet?.getCell?.(row, column) : undefined
   const centerAcrossRuns = new Map<number, readonly { column: number; widthPt: number }[]>()
   const centerAcrossForRow = (row: number) => {
     const cached = centerAcrossRuns.get(row)
@@ -559,10 +581,19 @@ export function layoutSheetPrint(
     hideText = false,
   ): string => {
     const style = styleAt(row, column)
+    const widthPt = mergedWidthPt ?? columnWidthPt(column)
     const diagonals = style?.bd?.tl_br || style?.bd?.bl_tr
-      ? cellDiagonalHtml(style, mergedWidthPt ?? columnWidthPt(column), heightPt, rightToLeft, blackAndWhite)
+      ? cellDiagonalHtml(style, widthPt, heightPt, rightToLeft, blackAndWhite)
       : ''
     const { text, raw, runs } = cellContentAt(data, row, column)
+    const conditional = conditionalAt(row, column, text)
+    const dataBar = !worksheetDraft && conditional?.dataBar
+      ? cellDataBarHtml(conditional.dataBar, widthPt, heightPt, rightToLeft)
+      : ''
+    const icon = !worksheetDraft && conditional?.iconSet
+      ? cellConditionalIconHtml(conditional.iconSet, options.conditionalIcons, widthPt, heightPt, rightToLeft)
+      : ''
+    const showText = !hideText && !conditionalHidesValue(conditional)
     const horizontalAlign = cellHorizontalAlign(style, raw)
     const gridlines = setup.printGridlines && !worksheetDraft &&
       (dataArea === null || (row <= dataArea.endRow && column <= dataArea.endColumn))
@@ -582,11 +613,11 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, horizontalAlign, gridlines, blackAndWhite, rightToLeft, edges, runs !== undefined)}">` +
-      diagonals +
-      cellTextHtml(hideText ? '' : text, style, horizontalAlign, heightPt,
-        mergedWidthPt ?? columnWidthPt(column), rightToLeft,
-        !hideText && runs ? richCellHtml(runs, blackAndWhite) : undefined) +
+      `<td${span}${diagonals || dataBar || icon ? ' class="has-cell-decoration"' : ''} style="${cellCss(style, horizontalAlign, gridlines, blackAndWhite, rightToLeft, edges, runs !== undefined)}">` +
+      dataBar + diagonals + icon +
+      cellTextHtml(showText ? text : '', style, horizontalAlign, heightPt, widthPt, rightToLeft,
+        showText && runs ? richCellHtml(runs, blackAndWhite) : undefined,
+        icon ? CONDITIONAL_ICON_PT + CONDITIONAL_INSET_PT : 0) +
       '</td>'
     )
   }
@@ -634,7 +665,7 @@ export function layoutSheetPrint(
             const style = styleAt(row, column)
             if (style?.ht !== 2) continue
             const { text, runs } = cellContentAt(data, row, column)
-            if (!text) continue
+            if (!text || conditionalHidesValue(conditionalAt(row, column, text))) continue
             const start = Math.max(0, offset)
             const end = Math.min(band.sizePt, offset + widthPt)
             const left = rightToLeft ? tableWidthPt - band.positionPt - end : band.positionPt + start
@@ -852,8 +883,11 @@ td .c.oriented, .center-across-text .c.oriented { position: relative; }
 td .c > .oriented-text, .center-across-text .c > .oriented-text { position: absolute; width: max-content; transform-origin: left top; }
 .center-across-clip, .center-across-text { position: absolute; top: 0; overflow: hidden; }
 .center-across-text { font-size: 11pt; }
-td.has-diagonal, td.has-diagonal > .c { position: relative; }
+td.has-cell-decoration, td.has-cell-decoration > .c { position: relative; }
 .cell-diagonal { display: block; position: absolute; left: 0; transform-origin: left center; print-color-adjust: exact; }
+.cell-data-bar, .cell-condition-icon { position: absolute; display: block; print-color-adjust: exact; }
+.cell-data-bar { top: ${CONDITIONAL_INSET_PT}pt; bottom: ${CONDITIONAL_INSET_PT}pt; border-radius: 0.75pt; }
+.cell-condition-icon { top: 50%; transform: translateY(-50%); width: ${CONDITIONAL_ICON_PT}pt; height: ${CONDITIONAL_ICON_PT}pt; }
 th.hd { background: #f1f1f1; color: #444; font-size: 8.5pt; font-weight: 400;
   text-align: center; vertical-align: middle;
   --heading-end: -0.75pt; --heading-start: 0.75pt;
@@ -868,6 +902,7 @@ th.hd-top.hd-left { box-shadow: inset var(--heading-end) 0 0 #b7b7b7, inset 0 -0
 .xlsx-print-visual { display: block; width: 100%; height: 100%; }
 .page-monochrome .hf span, .page-monochrome .shape-text, .page-monochrome .shape-text * { color: #000 !important; }
 .page-monochrome .pv, .page-monochrome .hf img { filter: grayscale(1); }
+.page-monochrome .cell-data-bar, .page-monochrome .cell-condition-icon { filter: grayscale(1); }
 .page-monochrome .xlsx-shape-drawn svg > path[fill]:not([fill="none"]):not([fill="transparent"]) { fill: #fff !important; }
 .page-monochrome .xlsx-shape-drawn svg > path[stroke]:not([stroke="none"]):not([stroke="transparent"]) { stroke: #000 !important; }
 ${pageRules.join('\n')}
@@ -1289,10 +1324,13 @@ function cellTextHtml(
   widthPt: number,
   rightToLeft: boolean,
   richHtml?: string,
+  iconInsetPt = 0,
 ): string {
   const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
-  const leftPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.l ?? 0, 0) * 0.75
-  const rightPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.r ?? 0, 0) * 0.75
+  const leftPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.l ?? 0, 0) * 0.75 +
+    (rightToLeft ? 0 : iconInsetPt)
+  const rightPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.r ?? 0, 0) * 0.75 +
+    (rightToLeft ? iconInsetPt : 0)
   const padding =
     (leftPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-left:${round(leftPaddingPt)}pt`) +
     (rightPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-right:${round(rightPaddingPt)}pt`)
@@ -1313,6 +1351,51 @@ function fontFamilyCss(name: string | null | undefined): string | undefined {
   return family
     ? `font-family:'${family}',Calibri,'Helvetica Neue',Arial,${printCjkFonts(getLang())},sans-serif`
     : undefined
+}
+
+function conditionalHidesValue(cell: PrintConditionalCell | null | undefined): boolean {
+  if (!cell?.dataBar && !cell?.iconSet) return false
+  return cell.fontRenderExtension?.isSkip ??
+    (cell.dataBar?.isShowValue === false || cell.iconSet?.isShowValue === false)
+}
+
+function cellDataBarHtml(
+  bar: NonNullable<PrintConditionalCell['dataBar']>,
+  widthPt: number,
+  heightPt: number,
+  rightToLeft: boolean,
+): string {
+  if (!Number.isFinite(bar.value) || !Number.isFinite(bar.startPoint) || bar.value === 0 ||
+      heightPt <= CONDITIONAL_INSET_PT * 2 || widthPt <= CONDITIONAL_INSET_PT * 2) return ''
+  const availablePt = widthPt - CONDITIONAL_INSET_PT * 2
+  const axisPt = availablePt * clamp(bar.startPoint, 0, 100) / 100
+  const positive = bar.value > 0
+  const sidePt = positive ? availablePt - axisPt : axisPt
+  if (sidePt <= 0) return ''
+  const barWidthPt = Math.min(sidePt, Math.max(0.75, sidePt * clamp(Math.abs(bar.value), 0, 100) / 100))
+  const originPt = CONDITIONAL_INSET_PT + axisPt - (positive ? 0 : barWidthPt)
+  const leftPt = rightToLeft ? widthPt - originPt - barWidthPt : originPt
+  const color = cssColor(bar.color)
+  const direction = positive !== rightToLeft ? 'right' : 'left'
+  const background = bar.isGradient ? `linear-gradient(to ${direction},${color},#ffffff)` : color
+  const outline = bar.isGradient ? `;border:0.75pt solid ${color}` : ''
+  return `<span class="cell-data-bar" aria-hidden="true" style="left:${round(leftPt)}pt;` +
+    `width:${round(barWidthPt)}pt;background:${background}${outline}"></span>`
+}
+
+function cellConditionalIconHtml(
+  icon: NonNullable<PrintConditionalCell['iconSet']>,
+  icons: SheetPrintOptions['conditionalIcons'],
+  widthPt: number,
+  heightPt: number,
+  rightToLeft: boolean,
+): string {
+  if (!icons || !Object.hasOwn(icons, icon.iconType) || !/^\d+$/.test(icon.iconId) ||
+      widthPt < CONDITIONAL_ICON_PT + CONDITIONAL_INSET_PT || heightPt < CONDITIONAL_ICON_PT) return ''
+  const src = icons[icon.iconType]?.[Number(icon.iconId)]
+  if (!src) return ''
+  const side = rightToLeft ? 'right' : 'left'
+  return `<img class="cell-condition-icon" src="${escapeAttribute(src)}" alt="" style="${side}:${CONDITIONAL_INSET_PT}pt">`
 }
 
 function richCellHtml(runs: readonly WorkbookRichRun[], blackAndWhite: boolean): string {
