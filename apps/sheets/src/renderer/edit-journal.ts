@@ -1662,25 +1662,35 @@ export function shiftPrintTitleSpan(
   return { axis: span.axis, start, end }
 }
 
-function shiftPrintArea(ref: string, shift: RowColumnShift): string | null {
+export function shiftPrintArea(ref: string, ops: readonly StructuralJournalOp[]): string | null {
   let area
   try {
     area = parseRange(ref)
   } catch {
     return ref
   }
-  const rows = shift.axis === 'row'
-  const start = rows ? area.startRow : area.startColumn
-  const end = rows ? area.endRow : area.endColumn
-  const moved = shiftGridSpan(start, end, shift)
-  if (!moved) return null
-  if (moved.start === start && moved.end === end) return ref
-  const first = formatAddress(
-    rows ? moved.start : area.startRow,
-    rows ? area.startColumn : moved.start,
-  )
+  const updated = { ...area }
+  for (const op of ops) {
+    if (!('index' in op)) continue
+    const shift = toRowColumnShift(op)
+    const rows = shift.axis === 'row'
+    const moved = rows
+      ? shiftGridSpan(updated.startRow, updated.endRow, shift)
+      : shiftGridSpan(updated.startColumn, updated.endColumn, shift)
+    if (!moved) return null
+    if (rows) {
+      updated.startRow = moved.start
+      updated.endRow = moved.end
+    } else {
+      updated.startColumn = moved.start
+      updated.endColumn = moved.end
+    }
+  }
+  if (updated.startRow === area.startRow && updated.endRow === area.endRow &&
+      updated.startColumn === area.startColumn && updated.endColumn === area.endColumn) return ref
+  const first = formatAddress(updated.startRow, updated.startColumn)
   if (!ref.includes(':')) return first
-  const last = formatAddress(rows ? moved.end : area.endRow, rows ? area.endColumn : moved.end)
+  const last = formatAddress(updated.endRow, updated.endColumn)
   return `${first}:${last}`
 }
 
@@ -1954,7 +1964,7 @@ export function recordStructuralOp(
   if (pageSetup) {
     const next = { ...pageSetup }
     if (typeof pageSetup.printArea === 'string') {
-      next.printArea = shiftPrintArea(pageSetup.printArea, shift)
+      next.printArea = shiftPrintArea(pageSetup.printArea, [rowColumnOp])
     }
     if (axis === 'row' && typeof pageSetup.printTitles === 'string') {
       const moved = shiftPrintTitleRows(pageSetup.printTitles, shift)

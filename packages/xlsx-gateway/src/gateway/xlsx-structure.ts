@@ -835,7 +835,7 @@ export function shiftDefinedNames(
       const name = decodeXmlText(readWorksheetTagAttribute(opening, 'name') ?? '')
       const scope = decodeXmlText(readWorksheetTagAttribute(opening, 'localSheetId') ?? '')
       if ((name === '_xlnm.Print_Area' || name === '_xlnm.Print_Titles') && /^\d+$/.test(scope)) {
-        const ranges = shiftPrintRanges(formula, editedSheetName, shift, axis, name === '_xlnm.Print_Titles')
+        const ranges = shiftPrintRanges(formula, editedSheetName, shift, axis)
         if (ranges !== undefined) return ranges
       }
       return shiftFormulaText(formula, editedSheetName, shift, axis, true)
@@ -863,7 +863,6 @@ function shiftPrintRanges(
   sheetName: string,
   shift: Shift,
   axis: Axis,
-  clipPrintTitles: boolean,
 ): string | null | undefined {
   const references: { part: string; qualifier: string; token: string }[] = []
   for (const part of splitPrintRangeUnion(formula)) {
@@ -878,7 +877,7 @@ function shiftPrintRanges(
       shifted.push(part)
       continue
     }
-    const moved = shiftReferenceToken(token, shift, axis, clipPrintTitles)
+    const moved = shiftReferenceToken(token, shift, axis, true)
     if (moved === null) continue
     const tokenEnd = part.trimEnd().length
     shifted.push(part.slice(0, tokenEnd - token.length) + moved + part.slice(tokenEnd))
@@ -2492,8 +2491,9 @@ function shiftReferenceToken(
   token: string,
   shift: Shift,
   axis: Axis,
-  clipPrintTitles = false,
+  clipToGrid = false,
 ): string | null {
+  const limit = axis === 'column' ? MAX_GRID_COLUMNS : MAX_GRID_ROWS
   const wholeColumn = /^(\$?)([A-Z]{1,3}):(\$?)([A-Z]{1,3})$/.exec(token)
   const whole = wholeColumn ?? /^(\$?)([0-9]+):(\$?)([0-9]+)$/.exec(token)
   if (whole?.[2] && whole[4]) {
@@ -2503,11 +2503,10 @@ function shiftReferenceToken(
     const format = wholeColumn ? columnToLetters : (index: number) => String(index + 1)
     const start = parse(whole[2])
     const end = parse(whole[4])
-    const limit = axis === 'column' ? MAX_GRID_COLUMNS : MAX_GRID_ROWS
-    if (clipPrintTitles && (start < 0 || end >= limit || start > end)) return null
+    if (clipToGrid && (start < 0 || end >= limit || start > end)) return null
     const moved = moveRange(start, end, shift)
-    if (moved === null || (clipPrintTitles && moved.start >= limit)) return null
-    const movedEnd = clipPrintTitles ? Math.min(moved.end, limit - 1) : moved.end
+    if (moved === null || (clipToGrid && moved.start >= limit)) return null
+    const movedEnd = clipToGrid ? Math.min(moved.end, limit - 1) : moved.end
     return `${whole[1]}${format(moved.start)}:${whole[3]}${format(movedEnd)}`
   }
   const parts = token.split(':')
@@ -2523,22 +2522,26 @@ function shiftReferenceToken(
   if (!first) return token
   if (parsed.length === 1) {
     const moved = movePosition(axis === 'row' ? first.row : first.column, shift)
-    if (moved === null) return null
+    if (moved === null || (clipToGrid && moved >= limit)) return null
     const row = axis === 'row' ? moved : first.row
     const column = axis === 'column' ? moved : first.column
     return `${first.colDollar}${columnToLetters(column)}${first.rowDollar}${row + 1}`
   }
   const second = parsed[1]
   if (!second) return token
-  const moved =
-    axis === 'row'
-      ? moveRange(first.row, second.row, shift)
-      : moveRange(first.column, second.column, shift)
-  if (moved === null) return null
-  const startRow = axis === 'row' ? moved.start : first.row
-  const endRow = axis === 'row' ? moved.end : second.row
-  const startColumn = axis === 'column' ? moved.start : first.column
-  const endColumn = axis === 'column' ? moved.end : second.column
+  const rowStart = clipToGrid ? Math.min(first.row, second.row) : first.row
+  const rowEnd = clipToGrid ? Math.max(first.row, second.row) : second.row
+  const columnStart = clipToGrid ? Math.min(first.column, second.column) : first.column
+  const columnEnd = clipToGrid ? Math.max(first.column, second.column) : second.column
+  const moved = axis === 'row'
+    ? moveRange(rowStart, rowEnd, shift)
+    : moveRange(columnStart, columnEnd, shift)
+  if (moved === null || (clipToGrid && moved.start >= limit)) return null
+  const movedEnd = clipToGrid ? Math.min(moved.end, limit - 1) : moved.end
+  const startRow = axis === 'row' ? moved.start : rowStart
+  const endRow = axis === 'row' ? movedEnd : rowEnd
+  const startColumn = axis === 'column' ? moved.start : columnStart
+  const endColumn = axis === 'column' ? movedEnd : columnEnd
   return (
     `${first.colDollar}${columnToLetters(startColumn)}${first.rowDollar}${startRow + 1}` +
     `:${second.colDollar}${columnToLetters(endColumn)}${second.rowDollar}${endRow + 1}`

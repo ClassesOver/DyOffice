@@ -355,6 +355,39 @@ describe('resolveEffectivePageSetup', () => {
     expect(setup.printAreas).toEqual([])
   })
 
+  it('keeps lines inserted inside a saved print area after its original lines are removed', () => {
+    const printArea = "'S'!$B$2:$C$3,'S'!$F$10:$G$11"
+    const ops = [
+      { kind: 'insert-rows', index: 2, count: 1 },
+      { kind: 'remove-rows', index: 3, count: 1 },
+      { kind: 'remove-rows', index: 1, count: 1 },
+      { kind: 'insert-cols', index: 2, count: 1 },
+      { kind: 'remove-cols', index: 3, count: 1 },
+      { kind: 'remove-cols', index: 1, count: 1 },
+    ] as const
+    const setup = resolveEffectivePageSetup({}, null, { printArea }, ops)
+    expect(setup.printAreas).toEqual(['B2:B2', 'E9:F10'])
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Area" localSheetId="0">' +
+      printArea + '</definedName></definedNames></workbook>'
+    expect(shiftDefinedNames(workbook, 'S', ops)).toContain("'S'!$B$2:$B$2,'S'!$E$9:$F$10")
+  })
+
+  it('clips print areas at the XLSX grid edge in preview and on save', () => {
+    const printArea = "'S'!$XFC$1048575:$XFD$1048576,'S'!$XFD$1,'S'!$A$1048576,'S'!$A$1"
+    const ops = [
+      { kind: 'insert-rows', index: 1, count: 1 },
+      { kind: 'insert-cols', index: 1, count: 1 },
+    ] as const
+    const setup = resolveEffectivePageSetup({}, null, { printArea }, ops)
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Area" localSheetId="0">' +
+      printArea + '</definedName></definedNames></workbook>'
+    const shifted = shiftDefinedNames(workbook, 'S', ops)
+    expect(setup.printAreas).toEqual(['XFD1048576:XFD1048576', 'A1:A1'])
+    expect(shifted).toContain(">'S'!$XFD$1048576:$XFD$1048576,'S'!$A$1</definedName>")
+  })
+
   it('shifts the file title rows through structural edits', () => {
     const setup = resolveEffectivePageSetup({}, null, { printTitles: "'S'!$17:$17" }, [
       { kind: 'insert-rows', index: 0, count: 3 },

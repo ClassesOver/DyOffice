@@ -10,9 +10,11 @@ import {
 } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import type { WorkbookPagePrintSettings } from '../shared/desktop-api'
-import { shiftPrintTitleSpan, type HeaderFooterParts, type PageSetupJournalState, type StructuralJournalOp } from './edit-journal'
+import {
+  shiftPrintArea, shiftPrintTitleSpan,
+  type HeaderFooterParts, type PageSetupJournalState, type StructuralJournalOp,
+} from './edit-journal'
 import { matchHeaderFooterFormat } from './print-hf-codes'
-import { fileRangeToScreenRange } from './view-transform'
 
 export interface PrintMargins {
   readonly left: number
@@ -93,29 +95,6 @@ export interface FilePrintNames {
   readonly printTitles?: string | undefined
 }
 
-/// File-space A1 areas → this session's screen space (envelope semantics,
-/// like streamed merges). Fully deleted areas drop out; when nothing
-/// survives the caller falls back to the used range.
-function mapAreasToScreen(areas: readonly string[], ops: readonly StructuralJournalOp[]): string[] {
-  if (ops.length === 0) return [...areas]
-  const mapped: string[] = []
-  for (const area of areas) {
-    let bounds
-    try {
-      bounds = parseRange(area)
-    } catch {
-      continue
-    }
-    const screen = fileRangeToScreenRange(ops, bounds)
-    if (screen === null) continue
-    mapped.push(
-      `${columnLabel(screen.startColumn)}${screen.startRow + 1}` +
-        `:${columnLabel(screen.endColumn)}${screen.endRow + 1}`,
-    )
-  }
-  return mapped
-}
-
 export function resolveEffectivePageSetup(
   journal: PageSetupJournalState,
   file: WorkbookPagePrintSettings | null,
@@ -150,7 +129,9 @@ export function resolveEffectivePageSetup(
       ? journal.printArea === null
         ? []
         : [journal.printArea]
-      : mapAreasToScreen(printAreasFromFormula(names?.printArea), ops)
+      : printAreasFromFormula(names?.printArea)
+          .map((area) => shiftPrintArea(area, ops))
+          .filter((area) => area !== null)
   const printTitles =
     journal.printTitles !== undefined
       ? printTitleRowsFromFormula(journal.printTitles ?? undefined)
