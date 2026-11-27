@@ -5,12 +5,13 @@
 /// part instead (Excel stores table filters there, never on the worksheet) —
 /// see `applyTableFilterState` and `applyRowVisibilityState`.
 
-import { readRootStartTag } from './xlsx-namespace'
-import { findRootChild } from './xlsx-root-tail'
-import { decodeAttribute } from './xlsx-sheets'
 import { childElements } from './xlsx-style-entries'
-import { readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure'
-import { prefixOf } from './xlsx-worksheet-xml'
+import {
+  inferWorksheetAddresses, omitWorksheetTagAttributes, updateWorksheetTagAttribute, worksheetChildren,
+  worksheetData, worksheetRowPositions,
+} from './xlsx-structure'
+import { isElement, prefixOf, scopedChildren, withBody, withNamespaces, type ScopedElement } from './xlsx-worksheet-xml'
+import { readRootOpening } from './xlsx-namespace'
 
 export class FilterEditError extends Error {}
 
@@ -57,26 +58,34 @@ const CUSTOM_OPERATORS = new Set([
   'lessThanOrEqual',
 ])
 
-const AUTO_FILTER = /<((?:[\w.-]+:)?)autoFilter(?=[\s/>])/
-const FILTER_COLUMN =
-  /<((?:[\w.-]+:)?)filterColumn(?=[\s/>])([^>]*?)(?:\/>|>[\s\S]*?<\/\1filterColumn\s*>)/g
-const OPAQUE_CRITERIA =
-  /<(?:[\w.-]+:)?(?:top10|dynamicFilter|colorFilter|iconFilter|dateGroupItem|extLst)(?=[\s/>])/
+const opaqueCriteria = new Set(['top10', 'dynamicFilter', 'colorFilter', 'iconFilter', 'extLst'])
 
-function directAutoFilter(xml: string, root: 'worksheet' | 'table') {
-  // A custom sheet view can have its own saved filter, below the worksheet's root.
-  return AUTO_FILTER.test(xml) ? findRootChild(xml, root, 'autoFilter') : null
+function scopedRoot(xml: string): ScopedElement | undefined {
+  const [root] = childElements(xml)
+  return root && withNamespaces(root, new Map())
+}
+
+function filterColumns(filter: ScopedElement | undefined): ScopedElement[] {
+  return filter ? scopedChildren(filter).filter((child) => isElement(child, 'filterColumn', filter.namespace)) : []
+}
+
+function isOpaqueColumn(column: ScopedElement): boolean {
+  return scopedChildren(column).some((child) => child.namespace === column.namespace &&
+    (opaqueCriteria.has(child.local) || (child.local === 'filters' &&
+      scopedChildren(child).some((item) => isElement(item, 'dateGroupItem', child.namespace)))))
 }
 
 export function hasUneditableAutoFilter(xml: string, root?: 'table'): boolean {
-  const range = root === undefined ? null : directAutoFilter(xml, root)
-  const filter = root === undefined ? xml : range === null ? '' : xml.slice(range.start, range.end)
-  return [...filter.matchAll(FILTER_COLUMN)].some(([column]) => OPAQUE_CRITERIA.test(column))
+  const element = scopedRoot(xml)
+  const filter = root && element
+    ? scopedChildren(element).find((child) => isElement(child, 'autoFilter', element.namespace))
+    : element
+  return filterColumns(filter).some(isOpaqueColumn)
 }
 
 export function applyFilterState(worksheetXml: string, state: SheetFilterState): string {
-  const existing = directAutoFilter(worksheetXml, 'worksheet')
-  const raw = existing ? worksheetXml.slice(existing.start, existing.end) : ''
+  const children = worksheetChildren(worksheetXml)
+  const existing = children.find((child) => child.local === 'autoFilter')
   const element =
     state.filter === null
       ? ''
@@ -84,14 +93,15 @@ export function applyFilterState(worksheetXml: string, state: SheetFilterState):
           toRef(state.filter.range),
           state.filter.columns,
           0,
-          raw,
+          existing,
           state.preserveUneditable === true,
+          prefixOf(readRootOpening(worksheetXml)?.name ?? ''),
         )
   let xml = worksheetXml
   if (existing) {
-    xml = worksheetXml.slice(0, existing.start) + element + worksheetXml.slice(existing.end)
+    xml = worksheetXml.slice(0, existing.start) + element + worksheetXml.slice(existing.start + existing.xml.length)
   } else if (element !== '') {
-    xml = insertAfterSheetData(worksheetXml, element)
+    xml = insertAfterSheetData(worksheetXml, children, element)
   }
   return applyRowVisibilityState(
     xml,
@@ -139,13 +149,15 @@ export function applyTableFilterState(
   filter: SheetFilterState['filter'],
   preserveUneditable = false,
 ): string {
-  const existing = directAutoFilter(tableXml, 'table')
-  if (route.headerRowCount === 0) {
-    return existing ? tableXml.slice(0, existing.start) + tableXml.slice(existing.end) : tableXml
-  }
-  const [root] = childElements(tableXml)
+  const root = scopedRoot(tableXml)
   if (!root) throw new FilterEditError('The table has no root element.')
-  const raw = existing ? tableXml.slice(existing.start, existing.end) : ''
+  const existing = scopedChildren(root).find((child) => isElement(child, 'autoFilter', root.namespace))
+  const start = root.start + root.opening.length
+  const replace = (element: string) => {
+    const at = start + (existing?.start ?? 0)
+    return tableXml.slice(0, at) + element + tableXml.slice(at + (existing?.xml.length ?? 0))
+  }
+  if (route.headerRowCount === 0) return replace('')
   const ref = toRef({ ...route.area, endRow: route.area.endRow - route.totalsRowCount })
   let offset = 0
   if (filter !== null) {
@@ -162,30 +174,25 @@ export function applyTableFilterState(
     ref,
     filter?.columns ?? [],
     offset,
-    raw,
+    existing,
     filter !== null && preserveUneditable,
     prefixOf(root.name),
   )
-  if (existing) {
-    return tableXml.slice(0, existing.start) + element + tableXml.slice(existing.end)
-  }
-  const insertAt = root.start + root.opening.length
-  return tableXml.slice(0, insertAt) + element + tableXml.slice(insertAt)
+  return replace(element)
 }
 
-function matchesMixedDateFilter(xml: string, column: FilterColumnState): boolean {
+function matchesMixedDateFilter(element: ScopedElement, column: FilterColumnState): boolean {
   if (column.customs || (column.values === undefined && !column.blank)) return false
-  const [element] = childElements(xml)
-  const filters = childElements(element?.inner ?? '').find(child => /(?:^|:)filters$/.test(child.name))
+  const filters = scopedChildren(element).find((child) => isElement(child, 'filters', element.namespace))
   if (!filters) return false
-  const items = childElements(filters.inner)
-  if (!items.some(child => /(?:^|:)dateGroupItem$/.test(child.name))) return false
-  const blank = readWorksheetTagAttribute(filters.opening, 'blank')
+  const items = scopedChildren(filters)
+  if (!items.some(child => isElement(child, 'dateGroupItem', filters.namespace))) return false
+  const blank = filters.attributes.get('blank')
   if ((blank === '1' || blank === 'true') !== Boolean(column.blank)) return false
   const saved = new Set(items.flatMap(child => {
-    if (!/(?:^|:)filter$/.test(child.name)) return []
-    const value = readWorksheetTagAttribute(child.opening, 'val')
-    return value === undefined ? [] : [decodeAttribute(value)]
+    if (!isElement(child, 'filter', filters.namespace)) return []
+    const value = child.attributes.get('val')
+    return value === undefined ? [] : [value]
   }))
   const values = new Set(column.values ?? [])
   return values.size === saved.size && [...values].every(value => saved.has(value))
@@ -195,36 +202,43 @@ function serializeAutoFilter(
   ref: string,
   columns: readonly FilterColumnState[],
   offset: number,
-  previous: string,
+  previous: ScopedElement | undefined,
   preserveUneditable: boolean,
   defaultPrefix = '',
 ): string {
-  const opening = readRootStartTag(previous)
-  const prefix = AUTO_FILTER.exec(opening)?.[1] ?? defaultPrefix
-  const raw = preserveUneditable ? previous : ''
-  const refAttribute = readWorksheetTagAttribute(opening, 'ref')
-  const fileRef = refAttribute === undefined ? undefined : decodeAttribute(refAttribute)
+  const opening = previous?.opening
+  const prefix = prefixOf(previous?.name ?? defaultPrefix + 'autoFilter')
+  const fileRef = previous?.attributes.get('ref')?.replaceAll('$', '').toUpperCase()
   const snapshot = new Map(columns.map(column => [column.colId + offset, column]))
   const entries = new Map(columns.map(column => [column.colId + offset, serializeFilterColumn(column, offset, prefix)]))
-  for (const [part, , attrs] of raw.matchAll(FILTER_COLUMN)) {
-    if (!OPAQUE_CRITERIA.test(part)) continue
-    const id = /(?:^|\s)colId\s*=\s*(?:"(\d+)"|'(\d+)')/.exec(attrs ?? '')
-    const colId = Number(id?.[1] ?? id?.[2])
+  for (const column of preserveUneditable ? filterColumns(previous) : []) {
+    if (!isOpaqueColumn(column)) continue
+    const id = column.attributes.get('colId')
+    const colId = id !== undefined && /^\d+$/.test(id) ? Number(id) : NaN
     if (!Number.isSafeInteger(colId))
       throw new FilterEditError('The existing filter column has no valid index.')
     const incoming = snapshot.get(colId)
     // A mixed date filter restores its editable values into the Web snapshot.
     // If those values are unchanged, keep the original column and its dates.
-    if (incoming && !matchesMixedDateFilter(part, incoming)) continue
-    if (fileRef?.replaceAll('$', '').toUpperCase() !== ref) {
+    if (incoming && !matchesMixedDateFilter(column, incoming)) continue
+    if (fileRef !== ref) {
       throw new FilterEditError('Clear the existing advanced filter before changing its range.')
     }
-    entries.set(colId, part)
+    entries.set(colId, column.xml)
+  }
+  let retained = previous?.inner ?? ''
+  if (previous) {
+    for (const child of scopedChildren(previous).reverse()) {
+      if (isElement(child, 'filterColumn', previous.namespace) ||
+        (fileRef !== ref && isElement(child, 'sortState', previous.namespace))) {
+        retained = retained.slice(0, child.start) + retained.slice(child.start + child.xml.length)
+      }
+    }
   }
   const body = [...entries]
     .sort(([left], [right]) => left - right)
     .map(([, xml]) => xml)
-    .join('')
+    .join('') + retained
   // Keep attributes and local namespace declarations from the original wrapper.
   const header = opening
     ? updateWorksheetTagAttribute(opening, 'ref', ref).replace(/\/?\s*>$/, '')
@@ -277,19 +291,13 @@ function serializeFilterColumn(
 
 /// Schema order places autoFilter after sheetData (and after the protection
 /// block when present).
-function insertAfterSheetData(worksheetXml: string, element: string): string {
-  let insertAt = -1
-  for (const pattern of [
-    /<sheetData\s*\/>|<\/sheetData>/,
-    /<sheetProtection\b[^>]*\/>/,
-    /<protectedRanges\b[^>]*\/>|<\/protectedRanges>/,
-    /<\/scenarios>/,
-  ]) {
-    const match = pattern.exec(worksheetXml)
-    if (match) insertAt = Math.max(insertAt, match.index + match[0].length)
-  }
-  if (insertAt < 0) throw new FilterEditError('Worksheet has no sheetData element.')
-  return worksheetXml.slice(0, insertAt) + element + worksheetXml.slice(insertAt)
+function insertAfterSheetData(worksheetXml: string, children: ScopedElement[], element: string): string {
+  const data = children.find((child) => child.local === 'sheetData')
+  if (!data) throw new FilterEditError('Worksheet has no sheetData element.')
+  const preceding = ['sheetData', 'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios']
+  const anchor = children.reverse().find((child) => preceding.includes(child.local)) ?? data
+  const at = anchor.start + anchor.xml.length
+  return worksheetXml.slice(0, at) + element + worksheetXml.slice(at)
 }
 
 /// Declarative row visibility inside the filter's data rows: listed rows are
@@ -301,52 +309,46 @@ function applyRowVisibility(
   hiddenRows: ReadonlySet<number>,
   preserveHidden: boolean,
 ): string {
+  const xml = inferWorksheetAddresses(worksheetXml)
+  const data = worksheetData(xml)
   const firstDataRow = range.startRow + 1
-  const seen = new Set<number>()
-  let xml = worksheetXml.replace(
-    /<row\b([^>]*?)(\/>|>)/g,
-    (full, attributes: string, close: string) => {
-      const rowNumber = /(?:^|\s)r="([0-9]+)"/.exec(attributes)?.[1]
-      if (rowNumber === undefined) return full
-      const rowIndex = Number(rowNumber) - 1
-      if (rowIndex < firstDataRow || rowIndex > range.endRow) return full
-      seen.add(rowIndex)
-      // The Web cannot re-evaluate the retained criteria, so keep rows the
-      // file already hid and add the rows hidden by the new snapshot.
-      if (preserveHidden && /(?:^|\s)hidden="(?:1|true)"/.test(attributes)) return full
-      const withoutHidden = attributes.replace(/\s*hidden="[^"]*"/, '')
-      const hidden = hiddenRows.has(rowIndex) ? ' hidden="1"' : ''
-      return `<row${withoutHidden}${hidden}${close}`
-    },
-  )
-  const missing = [...hiddenRows]
-    .filter(
-      (rowIndex) => !seen.has(rowIndex) && rowIndex >= firstDataRow && rowIndex <= range.endRow,
-    )
-    .sort((left, right) => left - right)
-  for (const rowIndex of missing) {
-    xml = insertEmptyHiddenRow(xml, rowIndex + 1)
+  const missing = new Set([...hiddenRows].filter((row) => row >= firstDataRow && row <= range.endRow))
+  if (!data) {
+    if (missing.size) throw new FilterEditError('Worksheet has no sheetData element.')
+    return worksheetXml
   }
-  return xml
-}
-
-function insertEmptyHiddenRow(worksheetXml: string, rowNumber: number): string {
-  const newRow = `<row r="${rowNumber}" hidden="1"/>`
-  const rowStartPattern = /<row\b[^>]*?\br="([1-9][0-9]*)"/g
-  let match: RegExpExecArray | null
-  while ((match = rowStartPattern.exec(worksheetXml)) !== null) {
-    if (Number(match[1]) > rowNumber) {
-      return worksheetXml.slice(0, match.index) + newRow + worksheetXml.slice(match.index)
+  const rows = [...worksheetRowPositions(data)]
+  for (const { rowNumber } of rows) missing.delete(rowNumber - 1)
+  const pending = [...missing].sort((left, right) => left - right)
+  const parts: string[] = []
+  const qualifier = prefixOf(data.name)
+  let cursor = 0
+  let next = 0
+  const insertBefore = (rowIndex: number, offset: number) => {
+    while (next < pending.length && pending[next]! < rowIndex) {
+      parts.push(data.inner.slice(cursor, offset), `<${qualifier}row r="${pending[next]! + 1}" hidden="1"/>`)
+      cursor = offset
+      next += 1
     }
   }
-  if (worksheetXml.includes('</sheetData>')) {
-    return worksheetXml.replace('</sheetData>', () => `${newRow}</sheetData>`)
+  for (const { row, rowNumber } of rows) {
+    const index = rowNumber - 1
+    insertBefore(index, row.start)
+    if (index < firstDataRow || index > range.endRow) continue
+    const hidden = row.attributes.get('hidden')
+    if (preserveHidden && (hidden === '1' || hidden === 'true')) continue
+    const kept = omitWorksheetTagAttributes(row.opening, ['hidden'])
+    const opening = hiddenRows.has(index)
+      ? kept.replace(/(\s*\/?>)$/, (_end, suffix) => ' hidden="1"' + suffix)
+      : kept
+    if (opening === row.opening) continue
+    parts.push(data.inner.slice(cursor, row.start), opening)
+    cursor = row.start + row.opening.length
   }
-  const emptySheetData = /<sheetData\s*\/>/
-  if (emptySheetData.test(worksheetXml)) {
-    return worksheetXml.replace(emptySheetData, () => `<sheetData>${newRow}</sheetData>`)
-  }
-  throw new FilterEditError('Worksheet has no sheetData element.')
+  insertBefore(range.endRow + 1, data.inner.length)
+  if (!parts.length) return xml
+  const body = parts.join('') + data.inner.slice(cursor)
+  return xml.slice(0, data.start) + withBody(data, body) + xml.slice(data.start + data.xml.length)
 }
 
 function toRef(range: CellArea): string {

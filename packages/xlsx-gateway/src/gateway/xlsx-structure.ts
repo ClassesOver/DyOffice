@@ -292,9 +292,10 @@ export function applyStructuralOps(
     xml = rewriteWorksheetCore(xml, (core) => {
       if (axis === 'column') return transformColumnOperation(core, sheetName, shift)
       const rows = transformSheetRows(core, shift)
-      return transformWorksheetAutoFilters(transformFormulas(rows, sheetName, shift, axis), shift, axis)
+      return transformFormulas(rows, sheetName, shift, axis)
     })
     xml = shiftWorksheetMerges(xml, shift, axis)
+    xml = transformWorksheetAutoFilters(xml, shift, axis)
     const moveSqref = (sqref: string) => shiftSqref(sqref, moveReference)
     xml = rewriteX14DataValidations(xml, moveFormula, moveSqref)
     xml = rewriteWorksheetVisualReferences(xml, moveFormula, moveSqref)
@@ -1715,7 +1716,6 @@ function transformColumnOperation(xml: string, sheetName: string, shift: Shift):
   if (!sheetDataOpen || closeIndex < sheetDataOpen.index) {
     let fallback = transformSheetColumns(xml, shift)
     fallback = transformFormulas(fallback, sheetName, shift, 'column')
-    fallback = transformWorksheetAutoFilters(fallback, shift, 'column')
     return transformColDefinitions(fallback, shift)
   }
   const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
@@ -1724,10 +1724,8 @@ function transformColumnOperation(xml: string, sheetName: string, shift: Shift):
   const originalSuffix = xml.slice(closeIndex)
 
   let prefix = transformFormulas(originalPrefix, sheetName, shift, 'column')
-  prefix = transformWorksheetAutoFilters(prefix, shift, 'column')
   prefix = transformColDefinitions(prefix, shift)
-  let suffix = transformFormulas(originalSuffix, sheetName, shift, 'column')
-  suffix = transformWorksheetAutoFilters(suffix, shift, 'column')
+  const suffix = transformFormulas(originalSuffix, sheetName, shift, 'column')
 
   // Cursor walk with a per-row early exit: a row whose rightmost cell sits
   // left of the shift and that holds no formulas cannot change, so it stays
@@ -1897,10 +1895,11 @@ function transformFormulas(xml: string, sheetName: string, shift: Shift, axis: A
 }
 
 function transformWorksheetAutoFilters(xml: string, shift: Shift, axis: Axis): string {
-  return xml.replace(
-    /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/g,
-    (element) => shiftAutoFilterCriteria(element, shift, axis),
-  )
+  if (!xml.includes('autoFilter')) return xml
+  const filter = worksheetChildren(xml).find((child) => child.local === 'autoFilter')
+  if (!filter) return xml
+  const replacement = shiftAutoFilterCriteria(filter, shift, axis)
+  return replacement === filter.xml ? xml : applyPatches(xml, [patchElement(filter, replacement)])
 }
 
 /// The worksheet extension list has its own formula dialects, including x14 DV.
@@ -1935,15 +1934,17 @@ function rewriteWorksheetSections(
 }
 
 function rewriteRangeSection(
-  element: ChildElement,
+  element: ChildElement | ScopedElement,
   entryName: string,
   rewriteOpening: (opening: string) => string | null,
   updateCount = false,
 ): string {
   let body = element.inner
   let count = 0
-  for (const child of childElements(element.inner).reverse()) {
-    if (child.name.slice(child.name.lastIndexOf(':') + 1) !== entryName) continue
+  const children = 'namespace' in element
+    ? scopedChildren(element).filter((child) => isElement(child, entryName, element.namespace))
+    : childElements(element.inner).filter((child) => child.name.slice(child.name.lastIndexOf(':') + 1) === entryName)
+  for (const child of children.reverse()) {
     const opening = rewriteOpening(child.opening)
     if (opening !== null) count += 1
     if (opening === child.opening) continue
@@ -2151,32 +2152,28 @@ function shiftBreakOpening(
   return opening
 }
 
-function shiftAutoFilterCriteria(element: string, shift: Shift, axis: Axis): string {
-  const [filter] = childElements(element)
-  if (!filter) return element
-  const rawRef = readWorksheetTagAttribute(filter.opening, 'ref')
-  if (!rawRef) return element
-  const ref = decodeEntities(rawRef)
+function shiftAutoFilterCriteria(filter: ScopedElement, shift: Shift, axis: Axis): string {
+  const ref = filter.attributes.get('ref')
+  if (!ref) return filter.xml
   const moveRef = (value: string) => moveRefRange(value, shift, axis)
   const movedRef = moveRef(ref)
-  if (movedRef === null) return element
+  if (movedRef === null) return filter.xml
   const opening =
     movedRef === ref
       ? filter.opening
       : updateWorksheetTagAttribute(filter.opening, 'ref', escapeXmlAttribute(movedRef))
-  const closing = element.slice(filter.opening.length + filter.inner.length)
+  const closing = filter.xml.slice(filter.opening.length + filter.inner.length)
 
   const from = refFirstColumn(ref)
   const to = refFirstColumn(movedRef)
   if (from === null || to === null) return opening + filter.inner + closing
   let body = filter.inner
-  for (const child of childElements(filter.inner).reverse()) {
+  for (const child of scopedChildren(filter).reverse()) {
+    if (child.namespace !== filter.namespace) continue
     let replacement: string
-    if (child.name === 'filterColumn' && axis === 'column') {
-      const rawId = readWorksheetTagAttribute(child.opening, 'colId')
-      if (rawId === undefined) continue
-      const id = decodeEntities(rawId)
-      if (!/^[0-9]+$/.test(id)) continue
+    if (child.local === 'filterColumn' && axis === 'column') {
+      const id = child.attributes.get('colId')
+      if (id === undefined || !/^[0-9]+$/.test(id)) continue
       const colId = Number(id)
       const column = movePosition(from + colId, shift)
       if (column !== null && column - to === colId) continue
@@ -2185,7 +2182,7 @@ function shiftAutoFilterCriteria(element: string, shift: Shift, axis: Axis): str
           ? ''
           : updateWorksheetTagAttribute(child.opening, 'colId', String(column - to)) +
             child.xml.slice(child.opening.length)
-    } else if (child.name === 'sortState') {
+    } else if (child.local === 'sortState') {
       replacement =
         child.xml !== child.opening && !child.inner.trim()
           ? ''

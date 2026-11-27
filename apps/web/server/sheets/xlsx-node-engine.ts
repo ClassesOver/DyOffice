@@ -128,8 +128,7 @@ const metadataXmlOptions:X2jOptions={
     'worksheet.extLst.ext',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup.sparklines.sparkline',
-    'worksheet.protectedRanges.protectedRange','worksheet.autoFilter','worksheet.autoFilter.filterColumn',
-    'worksheet.autoFilter.filterColumn.filters.filter','worksheet.autoFilter.filterColumn.customFilters.customFilter',
+    'worksheet.protectedRanges.protectedRange',
   ].includes(path),
 }
 const metadataXml=new XMLParser(metadataXmlOptions)
@@ -536,7 +535,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
   const split=(name:string,max:number)=>{const n=Number(pane?.attributes.get(name));return Number.isInteger(n)&&n>=0&&n<=max?n:0}
   const frozenRows=split('ySplit',1_048_576),frozenColumns=split('xSplit',16_384)
   const frozen=['frozen','frozenSplit'].includes(pane?.attributes.get('state')??'')
-  return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,rowExtent,columnWidths:columns,merges,conditionalRules,hyperlinks,
+  return {sheetProtection,protectedRanges,...readAutoFilter(children.find(child=>child.local==='autoFilter')),rows,rowExtent,columnWidths:columns,merges,conditionalRules,hyperlinks,
     ...(dimension?{dimension}:{}),
     dataValidations:readDataValidations(xml),
     sparklines:readSparklines(worksheet?.extLst?.ext??[],resolveColor),
@@ -565,48 +564,42 @@ function positiveStyle(raw:string|undefined){
   return Number.isSafeInteger(n)&&n>0?n:undefined
 }
 
-type AutoFilterXml=XmlElement & {filterColumn?:Array<XmlElement & {
-  filters?:XmlElement & {filter?:XmlElement[];dateGroupItem?:unknown}
-  customFilters?:XmlElement & {customFilter?:XmlElement[]}
-  top10?:unknown
-  dynamicFilter?:unknown
-  colorFilter?:unknown
-  iconFilter?:unknown
-  extLst?:unknown
-}>}
-
-function readAutoFilter(element:AutoFilterXml|undefined):Pick<SheetMetadata,'autoFilter'|'autoFilterColumns'> {
-  const ref=attribute(element,'ref')
-  const autoFilter=sheetArea(ref)
+function readAutoFilter(element:ScopedElement|undefined):Pick<SheetMetadata,'autoFilter'|'autoFilterColumns'> {
+  const autoFilter=sheetArea(element?.attributes.get('ref'))
   const autoFilterColumns:FilterColumn[]=[]
-  if(autoFilter)for(const column of element?.filterColumn??[]){
-    const id=attribute(column,'colId')
+  if(!element||!autoFilter)return {autoFilter,autoFilterColumns}
+  for(const column of scopedChildren(element)){
+    if(!isElement(column,'filterColumn',element.namespace))continue
+    const id=column.attributes.get('colId')
     if(id===undefined||!/^\d+$/.test(id))continue
     const colId=Number(id)
     if(colId>autoFilter.endColumn-autoFilter.startColumn)continue
-    const filters=column.filters
-    const custom=column.customFilters
-    if(column.top10!==undefined||column.dynamicFilter!==undefined
-      ||column.colorFilter!==undefined||column.iconFilter!==undefined||column.extLst!==undefined)continue
-    const values=filters?.filter?.flatMap(filter=>{
-      const val=attribute(filter,'val')
+    const criteria=scopedChildren(column).filter(child=>child.namespace===column.namespace)
+    if(criteria.some(({local})=>['top10','dynamicFilter','colorFilter','iconFilter','extLst'].includes(local)))continue
+    const filters=criteria.find(child=>child.local==='filters')
+    const custom=criteria.find(child=>child.local==='customFilters')
+    const items=filters ? scopedChildren(filters).filter(child=>child.namespace===filters.namespace) : []
+    const valueItems=items.filter(child=>child.local==='filter')
+    const values=valueItems.flatMap(filter=>{
+      const val=filter.attributes.get('val')
       return val!==undefined&&val.length<=32_767?[val]:[]
     }).slice(0,10_000)
-    const blank=enabled(attribute(filters,'blank'))
+    const blank=enabled(filters?.attributes.get('blank'))
     // Keep a mixed date filter opaque if the editor cannot round-trip its value list.
-    if(filters?.dateGroupItem!==undefined&&((!values?.length&&!blank)
-      ||(values?.length??0)!==(filters.filter?.length??0)))continue
-    const comparisonInputs=custom?.customFilter?.flatMap(filter=>{
-      const val=attribute(filter,'val')
-      return val===undefined?[]:[{val,name:attribute(filter,'operator')}]
-    }).slice(0,2)
-    const comparisons=comparisonInputs?.map(({val,name})=>({val,name,operator:filterOperators.find(item=>item===name)}))
-    const validComparisons=comparisons?.length&&comparisons.every(({val,name,operator})=>
+    if(items.some(child=>child.local==='dateGroupItem')&&((!values.length&&!blank)
+      ||values.length!==valueItems.length))continue
+    const comparisonInputs=custom ? scopedChildren(custom).flatMap(filter=>{
+      if(!isElement(filter,'customFilter',custom.namespace))return []
+      const val=filter.attributes.get('val')
+      return val===undefined?[]:[{val,name:filter.attributes.get('operator')}]
+    }).slice(0,2) : []
+    const comparisons=comparisonInputs.map(({val,name})=>({val,name,operator:filterOperators.find(item=>item===name)}))
+    const validComparisons=comparisons.length&&comparisons.every(({val,name,operator})=>
       val.length<=32_767&&(name===undefined||name==='equal'||operator!==undefined))
       ?comparisons.map(({val,operator})=>({val,...(operator?{operator}:{})})):undefined
     if(filters===undefined&&!validComparisons)continue
-    autoFilterColumns.push({colId,...(filters!==undefined?{values:values??[],...(blank?{blank:true}:{})}:{}),
-      ...(validComparisons?{customs:{filters:validComparisons,...(enabled(attribute(custom,'and'))?{and:true}:{})}}:{})})
+    autoFilterColumns.push({colId,...(filters!==undefined?{values,...(blank?{blank:true}:{})}:{}),
+      ...(validComparisons?{customs:{filters:validComparisons,...(enabled(custom?.attributes.get('and'))?{and:true}:{})}}:{})})
     if(autoFilterColumns.length===1_000)break
   }
   return {autoFilter,autoFilterColumns}

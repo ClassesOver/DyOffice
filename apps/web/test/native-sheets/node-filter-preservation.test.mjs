@@ -54,6 +54,41 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
   const save = async (bytes, request) =>
     (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
 
+  await t.test('reads, edits and shifts only SpreadsheetML filters and rows', async () => {
+    const foreign = 'xmlns="urn:example:filters"'
+    const extension = `<autoFilter ${foreign} ref="A1:G3"><filterColumn colId="0"><filters><filter val="Foreign"/></filters></filterColumn></autoFilter>`
+    const column = `<filterColumn ${foreign} colId="1"><filters><filter val="Foreign"/></filters></filterColumn>`
+    const row = `<row ${foreign} r="2" hidden="1"/>`
+    const sort = '<sortState ref="B2:C3"><sortCondition ref="B2:B3"/></sortState>'
+    const zip = await JSZip.loadAsync(source)
+    const xml = await zip.file(part).async('string')
+    zip.file(part, xml.replace('<row r="2">', row + "<row r=\"2\" hidden='1'>")
+      .replace('</sheetData>', '</sheetData>' + extension + `<autoFilter ref="A1:C3">${column}` +
+      '<filterColumn colId="1"><filters><filter val="25"/></filters></filterColumn>' + sort + '</autoFilter>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const read = async (file) => native.readRange(file, 'Acceptance', { ...span, endColumn: 6 })
+    const initial = await read(bytes)
+    assert.deepEqual(initial.autoFilter, span)
+    assert.deepEqual(initial.autoFilterColumns, [{ colId: 1, values: ['25'] }])
+    const filtered = await save(bytes, filterChange([{ colId: 1, values: ['15'] }], [2]))
+    const visible = await read(filtered)
+    assert.deepEqual(visible.autoFilterColumns, [{ colId: 1, values: ['15'] }])
+    assert.deepEqual(visible.rows.filter(({ hidden }) => hidden).map(({ row }) => row), [2])
+    const shifted = await save(filtered, { ...sheetsSaveRequest('sheet-1', []),
+      structuralOps: [{ sheetId: 'sheet-1', kind: 'insert-cols', index: 1, count: 1 }] })
+    const moved = await read(shifted)
+    assert.deepEqual(moved.autoFilter, { ...span, endColumn: 3 })
+    assert.deepEqual(moved.autoFilterColumns, [{ colId: 2, values: ['15'] }])
+    const filteredXml = await (await JSZip.loadAsync(filtered)).file(part).async('string')
+    const shiftedXml = await (await JSZip.loadAsync(shifted)).file(part).async('string')
+    assert.ok(filteredXml.includes(sort))
+    assert.ok(shiftedXml.includes('<sortState ref="C2:D3"><sortCondition ref="C2:C3"/></sortState>'))
+    for (const preserved of [extension, column, row]) {
+      assert.ok(filteredXml.includes(preserved))
+      assert.ok(shiftedXml.includes(preserved))
+    }
+  })
+
   await t.test('uses defined name declarations when adding and renaming tables', async () => {
     const zip = await JSZip.loadAsync(source)
     const workbookPath = 'xl/workbook.xml'
