@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import JSZip from 'jszip'
+import { changedPositions, reorderZ } from '../../../sheets/src/renderer/visual-arrange.ts'
 import { workbookFileSchema } from '../../../sheets/src/shared/desktop-api.ts'
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { readWorkbookVisuals } from '../../server/sheets/xlsx-node-visuals.ts'
@@ -768,6 +769,42 @@ test('opens a native XLSX text box and edits its paint at the original drawing i
   const savedDrawing = await textOf(await JSZip.loadAsync(output))(drawingPath)
   assert.ok(savedDrawing.includes(opaque))
   assert.match(savedDrawing, /<xdr:cNvPr id="81" name="Audit text box"/)
+})
+
+test('saves layer order across reorder and removal commands', { timeout: 120_000 }, async t => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const names = ['Layer A', 'Layer B', 'Layer C', 'Layer D']
+  const layers = names.map((name, index) => `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>3</xdr:row></xdr:from>
+    <xdr:ext cx="952500" cy="476250"/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="${100 + index}" name="${name}"/></xdr:nvSpPr>
+    <xdr:spPr><a:prstGeom prst="rect"/></xdr:spPr></xdr:sp><xdr:clientData/></xdr:oneCellAnchor>`)
+  const comment = '<!-- Keep drawing extension slot -->'
+  await appendDrawing(zip, layers.join(comment))
+  const source = await zip.generateAsync({ type: 'nodebuffer' })
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-layer-order-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const original = (await runtime.sheetsNative.inspect(source)).visuals.filter(({ name }) => names.includes(name))
+  const recorded = changedPositions(names, reorderZ(names, 'Layer A', 'front'))
+  recorded.delete('Layer B')
+  const before = ['Layer C', 'Layer D', 'Layer A']
+  for (const [name, index] of changedPositions(before, reorderZ(before, 'Layer D', 'front'), name => recorded.get(name))) {
+    recorded.set(name, index)
+  }
+  const request = sheetsSaveRequest(original[0].sheetId, [])
+  request.visualEdits = original.map(({ name, drawingIndex }) => ({
+    drawingPath, drawingIndex, ...(name === 'Layer B' ? { remove: true } : { zIndex: recorded.get(name) }),
+  }))
+  const plan = await runtime.sheetsWorkbookPlanner(source, request)
+  const { bytes } = await runtime.sheetsNative.savePlan(source, plan)
+  const reordered = (await runtime.sheetsNative.inspect(bytes)).visuals.filter(({ name }) => names.includes(name))
+  assert.deepEqual(reordered.map(({ name }) => name), ['Layer C', 'Layer A', 'Layer D'])
+  assert.equal((await textOf(await JSZip.loadAsync(bytes))(drawingPath)).split(comment).length, 4)
 })
 
 test('places nested group shapes and straight connectors with read-only child locators', async () => {

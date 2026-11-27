@@ -14,6 +14,7 @@ import {
   updateVisualAdd,
   toSaveVisualAdds,
 } from '../src/renderer/edit-journal'
+import { changedPositions, reorderZ } from '../src/renderer/visual-arrange'
 import { projectVisualEdits } from '../src/renderer/univer-sync'
 import {
   workbookChartEditSchema,
@@ -344,6 +345,27 @@ describe('arrange properties', () => {
       'added-shape-abc-2',
     ])
     expect(reorderVisualAdd(journal, 'missing', 0)).toBe(false)
+  })
+
+  it('keeps the requested layer order after deleting an already reordered visual', () => {
+    const journal = createEditJournal()
+    const visuals = ['a', 'b', 'c', 'd'].map((id, drawingIndex) => ({ ...fileShape(), id, drawingIndex }))
+    const layerOrder = () => projectVisualEdits(visuals, journal.visualEdits).map(visual => visual.id)
+    const bringToFront = (id: string) => {
+      const before = layerOrder()
+      const after = reorderZ(before, id, 'front')
+      for (const [visualId, zIndex] of changedPositions(before, after, id => journal.visualEdits.get(id)?.zIndex)) {
+        recordVisualEdit(journal, visuals.find(visual => visual.id === visualId)!, { zIndex })
+      }
+    }
+
+    bringToFront('a')
+    expect(layerOrder()).toEqual(['b', 'c', 'd', 'a'])
+    recordVisualEdit(journal, visuals[1]!, { remove: true })
+    bringToFront('d')
+    expect(layerOrder()).toEqual(['c', 'a', 'd'])
+    expect(toSaveVisualEdits(journal).sort((left, right) => left.drawingIndex - right.drawingIndex))
+      .toMatchObject([{ zIndex: 1 }, { remove: true }, { zIndex: 0 }, { zIndex: 2 }])
   })
 
   it('projects edits onto file visuals and sorts a drawing part by zIndex', () => {

@@ -260,7 +260,7 @@ function reorder(
   )
   const order = part.map((candidate) => candidate.id)
   const after = reorderZ(order, visual.id, op)
-  const changes = changedPositions(order, after)
+  const changes = changedPositions(order, after, id => journal.visualEdits.get(id)?.zIndex)
   if (changes.size === 0) return
   const snapshots = new Map(
     [...changes.keys()].map((id) => [id, captureVisualJournal(state, id, undefined)] as const),
