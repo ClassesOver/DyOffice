@@ -11,6 +11,7 @@ import { workbookNameParts } from './xlsx-defined-names.ts'
 import { rewriteWorksheetValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
+import { childElements } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
   applyPatches,
@@ -21,6 +22,8 @@ import {
   scopedChildren,
   spreadsheetPartRoot,
   withBody,
+  withNamespaces,
+  X14_XMLNS,
   worksheetRoot,
   type ScopedElement,
   type XmlPatch,
@@ -296,10 +299,40 @@ export function applyStructuralOps(
 /// in-memory `ole` visual on inserts/deletes; the saved anchor has to follow
 /// or the object jumps back over the wrong cells on reopen.
 export function shiftOleObjectAnchors(worksheetXml: string, ops: readonly StructuralOp[]): string {
-  if (!worksheetXml.includes('<oleObjects')) return worksheetXml
-  return worksheetXml.replace(/<oleObjects\b[\s\S]*?<\/oleObjects>/g, (block) =>
-    shiftDrawingAnchors(block, ops),
-  )
+  if (!worksheetXml.includes('oleObjects')) return worksheetXml
+  const shifts = rowColumnOps(ops)
+  if (!shifts.length) return worksheetXml
+  let xml = worksheetXml
+  for (const op of shifts) {
+    const shift = toShift(op)
+    const axis = axisOf(op) === 'row' ? 'row' : 'col'
+    const patches = worksheetChildren(xml).flatMap((section) => {
+      if (section.local !== 'oleObjects') return []
+      const updated = rewriteAnchorBranches(section, (object) => {
+        if (!isElement(object, 'oleObject', section.namespace)) return object.xml
+        const oleMarkup = (node: ScopedElement) =>
+          node.namespace === section.namespace || node.namespace === X14_XMLNS
+        return rewriteAnchorChildren(object, (properties) => {
+          if (properties.local !== 'objectPr' || !oleMarkup(properties)) return properties.xml
+          return rewriteAnchorChildren(properties, (anchor) =>
+            anchor.local === 'anchor' && oleMarkup(anchor)
+              ? rewriteCellAnchor(
+                  anchor,
+                  shift,
+                  axis,
+                  true,
+                  oleMarkup,
+                  (node) => oleMarkup(node) || isDrawingNamespace(node.namespace),
+                )
+              : anchor.xml,
+          )
+        })
+      })
+      return updated === section.xml ? [] : [patchElement(section, updated)]
+    })
+    xml = applyPatches(xml, patches)
+  }
+  return xml
 }
 
 /// Legacy VML shapes carry an `<x:Anchor>` of eight comma-separated values:
@@ -871,81 +904,143 @@ function rowColumnOps(ops: readonly StructuralOp[]): RowColumnOp[] {
   return ops.filter((op): op is RowColumnOp => 'index' in op)
 }
 
-/// Shifts twoCellAnchor/oneCellAnchor from/to markers in a drawing part along
-/// the same op stream. Markers inside a deleted span clamp to its start (with
-/// a zeroed offset) — objects are never dropped, only compressed.
-/// absoluteAnchor is EMU-positioned and unaffected.
+const DRAWING_NAMESPACES = new Set([
+  'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
+  'http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing',
+])
+const MARKUP_COMPATIBILITY_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+const compatibilityBranches = new Set(['AlternateContent', 'Choice', 'Fallback'])
+
+function isDrawingNamespace(namespace: string | undefined): boolean {
+  return namespace !== undefined && DRAWING_NAMESPACES.has(namespace)
+}
+
+/// Shifts drawing markers, leaving absolute anchors and opaque extensions alone.
 export function shiftDrawingAnchors(drawingXml: string, ops: readonly StructuralOp[]): string {
   let xml = drawingXml
   for (const op of rowColumnOps(ops)) {
-    const axis: Axis = axisOf(op)
+    const [element] = childElements(xml)
+    if (!element) return xml
+    const root = withNamespaces(element, new Map())
+    if (root.local !== 'wsDr') return xml
+    // The gateway also accepts fragments with the conventional implicit prefix.
+    const implicitPrefix = root.namespace === undefined && root.name === 'xdr:wsDr'
+    if (!implicitPrefix && root.namespace !== '' && !isDrawingNamespace(root.namespace)) return xml
+    const drawing = (node: ScopedElement) =>
+      node.namespace === root.namespace && (!implicitPrefix || node.name.startsWith('xdr:'))
     const shift = toShift(op)
-    const tag = axis === 'row' ? 'row' : 'col'
-    if (shift.swap) {
-      xml = swapDrawingAnchors(xml, shift, tag)
-      continue
-    }
-    xml = xml.replace(
-      /<((?:\w+:)?)(from|to)>([\s\S]*?)<\/\1\2>/g,
-      (_full, ns: string, kind: string, inner: string) => {
-        let clamped = false
-        let patched = inner.replace(
-          new RegExp(`(<(?:\\w+:)?${tag}>)([0-9]+)(</(?:\\w+:)?${tag}>)`),
-          (_m, open: string, value: string, close: string) => {
-            const moved = moveAnchorMark(Number(value), shift)
-            clamped = moved.clamped
-            return `${open}${moved.position}${close}`
-          },
-        )
-        if (clamped) {
-          patched = patched.replace(
-            new RegExp(`(<(?:\\w+:)?${tag}Off>)-?[0-9]+(</(?:\\w+:)?${tag}Off>)`),
-            (_m, open: string, close: string) => `${open}0${close}`,
-          )
-        }
-        return `<${ns}${kind}>${patched}</${ns}${kind}>`
-      },
-    )
+    const axis = axisOf(op) === 'row' ? 'row' : 'col'
+    const updated = rewriteAnchorBranches(root, (anchor) => {
+      if (
+        !drawing(anchor) ||
+        (anchor.local !== 'oneCellAnchor' && anchor.local !== 'twoCellAnchor')
+      ) {
+        return anchor.xml
+      }
+      return rewriteCellAnchor(
+        anchor,
+        shift,
+        axis,
+        anchor.local === 'twoCellAnchor',
+        drawing,
+        drawing,
+      )
+    })
+    if (updated !== root.xml) xml = applyPatches(xml, [patchElement(root, updated)])
   }
   return xml
 }
 
-/// Swap-shift pass over a drawing part: from/to marks are judged as a PAIR
-/// (independent remapping could tear an anchor whose ends straddle a block
-/// boundary). moveRange supplies the three-way semantics: anchors outside or
-/// spanning the swapped blocks stay put, anchors inside one block move with
-/// it, partial contact fails closed. A worksheet `oleObjects` `<anchor>` is
-/// the same from/to pair under another name.
-function swapDrawingAnchors(xml: string, shift: BlockSwap, tag: string): string {
-  const markPattern = (kind: string): RegExp =>
-    new RegExp(`(<(?:\\w+:)?${kind}>[\\s\\S]*?<(?:\\w+:)?${tag}>)([0-9]+)(</(?:\\w+:)?${tag}>)`)
-  const result = xml.replace(/<((?:\w+:)?)(twoCellAnchor|anchor)\b[\s\S]*?<\/\1\2>/g, (block) => {
-    const from = markPattern('from').exec(block)
-    const to = markPattern('to').exec(block)
-    if (!from?.[2] || !to?.[2]) return block
-    const moved = moveRange(Number(from[2]), Number(to[2]), shift)
-    if (!moved || (moved.start === Number(from[2]) && moved.end === Number(to[2]))) return block
-    return block
-      .replace(
-        markPattern('from'),
-        (_m, open: string, _v, close: string) => `${open}${moved.start}${close}`,
-      )
-      .replace(
-        markPattern('to'),
-        (_m, open: string, _v, close: string) => `${open}${moved.end}${close}`,
-      )
+function rewriteAnchorBranches(
+  parent: ScopedElement,
+  rewrite: (child: ScopedElement) => string,
+): string {
+  return rewriteAnchorChildren(parent, (child) =>
+    child.namespace === MARKUP_COMPATIBILITY_NS && compatibilityBranches.has(child.local)
+      ? rewriteAnchorBranches(child, rewrite)
+      : rewrite(child),
+  )
+}
+
+function rewriteAnchorChildren(
+  parent: ScopedElement,
+  rewrite: (child: ScopedElement) => string,
+): string {
+  const patches = scopedChildren(parent).flatMap((child) => {
+    const updated = rewrite(child)
+    return updated === child.xml ? [] : [patchElement(child, updated)]
   })
-  // oneCellAnchor is extent-based; its single mark remaps freely.
-  return result.replace(/<((?:\w+:)?)oneCellAnchor\b[\s\S]*?<\/\1oneCellAnchor>/g, (block) => {
-    const from = markPattern('from').exec(block)
-    if (!from?.[2]) return block
-    const moved = movePosition(Number(from[2]), shift)
-    if (moved === null || moved === Number(from[2])) return block
-    return block.replace(
-      markPattern('from'),
-      (_m, open: string, _v, close: string) => `${open}${moved}${close}`,
-    )
-  })
+  return patches.length ? withBody(parent, applyPatches(parent.inner, patches)) : parent.xml
+}
+
+function readAnchorCoordinate(
+  mark: ScopedElement | undefined,
+  axis: 'row' | 'col',
+  coordinate: (element: ScopedElement) => boolean,
+) {
+  if (!mark) return undefined
+  const fields = scopedChildren(mark).filter(coordinate)
+  const field = fields.find((child) => child.local === axis)
+  const text = field && elementText(field.inner).trim()
+  const number = Number(text)
+  if (!field || !text || !/^\d+$/.test(text) || !Number.isSafeInteger(number)) return undefined
+  return { mark, field, number, offset: fields.find((child) => child.local === axis + 'Off') }
+}
+
+function rewriteCellAnchor(
+  anchor: ScopedElement,
+  shift: Shift,
+  axis: 'row' | 'col',
+  paired: boolean,
+  isMarker: (element: ScopedElement) => boolean,
+  isCoordinate: (element: ScopedElement) => boolean,
+): string {
+  const marks = scopedChildren(anchor).filter(isMarker)
+  const from = readAnchorCoordinate(
+    marks.find((mark) => mark.local === 'from'),
+    axis,
+    isCoordinate,
+  )
+  const to = paired
+    ? readAnchorCoordinate(
+        marks.find((mark) => mark.local === 'to'),
+        axis,
+        isCoordinate,
+      )
+    : undefined
+  const patches: XmlPatch[] = []
+  const update = (coordinate: NonNullable<typeof from>, position: number, clamped: boolean) => {
+    const { mark, field, number, offset } = coordinate
+    const writes: XmlPatch[] = []
+    if (position !== number) writes.push(patchElement(field, withBody(field, String(position))))
+    const offsetText = clamped && offset ? elementText(offset.inner).trim() : ''
+    if (offset && /^-?\d+$/.test(offsetText) && offsetText !== '0') {
+      writes.push(patchElement(offset, withBody(offset, '0')))
+    }
+    if (writes.length)
+      patches.push(patchElement(mark, withBody(mark, applyPatches(mark.inner, writes))))
+  }
+  if (shift.swap) {
+    if (!from || (paired && !to)) return anchor.xml
+    if (to) {
+      // Move the complete pair or reject an anchor torn by the swap.
+      const moved = moveRange(from.number, to.number, shift)
+      if (moved) {
+        update(from, moved.start, false)
+        update(to, moved.end, false)
+      }
+    } else {
+      const moved = movePosition(from.number, shift)
+      if (moved !== null) update(from, moved, false)
+    }
+  } else {
+    for (const coordinate of [from, to]) {
+      if (!coordinate) continue
+      const moved = moveAnchorMark(coordinate.number, shift)
+      update(coordinate, moved.position, moved.clamped)
+    }
+  }
+  return patches.length ? withBody(anchor, applyPatches(anchor.inner, patches)) : anchor.xml
 }
 
 function moveAnchorMark(

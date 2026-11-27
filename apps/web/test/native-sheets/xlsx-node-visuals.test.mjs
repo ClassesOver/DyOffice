@@ -197,6 +197,12 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   const foreign = `<Relationship xmlns="urn:example:opaque" Type="${relationships}printerSettings" Target="opaque"/>`
   book.file(sheet, (await textOf(book)(sheet)).replace('</worksheet>', background + '</worksheet>'))
   book.file(sheetRels, (await textOf(book)(sheetRels)).replace('</Relationships>', foreign + image + '</Relationships>'))
+  const foreignAnchor = '<xdr:extLst><xdr:ext uri="urn:example:cache"><xdr:from><xdr:row>8</xdr:row></xdr:from></xdr:ext></xdr:extLst>'
+  book.file(drawingPath, (await textOf(book)(drawingPath))
+    .replace(/<xdr:from>[\s\S]*?<\/xdr:from>/, (from) => from
+      .replace('<xdr:from>', '<xdr:from xmlns:cache="urn:example:cache" cache:keep="1">')
+      .replace(/<xdr:row>([0-9]+)<\/xdr:row>/, (_, row) => `<xdr:row><![CDATA[${row}]]></xdr:row>`))
+    .replace('</xdr:wsDr>', foreignAnchor + '</xdr:wsDr>'))
   book.file(media, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
   const contentTypes = '[Content_Types].xml'
   const types = await textOf(book)(contentTypes)
@@ -239,6 +245,7 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   assert.equal(copy.chart.series[0].valuesRef, "'Worksheet Copy'!$A$3:$A$4")
   assert.deepEqual(copy.chart.series[0].values, original.chart.series[0].values)
   const copiedZip = await JSZip.loadAsync(copied)
+  assert.ok((await textOf(copiedZip)(copy.drawingPath)).includes(foreignAnchor))
   const copiedSheetPath = 'xl/worksheets/sheet2.xml'
   const copiedRelsPath = 'xl/worksheets/_rels/sheet2.xml.rels'
   assert.ok((await textOf(copiedZip)(copiedSheetPath)).includes(background))

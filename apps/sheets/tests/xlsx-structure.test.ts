@@ -300,6 +300,30 @@ const DRAWING_XML =
   '</xdr:wsDr>'
 
 describe('shiftDrawingAnchors', () => {
+  it('moves qualified markers and keeps extension lookalikes intact', () => {
+    const foreign = '<row xmlns="urn:example:drawing">99</row>'
+    const outside = '<f:cache xmlns:f="urn:example:drawing"><xdr:from><xdr:row>8</xdr:row></xdr:from></f:cache>'
+    const mixed = DRAWING_XML.replace('<xdr:from>', '<xdr:from xmlns:m="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">')
+      .replace('<xdr:row>5</xdr:row>', foreign + '<m:row><![CDATA[5]]></m:row>')
+      .replace('</xdr:wsDr>', outside + '</xdr:wsDr>')
+    const moved = shiftDrawingAnchors(mixed, [{ kind: 'remove-rows', index: 4, count: 2 }])
+    expect(moved).toContain(foreign + '<m:row>4</m:row><xdr:rowOff>0</xdr:rowOff>')
+    expect(moved).toContain(outside)
+  })
+
+  it('moves anchors in both markup compatibility branches without reading extension anchors', () => {
+    const real = '<xdr:twoCellAnchor><xdr:from mark="from"><xdr:row>2</xdr:row></xdr:from>' +
+      '<xdr:to><xdr:row>3</xdr:row></xdr:to></xdr:twoCellAnchor>'
+    const foreign = '<xdr:twoCellAnchor xmlns:xdr="urn:example:drawing"><xdr:from><xdr:row>0</xdr:row></xdr:from>' +
+      '<xdr:to><xdr:row>2</xdr:row></xdr:to></xdr:twoCellAnchor>'
+    const xml = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"' +
+      ' xmlns:m="http://schemas.openxmlformats.org/markup-compatibility/2006">' + foreign +
+      '<m:AlternateContent><m:Choice Requires="xdr">' + real + '</m:Choice><m:Fallback>' + real +
+      '</m:Fallback></m:AlternateContent></xdr:wsDr>'
+    const moved = shiftDrawingAnchors(xml, [{ kind: 'move-rows', index: 2, count: 2, before: 1 }])
+    expect(moved.match(/<xdr:from mark="from"><xdr:row>1<\/xdr:row>/g)).toHaveLength(2)
+    expect(moved).toContain(foreign)
+  })
   it('row insert shifts markers past the boundary; absoluteAnchor stays', () => {
     const xml = shiftDrawingAnchors(DRAWING_XML, [{ kind: 'insert-rows', index: 6, count: 2 }])
     // from row 5 is before the boundary; to row 8 shifts (object grows).
@@ -365,6 +389,14 @@ const OLE_VML_XML =
   '</xml>'
 
 describe('applyStructuralOps oleObjects anchors', () => {
+  it('moves an aliased worksheet OLE anchor without touching its foreign namesake', () => {
+    const foreign = '<from xmlns="urn:example:ole"><xdr:row>5</xdr:row></from>'
+    const input = OLE_SHEET_XML.replace('<oleObjects>', '<s:oleObjects xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main">')
+      .replace('</oleObjects>', '</s:oleObjects>').replace('</from>', '</s:from>').replace('<from>', foreign + '<s:from>')
+    const moved = applyStructuralOps(input, [{ kind: 'insert-rows', index: 1, count: 1 }], SHEET)
+    expect(moved).toContain(foreign)
+    expect(moved).toContain('<xdr:row>6</xdr:row><xdr:rowOff>50</xdr:rowOff></s:from>')
+  })
   it('row insert shifts the objectPr markers past the boundary like a drawing anchor', () => {
     const xml = applyStructuralOps(
       OLE_SHEET_XML,
