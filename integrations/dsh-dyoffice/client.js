@@ -767,9 +767,24 @@ window.__ModuleLoader__.load({
               collaboration.set(new Map(entries).set(fileId,{...current,snapshot:current.snapshot??snapshot,
                 topic:current.topic??writing?.topic,canEdit:payload?.canEdit===true,inlineChecked:true}))
             }
-            void fetch(url,{signal:controller.signal,cache:'no-store'})
-              .then(async response=>update(response.ok?await response.json():null)).catch(()=>update(null))
-            return ()=>controller.abort()
+            let timer,retries=0
+            async function loadPreview(){
+              let response,payload
+              try {
+                response=await fetch(url,{signal:controller.signal,cache:'no-store'})
+                if(response.ok)payload=await response.json()
+              } catch { /* A network interruption can be retried while the card is mounted. */ }
+              if(controller.signal.aborted)return
+              const transient=!response||response.status===409||response.status===429||response.status>=500
+              if(transient&&retries<3){
+                timer=setTimeout(loadPreview,1000*2**retries)
+                retries++
+                return
+              }
+              update(payload)
+            }
+            void loadPreview()
+            return ()=>{controller.abort();clearTimeout(timer)}
           },[fileId,sessionId])
           const row=(author,body,key)=>h('article',{key,className:'dsh-office-message','data-party':author},
             h('strong',null,author),h('div',{className:'dsh-office-message-body',dir:'auto'},body))
