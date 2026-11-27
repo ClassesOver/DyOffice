@@ -120,6 +120,7 @@ test('a delivered thumbnail opens in the right preview only on click',async()=>{
   const inline=render({...props,turn:message})
   assert.equal(inline.children.length,1)
   assert.equal(inline.children[0].props.url,url)
+  assert.equal(inline.children[0].props.name,'读书会.docx')
 
 })
 

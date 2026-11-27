@@ -815,7 +815,7 @@ function shadowPlanDiff(
 
 export type DocsNamedCopy = (propose: (suggest: NonNullable<Parameters<typeof suggestedSaveAsName>[1]>) => Promise<string>) => Promise<void>
 
-export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; setImageAttachments?: SetDocsImageAttachments; desktopActionsAvailable?: boolean; namedCopy?: DocsNamedCopy; bodyCollaboration?: boolean; syncBody?:()=>Promise<boolean>; onCollabEditor?: (editor: import('@tiptap/core').Editor | null) => void; readOnly: boolean; assistantAvailable: boolean; getSupportedCreateDocumentTypes?: () => readonly import('../shared/ipc').CreateDocumentType[]; resolveKnowledgeCitation?: (path: string) => string | undefined; externalAssistant?: {id:string;activity:React.ReactNode}; onHandoffReady?: (runner: import('./file-actions').OfficeHandoffRunner | null) => void; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined} & DocsAssistantRecovery; recoveryRevision?: string | undefined; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions?: React.ReactNode; saveStatus?: React.ReactNode; setImageAttachments?: SetDocsImageAttachments; desktopActionsAvailable?: boolean; namedCopy?: DocsNamedCopy; bodyCollaboration?: boolean; syncBody?:()=>Promise<boolean>; onCollabEditor?: (editor: import('@tiptap/core').Editor | null) => void; readOnly: boolean; assistantAvailable: boolean; getSupportedCreateDocumentTypes?: () => readonly import('../shared/ipc').CreateDocumentType[]; resolveKnowledgeCitation?: (path: string) => string | undefined; externalAssistant?: {id:string;activity:React.ReactNode}; onHandoffReady?: (runner: import('./file-actions').OfficeHandoffRunner | null) => void; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined} & DocsAssistantRecovery; recoveryRevision?: string | undefined; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -1003,7 +1003,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   const closeNav = useCallback(() => setLeftPane(null), [])
   // Review → Reviewing Pane: the outermost right-edge panel (Word's vertical pane)
   const [showReviewPane, setShowReviewPane] = useState(false)
-  const [viewMode, setViewMode] = useState<ViewMode>('print')
+  const [viewMode, setViewMode] = useState<ViewMode>(host?.embeddedDocument ? 'web' : 'print')
   const [readMode, setReadMode] = useState(false)
   const [showGrid, setShowGrid] = useState(false)
   const [splitView, setSplitView] = useState(false)
@@ -8421,6 +8421,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
 .editor-scroll .doc-page.measuring-columns { column-count: auto; width: ${colFlow.colWidthPx + twipsToPx(canvasSection?.marginLeft ?? section?.marginLeft ?? 0) + twipsToPx(canvasSection?.marginRight ?? section?.marginRight ?? 0)}px; }`}</style>
       )}
       <Ribbon
+        embeddedDocument={host?.embeddedDocument === true}
         desktopActionsAvailable={desktopActionsAvailable}
         aiNamingAvailable={desktopActionsAvailable !== false || !!namedCopy}
         fileActions={host?.fileActions}

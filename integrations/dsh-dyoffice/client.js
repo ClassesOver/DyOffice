@@ -119,11 +119,16 @@ window.__ModuleLoader__.load({
     // Keep iframe interaction coordinates and the editor's layout in the same scaled viewport.
     const embeddedEditorStyle={display:'block',width:'125%',height:'125%',maxWidth:'none',border:0,transform:'scale(.8)',transformOrigin:'top left'}
     const chatDocumentStyles=`
-      .dsh-chat-document{min-width:0;margin-block:6px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:9px;color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-bg-layer-1,Canvas)}
-      .dsh-chat-document>summary{cursor:pointer;padding:8px 12px;font:inherit;font-size:13px;font-weight:600;line-height:20px}
-      .dsh-chat-document>summary::marker{color:var(--dsw-alias-brand-primary,Highlight)}
-      .dsh-chat-document>summary:hover{background:color-mix(in srgb,currentColor 5%,transparent)}
-      .dsh-chat-document>summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:-2px}
+      .dsh-chat-document{--paper:var(--dsw-alias-bg-layer-1,Canvas);--ink:var(--dsw-alias-label-primary,CanvasText);--edge:var(--dsw-alias-border-l2,#ccd2da);--file-accent:color-mix(in srgb,#138178 74%,var(--ink));min-width:0;margin-block:8px;overflow:hidden;border:1px solid var(--edge);border-radius:12px;background:var(--paper);color:var(--ink)}
+      .dsh-chat-document>summary{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;list-style:none;background:linear-gradient(110deg,color-mix(in srgb,var(--file-accent) 9%,var(--paper)),var(--paper) 80%);font:inherit}
+      .dsh-chat-document>summary::-webkit-details-marker{display:none}
+      .dsh-chat-document>summary:hover{background:color-mix(in srgb,var(--file-accent) 9%,var(--paper))}
+      .dsh-chat-document>summary:focus-visible{outline:2px solid var(--file-accent);outline-offset:-3px}
+      .dsh-chat-document>summary::before{content:'';width:15px;height:19px;border:1.5px solid var(--file-accent);border-radius:3px;flex:none;background:linear-gradient(var(--file-accent),var(--file-accent)) 3px 6px/8px 1px no-repeat,linear-gradient(var(--file-accent),var(--file-accent)) 3px 10px/6px 1px no-repeat}
+      .dsh-chat-document .doc-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600}
+      .dsh-chat-document .doc-action{flex:none;color:var(--file-accent);font-size:12px}
+      .dsh-chat-document>summary::after{content:'';width:6px;height:6px;flex:none;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg);margin:-3px 2px 0 0}
+      .dsh-chat-document[open]>summary::after{transform:rotate(225deg);margin-top:3px}
       .dsh-chat-document .when-open,.dsh-chat-document[open] .when-closed{display:none}
       .dsh-chat-document[open] .when-open{display:inline}
       .dsh-chat-document .editor-viewport{box-sizing:border-box;overflow:hidden;height:min(32vh,280px);height:${chatFrameHeight};border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}
@@ -735,10 +740,10 @@ window.__ModuleLoader__.load({
             !failed&&h('img',{src:url.href,alt:t('snapshot'),loading:'lazy',onError:()=>setFailed(true),style:{maxWidth:'100%',maxHeight:180,objectFit:'contain'}}),
             h('strong',null,path.split('/').at(-1)),h('small',null,t(failed?'snapshotUnavailable':'previewRight')))
         }
-        function ChatDocument({url,t}){
+        function ChatDocument({url,name,t}){
           const [mounted,setMounted]=useState(false)
           return h('details',{className:'dsh-chat-document',onToggle:event=>{if(event.currentTarget.open)setMounted(true)}},
-            h('summary',null,h('span',{className:'when-closed'},t('showDocument')),h('span',{className:'when-open'},t('hideDocument'))),
+            h('summary',null,h('strong',{className:'doc-name',title:name},name||t('livePreview')),h('span',{className:'doc-action when-closed'},t('showDocument')),h('span',{className:'doc-action when-open'},t('hideDocument'))),
             h('style',null,chatDocumentStyles),
             mounted&&h('div',{className:'editor-viewport'},h('iframe',{title:t('livePreview'),src:url,style:embeddedEditorStyle})))
         }
@@ -748,13 +753,14 @@ window.__ModuleLoader__.load({
           const data=turn.data.get('deliverables')
           const paths=[...(data?.presented??[]),...(data?.produced??[])].map(file=>file.path)
           const blocks=(turn.steps??[]).map(step=>step.data.get('assistant-step')).filter(step=>step?.finalNode).at(-1)?.blocks??[]
-          const documents=new Set()
+          const documents=new Map()
           for(const block of blocks)if(block.kind==='text'){
-            for(const match of block.text.matchAll(/\[[^\]\n]*\]\(<?([^<>\s)]+)>?\)/gu)){
+            for(const match of block.text.matchAll(/\[([^\]\n]*)\]\(<?([^<>\s)]+)>?\)/gu)){
               try{
-                const url=new URL(match[1])
+                const url=new URL(match[2])
                 if(url.origin===previewUrl().origin&&url.pathname===previewUrl().pathname&&uuid.test(url.searchParams.get('edit')??'')){
-                  documents.add(guestEditorUrl(url.searchParams.get('edit')))
+                  const filename=match[1].match(/《([^》]+)》/u)?.[1]??(/\.(docx|xlsx|pptx|pdf)$/iu.test(match[1])?match[1]:undefined)
+                  documents.set(guestEditorUrl(url.searchParams.get('edit')),filename)
                 }
               }catch{/* Relative paths are handled by the file preview. */}
             }
@@ -765,7 +771,7 @@ window.__ModuleLoader__.load({
             }
           }
           const files=[...new Set(paths.filter(path=>typeof path==='string'&&/\.(docx|xlsx|pptx|pdf)$/iu.test(path)))].slice(0,4)
-          return documents.size||files.length?h('div',null,...Array.from(documents,url=>h(ChatDocument,{key:url,url,t})),...files.map(path=>h(FileThumbnail,{key:path,path,sessionId,openFile,t}))):null
+          return documents.size||files.length?h('div',null,...Array.from(documents,([url,name])=>h(ChatDocument,{key:url,url,name,t})),...files.map(path=>h(FileThumbnail,{key:path,path,sessionId,openFile,t}))):null
         })))
         ctx.effect(() => ctx.slots.inject('conversation.chat.commandview', () => ctx.slots.register({
           name:'conversation.chat.commandview', key:'dyoffice', locale:namespace,

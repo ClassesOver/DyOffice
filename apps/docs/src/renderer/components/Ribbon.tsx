@@ -259,6 +259,7 @@ import {
   IconComments,
 } from './icons'
 interface RibbonProps {
+  embeddedDocument?: boolean
   fileActions?: React.ReactNode
   desktopActionsAvailable?: boolean
   aiNamingAvailable?: boolean
@@ -720,6 +721,7 @@ function keepDocumentFocus(e: ReactMouseEvent<HTMLDivElement>) {
 }
 
 function RibbonInner({
+  embeddedDocument,
   actionsRef,
   quickActions,
   desktopActionsAvailable = true,
@@ -867,7 +869,7 @@ function RibbonInner({
     // ⌥⌘K / Ctrl+Alt+K: the icon-only middle density (see genoffice#362)
     compact: t('ribbonCompact'),
     expandFull: t('ribbonExpand'),
-  })
+  }, embeddedDocument ? 'collapsed' : undefined)
   // The one-click AI actions need text to work on; grey them out on an empty document
   const docEmpty = !hasDoc || fs.docEmpty
   const [tab, setTab] = useState<RibbonTab>('home')
