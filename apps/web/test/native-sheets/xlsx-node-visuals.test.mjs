@@ -85,7 +85,10 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     .replace(/<xdr:twoCellAnchor><xdr:from>[\s\S]*?<\/xdr:to>/,
       '<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9304587" cy="6077107"/>')
     .replace('</xdr:twoCellAnchor>', '</xdr:absoluteAnchor>'))
+  const styledLegend = '<c:legend><c:legendPos val="r"/><c:overlay val="1"/>' +
+    '<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1300"/></a:pPr></a:p></c:txPr></c:legend>'
   zip.file(chartPath, (await text(chartPath))
+    .replace('</c:plotArea>', '</c:plotArea>' + styledLegend)
     .replace('<c:axPos val="b"/>', '<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="900"/></a:pPr></a:p></c:txPr>')
     .replace('<c:axPos val="l"/>', `<c:title><c:tx><c:rich><a:bodyPr/><a:p>
       <a:pPr><a:defRPr/></a:pPr>
@@ -127,8 +130,9 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal(original.yAxis?.displayUnit, 1e3)
   assert.equal(original.yAxis?.displayUnitLabel, 'Thousands')
   assert.equal(original.yAxis?.numFmt, '0.0')
+  assert.equal(original.legend, 'right')
   const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 7, value: 42, writeValue: true }])
-  request.chartEdits = [{ chartPath, title: 'Chart sheet revenue' }]
+  request.chartEdits = [{ chartPath, title: 'Chart sheet revenue', legend: 'bottom', axisTitles: { value: 'Net revenue' } }]
   request.sheetOps = [
     { kind: 'set-sheet-tab-color', sheetId: 'sheet-9', color: '#654321' },
     { kind: 'set-sheet-tab-color', sheetId: 'sheet-1', color: '#123456' },
@@ -141,7 +145,10 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal(chart.title, 'Chart sheet revenue')
   assert.deepEqual(chart.series, original.series)
   assert.deepEqual(chart.xAxis, original.xAxis)
-  assert.deepEqual(chart.yAxis, original.yAxis)
+  assert.deepEqual(chart.yAxis, { ...original.yAxis, title: 'Net revenue' })
+  assert.equal(chart.legend, 'bottom')
+  const savedPart = await textOf(await JSZip.loadAsync(saved))(chartPath)
+  assert.ok(savedPart.includes(styledLegend.replace('val="r"', 'val="b"')))
   const range = await runtime.sheetsNative.readRange(saved, 'Acceptance',
     { startRow: 0, endRow: 0, startColumn: 7, endColumn: 7 })
   assert.equal(range.cells[0].value, 42)

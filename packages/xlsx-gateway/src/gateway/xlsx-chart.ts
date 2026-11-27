@@ -1,5 +1,6 @@
 import type { WorkbookChartEdit } from '../shared/edit-schemas.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
+import { withBody } from './xlsx-worksheet-xml.ts'
 
 /// Surgical edits to a chart part (xl/charts/chartN.xml): title text, chart
 /// type conversion within the axis-based family, and series solid colors.
@@ -753,16 +754,38 @@ const LEGEND_POSITIONS: Record<string, string> = {
   left: 'l',
 }
 
+function replaceChildMarkup(inner: string, child: ChildElement, replacement: string): string {
+  return inner.slice(0, child.start) + replacement + inner.slice(child.start + child.xml.length)
+}
+
+function editChartContents(chartXml: string, edit: (inner: string) => string): string {
+  const root = childElements(chartXml)[0]
+  const chart = root?.name === 'c:chartSpace'
+    ? childElements(root.inner).find(child => child.name === 'c:chart')
+    : root?.name === 'c:chart' ? root : undefined
+  if (!chart) throw new ChartEditError('Chart part has no c:chart element.')
+  const newChart = withBody(chart, edit(chart.inner))
+  return root?.name === 'c:chartSpace'
+    ? replaceChildMarkup(chartXml, root, withBody(root, replaceChildMarkup(root.inner, chart, newChart)))
+    : replaceChildMarkup(chartXml, chart, newChart)
+}
+
 /// Removes the legend or moves/creates it at the given side.
 function setLegend(chartXml: string, legend: NonNullable<WorkbookChartEdit['legend']>): string {
-  const withoutLegend = chartXml.replace(/<c:legend>[\s\S]*?<\/c:legend>/, '')
-  if (legend === 'none') return withoutLegend
-  const position = LEGEND_POSITIONS[legend]
-  const element = `<c:legend><c:legendPos val="${position}"/><c:overlay val="0"/></c:legend>`
-  const plotAreaEnd = /<\/c:plotArea>/.exec(withoutLegend)
-  if (!plotAreaEnd) throw new ChartEditError('Chart part has no plot area.')
-  const insertAt = plotAreaEnd.index + plotAreaEnd[0].length
-  return withoutLegend.slice(0, insertAt) + element + withoutLegend.slice(insertAt)
+  return editChartContents(chartXml, inner => {
+    const children = childElements(inner)
+    const existing = children.find(child => child.name === 'c:legend')
+    if (legend === 'none') return existing ? replaceChildMarkup(inner, existing, '') : inner
+    const position = `<c:legendPos val="${LEGEND_POSITIONS[legend]}"/>`
+    if (existing) {
+      const previous = childElements(existing.inner).find(child => child.name === 'c:legendPos')
+      const body = previous ? replaceChildMarkup(existing.inner, previous, position) : position + existing.inner
+      return replaceChildMarkup(inner, existing, withBody(existing, body))
+    }
+    const plot = children.find(child => child.name === 'c:plotArea')
+    if (!plot) throw new ChartEditError('Chart part has no plot area.')
+    return replaceChildMarkup(inner, plot, plot.xml + `<c:legend>${position}<c:overlay val="0"/></c:legend>`)
+  })
 }
 
 /// Plot-level data labels: what every slice/bar/point shows. Excel's Quick
@@ -856,40 +879,28 @@ function setPlotLabelChild(
 
 /// Sets or removes (null) the title of the first category/value axis.
 function setAxisTitle(chartXml: string, axis: 'catAx' | 'valAx', title: string | null): string {
-  const axisPattern = new RegExp(`<c:${axis}>([\\s\\S]*?)</c:${axis}>`)
-  const axisMatch = axisPattern.exec(chartXml)
-  if (!axisMatch || axisMatch[1] === undefined) {
-    // Date axes stand in for category axes on time-series charts.
-    if (axis === 'catAx' && /<c:dateAx>/.test(chartXml)) {
-      return setDateAxisTitle(chartXml, title)
-    }
-    throw new ChartEditError(`Chart has no ${axis === 'catAx' ? 'category' : 'value'} axis.`)
-  }
-  return chartXml.replace(
-    axisPattern,
-    (_full, inner: string) => `<c:${axis}>${patchAxisInnerTitle(inner, title)}</c:${axis}>`,
-  )
-}
-
-function setDateAxisTitle(chartXml: string, title: string | null): string {
-  return chartXml.replace(
-    /<c:dateAx>([\s\S]*?)<\/c:dateAx>/,
-    (_full, inner: string) => `<c:dateAx>${patchAxisInnerTitle(inner, title)}</c:dateAx>`,
-  )
+  return editChartContents(chartXml, inner => {
+    const plot = childElements(inner).find(child => child.name === 'c:plotArea')
+    if (!plot) throw new ChartEditError('Chart part has no plot area.')
+    const axes = childElements(plot.inner)
+    const existing = axes.find(child => child.name === `c:${axis}`) ??
+      (axis === 'catAx' ? axes.find(child => child.name === 'c:dateAx') : undefined)
+    if (!existing) throw new ChartEditError(`Chart has no ${axis === 'catAx' ? 'category' : 'value'} axis.`)
+    const updatedAxis = withBody(existing, patchAxisInnerTitle(existing.inner, title))
+    return replaceChildMarkup(inner, plot, withBody(plot, replaceChildMarkup(plot.inner, existing, updatedAxis)))
+  })
 }
 
 /// CT_*Ax order: the title slot follows axPos / gridlines.
 function patchAxisInnerTitle(axisInner: string, title: string | null): string {
-  const stripped = axisInner.replace(/<c:title>[\s\S]*?<\/c:title>/, '')
-  if (title === null) return stripped
-  const anchor =
-    /<c:minorGridlines\/>|<c:minorGridlines>[\s\S]*?<\/c:minorGridlines>|<c:majorGridlines\/>|<c:majorGridlines>[\s\S]*?<\/c:majorGridlines>|<c:axPos val="[^"]*"\/>/g
-  let insertAt = -1
-  for (const found of stripped.matchAll(anchor)) {
-    insertAt = found.index + found[0].length
-  }
-  if (insertAt === -1) throw new ChartEditError('Chart axis is missing its position element.')
-  return stripped.slice(0, insertAt) + builtTitle(escapeXmlText(title)) + stripped.slice(insertAt)
+  const children = childElements(axisInner)
+  const existing = children.find(child => child.name === 'c:title')
+  if (title === null) return existing ? replaceChildMarkup(axisInner, existing, '') : axisInner
+  const escaped = escapeXmlText(title)
+  if (existing) return replaceChildMarkup(axisInner, existing, rewriteTitleText(existing, escaped))
+  const leading = new Set(['c:axId', 'c:scaling', 'c:delete', 'c:axPos', 'c:majorGridlines', 'c:minorGridlines'])
+  const anchor = children.filter(child => leading.has(child.name)).at(-1)
+  return anchor ? replaceChildMarkup(axisInner, anchor, anchor.xml + builtTitle(escaped)) : builtTitle(escaped) + axisInner
 }
 
 /// Rewrites a series' name and/or data (reference + cached values together).
@@ -1128,39 +1139,59 @@ function setScatterXValues(
 /// inside the plot area, so the search stops there.
 function setChartTitle(chartXml: string, title: string): string {
   const escaped = escapeXmlText(title)
-  const xml = chartXml.replace(/<c:autoTitleDeleted val="1"\/>/, '<c:autoTitleDeleted val="0"/>')
-  const plotAreaAt = xml.search(/<c:plotArea[\s>]/)
-  const scope = plotAreaAt === -1 ? xml : xml.slice(0, plotAreaAt)
-  const titleElement = /<c:title>[\s\S]*?<\/c:title>/.exec(scope)
-  if (titleElement) {
-    let isFirstRun = true
-    const rewritten = titleElement[0].replace(
-      /(<a:t>)[\s\S]*?(<\/a:t>)|<a:t\/>/g,
-      (_full, open: string | undefined, close: string | undefined) => {
-        const text = isFirstRun ? escaped : ''
-        isFirstRun = false
-        return `${open ?? '<a:t>'}${text}${close ?? '</a:t>'}`
+  return editChartContents(chartXml, inner => {
+    const existing = childElements(inner).find(child => child.name === 'c:title')
+    const newTitle = existing ? rewriteTitleText(existing, escaped) : builtTitle(escaped)
+    let next = existing
+      ? replaceChildMarkup(inner, existing, newTitle)
+      : newTitle + inner
+    const autoTitle = childElements(next).find(child => child.name === 'c:autoTitleDeleted')
+    if (autoTitle) {
+      next = replaceChildMarkup(next, autoTitle, '<c:autoTitleDeleted val="0"/>')
+    } else if (!existing) {
+      next = newTitle + '<c:autoTitleDeleted val="0"/>' + inner
+    }
+    return next
+  })
+}
+
+function rewriteTitleText(title: ChildElement, escapedText: string): string {
+  const tx = childElements(title.inner).find(child => child.name === 'c:tx')
+  if (!tx) return withBody(title, `<c:tx>${builtTitleRichText(escapedText)}</c:tx>` + title.inner)
+  const rich = childElements(tx.inner).find(child => child.name === 'c:rich')
+  let text = builtTitleRichText(escapedText)
+  if (rich) {
+    let firstRun = true
+    let body = rich.inner.replace(
+      /(<a:t(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?)(\/>|>[\s\S]*?<\/a:t>)/g,
+      (_full, opening: string) => {
+        const value = firstRun ? escapedText : ''
+        firstRun = false
+        return `${opening}>${value}</a:t>`
       },
     )
-    if (isFirstRun) {
-      // A title without any text run (e.g. formula-linked): replace whole tx.
-      return xml.replace(/<c:title>[\s\S]*?<\/c:title>/, () => builtTitle(escaped))
+    if (firstRun) {
+      const paragraph = childElements(body).find(child => child.name === 'a:p')
+      const run = `<a:r><a:t>${escapedText}</a:t></a:r>`
+      body = paragraph
+        ? replaceChildMarkup(body, paragraph, withBody(paragraph, paragraph.inner + run))
+        : body + `<a:p>${run}</a:p>`
     }
-    return xml.replace(/<c:title>[\s\S]*?<\/c:title>/, () => rewritten)
+    text = withBody(rich, body)
   }
-  const chartOpen = /<c:chart>/.exec(xml)
-  if (!chartOpen) throw new ChartEditError('Chart part has no c:chart element.')
-  const insertAt = chartOpen.index + chartOpen[0].length
-  const autoTitle = /<c:autoTitleDeleted /.test(xml) ? '' : '<c:autoTitleDeleted val="0"/>'
-  return xml.slice(0, insertAt) + `${builtTitle(escaped)}${autoTitle}` + xml.slice(insertAt)
+  return withBody(title, replaceChildMarkup(title.inner, tx, withBody(tx, text)))
+}
+
+function builtTitleRichText(escapedText: string): string {
+  return (
+    '<c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r>' +
+    `<a:t>${escapedText}</a:t>` +
+    '</a:r></a:p></c:rich>'
+  )
 }
 
 function builtTitle(escapedText: string): string {
-  return (
-    '<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r>' +
-    `<a:t>${escapedText}</a:t>` +
-    '</a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>'
-  )
+  return `<c:title><c:tx>${builtTitleRichText(escapedText)}</c:tx><c:overlay val="0"/></c:title>`
 }
 
 /// Converts between column/bar/line/area/pie/doughnut. Bar direction changes

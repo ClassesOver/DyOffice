@@ -79,11 +79,12 @@ describe('chart planner style relationships', () => {
 
 describe('applyChartEdit title', () => {
   it('replaces the first run text, blanks the rest, keeps run styling', () => {
-    const xml = applyChartEdit(BAR_CHART, {
+    const source = BAR_CHART.replace('<a:t>Old title', '<a:t xml:space="preserve">Old title')
+    const xml = applyChartEdit(source, {
       chartPath: 'xl/charts/chart1.xml',
       title: 'New <Title>',
     })
-    expect(xml).toContain('<a:rPr b="1"/><a:t>New &lt;Title&gt;</a:t>')
+    expect(xml).toContain('<a:rPr b="1"/><a:t xml:space="preserve">New &lt;Title&gt;</a:t>')
     expect(xml).toContain('<a:r><a:t></a:t></a:r>')
     expect(xml).not.toContain('Old title')
   })
@@ -109,6 +110,17 @@ describe('applyChartEdit title', () => {
     const chartLevel = xml.slice(0, xml.indexOf('<c:plotArea>'))
     expect(chartLevel).toContain('<a:t>My Chart</a:t>')
     expect(xml.match(/<c:autoTitleDeleted /g)).toHaveLength(1)
+  })
+
+  it('replaces a linked title with text while keeping its layout and font defaults', () => {
+    const layout = '<c:layout><c:manualLayout><c:x val="0.2"/></c:manualLayout></c:layout>'
+    const font = '<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1600"/></a:pPr></a:p></c:txPr>'
+    const linked = BAR_CHART.replace(/<c:title>[\s\S]*?<\/c:title>/,
+      '<c:title><c:tx><c:strRef><c:f>Data!A1</c:f></c:strRef></c:tx>' + layout + '<c:overlay val="1"/>' + font + '</c:title>')
+    const xml = applyChartEdit(linked, { chartPath: 'xl/charts/chart1.xml', title: 'Direct title' })
+    expect(xml).toContain('<a:t>Direct title</a:t>')
+    expect(xml).toContain(layout + '<c:overlay val="1"/>' + font)
+    expect(xml).not.toContain('<c:f>Data!A1</c:f>')
   })
 })
 
@@ -434,6 +446,14 @@ describe('applyChartEdit legend', () => {
     const xml = applyChartEdit(BAR_CHART, { chartPath: 'xl/charts/chart1.xml', legend: 'top' })
     expect(xml).toContain('</c:plotArea><c:legend><c:legendPos val="t"/>')
   })
+
+  it('moves a legend without changing its entries, layout, overlay, or text', () => {
+    const settings = '<c:legendEntry><c:idx val="1"/><c:delete/></c:legendEntry>' +
+      '<c:layout/><c:overlay val="1"/><c:txPr><a:bodyPr/></c:txPr>'
+    const source = AXIS_CHART.replace('<c:overlay val="0"/></c:legend>', settings + '</c:legend>')
+    const xml = applyChartEdit(source, { chartPath: 'xl/charts/chart1.xml', legend: 'left' })
+    expect(xml).toContain('<c:legend><c:legendPos val="l"/>' + settings + '</c:legend>')
+  })
 })
 
 describe('applyChartEdit axis titles', () => {
@@ -453,7 +473,7 @@ describe('applyChartEdit axis titles', () => {
       axisTitles: { value: 'Sales' },
     })
     expect(renamed).toContain(
-      '<c:majorGridlines/><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:crossAx val="111"/>',
+      '<c:majorGridlines/><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:crossAx val="111"/>',
     )
     expect(renamed).not.toContain('old axis')
     const cleared = applyChartEdit(AXIS_CHART, {
