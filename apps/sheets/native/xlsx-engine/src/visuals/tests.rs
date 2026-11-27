@@ -2057,8 +2057,8 @@ fn combo_series_carry_their_plot_group() {
             <c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>Meetings</c:v></c:pt></c:strCache></c:strRef></c:tx><c:marker><c:symbol val="none"/></c:marker>
             <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1858</c:v></c:pt><c:pt idx="1"><c:v>1889</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
             <c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>Deals</c:v></c:pt></c:strCache></c:strRef></c:tx><c:marker><c:symbol val="none"/></c:marker>
-            <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1120</c:v></c:pt><c:pt idx="1"><c:v>1125</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
-            <c:marker val="1"/><c:axId val="1559070815"/><c:axId val="1419985231"/></c:lineChart>
+            <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1120</c:v></c:pt><c:pt idx="1"><c:v>1125</c:v></c:pt></c:numCache></c:numRef></c:val><c:smooth val="0"/></c:ser>
+            <c:marker val="1"/><c:smooth/><c:axId val="1559070815"/><c:axId val="1419985231"/></c:lineChart>
         <c:catAx><c:axId val="1559191455"/><c:axPos val="b"/><c:crossAx val="1419995791"/></c:catAx>
         <c:valAx><c:axId val="1419995791"/><c:axPos val="l"/><c:crossAx val="1559191455"/></c:valAx>
         <c:valAx><c:axId val="1419985231"/><c:axPos val="r"/><c:crossAx val="1559070815"/></c:valAx>
@@ -2067,6 +2067,9 @@ fn combo_series_carry_their_plot_group() {
     let chart = metadata(combo);
     assert_eq!(chart.chart_types, vec!["barChart", "lineChart"]);
     assert!(chart.secondary_y_axis.is_some());
+    assert_eq!(chart.series[0].smooth, None);
+    assert_eq!(chart.series[1].smooth, Some(true));
+    assert_eq!(chart.series[2].smooth, Some(false));
     let plots = chart
         .series
         .iter()

@@ -620,7 +620,7 @@ pub(crate) fn data_labels_node<'a>(document: &'a Document<'a>) -> Option<Node<'a
 }
 
 pub(crate) fn data_labels_mode(labels: Node<'_, '_>) -> &'static str {
-    let shown = |name| label_flag(labels, name).unwrap_or(false);
+    let shown = |name| boolean_child(labels, name).unwrap_or(false);
     if shown("delete") {
         return "none";
     }
@@ -633,9 +633,9 @@ pub(crate) fn data_labels_mode(labels: Node<'_, '_>) -> &'static str {
     }
 }
 
-fn label_flag(labels: Node<'_, '_>, name: &str) -> Option<bool> {
+fn boolean_child(parent: Node<'_, '_>, name: &str) -> Option<bool> {
     // CT_Boolean defaults to true for a present element without val.
-    direct_child(labels, name)
+    direct_child(parent, name)
         .map(|node| matches!(node.attribute("val"), None | Some("1" | "true")))
 }
 
@@ -808,9 +808,11 @@ pub(crate) fn parse_chart_series(
         .and_then(|ln| ln.attribute("w"))
         .and_then(|value| value.parse::<f64>().ok())
         .map(|emu| emu / 12700.0 * (96.0 / 72.0));
-    let smooth = direct_child(series, "smooth")
-        .and_then(|node| node.attribute("val"))
-        .map(|value| value == "1" || value == "true");
+    let smooth = boolean_child(series, "smooth").or_else(|| {
+        series
+            .parent()
+            .and_then(|plot| boolean_child(plot, "smooth"))
+    });
     let marker = direct_child(series, "marker")
         .and_then(|node| direct_child(node, "symbol"))
         .and_then(|node| node.attribute("val"))
@@ -860,10 +862,10 @@ pub(crate) fn point_labels(labels: Node<'_, '_>) -> Vec<PointLabel> {
         .filter(|node| node.has_tag_name("dLbl"))
         .filter_map(|label| {
             let index = direct_child(label, "idx")?.attribute("val")?.parse().ok()?;
-            let show_val = if label_flag(label, "delete") == Some(true) {
+            let show_val = if boolean_child(label, "delete") == Some(true) {
                 Some(false)
             } else {
-                label_flag(label, "showVal")
+                boolean_child(label, "showVal")
             };
             let layout =
                 direct_child(label, "layout").and_then(|node| direct_child(node, "manualLayout"));

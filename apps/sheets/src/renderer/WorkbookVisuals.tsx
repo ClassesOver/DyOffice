@@ -3603,6 +3603,7 @@ export function BarChart({
     return {
       stroke,
       width: series.lineWidth ?? 3,
+      smooth: series.smooth,
       markerColor: stroke ?? seriesColor(series, paletteIndex),
       segments: lineSegments(
         Math.min(series.values.length, visibleCount),
@@ -3763,10 +3764,10 @@ export function BarChart({
         <g key={`combo-${lineIndex}`}>
           {stroke !== null &&
             line.segments.map((segment, segmentIndex) => (
-              <polyline
+              <SeriesStroke
                 key={segmentIndex}
-                points={segment.map((index) => `${comboX(index)},${line.y(index)}`).join(' ')}
-                fill="none"
+                points={segment.map((index) => [comboX(index), line.y(index)])}
+                smooth={line.smooth}
                 stroke={stroke}
                 strokeWidth={line.width}
               />
@@ -4498,15 +4499,14 @@ export function LineChart({
         const width = series.lineWidth ?? 3
         const values = displayValues(seriesIndex)
         const denominator = Math.max(1, values.length - 1)
-        const pointAt = (index: number): string =>
-          `${60 + (index / denominator) * 500},${
-            280 - Math.max(0, Math.min(1, ((values[index] ?? 0) - bounds.min) / (span || 1))) * 240
-          }`
         return seriesSegments(series).map((segment, segmentIndex) => (
-          <polyline
+          <SeriesStroke
             key={`${seriesIndex}-${segmentIndex}`}
-            points={segment.map(pointAt).join(' ')}
-            fill="none"
+            points={segment.map((index) => [
+              60 + (index / denominator) * 500,
+              280 - Math.max(0, Math.min(1, ((values[index] ?? 0) - bounds.min) / (span || 1))) * 240,
+            ])}
+            smooth={series.smooth}
             stroke={stroke}
             strokeWidth={
               selectedEl?.kind === 'series' && selectedEl.seriesIndex === seriesIndex
@@ -4997,6 +4997,19 @@ function smoothChartPath(points: readonly (readonly [number, number])[]): string
   return path
 }
 
+function SeriesStroke({ points, smooth, stroke, strokeWidth, onClick }: {
+  readonly points: readonly (readonly [number, number])[]
+  readonly smooth?: boolean | undefined
+  readonly stroke: string
+  readonly strokeWidth: number
+  readonly onClick?: React.MouseEventHandler<SVGElement> | undefined
+}): React.JSX.Element {
+  const style = { fill: 'none', stroke, strokeWidth, onClick }
+  return smooth && points.length > 2
+    ? <path d={smoothChartPath(points)} {...style} />
+    : <polyline points={points.map((point) => point.join(',')).join(' ')} {...style} />
+}
+
 export function ScatterChart({
   seriesList,
   axisTitles,
@@ -5079,7 +5092,7 @@ export function ScatterChart({
     const stroke = lineStroke(series, seriesIndex)
     if (!styleWantsLines || stroke === null) return null
     const attrs = {
-      fill: 'none',
+      smooth: series.smooth ?? styleWantsSmooth,
       stroke,
       strokeWidth: series.lineWidth ?? 2,
       onClick: onElement ? (event: React.MouseEvent<SVGElement>) => {
@@ -5091,9 +5104,7 @@ export function ScatterChart({
     return segments.map((segment) => {
       if (segment.length < 2) return null
       const coordinates = segment.map(index => [plotX(xValues[index] ?? 0), plotY(series.values[index]!)] as const)
-      return (series.smooth ?? styleWantsSmooth) && coordinates.length > 2
-        ? <path key={segment[0]} d={smoothChartPath(coordinates)} {...attrs} />
-        : <polyline key={segment[0]} points={coordinates.map(point => point.join(',')).join(' ')} {...attrs} />
+      return <SeriesStroke key={segment[0]} points={coordinates} {...attrs} />
     })
   }
   return (

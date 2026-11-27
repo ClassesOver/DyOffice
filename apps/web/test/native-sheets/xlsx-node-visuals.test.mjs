@@ -371,7 +371,7 @@ test('loads combo series and secondary scale without losing sparse cache slots o
   const theme = ['#FFFFFF', '#000000', '#EEEEEE', '#111111', '#4472C4', '#ED7D31']
   zip.file(chartPath, `<chartSpace xmlns="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><chart>
     <title><tx><rich><a:p><a:r><a:t>Revenue &amp; Margin</a:t></a:r></a:p></rich></tx></title>
-    <plotArea><lineChart><ser><idx val="1"/><tx><strRef><f>Acceptance!B1</f></strRef></tx><cat><strRef><f>Acceptance!C2:C4</f><strCache><ptCount val="3"/><pt idx="2"><v>Dec</v></pt><pt idx="0"><v>Oct</v></pt></strCache></strRef></cat><val><numRef><f>Acceptance!B2:B4</f></numRef></val></ser><axId val="3"/><axId val="4"/></lineChart>
+    <plotArea><lineChart><ser><idx val="1"/><tx><strRef><f>Acceptance!B1</f></strRef></tx><cat><strRef><f>Acceptance!C2:C4</f><strCache><ptCount val="3"/><pt idx="2"><v>Dec</v></pt><pt idx="0"><v>Oct</v></pt></strCache></strRef></cat><val><numRef><f>Acceptance!B2:B4</f></numRef></val></ser><smooth/><axId val="3"/><axId val="4"/></lineChart>
     <barChart><barDir val="col"/><ser><idx val="0"/><tx><v>Revenue</v></tx><val><numLit><formatCode>0.0</formatCode><ptCount val="3"/><pt idx="2"><v>-7.5</v></pt><pt idx="0"><v>12.5</v></pt></numLit></val></ser><axId val="1"/><axId val="2"/></barChart>
     <catAx><axId val="1"/><axPos val="b"/></catAx><valAx><axId val="2"/><axPos val="l"/><majorGridlines/></valAx>
     <catAx><axId val="3"/><axPos val="t"/><delete val="1"/></catAx><valAx><axId val="4"/><axPos val="r"/><scaling><min val="-1"/><max val="1"/></scaling><numFmt formatCode="0%"/></valAx></plotArea>
@@ -390,6 +390,8 @@ test('loads combo series and secondary scale without losing sparse cache slots o
   assert.equal(chart.series[0].nameRef, 'Acceptance!B1')
   assert.equal(chart.series[0].categoriesRef, 'Acceptance!C2:C4')
   assert.equal(chart.series[0].valuesRef, 'Acceptance!B2:B4')
+  assert.equal(chart.series[0].smooth, true)
+  assert.equal(chart.series[1].smooth, undefined)
   assert.deepEqual(chart.series[1].values, [12.5, 0, -7.5])
   assert.deepEqual(chart.series[1].blanks, [1])
   assert.equal(chart.series[1].numberFormat, '0.0')
