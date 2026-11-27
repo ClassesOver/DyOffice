@@ -273,7 +273,7 @@ export function chartReferencesSheet(chartXml: string, sheetName: string): boole
 /// workbook-internal anchors). Printer settings reference a part the copy
 /// must not share, so they are dropped — the caller strips the matching
 /// r:id attributes. Drawing relationships are retained for the part copier
-/// to retarget. Anything else (tables, comments, pivots) would
+/// to retarget. Background images can be shared. Anything else (tables, comments, pivots) would
 /// leave the clone pointing at parts that cannot be shared: fail closed.
 export function prepareClonedSheetRels(
   relsXml: string,
@@ -283,12 +283,18 @@ export function prepareClonedSheetRels(
   if (!root) throw new SheetEditError(`Sheet "${sourceName}" has an invalid relationships part.`)
   const printerSettings = []
   let hasClonedRelationships = false
-  for (const entry of childElements(root.inner)) {
-    const rawType = readWorksheetTagAttribute(entry.opening, 'Type')
-    const type = rawType === undefined ? '' : decodeAttribute(rawType)
-    const external = decodeAttribute(readWorksheetTagAttribute(entry.opening, 'TargetMode') ?? '') === 'External'
-    if (entry.name.slice(entry.name.lastIndexOf(':') + 1) === 'Relationship') {
-      if (type.endsWith('/hyperlink') || (type.endsWith('/drawing') && !external)) {
+  for (const entry of scopedChildren(root)) {
+    if (entry.namespace !== root.namespace) {
+      hasClonedRelationships = true
+      continue
+    }
+    const type = entry.attributes.get('Type') ?? ''
+    const external = entry.attributes.get('TargetMode') === 'External'
+    if (entry.local === 'Relationship') {
+      if (
+        type.endsWith('/hyperlink') ||
+        (!external && (type.endsWith('/drawing') || type.endsWith('/image')))
+      ) {
         hasClonedRelationships = true
         continue
       }
@@ -303,7 +309,9 @@ export function prepareClonedSheetRels(
   }
   return {
     relsXml: hasClonedRelationships
-      ? applyPatches(relsXml, [patchElement(root, withBody(root, applyPatches(root.inner, printerSettings)))])
+      ? applyPatches(relsXml, [
+          patchElement(root, withBody(root, applyPatches(root.inner, printerSettings))),
+        ])
       : null,
     droppedPrinterSettings: printerSettings.length > 0,
   }
@@ -744,8 +752,15 @@ export function addWorksheetRelationship(
   return added
 }
 
-export function findRelationshipsRoot(xml: string) {
-  return childElements(xml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+export function findRelationshipsRoot(xml: string): ScopedElement | undefined {
+  const [element] = childElements(xml)
+  if (!element) return undefined
+  const root = withNamespaces(element, new Map())
+  return root.local === 'Relationships' &&
+    (root.namespace === '' ||
+      root.namespace === 'http://schemas.openxmlformats.org/package/2006/relationships')
+    ? root
+    : undefined
 }
 
 export function appendRelationshipRecord(
@@ -779,9 +794,10 @@ export function relationshipIdsMatch(id: string | undefined, reference: string |
 export function removeRelationshipById(relationshipsXml: string, relationshipId: string): string {
   const root = findRelationshipsRoot(relationshipsXml)
   if (!root) return relationshipsXml
-  const entry = childElements(root.inner).find(({ name, opening }) =>
-    name.slice(name.lastIndexOf(':') + 1) === 'Relationship' &&
-    relationshipIdsMatch(readWorksheetTagAttribute(opening, 'Id'), relationshipId),
+  const entry = scopedChildren(root).find(
+    (child) =>
+      isElement(child, 'Relationship', root.namespace) &&
+      relationshipIdsMatch(readWorksheetTagAttribute(child.opening, 'Id'), relationshipId),
   )
   if (!entry) return relationshipsXml
   const start = root.start + root.opening.length + entry.start
@@ -810,16 +826,17 @@ export interface ParsedRelationship {
 export function parseRelationships(relsXml: string): ParsedRelationship[] {
   const entries: ParsedRelationship[] = []
   const root = findRelationshipsRoot(relsXml)
-  for (const { name, opening } of childElements(root?.inner ?? '')) {
-    if (name.slice(name.lastIndexOf(':') + 1) !== 'Relationship') continue
-    const type = readWorksheetTagAttribute(opening, 'Type')
-    const target = readWorksheetTagAttribute(opening, 'Target')
+  if (!root) return entries
+  for (const entry of scopedChildren(root)) {
+    if (!isElement(entry, 'Relationship', root.namespace)) continue
+    const type = entry.attributes.get('Type')
+    const target = entry.attributes.get('Target')
     if (type === undefined || target === undefined) continue
     entries.push({
-      id: readWorksheetTagAttribute(opening, 'Id'),
-      type: decodeAttribute(type),
-      target: decodeAttribute(target),
-      external: decodeAttribute(readWorksheetTagAttribute(opening, 'TargetMode') ?? '') === 'External',
+      id: readWorksheetTagAttribute(entry.opening, 'Id'),
+      type,
+      target,
+      external: entry.attributes.get('TargetMode') === 'External',
     })
   }
   return entries

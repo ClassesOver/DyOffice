@@ -11,10 +11,12 @@ import {
   definedNamesUseToken,
   formatSheetQualifier,
   partPathForRels,
+  parseRelationships,
   pivotCacheReadsFromSheet,
   prepareClonedSheetRels,
   renameSheetInFormula,
   renameSheetInPivotCacheSource,
+  removeRelationshipById,
   sanitizeClonedWorksheetXml,
   SheetEditError,
   stripPageSetupRelIds,
@@ -658,14 +660,25 @@ describe('sheet duplicate save', () => {
     expect(() => assertOnlyTouchedEntriesChanged(mutation)).not.toThrow()
   })
 
-  it('rejects a real drawing relationship with a prefix and a paired tag', async () => {
+  it('keeps a real drawing relationship with a prefix and a paired tag', () => {
     const rels = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">' +
       "<p:Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/draw&#105;ng' Target='../drawings/drawing1.xml'></p:Relationship>" +
       '</p:Relationships>'
-    expect(() => prepareClonedSheetRels(rels, 'Data')).toThrow('not supported yet')
+    expect(prepareClonedSheetRels(rels, 'Data')).toEqual({ relsXml: rels, droppedPrinterSettings: false })
   })
 
-  it('fails closed on drawings, tables, and sheet-scoped defined names', async () => {
+  it('preserves foreign relationship metadata and the internal background image', () => {
+    const foreign = '<Relationship xmlns="urn:example:opaque" Id="rId1" Type="urn:example:printerSettings" Target="opaque"/>'
+    const rels = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      foreign +
+      '<p:Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/background.png"/>' +
+      '</p:Relationships>'
+    expect(prepareClonedSheetRels(rels, 'Data')).toEqual({ relsXml: rels, droppedPrinterSettings: false })
+    expect(parseRelationships(rels).map(({ target }) => target)).toEqual(['../media/background.png'])
+    expect(removeRelationshipById(rels, 'rId1')).toBe(rels.replace(/<p:Relationship Id[^>]*\/>/, ''))
+  })
+
+  it('rejects a missing drawing and still protects sheet-scoped defined names', async () => {
     const zip = await JSZip.loadAsync(await buildSheetsFixture())
     zip.file(
       'xl/worksheets/_rels/sheet1.xml.rels',
@@ -681,7 +694,7 @@ describe('sheet duplicate save', () => {
         removals: [],
         order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
       }),
-    ).rejects.toThrow('not supported yet')
+    ).rejects.toThrow('Workbook is missing xl/drawings/drawing1.xml')
 
     // "Other" carries a sheet-scoped Print_Area (localSheetId=1).
     await expect(
@@ -718,6 +731,7 @@ describe('sheet duplicate save', () => {
     const commentRels =
       '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/></Relationships>'
     expect(() => prepareClonedSheetRels(commentRels, 'Data')).toThrow(SheetEditError)
+    expect(() => prepareClonedSheetRels(commentRels.replace('/comments', '/table'), 'Data')).toThrow(SheetEditError)
   })
 })
 

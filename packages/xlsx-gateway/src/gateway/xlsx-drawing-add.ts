@@ -6,7 +6,7 @@ import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart.ts'
 import { ensureRelationshipNamespace, readRelationshipId, relationshipNamespaceOverride } from './xlsx-namespace.ts'
 import { addContentTypeEntry, appendRelationshipRecord, findRelationshipsRoot, nextFreeRelationshipId, parseRelationships, relationshipIdsMatch } from './xlsx-sheets.ts'
 import { updateWorksheetTagAttribute } from './xlsx-structure.ts'
-import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, withNamespaces, worksheetRoot } from './xlsx-worksheet-xml.ts'
+import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, worksheetRoot } from './xlsx-worksheet-xml.ts'
 
 export class VisualAddError extends Error {}
 
@@ -974,31 +974,48 @@ export async function cloneSheetDrawingParts(
     relationshipXml?: string,
   ) {
     const sourceRels = relsPathFor(source)
-    const xml = relationshipXml ?? ((await pkg.has(sourceRels)) ? await pkg.readText(sourceRels) : undefined)
+    const xml =
+      relationshipXml ?? ((await pkg.has(sourceRels)) ? await pkg.readText(sourceRels) : undefined)
     if (xml === undefined) return
-    const element = findRelationshipsRoot(xml)
-    if (!element) throw new VisualAddError(`${sourceRels} is not a relationships part.`)
-    const root = withNamespaces(element, new Map())
+    const root = findRelationshipsRoot(xml)
+    if (!root) throw new VisualAddError(`${sourceRels} is not a relationships part.`)
     const patches = []
     for (const entry of scopedChildren(root)) {
-      if (!isElement(entry, 'Relationship', root.namespace) ||
-          entry.attributes.get('TargetMode') === 'External') continue
+      if (
+        !isElement(entry, 'Relationship', root.namespace) ||
+        entry.attributes.get('TargetMode') === 'External'
+      )
+        continue
       const target = entry.attributes.get('Target')
       const type = entry.attributes.get('Type')
       if (target === undefined || type === undefined) continue
       const owned = ownedKind !== undefined && type.endsWith(`/${ownedKind}`)
-      if (!owned && directory(source) === directory(destination)) continue
+      const background = ownedKind === 'drawing' && type.endsWith('/image')
+      const sameDirectory = directory(source) === directory(destination)
+      if (!owned && !background && sameDirectory) continue
       const part = resolveRelTarget(source, target)
+      if (background && !(await pkg.has(part))) {
+        throw new VisualAddError(`Workbook is missing ${part}.`)
+      }
+      if (!owned && sameDirectory) continue
       const path = owned ? await copyPart(part, ownedKind) : part
       const fragmentAt = target.indexOf('#')
       const fragment = fragmentAt === -1 ? '' : target.slice(fragmentAt)
-      const relative = relativeTarget(destination, path).split('/').map(encodeURIComponent).join('/')
-      const opening = updateWorksheetTagAttribute(entry.opening, 'Target', escapeXmlAttribute(relative + fragment))
+      const relative = relativeTarget(destination, path)
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/')
+      const opening = updateWorksheetTagAttribute(
+        entry.opening,
+        'Target',
+        escapeXmlAttribute(relative + fragment),
+      )
       patches.push(patchElement(entry, opening + entry.xml.slice(entry.opening.length)))
     }
-    const updated = patches.length === 0 ? xml : applyPatches(xml, [
-      patchElement(root, withBody(root, applyPatches(root.inner, patches))),
-    ])
+    const updated =
+      patches.length === 0
+        ? xml
+        : applyPatches(xml, [patchElement(root, withBody(root, applyPatches(root.inner, patches)))])
     pkg.add(relsPathFor(destination), updated)
   }
 

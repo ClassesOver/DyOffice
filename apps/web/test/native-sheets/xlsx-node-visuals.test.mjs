@@ -188,7 +188,22 @@ test('imports the acceptance chart with a usable anchor, series cache, and edita
 })
 
 test('duplicates a worksheet with an independently editable embedded chart', { timeout: 120_000 }, async t => {
-  const bytes = await readFile(fixture)
+  const book = await JSZip.loadAsync(await readFile(fixture))
+  const sheet = 'xl/worksheets/sheet1.xml'
+  const sheetRels = 'xl/worksheets/_rels/sheet1.xml.rels'
+  const media = 'xl/media/sheet-background.png'
+  const background = '<picture r:id="rIdBackground"/>'
+  const image = `<Relationship Id="rIdBackground" Type="${relationships}image" Target="../media/sheet-background.png"/>`
+  const foreign = `<Relationship xmlns="urn:example:opaque" Type="${relationships}printerSettings" Target="opaque"/>`
+  book.file(sheet, (await textOf(book)(sheet)).replace('</worksheet>', background + '</worksheet>'))
+  book.file(sheetRels, (await textOf(book)(sheetRels)).replace('</Relationships>', foreign + image + '</Relationships>'))
+  book.file(media, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
+  const contentTypes = '[Content_Types].xml'
+  const types = await textOf(book)(contentTypes)
+  if (!types.includes('Extension="png"')) {
+    book.file(contentTypes, types.replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>'))
+  }
+  const bytes = await book.generateAsync({ type: 'nodebuffer' })
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-worksheet-chart-copy-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   await buildSheetsGateway(join(directory, 'gateway.mjs'))
@@ -223,6 +238,14 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   assert.equal(original.chart.series[0].valuesRef, "'Original Data'!$A$2:$A$3")
   assert.equal(copy.chart.series[0].valuesRef, "'Worksheet Copy'!$A$3:$A$4")
   assert.deepEqual(copy.chart.series[0].values, original.chart.series[0].values)
+  const copiedZip = await JSZip.loadAsync(copied)
+  const copiedSheetPath = 'xl/worksheets/sheet2.xml'
+  const copiedRelsPath = 'xl/worksheets/_rels/sheet2.xml.rels'
+  assert.ok((await textOf(copiedZip)(copiedSheetPath)).includes(background))
+  const clonedRels = await textOf(copiedZip)(copiedRelsPath)
+  assert.ok(clonedRels.includes(image))
+  assert.ok(clonedRels.includes(foreign))
+  assert.deepEqual(await copiedZip.file(media).async('nodebuffer'), await book.file(media).async('nodebuffer'))
   const value = await runtime.sheetsNative.readRange(copied, 'Worksheet Copy',
     { startRow: 1, endRow: 1, startColumn: 0, endColumn: 0 })
   assert.equal(value.cells[0].value, 'Revenue')
@@ -251,6 +274,9 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   const replacement = await runtime.sheetsNative.inspect(replaced)
   assert.deepEqual(replacement.sheets.map(({ name }) => name), ['Worksheet Copy'])
   assert.equal(replacement.visuals[0].chart.series[0].valuesRef, "'Worksheet Copy'!$A$2:$A$3")
+  const replacementZip = await JSZip.loadAsync(replaced)
+  assert.ok(replacementZip.file(media))
+  assert.ok((await textOf(replacementZip)(copiedSheetPath)).includes(background))
 })
 
 test('loads combo series and secondary scale without losing sparse cache slots or uncached formulas', async () => {
