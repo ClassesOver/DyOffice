@@ -742,7 +742,7 @@ export function shiftCrossSheetFormulas(
             opening + rewrite(body) + closing,
         )
         .replace(
-          /<(formula[12]?)>([\s\S]*?)<\/\1>/g,
+          /<(formula[12])>([\s\S]*?)<\/\1>/g,
           (_full, tag: string, body: string) => `<${tag}>${rewrite(body)}</${tag}>`,
         ),
     )
@@ -1863,8 +1863,7 @@ function transformColDefinitions(xml: string, shift: Shift): string {
 const CELL_FORMULA = /(<f(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/f>)/g
 
 /// Rewrites `<f>` bodies plus shared/array formula `ref` attributes, and the
-/// `<formula>`/`<formula1>`/`<formula2>` bodies of conditional formatting and
-/// data validation rules.
+/// `<formula1>`/`<formula2>` bodies of data validation rules.
 function transformFormulas(xml: string, sheetName: string, shift: Shift, axis: Axis): string {
   let result = xml.replace(
     CELL_FORMULA,
@@ -1887,7 +1886,7 @@ function transformFormulas(xml: string, sheetName: string, shift: Shift, axis: A
     },
   )
   result = result.replace(
-    /<(formula[12]?)>([\s\S]*?)<\/\1>/g,
+    /<(formula[12])>([\s\S]*?)<\/\1>/g,
     (_full, tag: string, body: string) =>
       `<${tag}>${escapeXmlText(shiftFormulaText(decodeEntities(body), sheetName, shift, axis))}</${tag}>`,
   )
@@ -2025,7 +2024,7 @@ function shiftSqref(sqref: string, moveRef: (ref: string) => string | null): str
 }
 
 function shiftWorksheetRuleRanges(xml: string, moveRef: (ref: string) => string | null): string {
-  if (!/protectedRanges|conditionalFormatting|dataValidations/.test(xml)) return xml
+  if (!/protectedRanges|dataValidations/.test(xml)) return xml
   const shiftOpening = (opening: string) =>
     rewriteRangeAttribute(opening, 'sqref', (sqref) => shiftSqref(sqref, moveRef))
   if (xml.includes('protectedRanges')) {
@@ -2037,13 +2036,8 @@ function shiftWorksheetRuleRanges(xml: string, moveRef: (ref: string) => string 
   }
   return rewriteWorksheetSections(
     xml,
-    ['conditionalFormatting', 'dataValidations'],
-    (element, name) => {
-      if (name === 'dataValidations')
-        return rewriteRangeSection(element, 'dataValidation', shiftOpening, true)
-      const opening = shiftOpening(element.opening)
-      return opening === null ? '' : opening + element.xml.slice(element.opening.length)
-    },
+    ['dataValidations'],
+    (element) => rewriteRangeSection(element, 'dataValidation', shiftOpening, true),
   )
 }
 

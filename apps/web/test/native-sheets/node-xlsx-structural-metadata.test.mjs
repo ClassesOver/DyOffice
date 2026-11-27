@@ -242,6 +242,32 @@ test(
       },
     )
     await t.test(
+      'reads and moves only conditional rules in the worksheet namespace',
+      async () => {
+        const foreignBlock = '<conditionalFormatting xmlns="urn:example:cf" sqref="F2"><cfRule type="expression"><formula>A2</formula></cfRule></conditionalFormatting>'
+        const foreignRule = '<cfRule xmlns="urn:example:cf" type="expression"><formula>A2</formula></cfRule>'
+        const foreignFormula = '<formula xmlns="urn:example:cf">A2</formula>'
+        const foreignNestedFormula = '<extra xmlns="urn:example:cf"><formula>Acceptance!A2</formula></extra>'
+        const fixture = await book(xml => beforeDrawing(xml,
+          foreignBlock + '<conditionalFormatting xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main" sqref="C2:C3">' + foreignRule +
+          '<cfRule type="expression" priority="1">' + foreignFormula + foreignNestedFormula +
+          '<s:formula><![CDATA[Acceptance!$B2>10]]></s:formula></cfRule></conditionalFormatting>'))
+        const rules = async (bytes, name) => (await read(bytes, name)).conditionalRules.map(({ ranges, formulas }) => [ranges, formulas])
+        assert.deepEqual(await rules(fixture), [[[area(1, 2, 2)], ['Acceptance!$B2>10']]])
+
+        const moved = await save(fixture, { structuralOps: insert })
+        assert.deepEqual(await rules(moved), [[[area(2, 3, 3)], ['Acceptance!$C3>10']]])
+        const renamed = await save(moved, { sheetOps: rename })
+        assert.deepEqual(await rules(renamed, 'New Tab'), [[[area(2, 3, 3)], ["'New Tab'!$C3>10"]]])
+        for (const bytes of [moved, renamed]) {
+          const xml = await (await JSZip.loadAsync(bytes)).file(sheet).async('string')
+          for (const preserved of [foreignBlock, foreignRule, foreignFormula, foreignNestedFormula]) {
+            assert.ok(xml.includes(preserved), preserved)
+          }
+        }
+      },
+    )
+    await t.test(
       'moves a quoted legacy array extent along with its master and formula',
       async () => {
         const fixture = (q) =>

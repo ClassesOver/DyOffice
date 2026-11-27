@@ -14,7 +14,7 @@ import {parseSheetProtectionAttributes,protectedRangeHasCredentials} from '../..
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import {hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
-import {elementText as worksheetElementText,isElement,lastWorksheetView,scopedChildren,spreadsheetSheetRoot,withNamespaces,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import {elementText as worksheetElementText,isElement,lastWorksheetView,scopedChildren,spreadsheetSheetRoot,withNamespaces,X14_CF_EXT_URI,X14_XMLNS,XM_XMLNS,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import {inferWorksheetAddresses,readDefinedNameText,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
 import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
@@ -116,15 +116,6 @@ const metadataXmlOptions:X2jOptions={
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
-    'worksheet.conditionalFormatting',
-    'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
-    'worksheet.conditionalFormatting.cfRule.colorScale.color',
-    'worksheet.conditionalFormatting.cfRule.formula','worksheet.conditionalFormatting.cfRule.dataBar.cfvo',
-    'worksheet.conditionalFormatting.cfRule.dataBar.color','worksheet.conditionalFormatting.cfRule.iconSet.cfvo',
-    'worksheet.conditionalFormatting.cfRule.extLst.ext',
-    'worksheet.extLst.ext.conditionalFormattings.conditionalFormatting',
-    'worksheet.extLst.ext.conditionalFormattings.conditionalFormatting.cfRule',
-    'worksheet.extLst.ext.conditionalFormattings.conditionalFormatting.cfRule.dataBar.cfvo',
     'worksheet.extLst.ext',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup',
     'worksheet.extLst.ext.sparklineGroups.sparklineGroup.sparklines.sparkline',
@@ -319,126 +310,134 @@ function readManualBreaks(section: ScopedElement | undefined, max: number): numb
 
 type ResolveColor=(element:XmlElement|undefined)=>{rgb:string|undefined}
 type SheetConditionalRule=SheetMetadata['conditionalRules'][number]
-type CfThresholdXml=XmlElement & { f?: ElementText }
-type CfPayload=XmlElement & { cfvo?: CfThresholdXml[]; color?: XmlElement[] }
-type CfRuleExtension=XmlElement & { id?: ElementText }
-type CfRuleXml=XmlElement & {
-  formula?: ElementText[]
-  colorScale?: CfPayload
-  dataBar?: CfPayload
-  iconSet?: CfPayload
-  extLst?: { ext?: CfRuleExtension[] }
-}
-type CfBlockXml=XmlElement & { cfRule?: CfRuleXml[] }
-type EnhancedDataBarXml=CfPayload & { axisColor?: XmlElement; negativeFillColor?: XmlElement; fillColor?: XmlElement }
-type EnhancedCfBlockXml={ cfRule?: (XmlElement & { dataBar?: EnhancedDataBarXml })[] }
-type EnhancedCfExtension=XmlElement & {
-  conditionalFormattings?: { conditionalFormatting?: EnhancedCfBlockXml[] }
+const conditionalRuleIdExtension = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
+
+function cfChildren(parent: ScopedElement | undefined, name: string, namespace = parent?.namespace): ScopedElement[] {
+  return parent ? scopedChildren(parent).filter(child => isElement(child, name, namespace)) : []
 }
 
-const conditionalFormattingExtension = '{78c0d931-6437-407d-a8ee-f0aad7539e65}'
-const conditionalRuleIdExtension = '{b025f937-c7b1-47d3-b67f-a62eff666e3e}'
+function cfText(element: ScopedElement | undefined): string {
+  return element ? worksheetElementText(element.inner) : ''
+}
 
-function enhancedDataBars(extensions: readonly EnhancedCfExtension[]): ReadonlyMap<string, EnhancedDataBarXml> {
-  const bars = new Map<string, EnhancedDataBarXml>()
-  for (const extension of extensions) {
-    if (attribute(extension, 'uri')?.toLowerCase() !== conditionalFormattingExtension) continue
-    for (const block of extension.conditionalFormattings?.conditionalFormatting ?? []) {
-      for (const rule of block.cfRule ?? []) {
-        if (attribute(rule, 'type') !== 'dataBar' || !rule.dataBar) continue
-        const id = attribute(rule, 'id')?.trim().toLowerCase()
-        if (id) bars.set(id, rule.dataBar)
+function cfColor(element: ScopedElement | undefined, resolveColor: ResolveColor): string | undefined {
+  const attrs = element && Object.fromEntries([...element.attributes].map(([name, value]) => [`@_${name}`, value]))
+  return resolveColor(attrs).rgb
+}
+
+function enhancedDataBars(extensionList: ScopedElement | undefined): ReadonlyMap<string, ScopedElement> {
+  const bars = new Map<string, ScopedElement>()
+  for (const extension of cfChildren(extensionList, 'ext')) {
+    if (extension.attributes.get('uri')?.toUpperCase() !== X14_CF_EXT_URI) continue
+    for (const collection of cfChildren(extension, 'conditionalFormattings', X14_XMLNS)) {
+      for (const block of cfChildren(collection, 'conditionalFormatting')) {
+        for (const rule of cfChildren(block, 'cfRule')) {
+          if (rule.attributes.get('type') !== 'dataBar') continue
+          const bar = cfChildren(rule, 'dataBar')[0]
+          const id = rule.attributes.get('id')?.trim().toLowerCase()
+          if (id && bar) bars.set(id, bar)
+        }
       }
     }
   }
   return bars
 }
 
-function cfInteger(node: XmlElement | undefined, key: string) {
-  const raw = attribute(node, key)
+function cfInteger(node: ScopedElement | undefined, key: string) {
+  const raw = node?.attributes.get(key)
   const value = Number(raw)
   return raw !== undefined && /^\d+$/.test(raw) && Number.isSafeInteger(value) ? value : undefined
 }
 
 function readCfThresholds(
-  nodes: readonly CfThresholdXml[],
+  nodes: readonly ScopedElement[],
   base: SheetConditionalRule['cfvos'] = [],
 ): SheetConditionalRule['cfvos'] {
   return nodes.flatMap((stop, index) => {
-    const kind = attribute(stop, 'type')
+    const kind = stop.attributes.get('type')
     if (!kind) return []
-    const gte = attribute(stop, 'gte')
+    const gte = stop.attributes.get('gte')
     const fallback = base[index]?.kind === kind ? base[index] : undefined
+    const formula = cfChildren(stop, 'f', stop.namespace === X14_XMLNS ? XM_XMLNS : stop.namespace)[0]
     return [{
       kind,
-      value: (elementText(stop.f).trim() || attribute(stop, 'val')) ?? fallback?.value,
+      value: (cfText(formula).trim() || stop.attributes.get('val')) ?? fallback?.value,
       gte: gte === undefined ? fallback?.gte : !disabled(gte),
     }]
   })
 }
 
-function mergeEnhancedDataBar(rule: SheetConditionalRule, twin: EnhancedDataBarXml, resolveColor: ResolveColor): SheetConditionalRule {
-  const axis = attribute(twin, 'axisPosition')
-  const gradient = attribute(twin, 'gradient')
-  const showValue = attribute(twin, 'showValue')
-  const fillColor = resolveColor(twin.fillColor).rgb
-  const cfvos = readCfThresholds(twin.cfvo ?? [], rule.cfvos)
+function mergeEnhancedDataBar(rule: SheetConditionalRule, twin: ScopedElement, resolveColor: ResolveColor): SheetConditionalRule {
+  const axis = twin.attributes.get('axisPosition')
+  const gradient = twin.attributes.get('gradient')
+  const showValue = twin.attributes.get('showValue')
+  const fillColor = cfColor(cfChildren(twin, 'fillColor')[0], resolveColor)
+  const cfvos = readCfThresholds(cfChildren(twin, 'cfvo'), rule.cfvos)
   return {
     ...rule,
     cfvos: cfvos.length === 2 ? cfvos : rule.cfvos,
     colors: fillColor === undefined ? rule.colors : [fillColor],
     showValue: showValue === undefined ? rule.showValue : !disabled(showValue),
     axisPosition: axis === 'automatic' || axis === 'middle' || axis === 'none' ? axis : undefined,
-    axisColor: resolveColor(twin.axisColor).rgb,
+    axisColor: cfColor(cfChildren(twin, 'axisColor')[0], resolveColor),
     gradient: gradient === undefined ? undefined : !disabled(gradient),
-    negativeColor: resolveColor(twin.negativeFillColor).rgb,
-    negativeSameAsPositive: !disabled(attribute(twin, 'negativeBarColorSameAsPositive')),
+    negativeColor: cfColor(cfChildren(twin, 'negativeFillColor')[0], resolveColor),
+    negativeSameAsPositive: !disabled(twin.attributes.get('negativeBarColorSameAsPositive')),
     minLength: Math.min(100, cfInteger(twin, 'minLength') ?? 0),
     maxLength: Math.min(100, cfInteger(twin, 'maxLength') ?? 100),
   }
 }
 
 function readConditionalRules(
-  blocks: readonly CfBlockXml[],
-  extensions: readonly EnhancedCfExtension[],
+  worksheet: readonly ScopedElement[],
   resolveColor: ResolveColor,
 ): SheetConditionalRule[] {
-  const bars = enhancedDataBars(extensions)
+  const bars = enhancedDataBars(worksheet.find(child => child.local === 'extLst'))
   const rules: SheetConditionalRule[] = []
-  for (const block of blocks) {
-    const ranges = (attribute(block, 'sqref') ?? '').split(/\s+/).map(sheetArea).filter(area => area !== null)
+  for (const block of worksheet) {
+    if (block.local !== 'conditionalFormatting') continue
+    const ranges = (block.attributes.get('sqref') ?? '').split(/\s+/).map(sheetArea).filter(area => area !== null)
     if (!ranges.length) continue
-    for (const node of block.cfRule ?? []) {
-      const ruleType = attribute(node, 'type') ?? 'unknown'
-      const { colorScale, dataBar, iconSet } = node
+    for (const node of cfChildren(block, 'cfRule')) {
+      const attrs = node.attributes
+      const ruleType = attrs.get('type') ?? 'unknown'
+      const children = scopedChildren(node)
+      const colorScale = children.find(child => isElement(child, 'colorScale', node.namespace))
+      const dataBar = children.find(child => isElement(child, 'dataBar', node.namespace))
+      const iconSet = children.find(child => isElement(child, 'iconSet', node.namespace))
       const payload = colorScale ?? dataBar ?? iconSet
-      const colors = (payload?.color ?? []).flatMap(color => {
-        const rgb = resolveColor(color).rgb
+      const colorNodes = cfChildren(payload, 'color')
+      const thresholdNodes = cfChildren(payload, 'cfvo')
+      const colors = colorNodes.flatMap(color => {
+        const rgb = cfColor(color, resolveColor)
         return rgb ? [rgb] : []
       })
-      const cfvos = readCfThresholds(payload?.cfvo ?? [])
-      if (ruleType === 'colorScale' && (colors.length < 2 || colors.length !== cfvos.length ||
-        cfvos.length !== colorScale?.cfvo?.length || colors.length !== colorScale?.color?.length)) continue
+      const cfvos = readCfThresholds(thresholdNodes)
+      if (ruleType === 'colorScale' && (!colorScale || colors.length < 2 || colors.length !== cfvos.length ||
+        cfvos.length !== thresholdNodes.length || colors.length !== colorNodes.length)) continue
       const rule: SheetConditionalRule = {
         ranges, ruleType, colors, cfvos,
-        operator: attribute(node, 'operator'),
-        formulas: (node.formula ?? []).map(elementText),
-        text: attribute(node, 'text'),
+        operator: attrs.get('operator'),
+        formulas: children.filter(child => isElement(child, 'formula', node.namespace)).map(cfText),
+        text: attrs.get('text'),
         dxfIndex: cfInteger(node, 'dxfId'),
         priority: cfInteger(node, 'priority') ?? 0,
-        stopIfTrue: enabled(attribute(node, 'stopIfTrue')),
+        stopIfTrue: enabled(attrs.get('stopIfTrue')),
         rank: cfInteger(node, 'rank'),
-        percent: enabled(attribute(node, 'percent')),
-        bottom: enabled(attribute(node, 'bottom')),
-        iconSetName: iconSet === undefined ? undefined : attribute(iconSet, 'iconSet') ?? '3TrafficLights1',
-        iconReverse: enabled(attribute(iconSet, 'reverse')),
-        showValue: !disabled(attribute(payload, 'showValue')),
+        percent: enabled(attrs.get('percent')),
+        bottom: enabled(attrs.get('bottom')),
+        iconSetName: iconSet === undefined ? undefined : iconSet.attributes.get('iconSet') ?? '3TrafficLights1',
+        iconReverse: enabled(iconSet?.attributes.get('reverse')),
+        showValue: !disabled(payload?.attributes.get('showValue')),
         minLength: dataBar === undefined ? undefined : Math.min(100, cfInteger(dataBar, 'minLength') ?? 10),
         maxLength: dataBar === undefined ? undefined : Math.min(100, cfInteger(dataBar, 'maxLength') ?? 90),
       }
-      const idExtension = ruleType === 'dataBar' && node.extLst?.ext?.find(extension =>
-        attribute(extension, 'uri')?.toLowerCase() === conditionalRuleIdExtension)
-      const twin = idExtension ? bars.get(elementText(idExtension.id).trim().toLowerCase()) : undefined
+      const extensionList = ruleType === 'dataBar'
+        ? children.find(child => isElement(child, 'extLst', node.namespace))
+        : undefined
+      const idExtension = cfChildren(extensionList, 'ext').find(extension =>
+        extension.attributes.get('uri')?.toUpperCase() === conditionalRuleIdExtension)
+      const twin = bars.get(cfText(cfChildren(idExtension, 'id', X14_XMLNS)[0]).trim().toLowerCase())
       rules.push(twin === undefined ? rule : mergeEnhancedDataBar(rule, twin, resolveColor))
     }
   }
@@ -511,7 +510,7 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:
       if(target!==undefined)hyperlinks.push({...cell,target})
     }
   }
-  const conditionalRules = readConditionalRules(worksheet?.conditionalFormatting ?? [], worksheet?.extLst?.ext ?? [], resolveColor)
+  const conditionalRules = readConditionalRules(children, resolveColor)
   const rows:SheetMetadata['rows']=[]
   for(const {row,rowNumber} of sheetData ? worksheetRowPositions(sheetData) : []){
     if(rowNumber>MAX_GRID_ROWS)continue

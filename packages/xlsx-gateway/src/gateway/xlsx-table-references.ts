@@ -13,7 +13,7 @@ import {
 } from './xlsx-worksheet-xml.ts'
 
 const formulaTags = /<(?:[\w.-]+:)?(?:f|formula[12]?|calculatedColumnFormula|totalsRowFormula)(?=[\s/>])/
-const worksheetFormulas = new Set(['f', 'formula', 'formula1', 'formula2'])
+const worksheetFormulas = new Set(['f', 'formula1', 'formula2'])
 const tableFormulas = new Set(['calculatedColumnFormula', 'totalsRowFormula'])
 
 export function rewriteTableReferencesInPart(

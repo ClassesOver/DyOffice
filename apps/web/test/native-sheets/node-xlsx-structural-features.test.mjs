@@ -27,12 +27,13 @@ const spark = `
       <x14:sparkline><xm:f>Acceptance!D2:D3</xm:f><xm:sqref>G2</xm:sqref></x14:sparkline>
     </x14:sparklines></x14:sparklineGroup></x14:sparklineGroups>
   </ext>`
+const foreignBarColor = '<negativeFillColor xmlns="urn:example:cf" rgb="FFFF0000"/>'
 const twin = `
   <ext uri="${guids.cf}" xmlns:x14="${x14}" xmlns:xm="${xm}">
     <x14:conditionalFormattings><x14:conditionalFormatting>
       <x14:cfRule type="dataBar" id="${guids.rule}"><x14:dataBar minLength="0" maxLength="100">
         <x14:cfvo type="formula"><xm:f>Acceptance!$D$2</xm:f></x14:cfvo>
-        <x14:cfvo type="max"/><x14:fillColor rgb="FF336699"/>
+        <x14:cfvo type="max"/><x14:fillColor rgb="FF336699"/>${foreignBarColor}
       </x14:dataBar></x14:cfRule>
       <xm:sqref>E2:E3</xm:sqref>
     </x14:conditionalFormatting></x14:conditionalFormattings>
@@ -111,11 +112,13 @@ test(
           /<xm:sqref>([^<]+)<\/xm:sqref>\s*<\/x14:conditionalFormatting>/,
         )?.[1]
         assert.equal(old.cfvos[0].value, 'Acceptance!$D$2')
+        assert.deepEqual([old.minLength, old.maxLength, old.negativeColor], [0, 100, undefined])
         assert.deepEqual(next.ranges, [{ startRow: 2, startColumn: 5, endRow: 3, endColumn: 5 }])
         assert.equal(next.cfvos[0].value, "'New Tab'!$E$3")
         const legacyThreshold = resultXml.match(/<cfvo type="formula" val="([^"]+)"\/>/)?.[1]
         assert.equal(legacyThreshold, "'New Tab'!$E$3")
         assert.equal(extRange, 'F3:F4')
+        assert.ok(resultXml.includes(foreignBarColor))
       },
     )
     await t.test('moves a legacy icon set formula threshold', () => {

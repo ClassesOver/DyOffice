@@ -134,7 +134,7 @@ export interface WorksheetRenameExemptions {
 }
 
 const WORKSHEET_FORMULA =
-  /(<(f|formula[12]?)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/\2>)/g
+  /(<(f|formula[12])(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/\2>)/g
 const HYPERLINK_LOCATION = /^('(?:[^']|'')+'|[^'!]+)!([\s\S]*)$/
 function sheetNameLookup(renames: SheetEditPlan['renames']): SheetNameLookup {
   const names = new Map(renames.map(({ sheetName, newName }) => [sheetName.toLowerCase(), newName]))
