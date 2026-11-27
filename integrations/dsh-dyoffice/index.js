@@ -290,10 +290,9 @@ export function apply(ctx, config) {
   const creations = new Map()
   const createdDocument = createdPreviews(config)
   const editLink=(office,fileId)=>{
-    if(!office.canEdit)return office.origin+'/#/file/'+fileId
-    const advertised=ctx.get?.('webApp')?.getAdvertisedUrl()
-    if(!advertised)throw Error('请在 DSH 网页中打开此文档。')
-    const root=new URL(advertised)
+    const advertised=office.canEdit && ctx.get?.('webApp')?.getAdvertisedUrl?.()
+    const root=advertised && URL.canParse(advertised) ? new URL(advertised) : null
+    if(!root || !['https:', 'http:'].includes(root.protocol))return office.origin+'/#/file/'+fileId
     root.pathname=root.pathname.replace(/\/?$/,'/')
     return new URL(route.slice(1)+'?edit='+fileId,root).href
   }
@@ -330,7 +329,7 @@ export function apply(ctx, config) {
     }
     const office = await ensureOffice(signal, agent)
     if (office.paused) throw Error('DyOffice 频道已暂停，请在频道设置中恢复后重试。')
-    if (!office.fileId) throw Error('此频道还未绑定文档。请先在 DyOffice 绑定要分析的文档，或输入 /dyoffice word 创建一个活动策划。')
+    if (!office.fileId) throw Error('此频道还未绑定文档。请在 DyOffice 绑定要分析的文档，或直接告诉助手“帮我写一份活动策划”。')
     const {taskId} = await office.request('/actions', {
       requestId: randomUUID(), conversationId: office.conversationId, to: 'office',
       action: {kind: 'delegate', instruction, execution: 'saved-revision'},

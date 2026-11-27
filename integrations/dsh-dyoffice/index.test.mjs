@@ -216,4 +216,11 @@ test('natural language saves a filled Word document and only an owner navigation
  assert.equal(redirect.status,303)
  assert.equal(redirect.headers.Location,origin+'/dsh-edit#'+ticket)
  assert.deepEqual(requests,[[`/api/v1/assistant-channels/member/documents/${createdId}/edit-ticket`,proof]])
+
+ // A client without a published DSH web URL must still receive its saved document.
+ apply({...ctx,get:()=>undefined},{memberFile})
+ const count=documents.length
+ const standalone=await tool.execute({action:'create',format:'docx',title:'standalone',body:text},{signal:t.signal})
+ assert.deepEqual(standalone,{fileId:createdId,name:'demo.docx',url:origin+'/#/file/'+createdId})
+ assert.deepEqual(documents.slice(count),[{format:'docx',title:'standalone',body:text}])
 })
