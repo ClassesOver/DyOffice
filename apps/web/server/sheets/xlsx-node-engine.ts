@@ -244,7 +244,7 @@ function printInteger(element: ScopedElement | undefined, name: string, min: num
   return value!==undefined && Number.isInteger(value) && value>=min && value<=max ? value : undefined
 }
 
-function readPageSetup(children: readonly ScopedElement[]): SheetMetadata['pageSetup'] {
+function readPageSetup(children: readonly ScopedElement[], chartSheet = false): SheetMetadata['pageSetup'] {
   const section=(name:string)=>children.find(child=>child.local===name)
   const setup=section('pageSetup'), options=section('printOptions'), footer=section('headerFooter')
   const properties=section('sheetPr')
@@ -271,9 +271,14 @@ function readPageSetup(children: readonly ScopedElement[]): SheetMetadata['pageS
     headerFooterFixedSize:disabled(footer?.attributes.get('scaleWithDoc'))||undefined,
   }
   if (setup && enabled(setup.attributes.get('useFirstPageNumber'))) {
-    print.firstPageNumber=setup.attributes.has('firstPageNumber')
-      ? printInteger(setup,'firstPageNumber',0,0xffffffff)
+    const uint32Range = 0x1_0000_0000
+    const stored = setup.attributes.has('firstPageNumber')
+      ? printInteger(setup, 'firstPageNumber', 0, uint32Range - 1)
       : 1
+    // Excel wraps worksheet page numbers from -32767 through -1 into uint32.
+    print.firstPageNumber = !chartSheet && stored !== undefined && stored >= uint32Range - 32_767
+      ? stored - uint32Range
+      : stored
   }
   if (margins.every(value=>value!==undefined&&value<=10)) {
     print.margins={left:margins[0]!,right:margins[1]!,top:margins[2]!,bottom:margins[3]!,header:margins[4]!,footer:margins[5]!}
@@ -835,7 +840,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
       const savedZoom = sizeValue(view?.attributes.get('zoomScale'))
       const zoomScale = savedZoom ? Math.max(10, Math.min(400, Math.round(savedZoom))) : 100
       sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,chartSheet:true,
-        ...headerFooterMetadata(readPageSetup(children), await loadHeaderPictures()),
+        ...headerFooterMetadata(readPageSetup(children, true), await loadHeaderPictures()),
         view:{tabColor:resolveColor(color).rgb??null,
           showGridLines:false,showRowColHeaders:false,zoomScale:zoomScale===100?undefined:zoomScale}})
       continue

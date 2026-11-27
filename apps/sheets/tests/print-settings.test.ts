@@ -1062,6 +1062,21 @@ describe('layoutSheetPrint', () => {
     expect(selected).not.toContain('Even 10')
   })
 
+  it('keeps signed page numbers and selects odd/even headers across zero', () => {
+    const setup = resolveEffectivePageSetup({}, {
+      firstPageNumber: -2,
+      differentOddEven: true,
+      oddHeader: '&COdd &P',
+      evenHeader: '&CEven &P',
+    }, null)
+    const document = layout(tallWorksheet(120), setup)
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('Even -2</span>')
+    expect(html).toContain('Odd -1</span>')
+    expect(html).toContain('Even 0</span>')
+    expect(assemblePrintHtml([document], (page) => page === 3).html).toContain('Even 0</span>')
+  })
+
   it('renders a total page offset in the footer when printing a page subset', () => {
     const setup = resolveEffectivePageSetup({}, {
       firstPageNumber: 8,

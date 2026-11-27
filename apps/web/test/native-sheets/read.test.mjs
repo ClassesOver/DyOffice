@@ -9,6 +9,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
+import {workbookRangeResultSchema} from '../../../sheets/src/shared/desktop-api.ts'
 import {randomUUID} from 'node:crypto'
 test('native read adapter reopens captured bytes and resolves sheet names inside each isolated call',async()=>{
  const native=createXlsxNativeWorker(await sandboxFixture('native')),input=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
@@ -286,7 +287,8 @@ test('Node XLSX restores worksheet view, print settings and manual page breaks',
   <customSheetViews><customSheetView guid="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><pageSetup orientation="portrait"/></customSheetView></customSheetViews>
   <printOptions headings="1" gridLines="1"/>
   <pageMargins left="0.4" right="0.4" top="1" bottom="1" header="0.5" footer="0.5"/>
-  <pageSetup paperSize="9" orientation="landscape" scale="85" fitToWidth="1" fitToHeight="2" blackAndWhite="true" draft="1"/>
+  <pageSetup paperSize="9" orientation="landscape" scale="85" fitToWidth="1" fitToHeight="2" blackAndWhite="true" draft="1"
+   firstPageNumber="4294967295" useFirstPageNumber="1"/>
   <headerFooter differentOddEven="1" differentFirst="1" scaleWithDoc="0"><oddHeader>&amp;LA &amp; B</oddHeader>
    <oddFooter>&amp;R&amp;P</oddFooter><evenHeader>&amp;CEven</evenHeader><firstFooter>&amp;CFirst</firstFooter></headerFooter>
   <rowBreaks count="4" manualBreakCount="3"><brk id="99" man="0"/><brk id="4" man="1"/><brk id="2" man="1"/><brk id="2" man="true"/></rowBreaks>
@@ -306,11 +308,13 @@ test('Node XLSX restores worksheet view, print settings and manual page breaks',
  assert.deepEqual(result.colBreaks,[3])
  assert.deepEqual(result.pageSetup,{
   orientation:'landscape',paperSize:9,scale:85,fitToWidth:1,fitToHeight:2,fitToPage:true,blackAndWhite:true,draft:true,
+  firstPageNumber:-1,
   margins:{left:0.4,right:0.4,top:1,bottom:1,header:0.5,footer:0.5},printGridlines:true,printHeadings:true,
   oddHeader:'&LA & B',oddFooter:'&R&P',differentOddEven:true,differentFirst:true,headerFooterFixedSize:true,
   evenHeader:'&CEven',firstFooter:'&CFirst',
  })
  assert.deepEqual(inspected.openingViewport.result.pageSetup,result.pageSetup)
+ assert.equal(workbookRangeResultSchema.parse(result).pageSetup.firstPageNumber,-1)
 })
 
 test('Node XLSX reopens chart metadata and serves an embedded image by its visual ID',async t=>{

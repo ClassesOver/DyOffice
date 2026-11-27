@@ -37,9 +37,9 @@ describe('applyPageSetupState', () => {
     const xml =
       '<worksheet><sheetData/>' +
       '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>' +
-      '<pageSetup paperSize="1" orientation="portrait" draft="1" r:id="rId1"/></worksheet>'
+      '<pageSetup paperSize="1" orientation="portrait" draft="1" firstPageNumber="4294967295" useFirstPageNumber="1" r:id="rId1"/></worksheet>'
     const patched = applyPageSetupState(xml, { sheetName: 'S', orientation: 'landscape' })
-    expect(patched).toContain('<pageSetup paperSize="1" orientation="landscape" draft="1" r:id="rId1"/>')
+    expect(patched).toContain('<pageSetup paperSize="1" orientation="landscape" draft="1" firstPageNumber="4294967295" useFirstPageNumber="1" r:id="rId1"/>')
     expect(patched).toContain('<pageMargins left="0.7"')
   })
 
