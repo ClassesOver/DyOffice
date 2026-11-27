@@ -58,8 +58,8 @@ test('Web Node rewrites aliased worksheet validations without touching other ext
     { enabled: true },
   )
   t.after(() => runtime.close())
-  const validation = async (bytes) => {
-    const { dataValidations } = await runtime.sheetsNative.readRange(bytes, 'Acceptance', bounds)
+  const validation = async (bytes, sheetName = 'Acceptance') => {
+    const { dataValidations } = await runtime.sheetsNative.readRange(bytes, sheetName, bounds)
     return dataValidations.map(({ ranges, formulas }) => [ranges, formulas])
   }
   const current = 'Acceptance!$A$2:$A$3'
@@ -103,6 +103,35 @@ test('Web Node rewrites aliased worksheet validations without touching other ext
         [[area(4)], [current]],
         [[area(3)], [added]],
       ])
+    },
+  )
+
+  await t.test(
+    'moves and renames a legacy validation while preserving foreign formulas',
+    async () => {
+      const foreign = '<formula1 xmlns="urn:unrelated">Acceptance!A2</formula1>'
+      const legacy =
+        `<s:dataValidations xmlns:s="${spreadsheet}" count="1">` +
+        '<s:dataValidation type="custom" sqref="B2">' +
+        foreign +
+        '<s:formula1><![CDATA[Acceptance!A2>0]]></s:formula1></s:dataValidation></s:dataValidations>'
+      const source = await workbook(
+        `<worksheet xmlns="${spreadsheet}"><sheetData/>` + legacy + '</worksheet>',
+      )
+      assert.deepEqual(await validation(source), [[[area(1)], ['Acceptance!A2>0']]])
+      const request = {
+        ...sheetsSaveRequest('sheet-1', []),
+        structuralOps: [{ sheetId: 'sheet-1', kind: 'insert-rows', index: 0, count: 1 }],
+        sheetOps: [{ sheetId: 'sheet-1', kind: 'rename-sheet', newName: 'Validated Sheet' }],
+      }
+      const plan = await runtime.sheetsWorkbookPlanner(source, request)
+      const { bytes } = await runtime.sheetsNative.savePlan(source, plan)
+      const moved = { ...area(1), startRow: 2, endRow: 2 }
+      assert.deepEqual(await validation(bytes, 'Validated Sheet'), [
+        [[moved], ["'Validated Sheet'!A3>0"]],
+      ])
+      const xml = await (await JSZip.loadAsync(bytes)).file(path).async('string')
+      assert.ok(xml.includes(foreign))
     },
   )
 })

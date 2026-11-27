@@ -11,8 +11,32 @@ import {
   PIVOT_SHOW_DATA_AS_BASE_ITEM,
   showDataAsToOoxml,
 } from '../domain/pivot-value-modes.ts'
-import { resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
-import { buildCacheDefinitionXml, buildPivotTableXml, type PivotAddition } from './xlsx-pivot-add.ts'
+import { relativeTarget, relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
+import { readRelationshipIdAttribute, readRootStartTag } from './xlsx-namespace.ts'
+import { setPivotRefreshOnLoad } from './xlsx-pivot.ts'
+import {
+  addPivotCacheParts,
+  buildCacheDefinitionXml,
+  buildPivotTableXml,
+  maxCacheId,
+  registerWorkbookPivotCache,
+  type PivotAddition,
+} from './xlsx-pivot-add.ts'
+import { parseSlicerState } from './xlsx-slicer.ts'
+import {
+  decodeAttribute,
+  findRelationshipsRoot,
+  localPivotWorksheetSource,
+  parseRelationships,
+  relationshipIdsMatch,
+} from './xlsx-sheets.ts'
+import {
+  findPivotTableLocation,
+  readWorksheetTagAttribute,
+  updateWorksheetTagAttribute,
+} from './xlsx-structure.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { isElement, scopedChildren, withNamespaces, worksheetRoot } from './xlsx-worksheet-xml.ts'
 
 export class PivotExpandError extends Error {}
 
@@ -20,6 +44,8 @@ export class PivotExpandError extends Error {}
 export interface PivotRefreshUpdate {
   /// xl/pivotCache/pivotCacheDefinitionN.xml
   readonly cachePath: string
+  /// Identifies the pivot when several tables share its cache.
+  readonly pivotPath?: string | undefined
   /// xl/worksheets/sheetN.xml — the sheet that hosts the pivot output.
   /// May be omitted when the renderer only knows the sheet name; then
   /// planCellEditsToXlsx resolves it from sheetName before calling
@@ -33,8 +59,8 @@ export interface PivotRefreshUpdate {
   readonly newOutputRef: string
   /// Layout edit (A3): the full edited layout in the pivot-addition shape.
   /// The pivotTableDefinition and pivotCacheDefinition are regenerated from
-  /// it — the original name, cacheId, and records rel id stay; the emptied
-  /// records part is rebuilt by Excel via refreshOnLoad. The payload's own
+  /// it. The original name stays, and a shared cache gets a separate cache ID.
+  /// Excel rebuilds the edited cache's records on open. The payload's own
   /// `name` is a renderer placeholder and is ignored.
   readonly relayout?: Omit<PivotAddition, 'worksheetPath'> | undefined
 }
@@ -72,80 +98,81 @@ function areaRefToString(area: AreaRef): string {
 
 // ─── Package helpers ─────────────────────────────────────────────────────────
 
-/// Find the pivotTable part path linked to a given pivotCacheDefinition via
-/// its own rels (pivot table → cache, so we do a reverse scan).
-async function findPivotTablePathForCache(
+async function linkedParts(pkg: MutablePackage, partPath: string, kind: string): Promise<string[]> {
+  const relsPath = relsPathFor(partPath)
+  if (!(await pkg.has(relsPath))) return []
+  return parseRelationships(await pkg.readText(relsPath))
+    .filter(({ external, type }) => !external && type.endsWith('/' + kind))
+    .map(({ target }) => resolveRelTarget(partPath, target))
+}
+
+async function findPivotTablePathForRefresh(
   pkg: MutablePackage,
-  cachePath: string,
-): Promise<string | null> {
-  const allPaths = await pkg.paths()
-  const tableRelsPattern = /^xl\/pivotTables\/_rels\/[^/]+\.rels$/
-  for (const relsPath of allPaths) {
-    if (!tableRelsPattern.test(relsPath)) continue
-    const relsXml = await pkg.readText(relsPath)
-    // Each pivot table rels file has exactly one pivotCacheDefinition relationship
-    const targetMatch =
-      /Target="([^"]+)"[^>]*Type="[^"]*pivotCacheDefinition[^"]*"/.exec(relsXml) ??
-      /Type="[^"]*pivotCacheDefinition[^"]*"[^>]*Target="([^"]+)"/.exec(relsXml)
-    if (!targetMatch?.[1]) continue
-    // Resolve the target relative to the rels file's directory
-    // rels path: xl/pivotTables/_rels/pivotTable1.xml.rels
-    // Target: ../pivotCache/pivotCacheDefinition1.xml
-    // Resolved: xl/pivotCache/pivotCacheDefinition1.xml
-    const relsDir = relsPath.replace(/\/_rels\/[^/]+$/, '')
-    const sourcePart = relsPath.replace(/\/_rels\/([^/]+)\.rels$/, '/$1')
-    const resolved = resolveRelTarget(sourcePart, targetMatch[1])
-    if (resolved !== cachePath) continue
-    // The pivot table path: strip _rels/ and .rels suffix
-    const tableFilename = relsPath.replace(/.*\/_rels\//, '').replace(/\.rels$/, '')
-    return `${relsDir}/${tableFilename}`
+  worksheetPath: string,
+  update: PivotRefreshUpdate,
+): Promise<string | undefined> {
+  const candidates: string[] = []
+  for (const tablePath of new Set(await linkedParts(pkg, worksheetPath, 'pivotTable'))) {
+    if (update.pivotPath !== undefined && update.pivotPath !== tablePath) continue
+    if ((await linkedParts(pkg, tablePath, 'pivotCacheDefinition')).includes(update.cachePath)) {
+      candidates.push(tablePath)
+    }
   }
-  return null
-}
+  if (update.pivotPath !== undefined && candidates.length === 0) {
+    throw new PivotExpandError('The pivot refresh does not match the worksheet and cache relationships.')
+  }
+  if (candidates.length <= 1) return candidates[0]
 
-/// Read the current <location ref="…"> from a pivot table XML.
-function extractLocationRef(pivotTableXml: string): string | null {
-  return /<location\b[^>]*\bref="([^"]+)"/.exec(pivotTableXml)?.[1] ?? null
-}
-
-/// Replace the ref attribute on the <location …> element.
-function updateLocationRef(pivotTableXml: string, newRef: string): string {
-  return pivotTableXml.replace(
-    /<location\b([^>]*)\bref="[^"]*"([^>]*)>/,
-    (_, before, after) => `<location${before}ref="${newRef}"${after}>`,
-  )
+  // Older save requests identify the table by its unchanged output origin.
+  const { start } = parseAreaRef(update.newOutputRef)
+  const matches: string[] = []
+  for (const tablePath of candidates) {
+    const location = findPivotTableLocation(await pkg.readText(tablePath))
+    const ref = location?.attributes.get('ref')
+    if (!ref) continue
+    const { start: origin } = parseAreaRef(ref)
+    if (origin.col === start.col && origin.row === start.row) matches.push(tablePath)
+  }
+  if (matches.length !== 1) {
+    throw new PivotExpandError('The pivot refresh matches an ambiguous output location.')
+  }
+  return matches[0]
 }
 
 // ─── Conflict detection ───────────────────────────────────────────────────────
 
 /// True when the worksheet XML has any non-empty cell in the given area.
 function worksheetHasContentInArea(worksheetXml: string, area: AreaRef): boolean {
-  // Walk every <row r="N"> in the range, then every <c r="XX"> in the column band.
+  const worksheet = worksheetRoot(worksheetXml)
+  if (!worksheet) return false
+  const namespace = worksheet.namespace
+  const data = scopedChildren(worksheet).find((child) => isElement(child, 'sheetData', namespace))
+  if (!data) return false
+
   const { start, end } = area
-  const rowPattern = /<row\b([^>]*?)>([\s\S]*?)<\/row>/g
-  for (const rowMatch of worksheetXml.matchAll(rowPattern)) {
-    const rAttr = /\br="(\d+)"/.exec(rowMatch[1] ?? '')
-    if (!rAttr) continue
-    const rowIdx = Number(rAttr[1]) - 1 // 0-based
+  let rowIdx = -1
+  for (const row of scopedChildren(data)) {
+    if (!isElement(row, 'row', namespace)) continue
+    const rowNumber = row.attributes.get('r')
+    rowIdx = rowNumber === undefined ? rowIdx + 1 : Number(rowNumber) - 1
     if (rowIdx < start.row || rowIdx > end.row) continue
-    // Check each cell in this row
-    // Lazy attributes: greedy `[^>]*` swallows the "/" of a self-closing <c/>
-    // and makes the match run on to the next </c>, so an empty cell would
-    // borrow its neighbour's value.
-    const cellPattern = /<c\b([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g
-    for (const cellMatch of rowMatch[2]!.matchAll(cellPattern)) {
-      const rCell = /\br="([A-Z]+\d+)"/.exec(cellMatch[1] ?? '')
-      if (!rCell) continue
-      const colMatch = /^([A-Z]+)/.exec(rCell[1]!)
-      if (!colMatch) continue
-      const colIdx = columnIndex(colMatch[1]!)
+
+    let colIdx = -1
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', namespace)) continue
+      const ref = cell.attributes.get('r')
+      if (ref === undefined) {
+        colIdx += 1
+      } else {
+        const col = /^([A-Z]+)\d+$/.exec(ref.toUpperCase())?.[1]
+        if (!col) continue
+        colIdx = columnIndex(col)
+      }
       if (colIdx < start.col || colIdx > end.col) continue
-      // Cell exists in area — is it non-empty?
-      const cellXml = cellMatch[0]!
-      // Self-closing <c .../> or <c with no <v> = empty
-      if (cellXml.endsWith('/>')) continue
-      if (!/<v[^>]*>/.test(cellXml) && !/<is>/.test(cellXml)) continue
-      return true
+      // A formula, including a shared follower, can have no cached value.
+      if (scopedChildren(cell).some(({ local, namespace: childNamespace }) =>
+        childNamespace === namespace && (local === 'f' || local === 'v' || local === 'is'),
+      )) return true
     }
   }
   return false
@@ -203,15 +230,20 @@ export async function applyPivotLayoutExpansions(
   touchedEntries: Set<string>,
 ): Promise<void> {
   for (const update of updates) {
-    const pivotTablePath = await findPivotTablePathForCache(pkg, update.cachePath)
+    const { worksheetPath } = update
+    if (worksheetPath === undefined) {
+      throw new PivotExpandError('Pivot refresh needs a resolved worksheet path.')
+    }
+    const pivotTablePath = await findPivotTablePathForRefresh(pkg, worksheetPath, update)
     if (!pivotTablePath) {
       // Cache not yet linked to a table (edge case: bare cache from old save) — skip.
       continue
     }
 
     const pivotTableXml = await pkg.readText(pivotTablePath)
-    const currentRef = extractLocationRef(pivotTableXml)
-    if (!currentRef) continue
+    const location = findPivotTableLocation(pivotTableXml)
+    const currentRef = location?.attributes.get('ref')
+    if (!location || !currentRef) continue
 
     const oldArea = parseAreaRef(currentRef)
     const newArea = parseAreaRef(update.newOutputRef)
@@ -233,13 +265,10 @@ export async function applyPivotLayoutExpansions(
 
     const grows = newArea.end.row > oldArea.end.row || newArea.end.col > oldArea.end.col
     if (grows) {
-      if (update.worksheetPath === undefined) {
-        throw new PivotExpandError('Pivot expansion needs a resolved worksheet path.')
-      }
       // Growth — check added cells for pre-existing content. Shrinking needs
       // no check: the renderer already cleared the leftover cells and saved
       // them as ordinary cell edits.
-      const worksheetXml = await pkg.readText(update.worksheetPath)
+      const worksheetXml = await pkg.readText(worksheetPath)
       const addedAreas = subtractAreas(newArea, oldArea)
       for (const added of addedAreas) {
         if (worksheetHasContentInArea(worksheetXml, added)) {
@@ -253,7 +282,10 @@ export async function applyPivotLayoutExpansions(
     }
 
     if (update.relayout === undefined) {
-      const updatedTableXml = updateLocationRef(pivotTableXml, update.newOutputRef)
+      const { start, opening } = location
+      const updated = updateWorksheetTagAttribute(opening, 'ref', areaRefToString(newArea))
+      const updatedTableXml =
+        pivotTableXml.slice(0, start) + updated + pivotTableXml.slice(start + opening.length)
       pkg.write(pivotTablePath, updatedTableXml)
       touchedEntries.add(pivotTablePath)
       continue
@@ -262,10 +294,65 @@ export async function applyPivotLayoutExpansions(
   }
 }
 
-/// Layout edit: regenerate the pivotTableDefinition and pivotCacheDefinition
-/// from the edited layout, keeping the original name, cacheId, and records
-/// rel id. The records part empties (recordCount 0) — refreshOnLoad, set via
-/// the same save's pivotCacheRefreshPaths, has Excel rebuild it on open.
+async function isPivotCacheShared(pkg: MutablePackage, cachePath: string, pivotPath: string) {
+  for (const sheetPath of await linkedParts(pkg, 'xl/workbook.xml', 'worksheet')) {
+    for (const peer of await linkedParts(pkg, sheetPath, 'pivotTable')) {
+      if (peer !== pivotPath &&
+        (await linkedParts(pkg, peer, 'pivotCacheDefinition')).includes(cachePath)) return true
+    }
+  }
+  return false
+}
+
+/// Give the edited pivot its own cache while preserving peer pivots and their cache.
+async function separatePivotCache(
+  pkg: MutablePackage,
+  update: PivotRefreshUpdate,
+  pivotPath: string,
+  cacheId: number,
+  cacheDefinition: (recordsRelId: string) => string,
+  touchedEntries: Set<string>,
+): Promise<number> {
+  if ((await parseSlicerState(pkg)).some((slicer) => slicer.pivotCacheDefinitionPath === update.cachePath)) {
+    throw new PivotExpandError('A layout edit cannot separate a shared pivot cache used by slicers.')
+  }
+  const pivotRelsPath = relsPathFor(pivotPath)
+  const pivotRels = await pkg.readText(pivotRelsPath)
+  const root = findRelationshipsRoot(pivotRels)
+  const entry = root && childElements(root.inner).find(({ name, opening }) => {
+    const type = decodeAttribute(readWorksheetTagAttribute(opening, 'Type') ?? '')
+    const target = readWorksheetTagAttribute(opening, 'Target')
+    return name.slice(name.lastIndexOf(':') + 1) === 'Relationship' &&
+      type.endsWith('/pivotCacheDefinition') && target !== undefined &&
+      readWorksheetTagAttribute(opening, 'TargetMode') !== 'External' &&
+      resolveRelTarget(pivotPath, decodeAttribute(target)) === update.cachePath
+  })
+  if (!root || !entry) {
+    throw new PivotExpandError('The pivot table has no cache relationship to update.')
+  }
+  const workbookPath = 'xl/workbook.xml'
+  const workbookXml = await pkg.readText(workbookPath)
+  const nextId = Math.max(cacheId, maxCacheId(workbookXml)) + 1
+  const newCache = await addPivotCacheParts(pkg, EMPTY_PIVOT_RECORDS, cacheDefinition, touchedEntries)
+  const workbook = await registerWorkbookPivotCache(pkg, workbookXml, nextId, newCache, touchedEntries)
+  pkg.write(workbookPath, workbook)
+  touchedEntries.add(workbookPath)
+
+  const offset = root.start + root.opening.length + entry.start
+  const updated = updateWorksheetTagAttribute(entry.opening, 'Target', relativeTarget(pivotPath, newCache))
+  pkg.write(pivotRelsPath,
+    pivotRels.slice(0, offset) + updated + pivotRels.slice(offset + entry.opening.length))
+  touchedEntries.add(pivotRelsPath)
+  return nextId
+}
+
+const EMPTY_PIVOT_RECORDS =
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+  '<pivotCacheRecords ' +
+  'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+  'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+  'count="0"/>'
+
 async function applyPivotRelayout(
   pkg: MutablePackage,
   update: PivotRefreshUpdate,
@@ -278,62 +365,63 @@ async function applyPivotRelayout(
   // Both parts are rebuilt from the model, so refuse before touching either when
   // the original carries content the builders cannot reproduce.
   assertOnlyModelledContent(pivotTableXml, 'table')
-  assertOnlyModelledContent(cacheXml, 'cache')
-  const name = unescapeAttribute(
-    /<pivotTableDefinition\b[^>]*?\bname="([^"]*)"/.exec(pivotTableXml)?.[1] ?? '',
-  )
-  const cacheId = Number(/\bcacheId="(\d+)"/.exec(pivotTableXml)?.[1])
-  if (!name || !Number.isInteger(cacheId)) {
+  const recordsReference = readRelationshipIdAttribute(readRootStartTag(cacheXml), '', '')
+  assertOnlyModelledContent(cacheXml, 'cache', recordsReference?.name)
+  const tableOpening = readRootStartTag(pivotTableXml)
+  const name = decodeAttribute(readWorksheetTagAttribute(tableOpening, 'name') ?? '')
+  const rawCacheId = decodeAttribute(readWorksheetTagAttribute(tableOpening, 'cacheId') ?? '')
+  const cacheId = Number(rawCacheId)
+  if (!name || !/^\d+$/.test(rawCacheId) || !Number.isInteger(cacheId)) {
     throw new PivotExpandError('The pivot table definition is missing its name or cacheId.')
   }
+  const recordsRelId = recordsReference?.value
+  if (!recordsRelId) {
+    throw new PivotExpandError('The pivot cache definition is missing its records relationship.')
+  }
+  const cacheRelsPath = relsPathFor(update.cachePath)
+  const recordsRelationship = (await pkg.has(cacheRelsPath))
+    ? parseRelationships(await pkg.readText(cacheRelsPath)).find(({ id }) =>
+        relationshipIdsMatch(id, recordsRelId),
+      )
+    : undefined
+  if (!recordsRelationship || recordsRelationship.external ||
+    !recordsRelationship.type.endsWith('/pivotCacheRecords')) {
+    throw new PivotExpandError('The pivot cache does not have a valid internal records relationship.')
+  }
+  const recordsPath = resolveRelTarget(update.cachePath, recordsRelationship.target)
+  if (!(await pkg.has(recordsPath))) {
+    throw new PivotExpandError('The pivot cache records relationship points to a missing part.')
+  }
+
   const addition: PivotAddition = {
     ...relayout,
     name,
     worksheetPath: update.worksheetPath ?? '',
     location: refToArea(update.newOutputRef),
   }
-  pkg.write(pivotTablePath, buildPivotTableXml(cacheId, addition))
+  const source = localPivotWorksheetSource(cacheXml)?.element
+  const namedSource = source?.attributes.has('name') ? source.xml : undefined
+  const cacheDefinition = (id: string): string => {
+    const rebuilt = buildCacheDefinitionXml(id, addition, 0)
+    return setPivotRefreshOnLoad(namedSource === undefined ? rebuilt
+      : rebuilt.replace(/<worksheetSource\b[^>]*\/>/, () => namedSource))
+  }
+
+  const shared = await isPivotCacheShared(pkg, update.cachePath, pivotTablePath)
+  const editedCacheId = shared
+    ? await separatePivotCache(pkg, update, pivotTablePath, cacheId, cacheDefinition, touchedEntries)
+    : cacheId
+  if (!shared) {
+    pkg.write(update.cachePath, cacheDefinition(decodeAttribute(recordsRelId)))
+    touchedEntries.add(update.cachePath)
+    pkg.write(recordsPath, EMPTY_PIVOT_RECORDS)
+    touchedEntries.add(recordsPath)
+  }
+  pkg.write(pivotTablePath, buildPivotTableXml(editedCacheId, addition))
   touchedEntries.add(pivotTablePath)
-
-  const recordsRelId = /<pivotCacheDefinition\b[^>]*?\br:id="([^"]+)"/.exec(cacheXml)?.[1]
-  if (!recordsRelId) {
-    throw new PivotExpandError('The pivot cache definition is missing its records relationship.')
-  }
-  pkg.write(update.cachePath, buildCacheDefinitionXml(recordsRelId, addition, 0))
-  touchedEntries.add(update.cachePath)
-
-  // Empty the records part (found through the cache's rels); Excel rebuilds
-  // it from the source on open.
-  const cacheRelsPath = update.cachePath.replace(/\/([^/]+)$/, '/_rels/$1.rels')
-  if (await pkg.has(cacheRelsPath)) {
-    const relsXml = await pkg.readText(cacheRelsPath)
-    const target =
-      /Target="([^"]+)"[^>]*Type="[^"]*pivotCacheRecords[^"]*"/.exec(relsXml)?.[1] ??
-      /Type="[^"]*pivotCacheRecords[^"]*"[^>]*Target="([^"]+)"/.exec(relsXml)?.[1]
-    if (target) {
-      const recordsPath = resolveRelTarget(update.cachePath, target)
-      pkg.write(
-        recordsPath,
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
-          '<pivotCacheRecords ' +
-          'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
-          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
-          'count="0"/>',
-      )
-      touchedEntries.add(recordsPath)
-    }
-  }
 }
 
 // ─── Unmodelled-content guard ──────────────────────────────────────────────────
-
-/// One element start tag, as found by scanTags.
-interface ScannedTag {
-  readonly name: string
-  readonly attributes: readonly string[]
-  /// The raw attribute text, for the tags whose written value is fixed.
-  readonly raw: string
-}
 
 /// Every element `buildPivotTableXml` / `buildCacheDefinitionXml` can write, as
 /// the space-separated attribute and child-element names the builder emits for
@@ -388,12 +476,12 @@ const MODELLED_ELEMENTS: Readonly<Record<string, { attrs: string; children: stri
   // save, so a pivot DyOffice itself relaid out carries it on reopen.
   pivotCacheDefinition: {
     attrs:
-      'r:id refreshedBy createdVersion refreshedVersion minRefreshableVersion recordCount ' +
+      'refreshedBy createdVersion refreshedVersion minRefreshableVersion recordCount ' +
       'refreshOnLoad',
     children: 'cacheSource cacheFields',
   },
   cacheSource: { attrs: 'type', children: 'worksheetSource' },
-  worksheetSource: { attrs: 'ref sheet', children: '' },
+  worksheetSource: { attrs: 'ref sheet name', children: '' },
   cacheFields: { attrs: 'count', children: 'cacheField' },
   cacheField: { attrs: 'name numFmtId formula databaseField', children: 'sharedItems' },
   sharedItems: { attrs: 'count', children: 's' },
@@ -410,61 +498,37 @@ const BASE_FIELD_MODE_OOXML: readonly string[] =
   PIVOT_SHOW_DATA_AS_BASE_FIELD.map(showDataAsToOoxml)
 const BASE_ITEM_MODE_OOXML: readonly string[] = PIVOT_SHOW_DATA_AS_BASE_ITEM.map(showDataAsToOoxml)
 
-/// Every element start tag with its attribute names, without namespace
-/// declarations (which the builder always rewrites verbatim).
-function scanTags(xml: string): ScannedTag[] {
-  const tags: ScannedTag[] = []
-  const open: string[] = []
-  // The closing slash is captured apart from the attributes so an attribute
-  // value ending in "/" (ref="A1/") is not mistaken for a self-closing tag.
-  const pattern = /<(\/?)([A-Za-z_][\w.:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*?)(\/?)>/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(xml)) !== null) {
-    if (match[1] === '/') {
-      open.pop()
-      continue
-    }
-    const raw = match[3] ?? ''
-    const attributes: string[] = []
-    const attributePattern = /([A-Za-z_][\w.:-]*)\s*=/g
-    let attribute: RegExpExecArray | null
-    while ((attribute = attributePattern.exec(raw)) !== null) {
-      if (attribute[1] !== 'xmlns' && !attribute[1]!.startsWith('xmlns:')) {
-        attributes.push(attribute[1]!)
-      }
-    }
-    tags.push({ name: match[2]!, attributes, raw })
-    if (match[4] !== '/') open.push(match[2]!)
-  }
-  return tags
-}
-
-function attributeValue(tag: ScannedTag, name: string): string | undefined {
-  return new RegExp(`\\b${name}="([^"]*)"`).exec(tag.raw)?.[1]
-}
-
 /// Fail closed when a pivot or cache part carries content the relayout
 /// builders cannot reproduce. Without this, editing a layout silently drops
 /// styles, sort/subtotal settings, chart formats, conditional formats and
 /// extension content that the in-memory model never modelled.
-function assertOnlyModelledContent(xml: string, part: string): void {
+function assertOnlyModelledContent(xml: string, part: 'table' | 'cache', recordsAttribute?: string): void {
   const unmodelled = (detail: string): PivotExpandError =>
     new PivotExpandError(
       `The pivot ${part} has ${detail}, which a layout edit cannot preserve. ` +
         'Re-create the pivot after changing its layout.',
     )
-  for (const tag of scanTags(xml)) {
+  const roots = childElements(xml)
+  const expectedRoot = part === 'table' ? 'pivotTableDefinition' : 'pivotCacheDefinition'
+  const [root] = roots
+  if (roots.length !== 1 || root?.name !== expectedRoot) throw unmodelled('an invalid root element')
+  const pending = [withNamespaces(root, new Map())]
+  let tag = pending.pop()
+  while (tag) {
     const spec = MODELLED_ELEMENTS[tag.name]
     if (spec === undefined) throw unmodelled(`an unmodelled <${tag.name}> section`)
-    for (const attribute of tag.attributes) {
-      if (!spec.attrs.split(' ').includes(attribute)) {
+    const modelledAttributes = spec.attrs.split(' ')
+    for (const attribute of tag.attributes.keys()) {
+      if (attribute === 'xmlns' || attribute.startsWith('xmlns:')) continue
+      if (tag.name === 'pivotCacheDefinition' && attribute === recordsAttribute) continue
+      if (!modelledAttributes.includes(attribute)) {
         throw unmodelled(`an unmodelled <${tag.name} ${attribute}="…"> attribute`)
       }
     }
     // Attributes the builders write with a fixed value: a different original
     // value is user content the model does not carry.
     if (tag.name === 'pivotTableStyleInfo') {
-      const style = attributeValue(tag, 'name')
+      const style = tag.attributes.get('name')
       if (style !== undefined && style !== MODELLED_PIVOT_STYLE) {
         throw unmodelled(`the pivot table style "${style}"`)
       }
@@ -473,7 +537,7 @@ function assertOnlyModelledContent(xml: string, part: string): void {
     // base-field "show values as" mode; stray non-zero values the model would
     // rewrite to 0 stay fail-closed.
     if (tag.name === 'dataField') {
-      const mode = attributeValue(tag, 'showDataAs')
+      const mode = tag.attributes.get('showDataAs')
       const carriesBase = (spellings: readonly string[]): boolean =>
         mode !== undefined && spellings.includes(mode)
       const baseFieldModes = carriesBase(BASE_FIELD_MODE_OOXML)
@@ -482,12 +546,14 @@ function assertOnlyModelledContent(xml: string, part: string): void {
         ['baseField', baseFieldModes],
         ['baseItem', baseItemModes],
       ] as const) {
-        const value = attributeValue(tag, attribute)
+        const value = tag.attributes.get(attribute)
         if (value !== undefined && value !== '0' && !modelled) {
           throw unmodelled(`a dataField ${attribute}`)
         }
       }
     }
+    for (const child of scopedChildren(tag)) pending.push(child)
+    tag = pending.pop()
   }
 }
 
@@ -499,13 +565,4 @@ function refToArea(ref: string): PivotAddition['location'] {
     endRow: area.end.row,
     endColumn: area.end.col,
   }
-}
-
-function unescapeAttribute(input: string): string {
-  return input
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&apos;', "'")
-    .replaceAll('&amp;', '&')
 }

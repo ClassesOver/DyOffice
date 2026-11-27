@@ -55,7 +55,7 @@ export interface BoundWorkbookSource {
 }
 /** Uses the original sidecar's archive writer. This is an archive roundtrip,
  * not an editor or persisted recalculation implementation. */
-export function createXlsxNativeWorker(process: NativeProcess, supportsOpeningViewport=false) {
+export function createXlsxNativeWorker(process: NativeProcess, nodeEngine=false) {
   const native = createNativeAdmission(process)
   let refreshing = false
   return {
@@ -124,7 +124,7 @@ export function createXlsxNativeWorker(process: NativeProcess, supportsOpeningVi
     },
     inspect(input:Uint8Array,signal?:AbortSignal,openingViewport=false){
       return native.run(input,async io=>{
-        const result=await io.request('open',{path:'/work/input.xlsx',locale:'en',...(openingViewport&&supportsOpeningViewport?{openingViewport:true}:{})}) as Record<string,unknown>
+        const result=await io.request('open',{path:'/work/input.xlsx',locale:'en',...(openingViewport&&nodeEngine?{openingViewport:true}:{})}) as Record<string,unknown>
         const source=opened(result)
         await io.request('close',{sessionId:source.sessionId})
         const {sessionId: _session,path: _path,...metadata}=result
@@ -150,7 +150,10 @@ export function createXlsxNativeWorker(process: NativeProcess, supportsOpeningVi
           const index: FormulaIndexSheet[] = []
           for (const sheet of source.sheets) {
             await waitForSheet(io, source.sessionId, sheet.id, signal)
-            const result = await io.request('read_formula_cells', { sessionId: source.sessionId, sheetId: sheet.id }) as {
+            const result = await io.request('read_formula_cells', {
+              sessionId: source.sessionId, sheetId: sheet.id,
+              ...(nodeEngine ? { expandSharedFormulas: true } : {}),
+            }) as {
               cells: FormulaIndexSheet['cells']
               sharedGroups?: unknown[]
               indexingComplete?: boolean

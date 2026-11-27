@@ -93,9 +93,91 @@ test('Node XLSX preserves implicit and quoted coordinates on cell saves', async 
   const styles = (records) =>
     records.filter(({ row }) => row === 6).map(({ column, styleIndex }) => [column, styleIndex])
   assert.deepEqual(styles(before), [
-    [0, undefined],
+    [0, 0],
     [4, 1],
     [5, 1],
   ])
   assert.deepEqual(styles(after), styles(before))
+
+  await t.test('reads and edits grid cells only in SpreadsheetML worksheet data', async () => {
+    const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const foreignCell = '<c xmlns="urn:example:extension" r="B1"><v>900</v></c>'
+    const foreignData = '<sheetData xmlns="urn:example:extension"><row r="2"><c><v>902</v></c></row></sheetData>'
+    zip.file(path, `<worksheet xmlns="${spreadsheet}" xmlns:a="urn:example:extension">
+      <sheetData>
+        <row r="1">
+          <c r="A1"><v>11</v></c>
+          ${foreignCell}
+          <c><v xmlns="urn:example:extension">999</v><a:f>1+1</a:f><v>22</v></c>
+          <c t="inlineStr"><is><t>Real</t><t xmlns="urn:example:extension">Decoy</t></is></c>
+        </row>
+      </sheetData>
+      <extLst><ext uri="urn:example:extension"><payload xmlns="urn:example:extension">
+        <c r="A1"><v>901</v></c>
+        ${foreignData}
+      </payload></ext></extLst>
+    </worksheet>`)
+    const original = await zip.generateAsync({ type: 'nodebuffer' })
+    assert.deepEqual(cells(await read(original)), [
+      [0, 0, 11],
+      [0, 1, 22],
+      [0, 2, 'Real'],
+    ])
+    const edit = sheetsSaveRequest('sheet-1', [{ row: 0, column: 1, writeValue: true, value: 33 }])
+    const result = (await native.savePlan(original, await runtime.sheetsWorkbookPlanner(original, edit))).bytes
+    const editedXml = await (await JSZip.loadAsync(result)).file(path).async('string')
+    assert.equal(XMLValidator.validate(editedXml), true)
+    assert.ok(editedXml.includes(foreignCell))
+    assert.ok(editedXml.includes(foreignData))
+    assert.deepEqual(cells(await read(result)), [
+      [0, 0, 11],
+      [0, 1, 33],
+      [0, 2, 'Real'],
+    ])
+  })
+
+  await t.test('builds the saved worksheet dimension from grid cells only', async () => {
+    const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const extension = '<payload xmlns="urn:example:extension">' +
+      '<dimension ref="A1:K500"/><row r="900"><c r="J900"/></row></payload>'
+    for (const dimension of ['', '<dimension ref="A1"/>', "<dimension ref='B1'></dimension>"]) {
+      zip.file(path, `<worksheet xmlns="${spreadsheet}"><sheetPr/>${dimension}
+        <sheetData><row r="1"><c r="B1"><v>10</v></c><c><v>11</v></c></row></sheetData>
+        <extLst><ext uri="urn:example:extension">${extension}</ext></extLst>
+      </worksheet>`)
+      const input = await zip.generateAsync({ type: 'nodebuffer' })
+      const edit = sheetsSaveRequest('sheet-1', [{ row: 1, column: 0, writeValue: true, value: 12 }])
+      const saved = (await native.savePlan(input, await runtime.sheetsWorkbookPlanner(input, edit))).bytes
+      const savedXml = await (await JSZip.loadAsync(saved)).file(path).async('string')
+      assert.equal(XMLValidator.validate(savedXml), true)
+      assert.match(savedXml, /<sheetPr\s*\/>\s*<dimension ref="A1:C2"(?:\s*\/>|><\/dimension>)/)
+      assert.ok(savedXml.includes(extension))
+      const [{ rowCount, columnCount }] = (await native.inspect(saved)).sheets
+      assert.deepEqual([rowCount, columnCount], [2, 3])
+    }
+  })
+
+  await t.test('reads dimensions, row layout and styles from the worksheet grid', async () => {
+    const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    zip.file(path, `<worksheet xmlns="${spreadsheet}">
+      <dimension xmlns="urn:example:extension" ref="A1:K500"/><dimension ref="A1:D6"/>
+      <sheetData>
+        <row r="2"><c r="A2" s="1"><v>10</v></c></row>
+        <row xmlns="urn:example:extension" r="900" ht="50"/>
+        <row ht="22" customHeight="1"><c s="1"><v>11</v></c></row>
+      </sheetData>
+      <extLst><ext uri="urn:example:extension"><payload xmlns="urn:example:extension">
+        <c r="A2" s="7"/>
+      </payload></ext></extLst>
+    </worksheet>`)
+    const input = await zip.generateAsync({ type: 'nodebuffer' })
+    const [{ rowCount, columnCount }] = (await native.inspect(input)).sheets
+    assert.deepEqual([rowCount, columnCount], [6, 4])
+    const { rows, cells } = await native.readRange(input, 'Acceptance', range)
+    assert.deepEqual(rows.map(({ row, height }) => [row, height]), [[2, 22]])
+    assert.deepEqual(cells.map(({ row, column, value, styleIndex }) => [row, column, value, styleIndex]), [
+      [1, 0, 10, 1],
+      [2, 0, 11, 1],
+    ])
+  })
 })

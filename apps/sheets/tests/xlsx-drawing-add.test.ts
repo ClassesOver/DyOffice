@@ -95,6 +95,23 @@ describe('visual additions: fresh sheet without a drawing', () => {
     expect(chartXml).toContain('<c:legend>')
   })
 
+  it('inserts the first drawing before the worksheet extensions with a scoped relationship prefix', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const worksheet = await zip.file(path)!.async('string')
+    const extensions = '<extLst><ext uri="urn:example"><drawing xmlns="urn:example"/></ext></extLst>'
+    const comment = '<!-- <drawing r:id="ignored"/> <extLst/> -->'
+    zip.file(path, worksheet.replace('<worksheet ', '<worksheet xmlns:r="urn:example" ')
+      .replace('</worksheet>', `${comment}${extensions}</worksheet >`))
+
+    const plan = await planWith([chartAddition()], await zip.generateAsync({ type: 'nodebuffer' }))
+    const patched = plan.replaced.get(path)
+    expect(patched).toContain('<worksheet xmlns:r="urn:example" ')
+    expect(patched).toContain(comment +
+      '<drawing xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/>' +
+      extensions + '</worksheet >')
+  })
+
   it('falls back to literal caches when range refs are absent', async () => {
     const plan = await planWith([
       chartAddition({
@@ -322,6 +339,25 @@ describe('visual additions: sheet with an existing drawing', () => {
     expect(drawingXml).toMatch(/<\/xdr:wsDr>$/)
     expect(drawingXml).not.toContain('/><xdr:twoCellAnchor>')
     expect(drawingXml).toContain('<xdr:graphicFrame')
+  })
+
+  it('appends to the drawing referenced by the worksheet when an orphan relationship comes first', async () => {
+    const zip = await JSZip.loadAsync(await buildDrawingFixture())
+    const worksheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const worksheet = await zip.file(worksheetPath)!.async('string')
+    const rels = await zip.file(relsPath)!.async('string')
+    zip.file(worksheetPath, worksheet.replace('<drawing r:id="rId9"/>',
+      '<drawing xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships" q:id="rId&#57;"/>'))
+    zip.file(relsPath, rels.replace('<Relationship Id="rId9"',
+      '<Relationship Id="rId8" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/>' +
+      '<Relationship Id="rId9"'))
+    zip.file('xl/drawings/drawing2.xml', EMPTY_SELF_CLOSED_DRAWING)
+
+    const plan = await planWith([chartAddition()], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get('xl/drawings/drawing1.xml')).toContain('<xdr:cNvPr id="4" name="Chart 4"/>')
+    expect(plan.replaced.has('xl/drawings/drawing2.xml')).toBe(false)
+    expect(plan.replaced.has(worksheetPath)).toBe(false)
   })
 
   it('declares missing namespaces on the inserted anchor', async () => {

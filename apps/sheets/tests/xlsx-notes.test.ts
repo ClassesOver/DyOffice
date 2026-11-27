@@ -66,6 +66,22 @@ describe('note removal', () => {
 })
 
 describe('note snapshots', () => {
+  it('inserts the real VML reference outside comments with a local relationship binding', async () => {
+    const path = 'xl/worksheets/sheet1.xml'
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const comment = '<!-- <legacyDrawing r:id="fake"/> -->'
+    const xml = (await zip.file(path)!.async('string'))
+      .replace(/\sxmlns:r="[^"]*"/, '')
+      .replace('<worksheet', '<worksheet xmlns:r="urn:example:extension"')
+      .replace('</worksheet>', comment + '</worksheet >')
+    zip.file(path, xml)
+    const plan = await planNotes(NOTES, await zip.generateAsync({ type: 'nodebuffer' }))
+    const saved = plan.replaced.get(path)
+    expect(saved).toContain('xmlns:r="urn:example:extension"')
+    expect(saved).toContain(comment)
+    expect(saved).toMatch(/<legacyDrawing xmlns:r="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships" r:id="rId\d+"\/>/)
+  })
+
   it('creates the comments part with authors, refs, and escaped text', async () => {
     const plan = await planNotes(NOTES)
     const comments = [...plan.added.entries()].find(([path]) => /xl\/comments\d+\.xml/.test(path))

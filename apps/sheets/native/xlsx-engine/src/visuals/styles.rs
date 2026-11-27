@@ -5,15 +5,16 @@ use super::*;
 
 pub fn read_styles(
     archive: &mut ZipArchive<File>,
+    styles_path: &str,
     colors: &ColorContext,
     theme_fonts: Option<&ThemeFonts>,
     locale: &str,
     short_date_format: Option<&str>,
 ) -> Result<(Vec<CellStyle>, Vec<CellStyle>, Option<String>), SidecarError> {
-    let Some(xml) = read_optional_xml(archive, "xl/styles.xml")? else {
+    let Some(xml) = read_optional_xml(archive, styles_path)? else {
         return Ok((vec![CellStyle::default()], Vec::new(), None));
     };
-    let document = parse_document(&xml, "styles.xml")?;
+    let document = parse_document(&xml, styles_path)?;
     // Only the top-level <numFmts> table: dxf-local <numFmt> entries reuse
     // file-local ids that must not shadow builtin ids for cell xfs.
     let custom_formats = document

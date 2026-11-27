@@ -168,6 +168,8 @@ pub struct DrawingAnchor {
     /// offsets past the edge and must keep walking.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub explicit_to: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub absolute: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -210,6 +212,9 @@ pub struct ChartSeries {
     /// spPr/a:ln/@w converted from EMU to CSS px (w / 12700 pt · 96/72).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_width: Option<f64>,
+    /// spPr/a:ln/a:prstDash/@val.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_dash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smooth: Option<bool>,
     /// c:marker/c:symbol — "none" hides scatter/line markers.
@@ -553,6 +558,8 @@ pub struct VisualObject {
     pub frame_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_transform: Option<GroupChildTransform>,
     /// xdr:cNvPr/@id — pairs a drawing fallback shape with its worksheet
     /// <oleObject shapeId=…>. Engine-internal, never serialized.
     #[serde(skip)]
@@ -572,6 +579,15 @@ pub struct VisualObject {
     /// cNvPr/a:hlinkClick target resolved through the drawing rels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hyperlink: Option<String>,
+}
+
+/// The anchor stores the transformed bounds. The matrix maps the local
+/// extents into the sheet, with both boxes centered on the same point.
+#[derive(Clone, Debug, Serialize)]
+pub struct GroupChildTransform {
+    pub matrix: [f64; 4],
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -618,6 +634,7 @@ pub struct SheetVisualSource {
 pub(crate) struct Relationship {
     pub(crate) target: String,
     pub(crate) relationship_type: String,
+    pub(crate) external: bool,
 }
 
 #[derive(Clone, Default)]
@@ -655,16 +672,27 @@ pub(crate) struct BorderSet {
 #[derive(Clone, Default)]
 pub struct ColorContext {
     theme: Vec<(u8, u8, u8)>,
-    /// fmtScheme/fillStyleLst entries (1-based fillRef idx order); None for
-    /// non-gradient entries.
-    fill_styles: Vec<Option<ThemeGradient>>,
+    /// fmtScheme/fillStyleLst and bgFillStyleLst in document order.
+    fill_styles: Vec<Option<ThemeFill>>,
+    background_fill_styles: Vec<Option<ThemeFill>>,
     /// styles.xml colors/indexedColors override of the legacy palette
     /// (hex without '#'); indexes past its end fall back to the builtin.
     indexed: Vec<String>,
 }
 
-/// A theme gradient with phClr stops: the placeholder resolves to the
-/// fillRef color at use time, then each stop's transforms apply.
+#[derive(Clone, Debug)]
+enum ThemeFill {
+    Transparent,
+    Solid(ThemePaintColor),
+    Pattern {
+        foreground: Option<ThemePaintColor>,
+        background: Option<ThemePaintColor>,
+    },
+    Gradient(ThemeGradient),
+}
+
+/// A theme gradient whose placeholder stops resolve to the fillRef color
+/// at use time.
 #[derive(Clone, Debug)]
 pub struct ThemeGradient {
     pub stops: Vec<ThemeGradientStop>,
@@ -676,8 +704,20 @@ pub struct ThemeGradient {
 pub struct ThemeGradientStop {
     /// 0..1 along the gradient axis.
     pub position: f64,
+    color: ThemePaintColor,
+}
+
+#[derive(Clone, Debug)]
+struct ThemePaintColor {
+    base: ThemePaintBase,
     /// (transform tag, val/100000) pairs in document order.
-    pub modifiers: Vec<(String, f64)>,
+    modifiers: Vec<(String, f64)>,
+}
+
+#[derive(Clone, Debug)]
+enum ThemePaintBase {
+    Rgb((u8, u8, u8)),
+    Scheme(String),
 }
 
 /// A shape gradient with fully resolved stop colors, ready to render.
@@ -704,8 +744,7 @@ impl ColorContext {
     pub(crate) fn with_theme(theme: Vec<(u8, u8, u8)>) -> Self {
         ColorContext {
             theme,
-            fill_styles: Vec::new(),
-            indexed: Vec::new(),
+            ..ColorContext::default()
         }
     }
 
@@ -739,11 +778,12 @@ pub struct ThemeFonts {
 
 pub fn read_theme_fonts(
     archive: &mut ZipArchive<File>,
+    theme_path: &str,
 ) -> Result<Option<ThemeFonts>, SidecarError> {
-    let Some(xml) = read_optional_xml(archive, "xl/theme/theme1.xml")? else {
+    let Some(xml) = read_optional_xml(archive, theme_path)? else {
         return Ok(None);
     };
-    let document = parse_document(&xml, "theme1.xml")?;
+    let document = parse_document(&xml, theme_path)?;
     let Some(scheme) = document
         .descendants()
         .find(|node| node.has_tag_name("fontScheme"))
@@ -948,6 +988,7 @@ pub fn read_visual_objects(
                 rotation: None,
                 frame_width: None,
                 frame_height: None,
+                group_transform: None,
                 nv_id: None,
                 // No edit locator on purpose: an OLE object lives in the
                 // worksheet's <oleObjects>, its embedding part and the legacy
@@ -1269,6 +1310,7 @@ pub(crate) fn parse_vml_anchor(text: &str) -> Option<DrawingAnchor> {
         to_row_offset: to_row_px * EMU_PER_PIXEL,
         to_column_offset: to_column_px * EMU_PER_PIXEL,
         explicit_to: true,
+        absolute: false,
     })
 }
 
@@ -1918,15 +1960,19 @@ pub(crate) fn read_relationships(
         return Ok(HashMap::new());
     };
     let document = parse_document(&xml, &relationship_path)?;
-    Ok(document
-        .descendants()
-        .filter(|node| node.has_tag_name("Relationship"))
+    let root = document.root_element();
+    Ok(root
+        .children()
+        .filter(|node| {
+            node.has_tag_name("Relationship") && node.tag_name().namespace() == root.tag_name().namespace()
+        })
         .filter_map(|node| {
             Some((
                 node.attribute("Id")?.to_owned(),
                 Relationship {
                     target: node.attribute("Target")?.to_owned(),
                     relationship_type: node.attribute("Type").unwrap_or_default().to_owned(),
+                    external: node.attribute("TargetMode") == Some("External"),
                 },
             ))
         })

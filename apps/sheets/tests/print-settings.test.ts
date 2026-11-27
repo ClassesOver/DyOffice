@@ -1,5 +1,7 @@
+import { BorderStyleTypes } from '@univerjs/core'
 import { describe, expect, it } from 'vitest'
 
+import { shiftDefinedNames } from '@genoffice/xlsx-gateway/gateway/xlsx-structure'
 import {
   createEditJournal,
   recordPageSetup,
@@ -17,6 +19,7 @@ import {
 import {
   decodeHeaderFooter,
   printAreasFromFormula,
+  printTitleColumnsFromFormula,
   printTitleRowsFromFormula,
   resolveEffectivePageSetup,
   type EffectivePageSetup,
@@ -101,6 +104,17 @@ describe('printAreasFromFormula', () => {
     expect(printAreasFromFormula("'S'!#REF!,'S'!$D$3")).toEqual(['D3:D3'])
   })
 
+  it('keeps print areas on quoted sheet names containing an error-like string', () => {
+    expect(printAreasFromFormula("'O''Brien, #REF!'!$B$2:$B$3,#REF!")).toEqual(['B2:B3'])
+  })
+
+  it('falls back to the used range for addresses outside the worksheet grid', () => {
+    expect(printAreasFromFormula("'S'!$A$0:$B$2")).toEqual([])
+    expect(printAreasFromFormula("'S'!$A$1048577")).toEqual([])
+    expect(printAreasFromFormula("'S'!$XFE$1:$XFE$2")).toEqual([])
+    expect(printAreasFromFormula("'S'!$XFD$1048576")).toEqual(['XFD1048576:XFD1048576'])
+  })
+
   it('returns [] when absent', () => {
     expect(printAreasFromFormula(undefined)).toEqual([])
   })
@@ -113,6 +127,12 @@ describe('printAreasFromFormula', () => {
 })
 
 describe('printTitleRowsFromFormula', () => {
+  it('skips invalid title references while retaining valid grid-edge titles', () => {
+    const formula = "'S'!$0:$1,'S'!$1048577:$1048577,#REF!$5:$6,'S'!$1048576:$1048576,'S'!$XFD:$XFE,'S'!$XFD:$XFD"
+    expect(printTitleRowsFromFormula(formula)).toBe('1048576:1048576')
+    expect(printTitleColumnsFromFormula(formula)).toBe('XFD:XFD')
+  })
+
   it('extracts the repeated row span', () => {
     expect(printTitleRowsFromFormula("'S'!$17:$17")).toBe('17:17')
   })
@@ -196,11 +216,12 @@ describe('resolveEffectivePageSetup', () => {
         margins: { left: 1, right: 1, top: 1, bottom: 1, header: 0.5, footer: 0.5 },
         oddHeader: '&CFile Header',
       },
-      { printArea: "'S'!$A$1:$K$84", printTitles: "'S'!$1:$2" },
+      { printArea: "'S'!$A$1:$K$84", printTitles: "'S'!$A:$B,'S'!$1:$2" },
     )
     expect(setup.orientation).toBe('portrait')
     expect(setup.printAreas).toEqual(['B2:C3'])
     expect(setup.printTitles).toBeNull()
+    expect(setup.printTitleColumns).toBeNull()
     expect(setup.header).toBeNull()
     expect(setup.margins.left).toBe(0.25)
   })
@@ -236,6 +257,22 @@ describe('resolveEffectivePageSetup', () => {
 
     expect(setup.printTitles).toBeNull()
     expect(setup.printTitleColumns).toBe('A:B')
+  })
+
+  it('keeps title columns cleared when the user sets new title rows before saving', () => {
+    const journal = createEditJournal()
+    const fileNames = { printTitles: "'S'!$A:$B,'S'!$5:$6" }
+    recordPageSetup(journal, 'sheet-1', { printTitles: '3:4' })
+    const [replaceRows] = toSavePageSetupStates(journal)
+    expect(resolveEffectivePageSetup(replaceRows ?? {}, null, fileNames).printTitleColumns)
+      .toBe('A:B')
+
+    recordPageSetup(journal, 'sheet-1', { printTitles: null })
+    recordPageSetup(journal, 'sheet-1', { printTitles: '1:1' })
+    const [pending] = toSavePageSetupStates(journal)
+    const setup = resolveEffectivePageSetup(pending ?? {}, null, fileNames)
+    expect(setup.printTitles).toBe('1:1')
+    expect(setup.printTitleColumns).toBeNull()
   })
 
   it('defaults fitToWidth/fitToHeight to one page when the file only sets fitToPage', () => {
@@ -319,11 +356,84 @@ describe('resolveEffectivePageSetup', () => {
     expect(setup.printAreas).toEqual([])
   })
 
+  it('keeps lines inserted inside a saved print area after its original lines are removed', () => {
+    const printArea = "'S'!$B$2:$C$3,'S'!$F$10:$G$11"
+    const ops = [
+      { kind: 'insert-rows', index: 2, count: 1 },
+      { kind: 'remove-rows', index: 3, count: 1 },
+      { kind: 'remove-rows', index: 1, count: 1 },
+      { kind: 'insert-cols', index: 2, count: 1 },
+      { kind: 'remove-cols', index: 3, count: 1 },
+      { kind: 'remove-cols', index: 1, count: 1 },
+    ] as const
+    const setup = resolveEffectivePageSetup({}, null, { printArea }, ops)
+    expect(setup.printAreas).toEqual(['B2:B2', 'E9:F10'])
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Area" localSheetId="0">' +
+      printArea + '</definedName></definedNames></workbook>'
+    expect(shiftDefinedNames(workbook, 'S', ops)).toContain("'S'!$B$2:$B$2,'S'!$E$9:$F$10")
+  })
+
+  it('clips print areas at the XLSX grid edge in preview and on save', () => {
+    const printArea = "'S'!$XFC$1048575:$XFD$1048576,'S'!$XFD$1,'S'!$A$1048576,'S'!$A$1"
+    const ops = [
+      { kind: 'insert-rows', index: 1, count: 1 },
+      { kind: 'insert-cols', index: 1, count: 1 },
+    ] as const
+    const setup = resolveEffectivePageSetup({}, null, { printArea }, ops)
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Area" localSheetId="0">' +
+      printArea + '</definedName></definedNames></workbook>'
+    const shifted = shiftDefinedNames(workbook, 'S', ops)
+    expect(setup.printAreas).toEqual(['XFD1048576:XFD1048576', 'A1:A1'])
+    expect(shifted).toContain(">'S'!$XFD$1048576:$XFD$1048576,'S'!$A$1</definedName>")
+  })
+
   it('shifts the file title rows through structural edits', () => {
     const setup = resolveEffectivePageSetup({}, null, { printTitles: "'S'!$17:$17" }, [
       { kind: 'insert-rows', index: 0, count: 3 },
     ])
     expect(setup.printTitles).toBe('20:20')
+  })
+
+  it('keeps newly inserted title cells after deleting the original title rows and columns', () => {
+    const ops = [
+      { kind: 'insert-rows', index: 1, count: 1 },
+      { kind: 'remove-rows', index: 2, count: 1 },
+      { kind: 'remove-rows', index: 0, count: 1 },
+      { kind: 'insert-cols', index: 1, count: 1 },
+      { kind: 'remove-cols', index: 2, count: 1 },
+      { kind: 'remove-cols', index: 0, count: 1 },
+    ] as const
+    const printTitles = "'S'!$1:$2,'S'!$A:$B"
+    const setup = resolveEffectivePageSetup({}, null, { printTitles }, ops)
+    expect(setup.printTitles).toBe('1:1')
+    expect(setup.printTitleColumns).toBe('A:A')
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Titles" localSheetId="0">' +
+      printTitles + '</definedName></definedNames></workbook>'
+    expect(shiftDefinedNames(workbook, 'S', ops)).toContain("'S'!$1:$1,'S'!$A:$A")
+  })
+
+  it('restores saved titles once structural edits bring their span within the layout cap', () => {
+    const setup = resolveEffectivePageSetup({}, null, { printTitles: "'S'!$1:$22,'S'!$A:$V" }, [
+      { kind: 'remove-rows', index: 21, count: 1 },
+      { kind: 'remove-cols', index: 21, count: 1 },
+    ])
+    expect(setup.printTitles).toBe('1:21')
+    expect(setup.printTitleColumns).toBe('A:U')
+  })
+
+  it('keeps only saved print titles that survive an insertion at the grid edge', () => {
+    const setup = resolveEffectivePageSetup(
+      {}, null, { printTitles: "'S'!$1048575:$1048576,'S'!$XFD:$XFD" },
+      [
+        { kind: 'insert-rows', index: 0, count: 1 },
+        { kind: 'insert-cols', index: 0, count: 1 },
+      ],
+    )
+    expect(setup.printTitles).toBe('1048576:1048576')
+    expect(setup.printTitleColumns).toBeNull()
   })
 
   it('keeps title rows through column edits and drops them when deleted', () => {
@@ -337,11 +447,11 @@ describe('resolveEffectivePageSetup', () => {
     expect(deleted.printTitles).toBeNull()
   })
 
-  it('does not remap session-set print areas (already screen space)', () => {
-    const setup = resolveEffectivePageSetup({ printArea: 'B2:C3' }, null, null, [
+  it('normalizes each session-set print area without remapping its screen coordinates', () => {
+    const setup = resolveEffectivePageSetup({ printArea: 'B2:C3,A1' }, null, null, [
       { kind: 'insert-rows', index: 0, count: 5 },
     ])
-    expect(setup.printAreas).toEqual(['B2:C3'])
+    expect(setup.printAreas).toEqual(['B2:C3', 'A1:A1'])
   })
 
   it('prints a reversed print area instead of refusing the export', () => {
@@ -382,6 +492,54 @@ describe('renderHeaderFooterSection', () => {
 
   it('resolves page codes for the page being rendered', () => {
     expect(renderHeaderFooterSection('Seite &P von &N', fields)).toBe('Seite 3 von 7')
+  })
+
+  it('renders formatted runs and applies font size to expanded fields', () => {
+    const html = renderHeaderFooterSection(
+      'Page &"Calibri,Bold Italic"&20&KAA4400&P&"Calibri,Regular" of &N',
+      fields,
+      undefined,
+      0.5,
+    )
+    expect(html).toBe(
+      'Page <span style="font-family:&quot;Calibri&quot;;font-size:10pt;color:#AA4400;' +
+        'font-weight:bold;font-style:italic">3</span>' +
+        '<span style="font-family:&quot;Calibri&quot;;font-size:10pt;color:#AA4400"> of 7</span>',
+    )
+  })
+
+  it('resolves workbook theme colors, their tints and both theme font faces', () => {
+    const html = renderHeaderFooterSection(
+      '&"+" &K00+000Title&"-,Regular"&K04-050Body &P&K01+100!',
+      fields,
+      undefined,
+      1,
+      {
+        colors: ['#FAF9F8', '#1D1D1D', '#DDDDDD', '#212121', '#808080'],
+        fonts: { major: 'Cambria', minor: 'Arial' },
+      },
+    )
+    expect(html).toBe(
+      '<span style="font-family:&quot;Cambria&quot;"> </span>' +
+        '<span style="font-family:&quot;Cambria&quot;;color:#FAF9F8">Title</span>' +
+        '<span style="font-family:&quot;Arial&quot;;color:#404040">Body 3</span>' +
+        '<span style="font-family:&quot;Arial&quot;;color:#FFFFFF">!</span>',
+    )
+  })
+
+  it('uses the default theme palette when the workbook does not carry one', () => {
+    expect(renderHeaderFooterSection('&K04+000Title', fields)).toBe(
+      '<span style="color:#4472C4">Title</span>',
+    )
+  })
+
+  it('applies style toggles without consuming escaped formatting codes', () => {
+    const html = renderHeaderFooterSection('&BA&B &&B &U&S<&S&U &X2&X', fields)
+    expect(html).toBe(
+      '<span style="font-weight:bold">A</span> &amp;B ' +
+        '<span style="text-decoration-line:underline line-through">&lt;</span> ' +
+        '<sup>2</sup>',
+    )
   })
 
   it('resolves static codes and escapes markup', () => {
@@ -454,6 +612,7 @@ function fakeWorksheet(): PrintWorksheet {
 function payloadSetup(overrides: Partial<EffectivePageSetup>): EffectivePageSetup {
   return {
     orientation: 'portrait',
+    pageOrder: 'downThenOver',
     paperSize: 9,
     scale: 100,
     fitToWidth: 0,
@@ -462,6 +621,10 @@ function payloadSetup(overrides: Partial<EffectivePageSetup>): EffectivePageSetu
     margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
     printGridlines: false,
     printHeadings: false,
+    blackAndWhite: false,
+    draft: false,
+    horizontalCentered: false,
+    verticalCentered: false,
     printAreas: [],
     printTitles: null,
     printTitleColumns: null,
@@ -507,6 +670,173 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it('renders supported external cell links and escapes their targets', () => {
+    const targets = [
+      ['https://example.test/report?x=1&y=2', 'file:///local.xlsx'],
+      ['mailto:team@example.test', '#Sheet1!A1'],
+    ]
+    const printed = layout(fakeWorksheet(), payloadSetup({ printAreas: ['A1:B2'] }),
+      undefined, undefined, { cellHyperlink: (row: number, column: number) => targets[row]?.[column] })
+    const html = assemblePrintHtml([printed]).html
+
+    expect(html).toMatch(/<a [^>]*href="https:\/\/example\.test\/report\?x=1&amp;y=2"[^>]*>A1<\/a>/)
+    expect(html).toMatch(/<a [^>]*href="mailto:team@example\.test"[^>]*>A2<\/a>/)
+    expect(html).toContain('>B1</span>')
+    expect(html).toContain('>B2</span>')
+    expect(html.match(/<a /g)).toHaveLength(2)
+  })
+
+  it('keeps draft worksheet text and custom borders while skipping drawings and printed gridlines', () => {
+    const worksheet = {
+      ...fakeWorksheet(),
+      getRange: () => ({
+        getDisplayValues: () => [['Draft text']],
+        getValues: () => [['Draft text']],
+        getCellStyleData: () => ({
+          cl: { rgb: '#FF0000' },
+          bg: { rgb: '#FFFF00' },
+          bd: { b: { s: 1, cl: { rgb: '#00FF00' } } },
+        }),
+      }),
+    } as PrintWorksheet
+    const setup = resolveEffectivePageSetup({}, {
+      draft: true,
+      printGridlines: true,
+      oddHeader: '&L&G&CReport',
+    }, null)
+    const pictures = new Map([['LH', { dataUrl: 'data:image/png;base64,AAAA', widthPt: 10, heightPt: 10 }]])
+    const drawings: PrintVisualSnapshot = {
+      visuals: [{
+        id: 'far-picture', fromRow: 40, fromColumn: 20, toRow: 45, toColumn: 25,
+        offsetXPx: 0, offsetYPx: 0, widthPx: 200, heightPx: 100,
+        html: '<img alt="Far picture">',
+      }],
+      css: '',
+    }
+    const printed = layout(worksheet, setup, pictures, drawings)
+    const html = assemblePrintHtml([printed]).html
+    expect(printed.pages).toHaveLength(1)
+    expect(printed.pages[0]?.body).toContain('Draft text')
+    expect(printed.pages[0]?.body).toContain('box-shadow:inset 0 -0.75pt 0 #000000')
+    expect(printed.pages[0]?.body).not.toContain('#c0c0c0')
+    expect(printed.pages[0]?.body).not.toContain('background:')
+    expect(html).toContain('Report')
+    expect(html).not.toContain('<img ')
+  })
+
+  it('prints black-and-white cells without colored fills and keeps color on other sheets', () => {
+    const worksheet = {
+      ...fakeWorksheet(),
+      getRange: () => ({
+        getDisplayValues: () => [['Styled']],
+        getValues: () => [['Styled']],
+        getCellStyleData: () => ({
+          cl: { rgb: '#FF0000' },
+          bg: { rgb: '#FFFF00' },
+          bd: { b: { s: 1, cl: { rgb: '#00FF00' } } },
+        }),
+      }),
+    } as PrintWorksheet
+    const blackAndWhite = layout(worksheet, resolveEffectivePageSetup({}, { blackAndWhite: true }, null))
+    const color = layout(worksheet, resolveEffectivePageSetup({}, { blackAndWhite: false }, null))
+    const monoBody = blackAndWhite.pages[0]?.body
+    expect(monoBody).toContain('color:#000000')
+    expect(monoBody).toContain('box-shadow:inset 0 -0.75pt 0 #000000')
+    expect(monoBody).not.toContain('background:')
+    expect(color.pages[0]?.body).toContain('color:#FF0000;background:#FFFF00')
+    expect(color.pages[0]?.body).toContain('#00FF00')
+    const html = assemblePrintHtml([blackAndWhite, color]).html
+    expect(html.match(/class="page p0 page-monochrome"/g)).toHaveLength(1)
+    expect(html).toContain('class="page p0"')
+  })
+
+  it('fits a standalone chart to a single page while keeping the saved paper and footer', () => {
+    const setup = resolveEffectivePageSetup({}, {
+      orientation: 'landscape',
+      paperSize: 9,
+      scale: 100,
+      blackAndWhite: true,
+      draft: true,
+      firstPageNumber: 8,
+      oddFooter: '&RPage &P of &N',
+    }, null)
+    const chart = {
+      id: 'chart-sheet-drawing',
+      fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+      offsetXPx: 10, offsetYPx: 20, widthPx: 1_200, heightPx: 600,
+      html: '<figure>Quarterly chart</figure>',
+    }
+    const document = layout(fakeWorksheet(), setup, new Map(), { visuals: [chart], css: '' }, {
+      chartSheet: true,
+    })
+    expect(document.pages).toHaveLength(1)
+    expect(document.scale).toBeCloseTo(10.29 * 96 / 1_200, 4)
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('width:11.69in;height:8.27in')
+    expect(html).toContain('left:0pt;top:0pt;width:900pt;height:450pt')
+    expect(html).toContain('Quarterly chart')
+    expect(html).toContain('class="page p0 page-monochrome"')
+    expect(html).toContain('.page-monochrome .pv')
+    expect(html).toContain('Page 8 of 1')
+    expect(html).not.toContain('<table ')
+  })
+
+  it('renders styles from saved headers and pending footer edits', () => {
+    const setup = resolveEffectivePageSetup(
+      { footer: { right: '&IPages &N&I' } },
+      { oddHeader: '&C&BReport&B', scale: 75 },
+      null,
+    )
+    const html = assemblePrintHtml([layout(fakeWorksheet(), setup)]).html
+    expect(html).toContain('<span style="font-weight:bold">Report</span>')
+    expect(html).toContain('<span style="font-style:italic">Pages 1</span>')
+  })
+
+  it.each([
+    { horizontalCentered: true, verticalCentered: false, left: 3.86, top: 0.5 },
+    { horizontalCentered: false, verticalCentered: true, left: 1, top: 5.19 },
+    { horizontalCentered: true, verticalCentered: true, left: 3.86, top: 5.19 },
+  ])('centers scaled worksheet content on the enabled axes ($left, $top)', ({
+    horizontalCentered, verticalCentered, left, top,
+  }) => {
+    const setup = resolveEffectivePageSetup({}, {
+      scale: 50,
+      horizontalCentered,
+      verticalCentered,
+      margins: { left: 1, right: 0.5, top: 0.5, bottom: 1.5, header: 0.3, footer: 0.3 },
+      oddHeader: '&CReport',
+    }, null)
+    const html = assemblePrintHtml([layout(fakeWorksheet(), setup)]).html
+    expect(html).toContain(`class="content" style="left:${left}in;top:${top}in;`)
+    expect(html).toContain('class="hf" style="left:1in;right:0.5in;top:0.3in;')
+  })
+
+  it('keeps oversized rows at the printable margin while centering the other axis', () => {
+    const worksheet = { ...fakeWorksheet(), getRowHeight: () => 1_200 }
+    const setup = resolveEffectivePageSetup({}, {
+      horizontalCentered: true,
+      verticalCentered: true,
+    }, null)
+    const html = assemblePrintHtml([layout(worksheet, setup)]).html
+    expect(html.match(/class="content" style="left:3.09in;top:0.75in;/g)).toHaveLength(3)
+  })
+
+  it('prints worksheet pages in the order saved in the file', () => {
+    const options = { breaks: { rowBreaks: [1], colBreaks: [1] } }
+    const starts = (pageOrder?: 'downThenOver' | 'overThenDown') =>
+      layout(
+        fakeWorksheet(),
+        resolveEffectivePageSetup({}, pageOrder === undefined ? null : { pageOrder }, null),
+        undefined,
+        undefined,
+        options,
+      ).pages.map(({ page }) => [page.rowStart, page.colStart])
+
+    expect(starts('overThenDown')).toEqual([[0, 0], [0, 1], [1, 0], [1, 1]])
+    expect(starts('downThenOver')).toEqual([[0, 0], [1, 0], [0, 1], [1, 1]])
+    expect(starts()).toEqual(starts('downThenOver'))
+  })
+
   it('maps common OOXML paper sizes instead of falling back to A4', () => {
     expect(layout(fakeWorksheet(), payloadSetup({ paperSize: 12 })).paper.pageSize).toEqual({
       width: 9.84,
@@ -542,7 +872,7 @@ describe('layoutSheetPrint', () => {
   it('prints a selection instead of the print area', () => {
     const html = assemblePrintHtml([
       layout(fakeWorksheet(), payloadSetup({ printAreas: ['A1:A2'] }), new Map(), undefined, {
-        selection: 'B2:B3',
+        selectionAreas: ['B2:B3'],
       }),
     ]).html
     expect(html).toContain('B2')
@@ -550,11 +880,87 @@ describe('layoutSheetPrint', () => {
     expect(html).not.toContain('A1')
   })
 
+  it('keeps the center-across text centered on its full span across column pages', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getLastColumn: () => 3,
+      getSheet: () => ({
+        getRowVisible: () => true,
+        getColVisible: () => true,
+        getCellMatrix: () => ({
+          getRow: () => ({ 0: { custom: { centerAcrossEnd: 2 } } }),
+        }),
+      }),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getDisplayValues: () => [['Centered heading', '', '', 'Adjacent'].slice(column, column + columns)],
+        getCellStyleData: () => column === 0 ? { ht: 2, fs: 8 } : null,
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:D1'] })
+    const document = layout(worksheet, setup, new Map(), undefined, {
+      breaks: { rowBreaks: [], colBreaks: [1] },
+    })
+    expect(document.pages).toHaveLength(2)
+    for (const { body } of document.pages) {
+      expect(body.match(/Centered heading/g)).toHaveLength(1)
+      expect(body).toContain('class="center-across-text"')
+      expect(body).toContain('width:225pt')
+      expect(body).not.toContain('colspan=')
+    }
+    expect(document.pages[1]?.body).toContain('left:-75pt;width:225pt')
+    expect(document.pages[1]?.body).toContain('<span>Adjacent</span>')
+
+    const cropped = layout(worksheet, { ...setup, printAreas: ['B1:C1'] })
+    expect(cropped.pages[0]?.body).toContain('left:-75pt;width:225pt')
+    expect(cropped.pages[0]?.body).toContain('Centered heading')
+  })
+
+  it('mirrors the worksheet grid and drawing positions for right-to-left printing', () => {
+    const setup = payloadSetup({
+      printAreas: ['B1:B2'],
+      printTitleColumns: 'A:A',
+      printHeadings: true,
+      printGridlines: true,
+      header: { left: 'Left header', right: 'Right header' },
+    })
+    const visuals = {
+      visuals: [{
+        id: 'logo', fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+        offsetXPx: 10, offsetYPx: 0, widthPx: 30, heightPx: 12,
+        html: '<img alt="Title logo">',
+      }],
+      css: '',
+    }
+    const document = layout(fakeWorksheet(), setup, new Map(), visuals, { rightToLeft: true })
+    const { body, offsetLeftIn } = document.pages[0]!
+    expect(body).toContain('<table dir="rtl" style="width:174pt">')
+    expect(body).toContain('class="pv" style="left:120pt;top:0pt;width:22.5pt;')
+    expect(body).toContain('inset 0.75pt 0 0 #c0c0c0')
+    expect(offsetLeftIn).toBeCloseTo(6.87 - 174 / 72)
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('<span>Left header</span>')
+    expect(html).toContain('<span style="text-align:right">Right header</span>')
+  })
+
   it('emits one page per print area', () => {
     const document = layout(fakeWorksheet(), payloadSetup({ printAreas: ['A1:A1', 'B2:B2'] }))
     expect(document.pages).toHaveLength(2)
     const html = assemblePrintHtml([document]).html
     expect(html.match(/<div class="page /g)).toHaveLength(2)
+  })
+
+  it('prints cells once when the saved print area is entirely covered by titles', () => {
+    const setup = resolveEffectivePageSetup({}, null, {
+      printArea: "'S'!$A$1:$A$2",
+      printTitles: "'S'!$1:$2,'S'!$A:$A",
+    })
+    const document = layout(fakeWorksheet(), setup)
+    expect(document.pages).toHaveLength(1)
+    const body = document.pages[0]?.body ?? ''
+    expect(body.match(/<span>A[12]<\/span>/g)).toEqual(['<span>A1</span>', '<span>A2</span>'])
+    expect(body).not.toContain('<span>B1</span>')
   })
 
   it('paginates wide sheets across columns and honours manual breaks', () => {
@@ -657,6 +1063,212 @@ describe('layoutSheetPrint', () => {
     expect(cropped).toContain('<thead><tr style="height:15pt"><td rowspan="1" colspan="3"')
   })
 
+  it('prints patterned borders over the cell fill without painting a shared edge twice', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getRange: ((row: number, column: number, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => column === 0 ? {
+          bg: { rgb: '#fff0b0' },
+          bd: {
+            t: { s: BorderStyleTypes.DOTTED, cl: { rgb: '#ff0000' } },
+            b: { s: BorderStyleTypes.DOUBLE, cl: { rgb: '#208040' } },
+            r: { s: BorderStyleTypes.MEDIUM_DASH_DOT, cl: { rgb: '#0000ff' } },
+          },
+        } : { bd: { l: { s: BorderStyleTypes.DASHED, cl: { rgb: '#ff00ff' } } } },
+      })) as PrintWorksheet['getRange'],
+    }
+    const setup = payloadSetup({ printAreas: ['A1:B1'], printGridlines: true })
+    const body = layout(worksheet, setup).pages[0]?.body ?? ''
+    expect(body).toContain('repeating-linear-gradient(to right,#ff0000')
+    expect(body).toContain('linear-gradient(to bottom,#208040')
+    expect(body).toContain('repeating-linear-gradient(to bottom,#0000ff')
+    expect(body).toContain('right / 1.5pt 100% no-repeat #fff0b0')
+    expect(body).not.toContain('#ff00ff')
+
+    const monochrome = layout(worksheet, { ...setup, blackAndWhite: true }).pages[0]?.body ?? ''
+    expect(monochrome).toContain('repeating-linear-gradient(to right,#000000')
+    expect(monochrome).not.toMatch(/#ff0000|#208040|#0000ff|#fff0b0/)
+  })
+
+  it('spans diagonal borders across a printed merge and mirrors their direction', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getMergedRanges: () => [
+        { getRow: () => 0, getColumn: () => 0, getWidth: () => 2, getHeight: () => 2 },
+      ],
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => ({
+          bd: {
+            tl_br: { s: BorderStyleTypes.DOTTED, cl: { rgb: '#ff0000' } },
+            bl_tr: { s: BorderStyleTypes.DOUBLE, cl: { rgb: '#208040' } },
+          },
+        }),
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:B2'] })
+    const body = layout(worksheet, setup).pages[0]?.body ?? ''
+    expect(body.match(/class="cell-diagonal"/g)).toHaveLength(2)
+    expect(body).toContain('top:0pt;width:152.97pt;height:0.75pt;transform:translateY(-50%) rotate(0.1974rad);background:repeating-linear-gradient(to right,#ff0000')
+    expect(body).toContain('top:30pt;width:152.97pt;height:2.25pt;transform:translateY(-50%) rotate(-0.1974rad);background:linear-gradient(to bottom,#208040')
+
+    const rtl = layout(worksheet, setup, new Map(), undefined, { rightToLeft: true })
+    expect(rtl.pages[0]?.body).toContain('rotate(-0.1974rad);background:repeating-linear-gradient(to right,#ff0000')
+    const monochrome = layout(worksheet, { ...setup, blackAndWhite: true }).pages[0]?.body ?? ''
+    expect(monochrome).toContain('linear-gradient(to bottom,#000000')
+    expect(monochrome).not.toMatch(/#ff0000|#208040/)
+  })
+
+  it('prints rotated and stacked text with the saved alignment', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => {
+          if (row === 0 && column === 0) return { tr: { a: 45 }, ht: 3, vt: 2 }
+          if (row === 0 && column === 1) return { tr: { a: -90 }, ht: 2, vt: 1, tb: 3 }
+          if (row === 1 && column === 0) return { tr: { a: 0, v: 1 } }
+          return null
+        },
+      }),
+    }
+    const document = layout(worksheet, payloadSetup({ printAreas: ['A1:B2'] }))
+    const body = document.pages[0]?.body ?? ''
+    expect(body).toContain('left:calc(100% - 2pt);top:50%;')
+    expect(body).toContain('rotate(-45deg)')
+    expect(body).toContain('left:50%;top:0%;')
+    expect(body).toContain('rotate(90deg)')
+    expect(body).toContain('max-width:15pt')
+    expect(body).toContain('writing-mode:vertical-lr;text-orientation:upright')
+    expect(body).toContain('<span>B2</span>')
+    expect(body.match(/class="oriented-text"/g)).toHaveLength(3)
+  })
+
+  it('keeps spreadsheet text padding in printed horizontal and rotated cells', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => column === 0
+          ? { pd: { l: 8 }, fs: 6 }
+          : { pd: { r: 16 }, ht: 3, tr: { a: 45 } },
+      }),
+    }
+    const document = layout(worksheet, payloadSetup({ printAreas: ['A1:B1'] }))
+    const body = document.pages[0]?.body ?? ''
+    expect(body).toContain('font-size:6pt;text-align:left')
+    expect(body).toContain('align-items:flex-end;padding-left:8pt')
+    expect(body).toContain('align-items:flex-end;padding-right:14pt')
+    expect(body).toContain('left:calc(100% - 14pt);top:100%;')
+    expect(body).toContain('rotate(-45deg)')
+  })
+
+  it('prints rich-text runs, escapes the text, and keeps run styling in monochrome', () => {
+    const base = fakeWorksheet()
+    const text = 'Bold <&>\rTail\r\r\n'
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getSheet: () => ({
+        getRowVisible: () => true,
+        getColVisible: () => true,
+        getCellMatrix: () => ({
+          getRow: () => ({ 0: { p: { body: { dataStream: text, textRuns: [
+            { st: 0, ed: 4, ts: { bl: 1, ul: { s: 1 }, cl: { rgb: '#ff0000' }, fs: 14 } },
+            { st: 4, ed: 8, ts: { it: 1, va: 3, ff: 'Georgia' } },
+          ] } } } }),
+        }),
+      }),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getDisplayValues: () => [[text]],
+        getCellStyleData: () => ({ bl: 1, ul: { s: 1 }, tb: 3 }),
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:A1'] })
+    const body = layout(worksheet, setup).pages[0]?.body ?? ''
+    expect(body).toContain('font-weight:700;font-style:normal;text-decoration:underline;font-size:14pt;color:#ff0000">Bold</span>')
+    expect(body).toContain('font-weight:400;font-style:italic;')
+    expect(body).toContain("font-family:'Georgia'")
+    expect(body).toContain('vertical-align:super"> &lt;&amp;&gt;</span>')
+    expect(body).toContain('\nTail\n</span>')
+    expect(body).not.toMatch(/<td style="[^"]*text-decoration:underline/)
+
+    const mono = layout(worksheet, { ...setup, blackAndWhite: true }).pages[0]?.body ?? ''
+    expect(mono).toContain('font-size:14pt;color:#000000">Bold</span>')
+    expect(mono).not.toContain('#ff0000')
+  })
+
+  it('prints evaluated conditional data bars and icon sets with their show-value rules', () => {
+    const base = fakeWorksheet()
+    const icon = 'data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E'
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getSheet: () => ({
+        getRowVisible: () => true,
+        getColVisible: () => true,
+        getCell: (_, column) => column === 0
+          ? { dataBar: { startPoint: 40, value: -50, color: '#cc0000', isGradient: true, isShowValue: false } }
+          : { iconSet: { iconType: '3Arrows', iconId: '1', isShowValue: true } },
+      }),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getDisplayValues: () => [['-15', '22'].slice(column, column + columns)],
+        getValues: () => [[-15, 22].slice(column, column + columns)],
+        getCellStyleData: () => null,
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:B1'] })
+    const options = { conditionalIcons: { '3Arrows': ['', icon] } }
+    const body = layout(worksheet, setup, new Map(), undefined, options).pages[0]?.body ?? ''
+    expect(body).toContain('class="cell-data-bar"')
+    expect(body).toContain('left:15.9pt;width:14.4pt;background:linear-gradient(to left,#cc0000,#ffffff)')
+    expect(body).not.toContain('>-15<')
+    expect(body).toContain(`class="cell-condition-icon" src="${icon}"`)
+    expect(body).toContain('padding-left:14.75pt')
+    expect(body).toContain('>22<')
+
+    const rtl = layout(worksheet, setup, new Map(), undefined, { ...options, rightToLeft: true })
+    expect(rtl.pages[0]?.body).toContain('left:44.7pt;width:14.4pt;background:linear-gradient(to right,#cc0000,#ffffff)')
+    expect(rtl.pages[0]?.body).toContain('padding-right:14.75pt')
+  })
+
+  it('preserves value alignment for titles outside the saved print area', () => {
+    const values = [[0.25, '005'], [true, 12], [34, 99]]
+    const display = [['25%', '005'], ['TRUE', '12'], ['34', '99']]
+    const worksheet: PrintWorksheet = {
+      ...fakeWorksheet(),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        getDisplayValues: () =>
+          display.slice(row, row + rows).map((cells) => cells.slice(column, column + columns)),
+        getValues: () =>
+          values.slice(row, row + rows).map((cells) => cells.slice(column, column + columns)),
+        getCellStyleData: () => row === 2 && column === 0 ? { ht: 1 } : null,
+      }),
+    }
+    const setup = resolveEffectivePageSetup({}, null, {
+      printArea: "'S'!$B$2:$B$3",
+      printTitles: "'S'!$1:$1,'S'!$A:$A",
+    })
+    const document = layout(worksheet, setup, new Map(), undefined, {
+      breaks: { rowBreaks: [2], colBreaks: [] },
+    })
+    expect(document.pages).toHaveLength(2)
+    const alignment = document.pages.map(({ body }) =>
+      Object.fromEntries([...body.matchAll(
+        /<td style="text-align:(right|left|center);[^"]*"><div class="c"[^>]*><span>([^<]*)<\/span>/g,
+      )].map(([, align, text]) => [text, align])),
+    )
+    expect(alignment).toEqual([
+      { '25%': 'right', '005': 'left', TRUE: 'center', '12': 'right' },
+      { '25%': 'right', '005': 'left', '34': 'left', '99': 'right' },
+    ])
+  })
+
   it('places floating visuals at their anchor and widens the used range to cover them', () => {
     const visual = {
       id: 'v1',
@@ -687,9 +1299,108 @@ describe('layoutSheetPrint', () => {
     const widened = assemblePrintHtml([
       layout(fakeWorksheet(), payloadSetup({}), new Map(), { visuals: [visual], css: '' }),
     ]).html
-    // A:B of data, but the chart reaches column E (index 4)
-    expect(widened.match(/<col /g)).toHaveLength(5)
+    // A:B of data, but the chart's right edge reaches column F (index 5).
+    expect(widened.match(/<col /g)).toHaveLength(6)
     expect(widened).not.toContain('<style></style>')
+  })
+
+  it('repeats a drawing in the intersection of title rows and columns on each page', () => {
+    const document = layout(
+      fakeWorksheet(),
+      payloadSetup({
+        printAreas: ['B2:B3'],
+        printTitles: '1:1',
+        printTitleColumns: 'A:A',
+        printHeadings: true,
+      }),
+      new Map(),
+      {
+        visuals: [{
+          id: 'logo', fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+          offsetXPx: 4, offsetYPx: 4, widthPx: 24, heightPx: 12,
+          html: '<img alt="Title logo">',
+        }],
+        css: '',
+      },
+      { breaks: { rowBreaks: [2], colBreaks: [] } },
+    )
+    expect(document.pages).toHaveLength(2)
+    for (const { body } of document.pages) {
+      expect(body.match(/alt="Title logo"/g)).toHaveLength(1)
+      expect(body).toContain('class="ov" style="left:24pt;top:14pt;')
+      expect(body).toContain('class="pv" style="left:3pt;top:3pt;')
+    }
+  })
+
+  it('clips drawing fragments where repeated titles and the body skip source rows', () => {
+    const document = layout(
+      fakeWorksheet(),
+      payloadSetup({ printAreas: ['A3:A3'], printTitles: '1:1' }),
+      new Map(),
+      {
+        visuals: [{
+          id: 'tall-logo', fromRow: 0, fromColumn: 0, toRow: 2, toColumn: 0,
+          offsetXPx: 0, offsetYPx: 0, widthPx: 25, heightPx: 60,
+          html: '<img alt="Tall logo">',
+        }],
+        css: '',
+      },
+    )
+    const body = document.pages[0]?.body ?? ''
+    expect(body).toContain('class="ov" style="left:0pt;top:0pt;width:75pt;height:15pt"')
+    expect(body).toContain('class="ov" style="left:0pt;top:15pt;width:75pt;height:15pt"')
+    expect(body).toContain('class="pv" style="left:0pt;top:-30pt;width:18.75pt;height:45pt"')
+  })
+
+  it('reserves room for the full size of a one-cell drawing beyond the loaded grid', () => {
+    const base = fakeWorksheet()
+    const worksheet = {
+      ...base,
+      getMaxRows: () => 3,
+      getMaxColumns: () => 2,
+      getRange: ((row: number, column: number, rows = 1, columns = 1) => {
+        if (row + rows > 3 || column + columns > 2) throw new Error('Range is out of bounds')
+        return base.getRange(row, column, rows, columns)
+      }) as PrintWorksheet['getRange'],
+    }
+    const drawing = {
+      id: 'image',
+      fromRow: 1, fromColumn: 1, toRow: 1, toColumn: 1,
+      offsetXPx: 10, offsetYPx: 5, widthPx: 200, heightPx: 65,
+      html: '<img alt="Logo">',
+    }
+    const visuals = { visuals: [drawing], css: '' }
+    const whole = layout(worksheet, payloadSetup({}), new Map(), visuals)
+    expect(whole.pages[0]?.page).toMatchObject({ rowEnd: 4, colEnd: 3 })
+    expect(whole.pages[0]?.body).toContain('class="ov" style="left:0pt;top:0pt;width:300pt;height:75pt"')
+    expect(whole.pages[0]?.body).toContain('style="left:82.5pt;top:18.75pt;width:150pt;height:48.75pt"')
+    expect(whole.pages[0]?.body).toContain('B3')
+
+    const gridSetup = payloadSetup({ printGridlines: true })
+    const withGridlines = layout(worksheet, gridSetup, new Map(), visuals)
+    const styles = [...(withGridlines.pages[0]?.body ?? '').matchAll(/<td style="([^"]*)">/g)]
+    const griddedCells = styles.flatMap(([_, style], index) =>
+      style?.includes('#c0c0c0') ? [index] : [],
+    )
+    expect(griddedCells).toEqual([0, 1, 4, 5, 8, 9])
+    expect(styles[9]?.[1]).toContain('inset 0 -0.75pt 0 #c0c0c0,inset -0.75pt 0 0 #c0c0c0')
+
+    const printAreaSetup = { ...gridSetup, printAreas: ['A1:D5'] }
+    const printArea = layout(worksheet, printAreaSetup, new Map(), visuals)
+    const selection = layout(worksheet, gridSetup, new Map(), visuals, { selectionAreas: ['A1:D5'] })
+    for (const document of [printArea, selection]) {
+      expect(document.pages[0]?.body.match(/box-shadow:/g)).toHaveLength(20)
+    }
+
+    const paged = layout(worksheet, payloadSetup({}), new Map(), visuals, {
+      breaks: { rowBreaks: [], colBreaks: [2] },
+    })
+    expect(paged.pages).toHaveLength(2)
+    expect(paged.pages[1]?.body).toContain('style="left:-67.5pt;top:18.75pt;width:150pt;height:48.75pt"')
+
+    const cropped = layout(worksheet, payloadSetup({ printAreas: ['A1:B3'] }), new Map(), visuals)
+    expect(cropped.pages[0]?.page).toMatchObject({ rowEnd: 2, colEnd: 1 })
+    expect(cropped.pages[0]?.body).toContain('class="ov" style="left:0pt;top:0pt;width:150pt;height:45pt"')
   })
 
   it('carries the page geometry and renders the header/footer inside the page', () => {
@@ -798,6 +1509,54 @@ describe('layoutSheetPrint', () => {
     )
     expect(pageVariant(second.headerFooter, 0, 4)).toBe('even')
     expect(pageVariant(second.headerFooter, 1, 5)).toBe('odd')
+  })
+
+  it('uses the saved first page number for fields and odd/even headers', () => {
+    const document = layout(
+      tallWorksheet(120),
+      resolveEffectivePageSetup({}, {
+        firstPageNumber: 8,
+        differentFirst: true,
+        differentOddEven: true,
+        firstHeader: '&CStart &P of &N',
+        oddHeader: '&COdd &P of &N',
+        evenHeader: '&CEven &P of &N',
+      }, null),
+    )
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('Start 8 of 3')
+    expect(html).toContain('Odd 9 of 3')
+    expect(html).toContain('Even 10 of 3')
+
+    const selected = assemblePrintHtml([document], (page) => page === 2).html
+    expect(selected).toContain('Odd 9 of 3')
+    expect(selected).not.toContain('Start 8')
+    expect(selected).not.toContain('Even 10')
+  })
+
+  it('keeps signed page numbers and selects odd/even headers across zero', () => {
+    const setup = resolveEffectivePageSetup({}, {
+      firstPageNumber: -2,
+      differentOddEven: true,
+      oddHeader: '&COdd &P',
+      evenHeader: '&CEven &P',
+    }, null)
+    const document = layout(tallWorksheet(120), setup)
+    const html = assemblePrintHtml([document]).html
+    expect(html).toContain('Even -2</span>')
+    expect(html).toContain('Odd -1</span>')
+    expect(html).toContain('Even 0</span>')
+    expect(assemblePrintHtml([document], (page) => page === 3).html).toContain('Even 0</span>')
+  })
+
+  it('renders a total page offset in the footer when printing a page subset', () => {
+    const setup = resolveEffectivePageSetup({}, {
+      firstPageNumber: 8,
+      oddFooter: '&RPage &P of &N+7',
+    }, null)
+    const document = layout(tallWorksheet(120), setup)
+    const selected = assemblePrintHtml([document], (page) => page === 2).html
+    expect(selected).toContain('Page 9 of 10</span>')
   })
 
   it('puts the &G picture of each variant into its own header', () => {

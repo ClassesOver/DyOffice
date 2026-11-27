@@ -65,6 +65,29 @@ describe('parsePivotDefinition', () => {
     expect(definition.unsupported).toEqual([])
   })
 
+  it('reads prefixed and single-quoted pivot XML without using commented or nested lookalikes', () => {
+    const main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const prefix = (xml: string) => xml.replace(/<(\/?)(\w+)/g, '<$1p:$2')
+    const pivot = prefix(PIVOT_XML.replace('name="PivotTable1"', `xmlns:p="${main}" name="PivotTable1"`)
+      .replace('ref="E3:H7"', 'ref="E&#51;:H7"')
+      .replace('name="Sum of Sales" fld="2"', 'name="Sales &#62; plan" fld="2" subtotal="count"'))
+      .replace('<p:location', '<!-- <p:location ref="A1:B2"/> --><p:location')
+      .replace('<p:dataFields', '<p:extLst><p:ext><p:dataFields><p:dataField fld="0"/></p:dataFields></p:ext></p:extLst><p:dataFields')
+      .replaceAll('"', "'")
+    const cache = prefix(CACHE_XML.replace('<pivotCacheDefinition>', `<pivotCacheDefinition xmlns:p="${main}">`)
+      .replace('<s v="East"/>', '<s v="E&#97;st"/>'))
+      .replace('<p:s v="West"/>', '<!-- <p:s v="Phantom"/> --><p:s v="West"/>')
+      .replaceAll('"', "'")
+
+    const definition = parsePivotDefinition(pivot, cache)
+    expect(definition.outputRef).toBe('E3:H7')
+    expect(definition.firstDataRow).toBe(2)
+    expect(definition.rowFields).toEqual([0])
+    expect(definition.fields[0]?.sharedItems).toEqual(['East', 'West'])
+    expect(definition.dataFields).toEqual([{ name: 'Sales > plan', field: 2, subtotal: 'count' }])
+    expect(definition.unsupported).toEqual([])
+  })
+
   it('flags bad calculated fields and unsupported filter types', () => {
     // The formula references a nonexistent field (Revenue), so calculated fields fail closed.
     const withFormula = CACHE_XML.replace(
@@ -83,6 +106,24 @@ describe('parsePivotDefinition', () => {
       'pivotFilters',
     )
   })
+})
+
+it('ranks a value filter using only rows visible on other axes', () => {
+  const pivot = PIVOT_XML
+    .replace('<pivotField axis="axisCol" showAll="0"><items count="3"><item x="0"/>',
+      '<pivotField axis="axisCol" showAll="0"><items count="3"><item x="0" h="1"/>')
+    .replace('</pivotTableDefinition>', '<filters><filter fld="0" iMeasureFld="0" type="count">' +
+      '<autoFilter ref="A1"><filterColumn colId="0"><top10 val="1"/></filterColumn></autoFilter>' +
+      '</filter></filters></pivotTableDefinition>')
+  const definition = parsePivotDefinition(pivot, CACHE_XML)
+  const source = [
+    ['Region', 'Product', 'Sales'],
+    ['East', 'A', 100], ['East', 'B', 1],
+    ['West', 'A', 1], ['West', 'B', 20],
+  ]
+  const grown = growPivotDefinition(definition, source).definition
+  expect(grown.fieldItems[0]?.map((item) => item.hidden)).toEqual([true, false])
+  expect(grown.fieldItems[1]?.map((item) => item.hidden)).toEqual([true, false])
 })
 
 describe('setPivotRefreshOnLoad', () => {
@@ -109,6 +150,64 @@ describe('recomputePivotData', () => {
       [30, 41, 71],
       [45, 61, 106],
     ])
+  })
+
+  it('preserves member indexes when subtotal items precede explicit data items', () => {
+    const pivot = PIVOT_XML
+      .replace('<item x="0"/><item x="1"/><item t="default"/>',
+        '<item t="default"/><item t="data" x="0"/><item t="data" x="1"/>')
+      .replace('<rowItems count="3"><i><x/></i><i><x v="1"/></i>',
+        '<rowItems count="3"><i><x v="1"/></i><i><x v="2"/></i>')
+    const definition = parsePivotDefinition(pivot, CACHE_XML)
+    expect(definition.fieldItems[0]?.map(({ x }) => x)).toEqual([null, 0, 1])
+    expect(recomputePivotData(definition, SOURCE).data).toEqual([
+      [15, 20, 35],
+      [30, 41, 71],
+      [45, 61, 106],
+    ])
+  })
+
+  it('recognizes the word-form hidden flag on explicit data items', () => {
+    const pivot = PIVOT_XML.replace('<item x="0"/>', '<item x="0" t="data" h="true"/>')
+    const definition = parsePivotDefinition(pivot, CACHE_XML)
+    expect(definition.fieldItems[0]?.map(({ x, hidden }) => [x, hidden]))
+      .toEqual([[0, true], [1, false]])
+    expect(recomputePivotData(definition, SOURCE).data.at(-1)).toEqual([30, 41, 71])
+  })
+
+  it('keeps typed Boolean members distinct from identical text in imported caches', () => {
+    const cache = CACHE_XML.replace('<s v="East"/><s v="West"/>', '<b v="1"/><s v="true"/>')
+    const source = [['Region', 'Product', 'Sales'], [true, 'A', 10], ['true', 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
+  })
+
+  it('keeps zero-padded labels separate from displayed numbers', () => {
+    const cache = CACHE_XML.replace('<s v="East"/><s v="West"/>', '<s v="001"/><s v="1"/>')
+    const source = [['Region', 'Product', 'Sales'], ['001', 'A', 10], [1, 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
+  })
+
+  it('respects separately cached numeric and text members with the same caption', () => {
+    const cache = CACHE_XML.replace('<s v="East"/><s v="West"/>', '<n v="1"/><s v="1"/>')
+    const source = [['Region', 'Product', 'Sales'], [1, 'A', 10], ['1', 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
+  })
+
+  it.each([
+    ['<n v="1"/>', '1.00'],
+    ['<s v="1.00"/>', 1],
+  ] as const)('matches an unambiguous numeric member across display formatting', (member, value) => {
+    const cache = CACHE_XML.replace('<s v="East"/>', member)
+    const source = [['Region', 'Product', 'Sales'], [value, 'A', 10], ['West', 'A', 20]]
+    const definition = parsePivotDefinition(PIVOT_XML, cache)
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10, 0, 10], [20, 0, 20], [30, 0, 30]])
   })
 
   it('fails closed when the source grows a new category', () => {
@@ -156,6 +255,28 @@ describe('recomputePivotData', () => {
     const result = recomputePivotData(definition, SOURCE)
     // Only Product=A rows count: East 15, West 30, grand 45.
     expect(result.data).toEqual([[15], [30], [45]])
+  })
+
+  it('ranks negative totals ahead of members with no numeric total on the selected page', () => {
+    const paged = PIVOT_XML
+      .replace('<pivotField axis="axisCol"', '<pivotField axis="axisPage"')
+      .replace('<colFields count="1"><field x="1"/></colFields>',
+        '<pageFields count="1"><pageField fld="1" item="0"/></pageFields>')
+      .replace('<colItems count="3"><i><x/></i><i><x v="1"/></i><i t="grand"><x/></i></colItems>', '')
+      .replace('</pivotTableDefinition>', '<filters><filter fld="0" iMeasureFld="0" type="count">' +
+        '<autoFilter ref="A1"><filterColumn colId="0"><top10 val="1"/></filterColumn></autoFilter>' +
+        '</filter></filters></pivotTableDefinition>')
+    const definition = parsePivotDefinition(paged, CACHE_XML)
+    for (const [west, hidden, total] of [
+      [['West', 'B', 100], [false, true], -10],
+      [['West', 'A', 'unavailable'], [false, true], -10],
+      [['West', 'A', 0], [true, false], 0],
+    ] as const) {
+      const source = [['Region', 'Product', 'Sales'], ['East', 'A', -10], west]
+      const grown = growPivotDefinition(definition, source).definition
+      expect(grown.fieldItems[0]?.map((item) => item.hidden)).toEqual(hidden)
+      expect(recomputePivotData(grown, source).data).toEqual([[total], [total]])
+    }
   })
 
   it('supports average and count aggregations', () => {

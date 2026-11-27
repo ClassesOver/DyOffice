@@ -28,6 +28,21 @@ async function fixtureWorksheet(): Promise<string> {
 }
 
 describe('applyStructuralOps rows', () => {
+  it('shifts internal hyperlink targets and keeps external locations intact regardless of prefix', () => {
+    const relationships = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const xml = '<worksheet><sheetData/>' +
+      `<hyperlinks xmlns:link="${relationships}" xmlns:r="urn:extension">` +
+      '<hyperlink ref="A1:B1" link:id="rId3" location="Data!A1"/>' +
+      '<hyperlink ref="C1" r:id="extension-id" location="Data!A1"/></hyperlinks></worksheet>'
+    const ops = [{ kind: 'insert-rows', index: 0, count: 1 }] as const
+    const local = applyStructuralOps(xml, ops, SHEET)
+    expect(local).toContain('<hyperlink ref="A2:B2" link:id="rId3" location="Data!A1"/>')
+    expect(local).toContain('<hyperlink ref="C2" r:id="extension-id" location="Data!A2"/>')
+    const other = shiftCrossSheetFormulas(xml, SHEET, ops)
+    expect(other).toContain('<hyperlink ref="A1:B1" link:id="rId3" location="Data!A1"/>')
+    expect(other).toContain('<hyperlink ref="C1" r:id="extension-id" location="Data!A2"/>')
+  })
+
   it('inserting rows renumbers rows, cells, merges, dimension, and scoped ranges', async () => {
     const xml = applyStructuralOps(
       await fixtureWorksheet(),
@@ -264,6 +279,17 @@ describe('cross-sheet reference rewriting', () => {
     expect(shifted).toContain('<definedName name="x">Data!$A$11</definedName>')
     expect(shifted).toContain('<definedName name="y">Other!$A$8</definedName>')
   })
+
+  it('clips shifted print titles to the worksheet grid', () => {
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Titles" localSheetId="0">' +
+      "Data!$1048575:$1048576,Data!$XFD:$XFD</definedName></definedNames></workbook>"
+    const shifted = shiftDefinedNames(workbook, SHEET, [
+      { kind: 'insert-rows', index: 0, count: 1 },
+      { kind: 'insert-cols', index: 0, count: 1 },
+    ])
+    expect(shifted).toContain('>Data!$1048576:$1048576</definedName>')
+  })
 })
 
 const DRAWING_XML =
@@ -285,6 +311,30 @@ const DRAWING_XML =
   '</xdr:wsDr>'
 
 describe('shiftDrawingAnchors', () => {
+  it('moves qualified markers and keeps extension lookalikes intact', () => {
+    const foreign = '<row xmlns="urn:example:drawing">99</row>'
+    const outside = '<f:cache xmlns:f="urn:example:drawing"><xdr:from><xdr:row>8</xdr:row></xdr:from></f:cache>'
+    const mixed = DRAWING_XML.replace('<xdr:from>', '<xdr:from xmlns:m="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">')
+      .replace('<xdr:row>5</xdr:row>', foreign + '<m:row><![CDATA[5]]></m:row>')
+      .replace('</xdr:wsDr>', outside + '</xdr:wsDr>')
+    const moved = shiftDrawingAnchors(mixed, [{ kind: 'remove-rows', index: 4, count: 2 }])
+    expect(moved).toContain(foreign + '<m:row>4</m:row><xdr:rowOff>0</xdr:rowOff>')
+    expect(moved).toContain(outside)
+  })
+
+  it('moves anchors in both markup compatibility branches without reading extension anchors', () => {
+    const real = '<xdr:twoCellAnchor><xdr:from mark="from"><xdr:row>2</xdr:row></xdr:from>' +
+      '<xdr:to><xdr:row>3</xdr:row></xdr:to></xdr:twoCellAnchor>'
+    const foreign = '<xdr:twoCellAnchor xmlns:xdr="urn:example:drawing"><xdr:from><xdr:row>0</xdr:row></xdr:from>' +
+      '<xdr:to><xdr:row>2</xdr:row></xdr:to></xdr:twoCellAnchor>'
+    const xml = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"' +
+      ' xmlns:m="http://schemas.openxmlformats.org/markup-compatibility/2006">' + foreign +
+      '<m:AlternateContent><m:Choice Requires="xdr">' + real + '</m:Choice><m:Fallback>' + real +
+      '</m:Fallback></m:AlternateContent></xdr:wsDr>'
+    const moved = shiftDrawingAnchors(xml, [{ kind: 'move-rows', index: 2, count: 2, before: 1 }])
+    expect(moved.match(/<xdr:from mark="from"><xdr:row>1<\/xdr:row>/g)).toHaveLength(2)
+    expect(moved).toContain(foreign)
+  })
   it('row insert shifts markers past the boundary; absoluteAnchor stays', () => {
     const xml = shiftDrawingAnchors(DRAWING_XML, [{ kind: 'insert-rows', index: 6, count: 2 }])
     // from row 5 is before the boundary; to row 8 shifts (object grows).
@@ -350,6 +400,14 @@ const OLE_VML_XML =
   '</xml>'
 
 describe('applyStructuralOps oleObjects anchors', () => {
+  it('moves an aliased worksheet OLE anchor without touching its foreign namesake', () => {
+    const foreign = '<from xmlns="urn:example:ole"><xdr:row>5</xdr:row></from>'
+    const input = OLE_SHEET_XML.replace('<oleObjects>', '<s:oleObjects xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main">')
+      .replace('</oleObjects>', '</s:oleObjects>').replace('</from>', '</s:from>').replace('<from>', foreign + '<s:from>')
+    const moved = applyStructuralOps(input, [{ kind: 'insert-rows', index: 1, count: 1 }], SHEET)
+    expect(moved).toContain(foreign)
+    expect(moved).toContain('<xdr:row>6</xdr:row><xdr:rowOff>50</xdr:rowOff></s:from>')
+  })
   it('row insert shifts the objectPr markers past the boundary like a drawing anchor', () => {
     const xml = applyStructuralOps(
       OLE_SHEET_XML,
@@ -803,6 +861,58 @@ describe('structural save integration', () => {
     expect(drawing).toContain('<xdr:row>7</xdr:row><xdr:rowOff>20</xdr:rowOff>')
     const chart = await zip.file('xl/charts/chart1.xml')?.async('text')
     expect(chart).toContain('<c:f>Data!$A$1:$A$11</c:f>')
+  })
+
+  it('shifts referenced drawing anchors and table ranges through scoped relationship aliases', async () => {
+    const zip = await JSZip.loadAsync(await buildAnchoredFixture())
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const sheet = await zip.file(sheetPath)!.async('text')
+    zip.file(sheetPath, sheet.replace('<drawing r:id="rIdD"/>',
+      `<!-- <drawing r:id="orphan"/> --><drawing xmlns:d="${relationshipNs}" d:id='rId&#68;'/>`)
+      .replace('<tableParts count="1"><tablePart r:id="rIdT"/>',
+        `<tableParts count="1" xmlns:t="${relationshipNs}"><tablePart t:id='rId&#84;'/>`))
+    const rels = await zip.file(relsPath)!.async('text')
+    zip.file(relsPath, rels.replace('<Relationship Id="rIdD"',
+      `<Relationship Id="orphan" Type="${relationshipNs}/drawing" Target="../drawings/drawing2.xml"/>` +
+      '<Relationship Id="rIdD"').replaceAll('"', "'"))
+    const orphanPath = 'xl/drawings/drawing2.xml'
+    zip.file(orphanPath, DRAWING_XML)
+
+    const mutation = await applyCellEditsToXlsx(
+      await zip.generateAsync({ type: 'nodebuffer' }),
+      [],
+      [{ sheetName: SHEET, ops: [{ kind: 'insert-rows', index: 1, count: 1 }] }],
+    )
+    const saved = await JSZip.loadAsync(mutation.buffer)
+    expect(await saved.file('xl/drawings/drawing1.xml')?.async('text')).toContain('<xdr:row>6</xdr:row><xdr:rowOff>50</xdr:rowOff>')
+    expect(await saved.file('xl/tables/table1.xml')?.async('text')).toContain('ref="A1:B4"')
+    expect(await saved.file(orphanPath)?.async('text')).toBe(DRAWING_XML)
+    expect(await saved.file(sheetPath)?.async('text')).toContain('<!-- <drawing r:id="orphan"/> -->')
+  })
+
+  it('shifts the OLE fallback anchor through an aliased legacy drawing relationship', async () => {
+    const zip = await JSZip.loadAsync(await buildStructureFixture())
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    zip.file('xl/worksheets/sheet1.xml', OLE_SHEET_XML
+      .replace('<worksheet ', `<worksheet xmlns:r="${relationshipNs}" `)
+      .replace('<legacyDrawing r:id="rId2"/>', `<legacyDrawing xmlns:vml="${relationshipNs}" vml:id="rId2"/>`))
+    zip.file('xl/worksheets/_rels/sheet1.xml.rels',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      `<Relationship Id="rId2" Type="${relationshipNs}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` +
+      '</Relationships>')
+    const vmlPath = 'xl/drawings/vmlDrawing1.vml'
+    zip.file(vmlPath, OLE_VML_XML)
+
+    const mutation = await applyCellEditsToXlsx(
+      await zip.generateAsync({ type: 'nodebuffer' }),
+      [],
+      [{ sheetName: SHEET, ops: [{ kind: 'insert-rows', index: 6, count: 2 }] }],
+    )
+    const saved = await JSZip.loadAsync(mutation.buffer)
+    expect(await saved.file(vmlPath)?.async('text')).toContain('<x:Anchor>1, 10, 5, 50, 3, 20, 10, 60</x:Anchor>')
+    expect(await saved.file(vmlPath)?.async('text')).toContain('<x:Anchor>4, 15, 6, 2, 6, 15, 9, 2</x:Anchor>')
   })
 
   it('a row deletion compresses covered drawings, leaves the table above alone, and clamps chart refs', async () => {

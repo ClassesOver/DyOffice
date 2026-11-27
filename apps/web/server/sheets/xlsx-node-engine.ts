@@ -3,25 +3,31 @@ import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { crc32 } from 'node:zlib'
 import JSZip from 'jszip'
-import {XMLParser} from 'fast-xml-parser'
+import {XMLParser,type X2jOptions} from 'fast-xml-parser'
+import {sparklineEntries,sparklineTarget,worksheetSparklineGroups} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sparkline.ts'
 import {readWorksheetValidations} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-dv.ts'
-import {parseSheetElements,parseRelationships,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
+import {parseSheetElements,parseRelationships,parseWorkbookTabIndex,relationshipIdsMatch,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
+import {parseRange} from '../../../../packages/xlsx-gateway/src/domain/cell-address.ts'
 import {childElements,resolvedStyleEntries} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
-import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
+import {parseSheetProtectionAttributes,protectedRangeHasCredentials} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
 import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
-import {normalizeOoxmlPartPrefix} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
-import {inferWorksheetAddresses} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
-import {pivotBandMetadata,pivotTheme} from './pivot-band-metadata'
+import {normalizeOoxmlPartPrefix,readRelationshipId,readRootStartTag} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
+import {hyperlinkAnchorReference} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-hyperlinks.ts'
+import {elementText as worksheetElementText,isElement,lastWorksheetView,scopedChildren,spreadsheetSheetRoot,withNamespaces,X14_CF_EXT_URI,X14_CF_RULE_ID_EXT_URI,X14_XMLNS,XM_XMLNS,type ScopedElement} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import {inferWorksheetAddresses,readDefinedNameText,worksheetChildren,worksheetRowPositions} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-structure.ts'
+import {readPivotPartMetadata,pivotTheme} from './pivot-band-metadata'
 import {readNodeSheetComments} from './xlsx-node-comments'
-import {readCustomTableStyles,readWorksheetTables} from './xlsx-node-tables'
-import {readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
+import {readCustomTableStyles,readWorksheetTables,type TableDxf} from './xlsx-node-tables'
+import {mixHexColors,readHeaderFooterPictures,readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
 import {cellImageKey,readCellImageSources,readSheetCellImages,readWorkbookImage} from './xlsx-node-cell-images'
 import {applyTint} from '../../../sheets/src/renderer/table-styles'
-import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult} from '../../../sheets/src/shared/desktop-api.ts'
+import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult,WorkbookSharedFormulaGroup} from '../../../sheets/src/shared/desktop-api.ts'
 import { readWorkbookWithCellDetails } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
 import type { WorkbookRichRun } from '../../../../packages/xlsx-gateway/src/shared/edit-schemas.ts'
+import { BUILTIN_NUMBER_FORMATS } from '../../../../packages/xlsx-gateway/src/shared/builtin-number-formats.ts'
+import { resolveWorkbookSheetTarget, workbookPartPath } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts.ts'
 import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/src/shared/grid-bounds.ts'
 
 // Isolated Node fallback sidecar for XLSX when the Rust xlsx-sidecar binary is not compiled.
@@ -29,6 +35,7 @@ import {MAX_GRID_COLUMNS,MAX_GRID_ROWS} from '../../../../packages/xlsx-gateway/
 // 32 MiB input/output caps, and a 30s wall-clock kill timeout.
 const MAX = 32 * 1024 * 1024
 const MAX_FORMULA_CELLS = 100_000
+const MAX_HEADER_FOOTER_PICTURE_BYTES = 2 * 1024 * 1024
 const workDir = process.env.DYOFFICE_WORK_DIR || '/work'
 const resolveWorkPath = (logicalPath: string) =>
   workDir === '/work' || !logicalPath.startsWith('/work/')
@@ -47,20 +54,23 @@ interface ParsedCell {
 
 type SheetViewMetadata=Pick<WorkbookFile['sheets'][number],'tabColor'|'showGridLines'|'showFormulas'|'showRowColHeaders'|'rightToLeft'|'zoomScale'|'outlineLevelRow'|'outlineLevelCol'|'outlineSummaryBelow'|'outlineSummaryRight'>
 type SheetMetadata=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'|'autoFilter'|'autoFilterColumns'|'rows'|'merges'|'conditionalRules'|'hyperlinks'|'dataValidations'|'rowBreaks'|'colBreaks'|'pageSetup'>
-  & Pick<WorkbookFile['sheets'][number],'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'|'comments'|'tables'|'sparklines'>
-  & { view: SheetViewMetadata; dimension?: Bounds }
+  & Pick<WorkbookFile['sheets'][number],'chartSheet'|'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'|'comments'|'tables'|'sparklines'>
+  & { view: SheetViewMetadata; dimension?: Bounds; rowExtent: number }
 type FilterColumn=WorkbookRangeResult['autoFilterColumns'][number]
 const EMPTY_SHEET_METADATA:SheetMetadata={sheetProtection:null,protectedRanges:[],autoFilter:null,autoFilterColumns:[],
   rows:[],merges:[],conditionalRules:[],hyperlinks:[],columnWidths:[],defaultRowHeight:null,defaultColumnWidth:null,freeze:null,
-  dataValidations:[],rowBreaks:[],colBreaks:[],pageSetup:null,comments:[],tables:[],sparklines:[],view:{tabColor:null,showGridLines:true}}
+  dataValidations:[],rowBreaks:[],colBreaks:[],pageSetup:null,comments:[],tables:[],sparklines:[],rowExtent:0,view:{tabColor:null,showGridLines:true}}
 
 interface ParsedSheet extends SheetMetadata {
   id: string
   name: string
   cells: ParsedCell[]
+  formulaCells: ParsedCell[]
+  sharedGroups: WorkbookSharedFormulaGroup[]
   cellImages: WorkbookFile['sheets'][number]['cellImages']
   rowCount: number
   columnCount: number
+  storedCellCount: number
   valueCellCount: number
   valueRowCount: number
   valueColumnCount: number
@@ -99,36 +109,14 @@ function matchFindText(query:string,matchCase:boolean,whole:boolean,wildcards:bo
 
 type ZipText=(path:string)=>Promise<string>
 type XmlElement={ [name: `@_${string}`]: string|undefined }
-const metadataXml=new XMLParser({
+const metadataXmlOptions:X2jOptions={
   ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
-  cdataPropName:'#cdata',
-  // The basic workbook reader already imports cell values. Keep only row headers with layout here.
-  stopNodes:['worksheet.sheetData.row'],
-  updateTag:(name,_path,attrs)=>name==='row'&&attrs?.['@_ht']===undefined&&attrs?.['@_hidden']===undefined
-    &&!(attrs?.['@_s']!==undefined&&enabled(attrs['@_customFormat']))
-    &&attrs?.['@_outlineLevel']===undefined&&attrs?.['@_collapsed']===undefined?false:name,
   isArray:(_name,path)=>typeof path==='string'&&[
     'Relationships.Relationship',
     'fill.gradientFill.stop','dxf.fill.gradientFill.stop',
-    'worksheet.sheetData.row',
-    'worksheet.cols.col','worksheet.mergeCells.mergeCell','worksheet.sheetViews.sheetView','worksheet.conditionalFormatting',
-    'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
-    'worksheet.conditionalFormatting.cfRule.colorScale.color',
-    'worksheet.conditionalFormatting.cfRule.formula','worksheet.conditionalFormatting.cfRule.dataBar.cfvo',
-    'worksheet.conditionalFormatting.cfRule.dataBar.color','worksheet.conditionalFormatting.cfRule.iconSet.cfvo',
-    'worksheet.conditionalFormatting.cfRule.extLst.ext',
-    'worksheet.extLst.ext.conditionalFormattings.conditionalFormatting',
-    'worksheet.extLst.ext.conditionalFormattings.conditionalFormatting.cfRule',
-    'worksheet.extLst.ext.conditionalFormattings.conditionalFormatting.cfRule.dataBar.cfvo',
-    'worksheet.hyperlinks.hyperlink',
-    'worksheet.extLst.ext',
-    'worksheet.extLst.ext.sparklineGroups.sparklineGroup',
-    'worksheet.extLst.ext.sparklineGroups.sparklineGroup.sparklines.sparkline',
-    'worksheet.rowBreaks.brk','worksheet.colBreaks.brk',
-    'worksheet.protectedRanges.protectedRange','worksheet.autoFilter','worksheet.autoFilter.filterColumn',
-    'worksheet.autoFilter.filterColumn.filters.filter','worksheet.autoFilter.filterColumn.customFilters.customFilter',
   ].includes(path),
-})
+}
+const metadataXml=new XMLParser(metadataXmlOptions)
 const attribute=(element:XmlElement|undefined,name:string)=>{
   const value=element?.[`@_${name}`]
   return value===undefined?undefined:decodeAttribute(value)
@@ -136,23 +124,16 @@ const attribute=(element:XmlElement|undefined,name:string)=>{
 const enabled=(value:string|undefined)=>value==='1'||value==='true'
 const disabled=(value:string|undefined)=>value==='0'||value==='false'
 
-type OrderedXml = {':@'?:XmlElement;'#text'?:string;'#cdata'?:OrderedXml[];[name:string]:unknown}
-const workbookMetadataXml=new XMLParser({
-  ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
-  preserveOrder:true,cdataPropName:'#cdata',
-})
 function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]){
-  const elements=(nodes:OrderedXml[],tag:string)=>nodes.flatMap(node=>
-    Array.isArray(node[tag])?[{attrs:node[':@'],children:node[tag] as OrderedXml[]}]:[])
-  const children=(nodes:OrderedXml[],tag:string)=>elements(nodes,tag)[0]?.children??[]
-  const nonnegativeIndex=(raw:string|undefined)=>{
-    const index=Number(raw)
-    return raw!==undefined&&/^\d+$/.test(raw)&&Number.isSafeInteger(index)?index:undefined
-  }
-  const workbook=children(workbookMetadataXml.parse(xml),'workbook')
-  const declarations=elements(children(workbook,'sheets'),'sheet').map(({attrs})=>({
-    name:attribute(attrs,'name'),
-    state:attribute(attrs,'state'),
+  const root=childElements(xml)[0]
+  const workbook=root&&withNamespaces(root,new Map())
+  const elements=(parent:ScopedElement|undefined,name:string)=>
+    parent?scopedChildren(parent).filter(node=>isElement(node,name,parent.namespace)):[]
+  const sections=workbook?.local==='workbook'?scopedChildren(workbook):[]
+  const section=(name:string)=>sections.find(node=>isElement(node,name,workbook?.namespace))
+  const declarations=elements(section('sheets'),'sheet').map(({attributes})=>({
+    name:attributes.get('name'),
+    state:attributes.get('state'),
   }))
   const visibility=new Map(declarations.flatMap(({name,state})=>name===undefined?[]:[[name,state]] as const))
   const readableIndexes=new Map(readableSheets.map(({name},index)=>[name,index]))
@@ -161,21 +142,21 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
     return name===undefined?undefined:readableIndexes.get(name)
   }
   let savedTab=0
-  for(const {attrs} of elements(children(workbook,'bookViews'),'workbookView')){
-    const activeTab=attribute(attrs,'activeTab')
-    if(activeTab!==undefined)savedTab=nonnegativeIndex(activeTab)??0
+  for(const {attributes} of elements(section('bookViews'),'workbookView')){
+    const activeTab=attributes.get('activeTab')
+    if(activeTab!==undefined)savedTab=parseWorkbookTabIndex(activeTab)??0
   }
   const definedNames:WorkbookFile['definedNames']=[]
   const scopedSheets=new Set<number>()
   const printNames=new Map<number,Pick<WorkbookFile['sheets'][number],'printArea'|'printTitles'>>()
-  for(const {attrs,children:body} of elements(children(workbook,'definedNames'),'definedName')){
-    const name=attribute(attrs,'name')
+  for(const {attributes,inner} of elements(section('definedNames'),'definedName')){
+    const name=attributes.get('name')
     if(!name)continue
-    const local=nonnegativeIndex(attribute(attrs,'localSheetId'))
+    const local=parseWorkbookTabIndex(attributes.get('localSheetId'))
     const sheetIndex=local===undefined?undefined:readableIndex(local)
     if(local!==undefined&&sheetIndex===undefined)continue
     if(sheetIndex!==undefined)scopedSheets.add(sheetIndex)
-    const formula=body.map(node=>node['#cdata']?.[0]?.['#text']??decodeAttribute(node['#text']??'')).join('')
+    const formula=readDefinedNameText(inner)
     if(!formula)continue
     if(name==='_xlnm.Print_Area'||name==='_xlnm.Print_Titles'){
       if(sheetIndex!==undefined&&formula.length<=2_000){
@@ -186,14 +167,14 @@ function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]
       }
       continue
     }
-    if(!name.startsWith('_xlnm')&&!enabled(attribute(attrs,'hidden'))){
+    if(!name.startsWith('_xlnm')&&!enabled(attributes.get('hidden'))){
       definedNames.push({name,formula:withoutFutureFunctionMarkers(formula),...(sheetIndex===undefined?{}:{sheetIndex})})
     }
   }
-  const protection=elements(workbook,'workbookProtection')[0]
-  const workbookProtection=protection&&{lockStructure:enabled(attribute(protection.attrs,'lockStructure')),
-    hasPassword:attribute(protection.attrs,'workbookPassword')!==undefined||attribute(protection.attrs,'workbookHashValue')!==undefined}
-  const date1904=enabled(attribute(elements(workbook,'workbookPr')[0]?.attrs,'date1904'))
+  const protection=section('workbookProtection')?.attributes
+  const workbookProtection=protection&&{lockStructure:enabled(protection.get('lockStructure')),
+    hasPassword:protection.has('workbookPassword')||protection.has('workbookHashValue')}
+  const date1904=enabled(section('workbookPr')?.attributes.get('date1904'))
   return {activeTab:readableIndex(savedTab)??0,visibility,definedNames,scopedSheets,printNames,workbookProtection,date1904}
 }
 
@@ -206,50 +187,34 @@ function sheetArea(ref:string|undefined){
   return area.startRow<=area.endRow&&area.endRow<1_048_576&&area.startColumn<=area.endColumn&&area.endColumn<16_384?area:null
 }
 
-function sizeAttribute(element:XmlElement|undefined,name:string){
-  const raw=attribute(element,name)
+function sizeValue(raw:string|undefined){
   const n=Number(raw)
   return raw?.trim()&&Number.isFinite(n)&&n>=0?n:undefined
 }
 
-type ElementText = string | { '#text'?: string; '#cdata'?: string }
-function elementText(node: ElementText | undefined): string {
-  if (typeof node === 'string') return decodeAttribute(node)
-  return decodeAttribute(node?.['#text']??'') + (node?.['#cdata']??'')
-}
-
-type SparklineExtension = XmlElement & {
-  sparklineGroups?: { sparklineGroup?: (XmlElement & {
-    colorSeries?: XmlElement
-    colorNegative?: XmlElement
-    sparklines?: { sparkline?: { f?: ElementText; sqref?: ElementText }[] }
-  })[] }
-}
-
-const sparklineExtension = '{05c60535-1f16-4fd2-b633-f4f36f0b64e0}'
-function readSparklines(extensions: readonly SparklineExtension[], resolveColor: ResolveColor): SheetMetadata['sparklines'] {
+function readSparklines(children: readonly ScopedElement[], resolveColor: ResolveColor): SheetMetadata['sparklines'] {
   const result: SheetMetadata['sparklines'] = []
-  for (const extension of extensions) {
-    if (attribute(extension, 'uri')?.toLowerCase() !== sparklineExtension) continue
-    for (const group of extension.sparklineGroups?.sparklineGroup ?? []) {
-      const cells: SheetMetadata['sparklines'][number]['cells'] = []
-      for (const item of group.sparklines?.sparkline ?? []) {
-        const sourceRef = elementText(item.f).trim()
-        const cell = (elementText(item.sqref).trim().split(/\s+/, 1)[0] ?? '').replaceAll('$', '').toUpperCase()
-        if (!sourceRef || !parseA1(cell)) continue
-        cells.push({ cell, sourceRef })
-        if (cells.length === 500) break
-      }
-      if (!cells.length) continue
-      const kind = attribute(group, 'type')
-      result.push({
-        type: kind === 'column' || kind === 'stacked' ? kind : 'line',
-        color: resolveColor(group.colorSeries).rgb,
-        negativeColor: resolveColor(group.colorNegative).rgb,
-        cells,
-      })
-      if (result.length === 100) return result
+  for (const group of worksheetSparklineGroups(children)) {
+    const cells: SheetMetadata['sparklines'][number]['cells'] = []
+    for (const item of sparklineEntries(group)) {
+      const fields = scopedChildren(item)
+      const formula = fields.find(field => isElement(field, 'f', XM_XMLNS))
+      const sourceRef = formula && worksheetElementText(formula.inner).trim()
+      const cell = sparklineTarget(fields)
+      if (!sourceRef || !cell) continue
+      cells.push({ cell, sourceRef })
+      if (cells.length === 500) break
     }
+    if (!cells.length) continue
+    const kind = group.attributes.get('type')
+    const colors = scopedChildren(group)
+    result.push({
+      type: kind === 'column' || kind === 'stacked' ? kind : 'line',
+      color: scopedColor(colors.find(color => isElement(color, 'colorSeries', X14_XMLNS)), resolveColor),
+      negativeColor: scopedColor(colors.find(color => isElement(color, 'colorNegative', X14_XMLNS)), resolveColor),
+      cells,
+    })
+    if (result.length === 100) break
   }
   return result
 }
@@ -274,51 +239,67 @@ function readDataValidations(xml: string): SheetMetadata['dataValidations'] {
 
 type PageSetup = NonNullable<SheetMetadata['pageSetup']>
 const headerFooterSections = ['oddHeader','oddFooter','evenHeader','evenFooter','firstHeader','firstFooter'] as const
-type SheetPrintElements = {
-  sheetPr?: {pageSetUpPr?: XmlElement}
-  pageSetup?: XmlElement
-  pageMargins?: XmlElement
-  printOptions?: XmlElement
-  headerFooter?: XmlElement & Partial<Record<(typeof headerFooterSections)[number],ElementText>>
-}
-
-function integerAttribute(element: XmlElement | undefined, name: string, min: number, max: number) {
-  const value = sizeAttribute(element,name)
+function printInteger(element: ScopedElement | undefined, name: string, min: number, max: number) {
+  const value = sizeValue(element?.attributes.get(name))
   return value!==undefined && Number.isInteger(value) && value>=min && value<=max ? value : undefined
 }
 
-function readPageSetup(worksheet: SheetPrintElements | undefined): SheetMetadata['pageSetup'] {
-  const setup=worksheet?.pageSetup, options=worksheet?.printOptions, footer=worksheet?.headerFooter
-  const orientation=attribute(setup,'orientation')
+function readPageSetup(children: readonly ScopedElement[], chartSheet = false): SheetMetadata['pageSetup'] {
+  const section=(name:string)=>children.find(child=>child.local===name)
+  const setup=section('pageSetup'), options=section('printOptions'), footer=section('headerFooter')
+  const properties=section('sheetPr')
+  const pageProperties=properties && scopedChildren(properties).find(child=>isElement(child,'pageSetUpPr',properties.namespace))
+  const orientation=setup?.attributes.get('orientation')
+  const pageOrder=setup?.attributes.get('pageOrder')
   const keys=['left','right','top','bottom','header','footer'] as const
-  const margins=keys.map(key=>sizeAttribute(worksheet?.pageMargins,key))
+  const pageMargins=section('pageMargins')
+  const margins=keys.map(key=>sizeValue(pageMargins?.attributes.get(key)))
   const print:PageSetup={
     orientation:orientation==='portrait'||orientation==='landscape'?orientation:undefined,
-    paperSize:integerAttribute(setup,'paperSize',1,256),scale:integerAttribute(setup,'scale',10,400),
-    fitToWidth:integerAttribute(setup,'fitToWidth',0,32_767),fitToHeight:integerAttribute(setup,'fitToHeight',0,32_767),
-    fitToPage:enabled(attribute(worksheet?.sheetPr?.pageSetUpPr,'fitToPage'))||undefined,
-    printGridlines:enabled(attribute(options,'gridLines'))||undefined,
-    printHeadings:enabled(attribute(options,'headings'))||undefined,
-    differentOddEven:enabled(attribute(footer,'differentOddEven'))||undefined,
-    differentFirst:enabled(attribute(footer,'differentFirst'))||undefined,
-    headerFooterFixedSize:disabled(attribute(footer,'scaleWithDoc'))||undefined,
+    pageOrder:pageOrder==='downThenOver'||pageOrder==='overThenDown'?pageOrder:undefined,
+    paperSize:printInteger(setup,'paperSize',1,256),scale:printInteger(setup,'scale',10,400),
+    fitToWidth:printInteger(setup,'fitToWidth',0,32_767),fitToHeight:printInteger(setup,'fitToHeight',0,32_767),
+    fitToPage:enabled(pageProperties?.attributes.get('fitToPage'))||undefined,
+    blackAndWhite:enabled(setup?.attributes.get('blackAndWhite'))||undefined,
+    draft:enabled(setup?.attributes.get('draft'))||undefined,
+    printGridlines:(enabled(options?.attributes.get('gridLines')) &&
+      !disabled(options?.attributes.get('gridLinesSet')))||undefined,
+    printHeadings:enabled(options?.attributes.get('headings'))||undefined,
+    horizontalCentered:enabled(options?.attributes.get('horizontalCentered'))||undefined,
+    verticalCentered:enabled(options?.attributes.get('verticalCentered'))||undefined,
+    differentOddEven:enabled(footer?.attributes.get('differentOddEven'))||undefined,
+    differentFirst:enabled(footer?.attributes.get('differentFirst'))||undefined,
+    headerFooterFixedSize:disabled(footer?.attributes.get('scaleWithDoc'))||undefined,
+  }
+  if (setup && enabled(setup.attributes.get('useFirstPageNumber'))) {
+    const uint32Range = 0x1_0000_0000
+    const stored = setup.attributes.has('firstPageNumber')
+      ? printInteger(setup, 'firstPageNumber', 0, uint32Range - 1)
+      : 1
+    // Excel wraps worksheet page numbers from -32767 through -1 into uint32.
+    print.firstPageNumber = !chartSheet && stored !== undefined && stored >= uint32Range - 32_767
+      ? stored - uint32Range
+      : stored
   }
   if (margins.every(value=>value!==undefined&&value<=10)) {
     print.margins={left:margins[0]!,right:margins[1]!,top:margins[2]!,bottom:margins[3]!,header:margins[4]!,footer:margins[5]!}
   }
-  for(const section of headerFooterSections){
-    const content=elementText(footer?.[section])
-    if(content.length>0&&content.length<=500)print[section]=content
+  const footerChildren=footer ? scopedChildren(footer) : []
+  for(const name of headerFooterSections){
+    const element=footerChildren.find(child=>isElement(child,name,footer?.namespace))
+    const content=element ? worksheetElementText(element.inner) : ''
+    if(content.length>0&&content.length<=500)print[name]=content
   }
   return Object.values(print).some(value=>value!==undefined)?print:null
 }
 
-function readManualBreaks(items: readonly XmlElement[], max: number): number[] {
+function readManualBreaks(section: ScopedElement | undefined, max: number): number[] {
+  if (!section) return []
   const breaks = new Set<number>()
-  for (const item of items) {
-    if (!enabled(attribute(item,'man'))) continue
-    const id = integerAttribute(item,'id',0,max)
-    if (id!==undefined) breaks.add(id)
+  for (const item of scopedChildren(section)) {
+    if (!isElement(item,'brk',section.namespace)||!enabled(item.attributes.get('man'))) continue
+    const id = sizeValue(item.attributes.get('id'))
+    if (id!==undefined&&Number.isInteger(id)&&id<=max) breaks.add(id)
     if (breaks.size===1_023) break
   }
   return [...breaks].sort((a,b)=>a-b)
@@ -326,219 +307,249 @@ function readManualBreaks(items: readonly XmlElement[], max: number): number[] {
 
 type ResolveColor=(element:XmlElement|undefined)=>{rgb:string|undefined}
 type SheetConditionalRule=SheetMetadata['conditionalRules'][number]
-type CfThresholdXml=XmlElement & { f?: ElementText }
-type CfPayload=XmlElement & { cfvo?: CfThresholdXml[]; color?: XmlElement[] }
-type CfRuleExtension=XmlElement & { id?: ElementText }
-type CfRuleXml=XmlElement & {
-  formula?: ElementText[]
-  colorScale?: CfPayload
-  dataBar?: CfPayload
-  iconSet?: CfPayload
-  extLst?: { ext?: CfRuleExtension[] }
-}
-type CfBlockXml=XmlElement & { cfRule?: CfRuleXml[] }
-type EnhancedDataBarXml=CfPayload & { axisColor?: XmlElement; negativeFillColor?: XmlElement; fillColor?: XmlElement }
-type EnhancedCfBlockXml={ cfRule?: (XmlElement & { dataBar?: EnhancedDataBarXml })[] }
-type EnhancedCfExtension=XmlElement & {
-  conditionalFormattings?: { conditionalFormatting?: EnhancedCfBlockXml[] }
+function cfChildren(parent: ScopedElement | undefined, name: string, namespace = parent?.namespace): ScopedElement[] {
+  return parent ? scopedChildren(parent).filter(child => isElement(child, name, namespace)) : []
 }
 
-const conditionalFormattingExtension = '{78c0d931-6437-407d-a8ee-f0aad7539e65}'
-const conditionalRuleIdExtension = '{b025f937-c7b1-47d3-b67f-a62eff666e3e}'
+function cfText(element: ScopedElement | undefined): string {
+  return element ? worksheetElementText(element.inner) : ''
+}
 
-function enhancedDataBars(extensions: readonly EnhancedCfExtension[]): ReadonlyMap<string, EnhancedDataBarXml> {
-  const bars = new Map<string, EnhancedDataBarXml>()
-  for (const extension of extensions) {
-    if (attribute(extension, 'uri')?.toLowerCase() !== conditionalFormattingExtension) continue
-    for (const block of extension.conditionalFormattings?.conditionalFormatting ?? []) {
-      for (const rule of block.cfRule ?? []) {
-        if (attribute(rule, 'type') !== 'dataBar' || !rule.dataBar) continue
-        const id = attribute(rule, 'id')?.trim().toLowerCase()
-        if (id) bars.set(id, rule.dataBar)
+function scopedColor(element: ScopedElement | undefined, resolveColor: ResolveColor): string | undefined {
+  const attrs = element && Object.fromEntries([...element.attributes].map(([name, value]) => [`@_${name}`, value]))
+  return resolveColor(attrs).rgb
+}
+
+function enhancedDataBars(extensionList: ScopedElement | undefined): ReadonlyMap<string, ScopedElement> {
+  const bars = new Map<string, ScopedElement>()
+  for (const extension of cfChildren(extensionList, 'ext')) {
+    if (extension.attributes.get('uri')?.toUpperCase() !== X14_CF_EXT_URI) continue
+    for (const collection of cfChildren(extension, 'conditionalFormattings', X14_XMLNS)) {
+      for (const block of cfChildren(collection, 'conditionalFormatting')) {
+        for (const rule of cfChildren(block, 'cfRule')) {
+          if (rule.attributes.get('type') !== 'dataBar') continue
+          const bar = cfChildren(rule, 'dataBar')[0]
+          const id = rule.attributes.get('id')?.trim().toLowerCase()
+          if (id && bar) bars.set(id, bar)
+        }
       }
     }
   }
   return bars
 }
 
-function cfInteger(node: XmlElement | undefined, key: string) {
-  const raw = attribute(node, key)
+function cfInteger(node: ScopedElement | undefined, key: string) {
+  const raw = node?.attributes.get(key)
   const value = Number(raw)
   return raw !== undefined && /^\d+$/.test(raw) && Number.isSafeInteger(value) ? value : undefined
 }
 
 function readCfThresholds(
-  nodes: readonly CfThresholdXml[],
+  nodes: readonly ScopedElement[],
   base: SheetConditionalRule['cfvos'] = [],
 ): SheetConditionalRule['cfvos'] {
   return nodes.flatMap((stop, index) => {
-    const kind = attribute(stop, 'type')
+    const kind = stop.attributes.get('type')
     if (!kind) return []
-    const gte = attribute(stop, 'gte')
+    const gte = stop.attributes.get('gte')
     const fallback = base[index]?.kind === kind ? base[index] : undefined
+    const formula = cfChildren(stop, 'f', stop.namespace === X14_XMLNS ? XM_XMLNS : stop.namespace)[0]
     return [{
       kind,
-      value: (elementText(stop.f).trim() || attribute(stop, 'val')) ?? fallback?.value,
+      value: (cfText(formula).trim() || stop.attributes.get('val')) ?? fallback?.value,
       gte: gte === undefined ? fallback?.gte : !disabled(gte),
     }]
   })
 }
 
-function mergeEnhancedDataBar(rule: SheetConditionalRule, twin: EnhancedDataBarXml, resolveColor: ResolveColor): SheetConditionalRule {
-  const axis = attribute(twin, 'axisPosition')
-  const gradient = attribute(twin, 'gradient')
-  const showValue = attribute(twin, 'showValue')
-  const fillColor = resolveColor(twin.fillColor).rgb
-  const cfvos = readCfThresholds(twin.cfvo ?? [], rule.cfvos)
+function mergeEnhancedDataBar(rule: SheetConditionalRule, twin: ScopedElement, resolveColor: ResolveColor): SheetConditionalRule {
+  const axis = twin.attributes.get('axisPosition')
+  const gradient = twin.attributes.get('gradient')
+  const showValue = twin.attributes.get('showValue')
+  const fillColor = scopedColor(cfChildren(twin, 'fillColor')[0], resolveColor)
+  const cfvos = readCfThresholds(cfChildren(twin, 'cfvo'), rule.cfvos)
   return {
     ...rule,
     cfvos: cfvos.length === 2 ? cfvos : rule.cfvos,
     colors: fillColor === undefined ? rule.colors : [fillColor],
     showValue: showValue === undefined ? rule.showValue : !disabled(showValue),
     axisPosition: axis === 'automatic' || axis === 'middle' || axis === 'none' ? axis : undefined,
-    axisColor: resolveColor(twin.axisColor).rgb,
+    axisColor: scopedColor(cfChildren(twin, 'axisColor')[0], resolveColor),
     gradient: gradient === undefined ? undefined : !disabled(gradient),
-    negativeColor: resolveColor(twin.negativeFillColor).rgb,
-    negativeSameAsPositive: !disabled(attribute(twin, 'negativeBarColorSameAsPositive')),
+    negativeColor: scopedColor(cfChildren(twin, 'negativeFillColor')[0], resolveColor),
+    negativeSameAsPositive: !disabled(twin.attributes.get('negativeBarColorSameAsPositive')),
     minLength: Math.min(100, cfInteger(twin, 'minLength') ?? 0),
     maxLength: Math.min(100, cfInteger(twin, 'maxLength') ?? 100),
   }
 }
 
 function readConditionalRules(
-  blocks: readonly CfBlockXml[],
-  extensions: readonly EnhancedCfExtension[],
+  worksheet: readonly ScopedElement[],
   resolveColor: ResolveColor,
 ): SheetConditionalRule[] {
-  const bars = enhancedDataBars(extensions)
+  const bars = enhancedDataBars(worksheet.find(child => child.local === 'extLst'))
   const rules: SheetConditionalRule[] = []
-  for (const block of blocks) {
-    const ranges = (attribute(block, 'sqref') ?? '').split(/\s+/).map(sheetArea).filter(area => area !== null)
+  for (const block of worksheet) {
+    if (block.local !== 'conditionalFormatting') continue
+    const ranges = (block.attributes.get('sqref') ?? '').split(/\s+/).map(sheetArea).filter(area => area !== null)
     if (!ranges.length) continue
-    for (const node of block.cfRule ?? []) {
-      const ruleType = attribute(node, 'type') ?? 'unknown'
-      const { colorScale, dataBar, iconSet } = node
+    for (const node of cfChildren(block, 'cfRule')) {
+      const attrs = node.attributes
+      const ruleType = attrs.get('type') ?? 'unknown'
+      const children = scopedChildren(node)
+      const colorScale = children.find(child => isElement(child, 'colorScale', node.namespace))
+      const dataBar = children.find(child => isElement(child, 'dataBar', node.namespace))
+      const iconSet = children.find(child => isElement(child, 'iconSet', node.namespace))
       const payload = colorScale ?? dataBar ?? iconSet
-      const colors = (payload?.color ?? []).flatMap(color => {
-        const rgb = resolveColor(color).rgb
+      const colorNodes = cfChildren(payload, 'color')
+      const thresholdNodes = cfChildren(payload, 'cfvo')
+      const colors = colorNodes.flatMap(color => {
+        const rgb = scopedColor(color, resolveColor)
         return rgb ? [rgb] : []
       })
-      const cfvos = readCfThresholds(payload?.cfvo ?? [])
-      if (ruleType === 'colorScale' && (colors.length < 2 || colors.length !== cfvos.length ||
-        cfvos.length !== colorScale?.cfvo?.length || colors.length !== colorScale?.color?.length)) continue
+      const cfvos = readCfThresholds(thresholdNodes)
+      if (ruleType === 'colorScale' && (!colorScale || colors.length < 2 || colors.length !== cfvos.length ||
+        cfvos.length !== thresholdNodes.length || colors.length !== colorNodes.length)) continue
       const rule: SheetConditionalRule = {
         ranges, ruleType, colors, cfvos,
-        operator: attribute(node, 'operator'),
-        formulas: (node.formula ?? []).map(elementText),
-        text: attribute(node, 'text'),
+        operator: attrs.get('operator'),
+        formulas: children.filter(child => isElement(child, 'formula', node.namespace)).map(cfText),
+        text: attrs.get('text'),
         dxfIndex: cfInteger(node, 'dxfId'),
         priority: cfInteger(node, 'priority') ?? 0,
-        stopIfTrue: enabled(attribute(node, 'stopIfTrue')),
+        stopIfTrue: enabled(attrs.get('stopIfTrue')),
         rank: cfInteger(node, 'rank'),
-        percent: enabled(attribute(node, 'percent')),
-        bottom: enabled(attribute(node, 'bottom')),
-        iconSetName: iconSet === undefined ? undefined : attribute(iconSet, 'iconSet') ?? '3TrafficLights1',
-        iconReverse: enabled(attribute(iconSet, 'reverse')),
-        showValue: !disabled(attribute(payload, 'showValue')),
+        percent: enabled(attrs.get('percent')),
+        bottom: enabled(attrs.get('bottom')),
+        iconSetName: iconSet === undefined ? undefined : iconSet.attributes.get('iconSet') ?? '3TrafficLights1',
+        iconReverse: enabled(iconSet?.attributes.get('reverse')),
+        showValue: !disabled(payload?.attributes.get('showValue')),
         minLength: dataBar === undefined ? undefined : Math.min(100, cfInteger(dataBar, 'minLength') ?? 10),
         maxLength: dataBar === undefined ? undefined : Math.min(100, cfInteger(dataBar, 'maxLength') ?? 90),
       }
-      const idExtension = ruleType === 'dataBar' && node.extLst?.ext?.find(extension =>
-        attribute(extension, 'uri')?.toLowerCase() === conditionalRuleIdExtension)
-      const twin = idExtension ? bars.get(elementText(idExtension.id).trim().toLowerCase()) : undefined
+      const extensionList = ruleType === 'dataBar'
+        ? children.find(child => isElement(child, 'extLst', node.namespace))
+        : undefined
+      const idExtension = cfChildren(extensionList, 'ext').find(extension =>
+        extension.attributes.get('uri')?.toUpperCase() === X14_CF_RULE_ID_EXT_URI)
+      const twin = bars.get(cfText(cfChildren(idExtension, 'id', X14_XMLNS)[0]).trim().toLowerCase())
       rules.push(twin === undefined ? rule : mergeEnhancedDataBar(rule, twin, resolveColor))
     }
   }
   return rules
 }
 function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:ReadonlyMap<string,string>):Omit<SheetMetadata,'comments'|'tables'>{
-  const worksheet=metadataXml.parse(xml).worksheet
-  const dimension=sheetArea(attribute(worksheet?.dimension,'ref'))
-  const element=worksheet?.sheetProtection
-  const parsed=element===undefined?null:parseSheetProtectionAttributes(name=>attribute(element,name))
+  let rowExtent=0
+  const children=worksheetChildren(xml)
+  const dimension=sheetArea(children.find(child=>child.local==='dimension')?.attributes.get('ref'))
+  const sheetData=children.find(child=>child.local==='sheetData')
+  const protection=children.find(child=>child.local==='sheetProtection')
+  const parsed=protection ? parseSheetProtectionAttributes(name=>protection.attributes.get(name)) : null
   const protectedRanges:SheetMetadata['protectedRanges']=[]
-  for(const range of worksheet?.protectedRanges?.protectedRange??[]){
-    const name=attribute(range,'name'),sqref=attribute(range,'sqref')
+  const rangeList=children.find(child=>child.local==='protectedRanges')
+  for(const range of rangeList ? scopedChildren(rangeList) : []){
+    if(!isElement(range,'protectedRange',rangeList?.namespace))continue
+    const name=range.attributes.get('name'),sqref=range.attributes.get('sqref')
     if(name===undefined||sqref===undefined)continue
-    protectedRanges.push({name,sqref,hasPassword:attribute(range,'password')!==undefined||attribute(range,'hashValue')!==undefined||
-      attribute(range,'securityDescriptor')!==undefined||range.securityDescriptor!==undefined})
+    protectedRanges.push({name,sqref,hasPassword:protectedRangeHasCredentials(range)})
   }
   const sheetProtection=parsed&&{
     protected:parsed.protected,allow:parsed.allow,hasPassword:parsed.password!==null,
     ...(parsed.password?{password:parsed.password}:{}),
   }
   const columns:SheetMetadata['columnWidths']=[]
-  const format=worksheet?.sheetFormatPr
-  const outline=worksheet?.sheetPr?.outlinePr
-  let outlineLevelCol=outlineLevel(attribute(format,'outlineLevelCol'))
-  let outlineLevelRow=outlineLevel(attribute(format,'outlineLevelRow'))
-  for(const col of worksheet?.cols?.col??[]){
-    const first=Number(attribute(col,'min')),last=Number(attribute(col,'max'))
-    if(!Number.isInteger(first)||!Number.isInteger(last)||first<1||last<first||last>16_384)continue
-    const level=outlineLevel(attribute(col,'outlineLevel'))
+  const format=children.find(child=>child.local==='sheetFormatPr')?.attributes
+  const properties=children.find(child=>child.local==='sheetPr')
+  const propertyChildren=properties ? scopedChildren(properties) : []
+  const outline=propertyChildren.find(child=>isElement(child,'outlinePr',properties?.namespace))?.attributes
+  const tabColor=propertyChildren.find(child=>isElement(child,'tabColor',properties?.namespace))
+  const tabColorAttrs=tabColor && Object.fromEntries([...tabColor.attributes].map(([name,value])=>[`@_${name}`,value]))
+  let outlineLevelCol=outlineLevel(format?.get('outlineLevelCol'))
+  let outlineLevelRow=outlineLevel(format?.get('outlineLevelRow'))
+  const cols=children.find(child=>child.local==='cols')
+  for(const col of cols ? scopedChildren(cols) : []){
+    if(!isElement(col,'col',cols?.namespace))continue
+    const attrs=col.attributes
+    const first=Number(attrs.get('min')),last=Number(attrs.get('max'))
+    if(!Number.isInteger(first)||!Number.isInteger(last)||first<1||last<first||last>MAX_GRID_COLUMNS)continue
+    const level=outlineLevel(attrs.get('outlineLevel')),width=sizeValue(attrs.get('width'))
+    const hidden=enabled(attrs.get('hidden')),collapsed=enabled(attrs.get('collapsed'))
+    const styleIndex=positiveStyle(attrs.get('style'))
+    if(width===undefined&&!hidden&&!collapsed&&!level&&styleIndex===undefined)continue
     outlineLevelCol=Math.max(outlineLevelCol,level)
-    columns.push({startColumn:first-1,endColumn:last-1,width:sizeAttribute(col,'width'),hidden:enabled(attribute(col,'hidden')),
-      styleIndex:positiveStyle(attribute(col,'style')),outlineLevel:level||undefined,collapsed:enabled(attribute(col,'collapsed'))||undefined})
+    columns.push({startColumn:first-1,endColumn:last-1,width,hidden,
+      styleIndex,outlineLevel:level||undefined,collapsed:collapsed||undefined})
   }
   const merges:SheetMetadata['merges']=[]
-  for(const merge of worksheet?.mergeCells?.mergeCell??[]){
-    const area=sheetArea(attribute(merge,'ref'))
+  const mergeSection=children.find(child=>child.local==='mergeCells')
+  for(const merge of mergeSection ? scopedChildren(mergeSection) : []){
+    if(!isElement(merge,'mergeCell',mergeSection?.namespace))continue
+    const area=sheetArea(merge.attributes.get('ref'))
     if(area)merges.push(area)
   }
   const hyperlinks:SheetMetadata['hyperlinks']=[]
-  for(const link of worksheet?.hyperlinks?.hyperlink??[]){
-    // A hyperlink on a range is anchored at its first cell, as in the Rust reader.
-    const anchor=attribute(link,'ref')?.split(':',1)[0]?.replaceAll('$','').toUpperCase()
-    const cell=anchor&&parseA1(anchor)
-    if(!cell)continue
-    const id=attribute(link,'id'),location=attribute(link,'location')
-    const target=id!==undefined?linkTargets.get(id):location!==undefined?'#'+location:undefined
-    if(target!==undefined)hyperlinks.push({...cell,target})
+  const hyperlinkSection=children.find(child=>child.local==='hyperlinks')
+  if(hyperlinkSection){
+    const root=readRootStartTag(xml)
+    for(const link of scopedChildren(hyperlinkSection)){
+      if(!isElement(link,'hyperlink',hyperlinkSection.namespace))continue
+      // A hyperlink on a range is anchored at its first cell, as in the Rust reader.
+      const reference=link.attributes.get('ref')
+      const anchor=reference===undefined?undefined:hyperlinkAnchorReference(reference)
+      const cell=anchor&&parseA1(anchor)
+      if(!cell)continue
+      const id=readRelationshipId(link.opening,hyperlinkSection.opening,root)
+      const location=link.attributes.get('location')
+      const target=id!==undefined?linkTargets.get(decodeAttribute(id)):location!==undefined?'#'+location:undefined
+      if(target!==undefined)hyperlinks.push({...cell,target})
+    }
   }
-  const conditionalRules = readConditionalRules(worksheet?.conditionalFormatting ?? [], worksheet?.extLst?.ext ?? [], resolveColor)
+  const conditionalRules = readConditionalRules(children, resolveColor)
   const rows:SheetMetadata['rows']=[]
-  for(const node of worksheet?.sheetData?.row??[]){
-    const r=Number(attribute(node,'r'))
-    if(!Number.isInteger(r)||r<1||r>1_048_576)continue
-    const level=outlineLevel(attribute(node,'outlineLevel'))
+  for(const {row,rowNumber} of sheetData ? worksheetRowPositions(sheetData) : []){
+    if(rowNumber>MAX_GRID_ROWS)continue
+    rowExtent=Math.max(rowExtent,rowNumber)
+    const attrs=row.attributes
+    const level=outlineLevel(attrs.get('outlineLevel')),height=sizeValue(attrs.get('ht'))
+    const hidden=enabled(attrs.get('hidden')),collapsed=enabled(attrs.get('collapsed'))
+    const styleIndex=enabled(attrs.get('customFormat'))?positiveStyle(attrs.get('s')):undefined
+    if(height===undefined&&!hidden&&!collapsed&&!level&&styleIndex===undefined)continue
     outlineLevelRow=Math.max(outlineLevelRow,level)
-    rows.push({row:r-1,height:sizeAttribute(node,'ht'),customHeight:enabled(attribute(node,'customHeight'))||undefined,
-      hidden:enabled(attribute(node,'hidden')),
-      styleIndex:enabled(attribute(node,'customFormat'))?positiveStyle(attribute(node,'s')):undefined,
-      outlineLevel:level||undefined,collapsed:enabled(attribute(node,'collapsed'))||undefined})
+    rows.push({row:rowNumber-1,height,customHeight:(height!==undefined&&enabled(attrs.get('customHeight')))||undefined,
+      hidden,styleIndex,outlineLevel:level||undefined,collapsed:collapsed||undefined})
   }
-  const view=worksheet?.sheetViews?.sheetView?.[0]
-  const pane=view?.pane
-  const viewKind=attribute(view,'view')
-  const zoomAttribute=(name:string)=>sizeAttribute(view,name)||undefined
+  const view=lastWorksheetView(children.find(child=>child.local==='sheetViews'))
+  const pane=view && scopedChildren(view).find(child=>isElement(child,'pane',view.namespace))
+  const viewKind=view?.attributes.get('view')
+  const zoomAttribute=(name:string)=>sizeValue(view?.attributes.get(name))||undefined
   const savedZoom=viewKind==='pageBreakPreview'||viewKind==='pageLayout'
     ?zoomAttribute('zoomScaleNormal'):zoomAttribute('zoomScale')??zoomAttribute('zoomScaleNormal')
   const zoomScale=savedZoom===undefined?100:Math.max(10,Math.min(400,Math.round(savedZoom)))
-  const split=(name:string,max:number)=>{const n=Number(attribute(pane,name));return Number.isInteger(n)&&n>=0&&n<=max?n:0}
+  const split=(name:string,max:number)=>{const n=Number(pane?.attributes.get(name));return Number.isInteger(n)&&n>=0&&n<=max?n:0}
   const frozenRows=split('ySplit',1_048_576),frozenColumns=split('xSplit',16_384)
-  const frozen=['frozen','frozenSplit'].includes(attribute(pane,'state')??'')
-  return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,columnWidths:columns,merges,conditionalRules,hyperlinks,
+  const frozen=['frozen','frozenSplit'].includes(pane?.attributes.get('state')??'')
+  return {sheetProtection,protectedRanges,...readAutoFilter(children.find(child=>child.local==='autoFilter')),rows,rowExtent,columnWidths:columns,merges,conditionalRules,hyperlinks,
     ...(dimension?{dimension}:{}),
     dataValidations:readDataValidations(xml),
-    sparklines:readSparklines(worksheet?.extLst?.ext??[],resolveColor),
-    rowBreaks:readManualBreaks(worksheet?.rowBreaks?.brk??[],1_048_575),
-    colBreaks:readManualBreaks(worksheet?.colBreaks?.brk??[],16_383),
-    pageSetup:readPageSetup(worksheet),
+    sparklines:readSparklines(children,resolveColor),
+    rowBreaks:readManualBreaks(children.find(child=>child.local==='rowBreaks'),MAX_GRID_ROWS-1),
+    colBreaks:readManualBreaks(children.find(child=>child.local==='colBreaks'),MAX_GRID_COLUMNS-1),
+    pageSetup:readPageSetup(children),
     view:{
-      tabColor:resolveColor(worksheet?.sheetPr?.tabColor).rgb??null,
-      showGridLines:!disabled(attribute(view,'showGridLines')),
-      showFormulas:enabled(attribute(view,'showFormulas'))||undefined,
-      showRowColHeaders:disabled(attribute(view,'showRowColHeaders'))?false:undefined,
-      rightToLeft:enabled(attribute(view,'rightToLeft'))||undefined,
+      tabColor:resolveColor(tabColorAttrs).rgb??null,
+      showGridLines:!disabled(view?.attributes.get('showGridLines')),
+      showFormulas:enabled(view?.attributes.get('showFormulas'))||undefined,
+      showRowColHeaders:disabled(view?.attributes.get('showRowColHeaders'))?false:undefined,
+      rightToLeft:enabled(view?.attributes.get('rightToLeft'))||undefined,
       zoomScale:zoomScale===100?undefined:zoomScale,
       outlineLevelRow:outlineLevelRow||undefined,
       outlineLevelCol:outlineLevelCol||undefined,
-      outlineSummaryBelow:disabled(attribute(outline,'summaryBelow'))?false:undefined,
-      outlineSummaryRight:disabled(attribute(outline,'summaryRight'))?false:undefined,
+      outlineSummaryBelow:disabled(outline?.get('summaryBelow'))?false:undefined,
+      outlineSummaryRight:disabled(outline?.get('summaryRight'))?false:undefined,
     },
     freeze:frozen&&(frozenRows||frozenColumns)?{frozenRows,frozenColumns}:null,
-    defaultRowHeight:sizeAttribute(format,'defaultRowHeight')||null,defaultColumnWidth:sizeAttribute(format,'defaultColWidth')||null,
-    defaultRowHeightFixed:enabled(attribute(format,'customHeight'))||undefined,baseColumnWidth:sizeAttribute(format,'baseColWidth')||null}
+    defaultRowHeight:sizeValue(format?.get('defaultRowHeight'))||null,defaultColumnWidth:sizeValue(format?.get('defaultColWidth'))||null,
+    defaultRowHeightFixed:enabled(format?.get('customHeight'))||undefined,baseColumnWidth:sizeValue(format?.get('baseColWidth'))||null}
 }
 
 function positiveStyle(raw:string|undefined){
@@ -546,44 +557,42 @@ function positiveStyle(raw:string|undefined){
   return Number.isSafeInteger(n)&&n>0?n:undefined
 }
 
-type AutoFilterXml=XmlElement & {filterColumn?:Array<XmlElement & {
-  filters?:XmlElement & {filter?:XmlElement[];dateGroupItem?:unknown}
-  customFilters?:XmlElement & {customFilter?:XmlElement[]}
-  top10?:unknown
-  dynamicFilter?:unknown
-  colorFilter?:unknown
-  iconFilter?:unknown
-  extLst?:unknown
-}>}
-
-function readAutoFilter(element:AutoFilterXml|undefined):Pick<SheetMetadata,'autoFilter'|'autoFilterColumns'> {
-  const ref=attribute(element,'ref')
-  const autoFilter=sheetArea(ref)
+function readAutoFilter(element:ScopedElement|undefined):Pick<SheetMetadata,'autoFilter'|'autoFilterColumns'> {
+  const autoFilter=sheetArea(element?.attributes.get('ref'))
   const autoFilterColumns:FilterColumn[]=[]
-  if(autoFilter)for(const column of element?.filterColumn??[]){
-    const id=attribute(column,'colId')
+  if(!element||!autoFilter)return {autoFilter,autoFilterColumns}
+  for(const column of scopedChildren(element)){
+    if(!isElement(column,'filterColumn',element.namespace))continue
+    const id=column.attributes.get('colId')
     if(id===undefined||!/^\d+$/.test(id))continue
     const colId=Number(id)
     if(colId>autoFilter.endColumn-autoFilter.startColumn)continue
-    const filters=column.filters
-    const custom=column.customFilters
-    if(filters?.dateGroupItem!==undefined||column.top10!==undefined||column.dynamicFilter!==undefined
-      ||column.colorFilter!==undefined||column.iconFilter!==undefined||column.extLst!==undefined)continue
-    const values=filters?.filter?.flatMap(filter=>{
-      const val=attribute(filter,'val')
+    const criteria=scopedChildren(column).filter(child=>child.namespace===column.namespace)
+    if(criteria.some(({local})=>['top10','dynamicFilter','colorFilter','iconFilter','extLst'].includes(local)))continue
+    const filters=criteria.find(child=>child.local==='filters')
+    const custom=criteria.find(child=>child.local==='customFilters')
+    const items=filters ? scopedChildren(filters).filter(child=>child.namespace===filters.namespace) : []
+    const valueItems=items.filter(child=>child.local==='filter')
+    const values=valueItems.flatMap(filter=>{
+      const val=filter.attributes.get('val')
       return val!==undefined&&val.length<=32_767?[val]:[]
     }).slice(0,10_000)
-    const comparisonInputs=custom?.customFilter?.flatMap(filter=>{
-      const val=attribute(filter,'val')
-      return val===undefined?[]:[{val,name:attribute(filter,'operator')}]
-    }).slice(0,2)
-    const comparisons=comparisonInputs?.map(({val,name})=>({val,name,operator:filterOperators.find(item=>item===name)}))
-    const validComparisons=comparisons?.length&&comparisons.every(({val,name,operator})=>
+    const blank=enabled(filters?.attributes.get('blank'))
+    // Keep a mixed date filter opaque if the editor cannot round-trip its value list.
+    if(items.some(child=>child.local==='dateGroupItem')&&((!values.length&&!blank)
+      ||values.length!==valueItems.length))continue
+    const comparisonInputs=custom ? scopedChildren(custom).flatMap(filter=>{
+      if(!isElement(filter,'customFilter',custom.namespace))return []
+      const val=filter.attributes.get('val')
+      return val===undefined?[]:[{val,name:filter.attributes.get('operator')}]
+    }).slice(0,2) : []
+    const comparisons=comparisonInputs.map(({val,name})=>({val,name,operator:filterOperators.find(item=>item===name)}))
+    const validComparisons=comparisons.length&&comparisons.every(({val,name,operator})=>
       val.length<=32_767&&(name===undefined||name==='equal'||operator!==undefined))
       ?comparisons.map(({val,operator})=>({val,...(operator?{operator}:{})})):undefined
     if(filters===undefined&&!validComparisons)continue
-    autoFilterColumns.push({colId,...(filters!==undefined?{values:values??[],...(enabled(attribute(filters,'blank'))?{blank:true}:{})}:{}),
-      ...(validComparisons?{customs:{filters:validComparisons,...(enabled(attribute(custom,'and'))?{and:true}:{})}}:{})})
+    autoFilterColumns.push({colId,...(filters!==undefined?{values,...(blank?{blank:true}:{})}:{}),
+      ...(validComparisons?{customs:{filters:validComparisons,...(enabled(custom?.attributes.get('and'))?{and:true}:{})}}:{})})
     if(autoFilterColumns.length===1_000)break
   }
   return {autoFilter,autoFilterColumns}
@@ -596,39 +605,39 @@ function zipText(zip:JSZip):ZipText{
 }
 
 async function readPivotMetadata(text:ZipText){
-  const workbookPath='xl/workbook.xml',theme=pivotTheme(await text('xl/theme/theme1.xml'))
-  const workbookRels=parseRelationships(await text(relsPathFor(workbookPath)))
+  const workbookPath='xl/workbook.xml',rels=await text(relsPathFor(workbookPath))
+  const theme=pivotTheme(await text(workbookPartPath(rels,'theme')))
+  const workbookRels=parseRelationships(rels)
   const result=new Map<string,Pick<WorkbookFile['sheets'][number],'pivotTables'|'pivotRanges'>>()
   for(const sheet of parseSheetElements(await text(workbookPath))){
-    const rel=workbookRels.find(rel=>rel.id===sheet.relationshipId&&!rel.external&&rel.type.endsWith('/worksheet'))
+    const rel=workbookRels.find(rel=>relationshipIdsMatch(rel.id,sheet.relationshipId)&&!rel.external&&rel.type.endsWith('/worksheet'))
     if(!rel)continue
-    const sheetPath=resolveRelTarget(workbookPath,rel.target)
+    const sheetPath=resolveWorkbookSheetTarget(rel.target)
     const pivotTables:WorkbookFile['sheets'][number]['pivotTables']=[]
+    const pivotRanges:WorkbookFile['sheets'][number]['pivotRanges']=[]
     for(const pivotRel of parseRelationships(await text(relsPathFor(sheetPath)))){
       if(pivotRel.external||!pivotRel.type.endsWith('/pivotTable'))continue
       const path=resolveRelTarget(sheetPath,pivotRel.target),xml=await text(path)
-      const location=/<(?:[\w.-]+:)?location\b[^>]*>/.exec(xml)?.[0]
-      const outputRef=location&&readAttribute(location,'ref')
-      if(!outputRef)continue
+      const pivot=readPivotPartMetadata(xml,theme)
+      if(!pivot)continue
       const cacheRel=parseRelationships(await text(relsPathFor(path))).find(rel=>!rel.external&&rel.type.endsWith('/pivotCacheDefinition'))
-      pivotTables.push({...pivotBandMetadata(xml,theme),path,cachePath:cacheRel?resolveRelTarget(path,cacheRel.target):null,outputRef:decodeAttribute(outputRef),firstDataRow:Number(readAttribute(location,'firstDataRow')??1),firstDataCol:Number(readAttribute(location,'firstDataCol')??1)})
+      pivotTables.push({...pivot,path,cachePath:cacheRel?resolveRelTarget(path,cacheRel.target):null})
+      try {
+        const range=parseRange(pivot.outputRef.toUpperCase())
+        if(range.endRow<MAX_GRID_ROWS&&range.endColumn<MAX_GRID_COLUMNS)pivotRanges.push(range)
+      } catch {
+        // Keep the pivot part visible in metadata, but a broken ref cannot lock cells.
+      }
     }
-    result.set(sheet.name,{pivotTables,pivotRanges:pivotTables.map(pivot=>parseRef(pivot.outputRef))})
+    result.set(sheet.name,{pivotTables,pivotRanges})
   }
   return result
 }
 
-const BUILTIN_NUMBER_FORMATS: Record<number, string> = {
-  0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%',
-  11: '0.00E+00', 12: '# ?/?', 13: '# ??/??', 14: 'mm-dd-yy', 15: 'd-mmm-yy',
-  16: 'd-mmm', 17: 'mmm-yy', 18: 'h:mm AM/PM', 19: 'h:mm:ss AM/PM', 20: 'h:mm',
-  21: 'h:mm:ss', 22: 'm/d/yy h:mm', 37: '#,##0 ;(#,##0)', 38: '#,##0 ;[Red](#,##0)',
-  39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)',
-}
-
 type StyleFontXml = Partial<Record<'color' | 'name' | 'rFont' | 'sz' | 'scheme' | 'vertAlign' | 'b' | 'i' | 'u' | 'strike', XmlElement>>
-type BorderSide = 'top' | 'bottom' | 'left' | 'right' | 'diagonal'
-type StyleBorderXml = XmlElement & Partial<Record<BorderSide, XmlElement & { color?: XmlElement }>>
+type BorderSide = 'top' | 'bottom' | 'left' | 'right' | 'diagonal' | 'horizontal' | 'vertical'
+type BorderEdgeXml = XmlElement & { color?: XmlElement }
+type StyleBorderXml = XmlElement & Partial<Record<BorderSide, BorderEdgeXml>>
 type StyleFillXml = {
   patternFill?: XmlElement & { fgColor?: XmlElement; bgColor?: XmlElement }
   gradientFill?: { stop?: (XmlElement & { color?: XmlElement })[] }
@@ -643,23 +652,16 @@ function readThemeFonts(xml: string): WorkbookFile['themeFonts'] {
   return major && minor ? { major, minor, ...(minorEa ? { minorEa } : {}) } : undefined
 }
 
-function mixHexColors(first: string, last: string): string {
-  const channels = [1, 3, 5].map(offset => {
-    const a = Number.parseInt(first.slice(offset, offset + 2), 16)
-    const b = Number.parseInt(last.slice(offset, offset + 2), 16)
-    return Math.floor((a + b) / 2).toString(16).padStart(2, '0')
-  })
-  return `#${channels.join('').toUpperCase()}`
-}
-
 async function readWorkbookStyles(text: ZipText) {
-  const [xml, themeXml] = await Promise.all([text('xl/styles.xml'), text('xl/theme/theme1.xml')])
+  const rels = await text('xl/_rels/workbook.xml.rels')
+  const [xml, themeXml] = await Promise.all([
+    text(workbookPartPath(rels, 'styles')), text(workbookPartPath(rels, 'theme')),
+  ])
   const localName = (name: string) => name.slice(name.lastIndexOf(':') + 1)
   const root = childElements(xml).find(element => localName(element.name) === 'styleSheet')
   const sections = childElements(root?.inner ?? '')
-  const entries = (section: string, tag: string) => resolvedStyleEntries(
-    sections.find(element => localName(element.name) === section)?.inner ?? '', tag, true,
-  )
+  const section = (name: string, elements = sections) => elements.find(element => localName(element.name) === name)?.inner
+  const entries = (name: string, tag: string) => resolvedStyleEntries(section(name) ?? '', tag, true)
   const formats = new Map<number, string>()
   for (const id of Object.keys(BUILTIN_NUMBER_FORMATS)) formats.set(Number(id), BUILTIN_NUMBER_FORMATS[Number(id)]!)
   for (const entry of entries('numFmts', 'numFmt')) {
@@ -672,7 +674,9 @@ async function readWorkbookStyles(text: ZipText) {
   const theme=pivotTheme(themeXml)
   const themeFonts = readThemeFonts(themeXml)
   const hex=(value:string|undefined)=>/^(?:[0-9a-f]{2})?[0-9a-f]{6}$/i.test(value??'')?'#'+value!.slice(-6).toUpperCase():undefined
-  const indexed=parseEntries('indexedColors','rgbColor').map(color=>hex(attribute(color,'rgb')))
+  const colors = childElements(section('colors') ?? '')
+  const indexed = resolvedStyleEntries(section('indexedColors', colors) ?? section('indexedColors') ?? '', 'rgbColor', true)
+    .map(entry => hex(attribute(metadataXml.parse(entry).rgbColor, 'rgb')))
   // ECMA-376 default indexed palette, followed by system text/background.
   const palette='000000 FFFFFF FF0000 00FF00 0000FF FFFF00 FF00FF 00FFFF 000000 FFFFFF FF0000 00FF00 0000FF FFFF00 FF00FF 00FFFF 800000 008000 000080 808000 800080 008080 C0C0C0 808080 9999FF 993366 FFFFCC CCFFFF 660066 FF8080 0066CC CCCCFF 000080 FF00FF FFFF00 00FFFF 800080 800000 008080 0000FF 00CCFF CCFFFF CCFFCC FFFF99 99CCFF FF99CC CC99FF FFCC99 3366FF 33CCCC 99CC00 FFCC00 FF9900 FF6600 666699 969696 003366 339966 003300 333300 993300 993366 333399 333333 000000 FFFFFF'.split(' ')
   const index=(value:string|undefined)=>value!==undefined&&/^\d+$/.test(value)?Number(value):-1
@@ -728,15 +732,15 @@ async function readWorkbookStyles(text: ZipText) {
       ...(vertAlign === 'subscript' || vertAlign === 'superscript' ? { vertAlign } : {}),
     }
   }
+  const borderEdge = (node: BorderEdgeXml | undefined) => {
+    const style = attribute(node, 'style')
+    return style && style !== 'none' ? { style, color: color(node?.color).rgb } : undefined
+  }
   const fontAndBorder = (font: StyleFontXml | undefined, border: StyleBorderXml | undefined) => {
     const fontColor = color(font?.color)
     const fontSize = Number(attribute(font?.sz, 'val'))
     const fontScheme = attribute(font?.scheme, 'val')
     const vertAlign = attribute(font?.vertAlign, 'val')
-    const edge = (name: BorderSide) => {
-      const node = border?.[name], style = attribute(node, 'style')
-      return style && style !== 'none' ? { style, color: color(node?.color).rgb } : undefined
-    }
     return {
       fontFamily: attribute(font?.name, 'val'),
       fontSize: Number.isFinite(fontSize) && fontSize > 0 ? fontSize : undefined,
@@ -745,8 +749,9 @@ async function readWorkbookStyles(text: ZipText) {
       vertAlign: vertAlign === 'superscript' || vertAlign === 'subscript' ? vertAlign : undefined,
       fontScheme: fontScheme === 'major' || fontScheme === 'minor' ? fontScheme : undefined,
       fontColor: fontColor.rgb, fontColorTheme: fontColor.slot, fontColorTint: fontColor.tint,
-      borderTop: edge('top'), borderBottom: edge('bottom'), borderLeft: edge('left'), borderRight: edge('right'),
-      borderDiagonal: edge('diagonal'), diagonalUp: enabled(attribute(border, 'diagonalUp')),
+      borderTop: borderEdge(border?.top), borderBottom: borderEdge(border?.bottom),
+      borderLeft: borderEdge(border?.left), borderRight: borderEdge(border?.right),
+      borderDiagonal: borderEdge(border?.diagonal), diagonalUp: enabled(attribute(border, 'diagonalUp')),
       diagonalDown: enabled(attribute(border, 'diagonalDown')),
     } satisfies Partial<WorkbookCellStyle>
   }
@@ -757,9 +762,9 @@ async function readWorkbookStyles(text: ZipText) {
   const normalFontName = attribute(fonts[index(attribute(cellXfs[0], 'fontId'))]?.name, 'val')
   const styles:WorkbookCellStyle[] = cellXfs.map(xf => {
     const id=Number(attribute(xf,'numFmtId')??0)
-    const font=fonts[Number(attribute(xf,'fontId')??0)]
-    const fillColor = cellFillColor(fills[Number(attribute(xf, 'fillId') ?? 0)])
-    const border=borders[Number(attribute(xf,'borderId')??0)]
+    const font=fonts[index(attribute(xf,'fontId'))]
+    const fillColor = cellFillColor(fills[index(attribute(xf, 'fillId'))])
+    const border=borders[index(attribute(xf,'borderId'))]
     const alignment=xf?.alignment
     const protection=enabled(attribute(xf,'applyProtection'))?xf?.protection:namedProtection[Number(attribute(xf,'xfId')??0)]
     const indent=index(attribute(alignment,'indent')),textRotation=index(attribute(alignment,'textRotation'))
@@ -777,36 +782,71 @@ async function readWorkbookStyles(text: ZipText) {
     }
   })
   if(styles[0]?.locked===false)for(const style of styles.slice(1))style.locked??=true
-  const dxfStyles: WorkbookCellStyle[] = parseEntries('dxfs', 'dxf').map(dxf => {
+  const dxfs: TableDxf[] = parseEntries('dxfs', 'dxf').map(dxf => {
     const fill = dxf?.fill as StyleFillXml | undefined
     const pattern = fill?.patternFill
     const fillColor = color(pattern?.bgColor ?? pattern?.fgColor)
     const format = attribute(dxf?.numFmt, 'formatCode')
-    return {
-      ...fontAndBorder(dxf?.font, dxf?.border),
+    const border = dxf?.border as StyleBorderXml | undefined
+    const style: WorkbookCellStyle = {
+      ...fontAndBorder(dxf?.font, border),
       wrapText: false,
       fillColor: pattern === undefined ? gradientColor(fill?.gradientFill) : fillColor.rgb,
       fillColorTheme: fillColor.slot,
       fillColorTint: fillColor.tint,
       numberFormat: format && format !== 'General' ? format : undefined,
     }
+    return { style, horizontal: borderEdge(border?.horizontal), vertical: borderEdge(border?.vertical) }
   })
-  return {styles,theme,themeFonts,normalFontName,color,dxfStyles,readRunStyle}
+  const dxfStyles = dxfs.map(({style}) => style)
+  const customTableStyles = readCustomTableStyles(section('tableStyles'), dxfs)
+  return {styles,theme,themeFonts,normalFontName,color,dxfStyles,readRunStyle,customTableStyles}
+}
+
+function headerFooterMetadata(pageSetup: SheetMetadata['pageSetup'], pictures: Awaited<ReturnType<typeof readHeaderFooterPictures>>) {
+  const headerFooterMedia = new Map<string, string>()
+  const headerFooterPictures = pictures.map(({ mediaPath, ...picture }) => {
+    headerFooterMedia.set(picture.id, mediaPath)
+    return picture
+  })
+  return {
+    pageSetup: headerFooterPictures.length ? { ...pageSetup, headerFooterPictures } : pageSetup,
+    headerFooterMedia,
+  }
 }
 
 async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:readonly string[],
-  imageSources:Awaited<ReturnType<typeof readCellImageSources>>) {
-  const customTableStyles=readCustomTableStyles(await text('xl/styles.xml'),resolveColor)
+  imageSources:Awaited<ReturnType<typeof readCellImageSources>>,hasPart:(path:string)=>boolean,
+  customTableStyles:ReturnType<typeof readCustomTableStyles>) {
   const workbookPath = 'xl/workbook.xml'
   const workbookRels = parseRelationships(await text(relsPathFor(workbookPath)))
   const sheets = new Map<string, SheetMetadata & {
-    styleIndexes:Map<string,number>; imageCells:ReturnType<typeof readSheetCellImages>
+    imageCells:ReturnType<typeof readSheetCellImages>; headerFooterMedia:Map<string,string>
   }>()
-  for (const sheet of parseSheetElements(await text(workbookPath))) {
-    const rel = workbookRels.find(item => item.id === sheet.relationshipId && !item.external && item.type.endsWith('/worksheet'))
+  for (const [sheetIndex,sheet] of parseSheetElements(await text(workbookPath)).entries()) {
+    const rel = workbookRels.find(item => relationshipIdsMatch(item.id, sheet.relationshipId) && !item.external && /\/(worksheet|chartsheet)$/.test(item.type))
     if (!rel) continue
-    const path = resolveRelTarget(workbookPath, rel.target)
-    const xml = inferWorksheetAddresses(normalizeOoxmlPartPrefix(await text(path)))
+    const path = resolveWorkbookSheetTarget(rel.target)
+    if (!hasPart(path)) continue
+    const sheetXml = normalizeOoxmlPartPrefix(await text(path))
+    const loadHeaderPictures = () => sheetXml.includes('legacyDrawingHF')
+      ? readHeaderFooterPictures(text, path, sheetIndex, hasPart) : []
+    if (rel.type.endsWith('/chartsheet')) {
+      const root = spreadsheetSheetRoot(sheetXml)
+      const children = root ? scopedChildren(root).filter(node => node.namespace === root.namespace) : []
+      const properties = children.find(node => node.local === 'sheetPr')
+      const tab = properties && scopedChildren(properties).find(node => isElement(node,'tabColor',properties.namespace))
+      const color = tab && Object.fromEntries([...tab.attributes].map(([name,value]) => [`@_${name}`,value]))
+      const view = lastWorksheetView(children.find(node => node.local === 'sheetViews'))
+      const savedZoom = sizeValue(view?.attributes.get('zoomScale'))
+      const zoomScale = savedZoom ? Math.max(10, Math.min(400, Math.round(savedZoom))) : 100
+      sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,chartSheet:true,
+        ...headerFooterMetadata(readPageSetup(children, true), await loadHeaderPictures()),
+        view:{tabColor:resolveColor(color).rgb??null,
+          showGridLines:false,showRowColHeaders:false,zoomScale:zoomScale===100?undefined:zoomScale}})
+      continue
+    }
+    const xml = inferWorksheetAddresses(sheetXml)
     const linkTargets=new Map<string,string>()
     if(xml.includes('hyperlink')){
       const linkRelationships=metadataXml.parse(await text(relsPathFor(path))).Relationships?.Relationship??[]
@@ -817,17 +857,13 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
         }
       }
     }
-    const cells = new Map<string, number>()
-    for (const match of xml.matchAll(/<(?:[\w.-]+:)?c\b([^>]*)>/g)) {
-      const address = readAttribute(match[1]!, 'r')
-      const style = readAttribute(match[1]!, 's')
-      if (address && style !== undefined && /^\d+$/.test(style)) cells.set(decodeAttribute(address), Number(style))
-    }
-    const [comments,tables]=await Promise.all([
+    const [comments,tables,headerPictures]=await Promise.all([
       readNodeSheetComments(text,path),
       readWorksheetTables(text,path,xml,theme,customTableStyles),
+      loadHeaderPictures(),
     ])
-    sheets.set(sheet.name,{styleIndexes:cells,...readWorksheetMetadata(xml,resolveColor,linkTargets),comments,tables,
+    const metadata=readWorksheetMetadata(xml,resolveColor,linkTargets)
+    sheets.set(sheet.name,{...metadata,comments,tables,...headerFooterMetadata(metadata.pageSetup, headerPictures),
       imageCells:readSheetCellImages(xml,imageSources)})
   }
   return sheets
@@ -873,6 +909,23 @@ async function entryDigests(zip: JSZip) {
 }
 
 type Bounds = {startRow: number; endRow: number; startColumn: number; endColumn: number}
+const compareCellPosition = (a: ParsedCell, b: ParsedCell) => a.row - b.row || a.column - b.column
+
+function sharedFormulaGroup(
+  si: number,
+  master: ParsedCell & { formula: string },
+  followers: ParsedCell[],
+  range: Bounds | undefined,
+): WorkbookSharedFormulaGroup {
+  const { row, column, formula } = master
+  if (range && (range.endRow - range.startRow + 1) * (range.endColumn - range.startColumn + 1) === followers.length + 1) {
+    const inside = (cell: ParsedCell) => cell.row >= range.startRow && cell.row <= range.endRow
+      && cell.column >= range.startColumn && cell.column <= range.endColumn
+    if (inside(master) && followers.every(inside)) return { si, row, column, formula, range }
+  }
+  return { si, row, column, formula, cells: followers.map(({ row, column }) => [row, column]) }
+}
+
 function readRange(sheet: ParsedSheet,r: Bounds) {
   const cells = sheet.cells.filter(
     c => c.row >= r.startRow && c.row <= r.endRow && c.column >= r.startColumn && c.column <= r.endColumn,
@@ -931,7 +984,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const imageSources=readCellImageSources(text,hasPart)
     const [imported, pivots, {styles,theme,themeFonts,normalFontName,dxfStyles}, metadata, workbookXml] = await Promise.all([
       styling.then(({readRunStyle})=>readWorkbookWithCellDetails(bytes,readRunStyle)),
-      readPivotMetadata(text), styling, Promise.all([styling,imageSources]).then(([{color,theme},images])=>readSheetMetadata(text,color,theme,images)),
+      readPivotMetadata(text), styling, Promise.all([styling,imageSources]).then(([{color,theme,customTableStyles},images])=>readSheetMetadata(text,color,theme,images,hasPart,customTableStyles)),
       text('xl/workbook.xml'),
     ])
     let entryCount = 0
@@ -939,8 +992,12 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const mediaById = new Map<string,string>()
     let imageCount=0
     const parsedSheets: ParsedSheet[] = imported.snapshot.sheets.map(s => {
-      const {styleIndexes,imageCells,dimension,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,styleIndexes:undefined,imageCells:undefined}
+      const {imageCells,headerFooterMedia,dimension,...sheetMetadata}=metadata.get(s.name)??{...EMPTY_SHEET_METADATA,imageCells:undefined,headerFooterMedia:undefined}
+      for(const [id,mediaPath] of headerFooterMedia??[])mediaById.set(id,mediaPath)
       const cells: ParsedCell[] = []
+      const formulaCells: ParsedCell[] = []
+      const masters = new Map<number, { cell: ParsedCell & { formula: string }; range?: Bounds }>()
+      const followers = new Map<number, ParsedCell[]>()
       const cellImages: ParsedSheet['cellImages'] = []
       let rowCount=1,columnCount=1,valueCellCount=0,valueRowCount=0,valueColumnCount=0
       if(dimension){
@@ -948,12 +1005,13 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
         if(dimension.endRow+1<MAX_GRID_ROWS)rowCount=dimension.endRow+1
         if(dimension.endColumn+1<MAX_GRID_COLUMNS)columnCount=dimension.endColumn+1
       }
+      rowCount=Math.max(rowCount,sheetMetadata.rowExtent)
       for (const [addr, cell] of Object.entries(s.cells)) {
         const pos = parseA1(addr)
         if (!pos) continue
         const isCellImage = imageCells?.has(cellImageKey(pos.row,pos.column)) === true
         const value = isCellImage ? null : cell.rawValue !== undefined ? cell.rawValue : cell.value
-        const formula = isCellImage ? undefined : cell.formula
+        const formula = isCellImage || !cell.formula ? undefined : withoutFutureFunctionMarkers(cell.formula)
         rowCount=Math.max(rowCount,pos.row+1)
         columnCount=Math.max(columnCount,pos.column+1)
         if(value!==null||formula){
@@ -961,8 +1019,8 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           valueRowCount=Math.max(valueRowCount,pos.row+1)
           valueColumnCount=Math.max(valueColumnCount,pos.column+1)
         }
-        const styleIndex=styleIndexes?.get(addr)
-        cells.push({
+        const styleIndex = cell.styleIndex ?? (value !== null || formula ? 0 : undefined)
+        const parsedCell: ParsedCell = {
           row: pos.row,
           column: pos.column,
           value,
@@ -970,8 +1028,29 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           ...(formula ? { formula } : {}),
           ...(isCellImage || cell.arrayRef === undefined ? {} : { arrayRef: cell.arrayRef }),
           ...(isCellImage || cell.rich === undefined ? {} : { rich: cell.rich }),
-        })
+        }
+        cells.push(parsedCell)
+        if (!formula) continue
+        if (cell.sharedFormulaMaster) {
+          const { si, range } = cell.sharedFormulaMaster
+          masters.set(si, { cell: { ...parsedCell, formula }, range })
+        }
+        if (cell.sharedFormulaFollower !== undefined) {
+          const si = cell.sharedFormulaFollower
+          const group = followers.get(si)
+          if (group) group.push(parsedCell)
+          else followers.set(si, [parsedCell])
+        } else {
+          formulaCells.push(parsedCell)
+        }
       }
+      const sharedGroups: WorkbookSharedFormulaGroup[] = []
+      for (const [si, group] of followers) {
+        const master = masters.get(si)
+        if (master) sharedGroups.push(sharedFormulaGroup(si, master.cell, group, master.range))
+        else for (const follower of group) formulaCells.push(follower)
+      }
+      sharedGroups.sort((a, b) => a.si - b.si)
       if (imageCells) for (const {row,column,mediaPath} of imageCells.values()) {
         const id=`cell-image-${imageCount++}`
         mediaById.set(id,mediaPath)
@@ -987,14 +1066,26 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
         rowCount=Math.max(rowCount,cell.row+1)
         columnCount=Math.max(columnCount,cell.column+1)
       }
-      for(const col of sheetMetadata.columnWidths)columnCount=Math.max(columnCount,col.endColumn+1)
-      for(const row of sheetMetadata.rows)rowCount=Math.max(rowCount,row.row+1)
-      cells.sort((a,b)=>a.row-b.row||a.column-b.column)
-      return { id: s.id, name: s.name, cells, cellImages, rowCount, columnCount, valueCellCount, valueRowCount, valueColumnCount,
+      cells.sort(compareCellPosition)
+      formulaCells.sort(compareCellPosition)
+      return { id: s.id, name: s.name, cells, formulaCells, sharedGroups, cellImages, rowCount, columnCount,
+        storedCellCount: s.storedCellCount ?? cells.length, valueCellCount, valueRowCount, valueColumnCount,
         ...sheetMetadata }
     })
     const {activeTab,visibility,definedNames,scopedSheets,printNames,workbookProtection,date1904}=readWorkbookMetadata(workbookXml,parsedSheets)
-    const visuals=await readWorkbookVisuals(text,parsedSheets,theme,hasPart)
+    const sourceSheets = new Map(imported.snapshot.sheets.map(sheet => [sheet.name.toLowerCase(), sheet]))
+    const visuals=await readWorkbookVisuals(text,parsedSheets,theme,hasPart,reference=>{
+      const separator = reference.lastIndexOf('!')
+      if (separator < 1) return undefined
+      const name = reference.slice(0, separator)
+      const sheet = sourceSheets.get((name.startsWith("'") && name.endsWith("'")
+        ? name.slice(1, -1).replaceAll("''", "'") : name).toLowerCase())
+      const address = reference.slice(separator + 1).split(':', 1)[0]?.replaceAll('$', '').toUpperCase()
+      const sourceCell = address && parseA1(address) ? sheet?.cells[address] : undefined
+      if (!sourceCell) return undefined
+      const format = styles[sourceCell.styleIndex ?? 0]?.numberFormat
+      return format && format !== 'General' && format !== '@' ? format : undefined
+    })
     for (const {id,mediaPath,fillMediaPath} of visuals) {
       const path=mediaPath??fillMediaPath
       if(path)mediaById.set(id,path)
@@ -1014,10 +1105,11 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           name: s.name,
           rowCount:s.rowCount,
           columnCount:s.columnCount,
-          storedCellCount:s.cells.length,
+          storedCellCount:s.storedCellCount,
           valueCellCount:s.valueCellCount,
           valueRowCount:s.valueRowCount,
           valueColumnCount:s.valueColumnCount,
+          chartSheet:s.chartSheet,
           columnWidths:s.columnWidths,defaultRowHeight:s.defaultRowHeight,defaultRowHeightFixed:s.defaultRowHeightFixed,
           defaultColumnWidth:s.defaultColumnWidth,baseColumnWidth:s.baseColumnWidth,freeze:s.freeze,
           hidden: state==='hidden'||state==='veryHidden',
@@ -1095,7 +1187,8 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const cells: ParsedCell[] = []
     let bytes = 0
     let truncated = false
-    for (const cell of sheet.cells) {
+    const expanded = packet.expandSharedFormulas === true
+    for (const cell of expanded ? sheet.cells : sheet.formulaCells) {
       if (!cell.formula) continue
       bytes += Buffer.byteLength(JSON.stringify(cell)) + 1
       // Leave room for the reply envelope around the cells.
@@ -1105,9 +1198,18 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       }
       cells.push(cell)
     }
+    if (!expanded && !truncated) {
+      for (const group of sheet.sharedGroups) {
+        bytes += Buffer.byteLength(JSON.stringify(group)) + 1
+        if (bytes > MAX - 1024) {
+          truncated = true
+          break
+        }
+      }
+    }
     return {
       cells,
-      sharedGroups: [],
+      sharedGroups: expanded || truncated ? [] : sheet.sharedGroups,
       indexingComplete: true,
       truncated,
     }
@@ -1128,7 +1230,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const mediaType = path && visualMediaType(path)
     const file = path && session?.zip.file(path)
     if (!file || !mediaType) throw new Error('MEDIA_NOT_FOUND')
-    return readWorkbookImage(file,mediaType)
+    return readWorkbookImage(file,mediaType,visualId.startsWith('hf-picture-') ? MAX_HEADER_FOOTER_PICTURE_BYTES : undefined)
   }
   if (cmd === 'recalc_cells') {
     const reads = (packet.reads ?? []) as {

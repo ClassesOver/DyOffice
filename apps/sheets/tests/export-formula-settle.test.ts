@@ -42,6 +42,7 @@ function harness(pendingFormula = true, appliedBarrier = true) {
     getMaxRows: () => 10,
     getMaxColumns: () => 10,
     isSheetHidden: () => false,
+    getSelection: () => null,
     getSheet: () => ({
       getRowVisible: () => true,
       getColVisible: () => true,
@@ -91,6 +92,7 @@ function harness(pendingFormula = true, appliedBarrier = true) {
     },
     flags: { preloadComplete: true, preloadRunning: false },
     editJournal: createEditJournal(),
+    hyperlinkTargets: new Map(),
     sheetFilePageSetups: new Map(),
     sheetPageBreaks: new Map(),
     sheetProtections: new Map(),

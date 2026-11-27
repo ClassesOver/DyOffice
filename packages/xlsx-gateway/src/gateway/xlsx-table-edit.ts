@@ -1,7 +1,20 @@
-import { relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
-import { escapeRegExp, removeRelationshipById } from './xlsx-sheets.ts'
+import { relsPathFor, type MutablePackage } from './xlsx-drawing-add.ts'
+import { readRootStartTag } from './xlsx-namespace.ts'
+import { decodeAttribute, relationshipIdsMatch, removePartOverride, removeRelationshipById, tablePartNames } from './xlsx-sheets.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
 import {
-  TABLE_REL_TYPE,
+  applyPatches,
+  isElement,
+  patchElement,
+  prefixOf,
+  scopedChildren,
+  withNamespaces,
+  worksheetRoot,
+  type ScopedElement,
+  type XmlPatch,
+} from './xlsx-worksheet-xml.ts'
+import {
   areaToRef,
   areasOverlap,
   assertNameNotDefined,
@@ -9,6 +22,10 @@ import {
   collectExistingTableNames,
   escapeAttribute,
   parseRef,
+  sheetTableParts,
+  tableWorksheetConflict,
+  worksheetTableParts,
+  type LocatedTable,
   type TableArea,
   type TableStyleOptions,
 } from './xlsx-table-add.ts'
@@ -35,9 +52,9 @@ const CONTENT_TYPES_PATH = '[Content_Types].xml'
 const TABLE_NAME_RULE = /^[\p{L}_\\][\p{L}\p{N}_.\\]*$/u
 const CELL_LIKE = /^(\$?[A-Za-z]{1,3}\$?[0-9]+|[rR]\d*[cC]\d*)$/
 
-export interface LocatedTable {
-  readonly path: string
-  readonly relId: string
+export interface ConvertedTable {
+  readonly worksheetPath: string
+  readonly names: readonly string[]
   readonly xml: string
 }
 
@@ -45,58 +62,40 @@ export async function applyTableEdits(
   pkg: MutablePackage,
   edits: readonly TableEdit[],
   touchedEntries: Set<string>,
-): Promise<void> {
-  if (edits.length === 0) return
+  checkWorkbookNames = true,
+): Promise<{ renames: Map<string, string>; converted: ConvertedTable[] }> {
+  const converted: ConvertedTable[] = []
+  const renames = new Map<string, { original: string[]; name: string }>()
   for (const edit of edits) {
     const located = await locateTable(pkg, edit)
     if (edit.remove) {
       await removeTable(pkg, edit.worksheetPath, located, touchedEntries)
+      converted.push({ worksheetPath: edit.worksheetPath, xml: located.xml,
+        names: [...(renames.get(located.path)?.original ?? []), ...tablePartNames(located.xml)] })
+      renames.delete(located.path)
       continue
     }
-    const rewritten = await rewriteTable(pkg, edit, located)
+    const rewritten = await rewriteTable(pkg, edit, located, checkWorkbookNames)
     pkg.write(located.path, rewritten)
     touchedEntries.add(located.path)
+    if (edit.name !== undefined) {
+      const original = renames.get(located.path)?.original ?? tablePartNames(located.xml)
+      renames.set(located.path, { original, name: edit.name })
+    }
   }
-}
-
-/// The table parts related from a worksheet, in relationship order. Shared
-/// with the filter save path, which routes table-overlapping filters into
-/// the table part instead of the worksheet.
-export async function sheetTableParts(
-  pkg: MutablePackage,
-  worksheetPath: string,
-): Promise<readonly LocatedTable[]> {
-  const relsPath = relsPathFor(worksheetPath)
-  if (!(await pkg.has(relsPath))) return []
-  const relsXml = await pkg.readText(relsPath)
-  const parts: LocatedTable[] = []
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*\/?>/g)) {
-    const tag = match[0]
-    if (!tag.includes(`Type="${TABLE_REL_TYPE}"`)) continue
-    const target = /\bTarget="([^"]+)"/.exec(tag)?.[1]
-    const relId = /\bId="([^"]+)"/.exec(tag)?.[1]
-    if (!target || !relId) continue
-    const path = resolveRelTarget(worksheetPath, target)
-    if (!(await pkg.has(path))) continue
-    parts.push({ path, relId, xml: await pkg.readText(path) })
+  const names = new Map<string, string>()
+  for (const { original, name } of renames.values()) {
+    for (const alias of original) {
+      if (alias !== name) names.set(alias.toLowerCase(), name)
+    }
   }
-  return parts
-}
-
-function tableNames(xml: string): string[] {
-  const open = /<table\b[^>]*>/.exec(xml)?.[0] ?? ''
-  const names: string[] = []
-  for (const attribute of ['displayName', 'name']) {
-    const value = new RegExp(`\\b${attribute}="([^"]*)"`).exec(open)?.[1]
-    if (value) names.push(unescapeAttribute(value))
-  }
-  return names
+  return { renames: names, converted }
 }
 
 async function locateTable(pkg: MutablePackage, edit: TableEdit): Promise<LocatedTable> {
   const wanted = edit.tableName.toLowerCase()
   for (const part of await sheetTableParts(pkg, edit.worksheetPath)) {
-    if (tableNames(part.xml).some((name) => name.toLowerCase() === wanted)) return part
+    if (tablePartNames(part.xml).some((name) => name.toLowerCase() === wanted)) return part
   }
   throw new TableEditError(`Table "${edit.tableName}" was not found on its worksheet.`)
 }
@@ -108,17 +107,21 @@ async function removeTable(
   touchedEntries: Set<string>,
 ): Promise<void> {
   const relsPath = relsPathFor(worksheetPath)
-  pkg.write(relsPath, removeRelationshipById(await pkg.readText(relsPath), table.relId))
+  const rels = await pkg.readText(relsPath)
+  const worksheet = await pkg.readText(worksheetPath)
+  const withoutRelationship = removeRelationshipById(rels, table.relId)
+  const withoutTable = removeTablePart(worksheet, table.relId)
+  if (withoutRelationship === rels || withoutTable === worksheet) {
+    throw new TableEditError('The table reference could not be removed safely.')
+  }
+  pkg.write(relsPath, withoutRelationship)
   touchedEntries.add(relsPath)
-  pkg.write(worksheetPath, removeTablePart(await pkg.readText(worksheetPath), table.relId))
+  pkg.write(worksheetPath, withoutTable)
   touchedEntries.add(worksheetPath)
   pkg.remove(table.path)
   touchedEntries.add(table.path)
   const contentTypes = await pkg.readText(CONTENT_TYPES_PATH)
-  const stripped = contentTypes.replace(
-    new RegExp(`<Override\\b[^>]*PartName="/${escapeRegExp(table.path)}"[^>]*/>`),
-    '',
-  )
+  const stripped = removePartOverride(contentTypes, table.path)
   if (stripped !== contentTypes) {
     pkg.write(CONTENT_TYPES_PATH, stripped)
     touchedEntries.add(CONTENT_TYPES_PATH)
@@ -127,109 +130,122 @@ async function removeTable(
 
 /// Drops one <tablePart>; an emptied <tableParts> container goes with it.
 export function removeTablePart(worksheetXml: string, relId: string): string {
-  const without = worksheetXml.replace(
-    new RegExp(`<tablePart\\b[^>]*\\br:id="${escapeRegExp(relId)}"[^>]*/>\\s*`),
-    '',
-  )
-  const container = /<tableParts\b([^>]*?)(\/?)>/.exec(without)
-  if (!container) return without
-  const remaining = (without.match(/<tablePart\b/g) ?? []).length
-  if (remaining === 0) {
-    return without.replace(/<tableParts\b[^>]*?(?:\/>|>\s*<\/tableParts>)/, '')
-  }
-  if (/count="\d+"/.test(container[1] ?? '')) {
-    return without.replace(
-      container[0],
-      container[0].replace(/count="\d+"/, `count="${remaining}"`),
-    )
-  }
-  return without
+  const root = worksheetRoot(worksheetXml)
+  const references = root && worksheetTableParts(root)
+  if (!root || !references) return worksheetXml
+  const { container, entries } = references
+  const patches = entries
+    .filter(({ id }) => relationshipIdsMatch(id, relId))
+    .map(({ entry }) => patchElement(entry, ''))
+  if (!patches.length) return worksheetXml
+  const inner = applyPatches(container.inner, patches)
+  const remaining = entries.length - patches.length
+  const keepContainer = remaining > 0 || childElements(inner).length > 0
+  const opening = container.attributes.has('count')
+    ? updateWorksheetTagAttribute(container.opening, 'count', String(remaining))
+    : container.opening
+  const replacement = keepContainer
+    ? opening + inner + container.xml.slice(container.opening.length + container.inner.length)
+    : inner
+  const offset = root.start + root.opening.length + container.start
+  return worksheetXml.slice(0, offset) + replacement + worksheetXml.slice(offset + container.xml.length)
 }
 
 async function rewriteTable(
   pkg: MutablePackage,
   edit: TableEdit,
   table: LocatedTable,
+  checkWorkbookNames: boolean,
 ): Promise<string> {
-  let xml = table.xml
-  const openMatch = /<table\b[^>]*>/.exec(xml)
-  if (!openMatch) throw new TableEditError(`Table part ${table.path} is malformed.`)
-  const attributes = parseAttributes(openMatch[0])
-  const currentRef = attributes.get('ref')
+  const [element] = childElements(table.xml)
+  const root = element && withNamespaces(element, new Map())
+  if (root?.local !== 'table') throw new TableEditError(`Table part ${table.path} is malformed.`)
+  const currentRef = root.attributes.get('ref')
   if (!currentRef) throw new TableEditError(`Table part ${table.path} has no ref.`)
 
+  let opening = root.opening
   if (edit.name !== undefined) {
-    await assertRenameAllowed(pkg, edit, table)
-    attributes.set('name', escapeAttribute(edit.name))
-    attributes.set('displayName', escapeAttribute(edit.name))
+    await assertRenameAllowed(pkg, edit, table, checkWorkbookNames)
+    const name = escapeAttribute(edit.name)
+    opening = updateWorksheetTagAttribute(opening, 'name', name)
+    opening = updateWorksheetTagAttribute(opening, 'displayName', name)
   }
-
   const headerRows =
     edit.headerRow === undefined
-      ? Number(attributes.get('headerRowCount') ?? '1')
-      : edit.headerRow
-        ? 1
-        : 0
+      ? Number(root.attributes.get('headerRowCount') ?? '1')
+      : Number(edit.headerRow)
   const totalsRows =
     edit.totalsRow === undefined
-      ? Number(attributes.get('totalsRowCount') ?? '0')
-      : edit.totalsRow
-        ? 1
-        : 0
-  const area = edit.area ?? parseRef(currentRef)
+      ? Number(root.attributes.get('totalsRowCount') ?? '0')
+      : Number(edit.totalsRow)
+  const previousArea = parseRef(currentRef)
+  const area = edit.area ?? previousArea
   if (area.endRow - area.startRow + 1 <= headerRows + totalsRows) {
     throw new TableEditError(
       `Table "${edit.tableName}" needs at least one data row beside its header and totals rows.`,
     )
   }
   if (edit.area) {
-    await assertAreaFree(pkg, edit, table, area)
-    attributes.set('ref', areaToRef(area))
+    await assertAreaFree(pkg, edit, table, area, previousArea)
+    opening = updateWorksheetTagAttribute(opening, 'ref', areaToRef(area))
   }
-  if (headerRows === 0) attributes.set('headerRowCount', '0')
-  else attributes.delete('headerRowCount')
-  if (totalsRows > 0) {
-    attributes.set('totalsRowCount', String(totalsRows))
-    attributes.set('totalsRowShown', '1')
-  } else {
-    attributes.delete('totalsRowCount')
-    if (edit.totalsRow === false) attributes.set('totalsRowShown', '0')
+  opening = updateWorksheetTagAttribute(opening, 'headerRowCount', headerRows === 0 ? '0' : null)
+  opening = updateWorksheetTagAttribute(opening, 'totalsRowCount', totalsRows > 0 ? String(totalsRows) : null)
+  if (totalsRows > 0 || edit.totalsRow === false) {
+    opening = updateWorksheetTagAttribute(opening, 'totalsRowShown', totalsRows > 0 ? '1' : '0')
   }
-  xml = xml.replace(openMatch[0], `<table ${serializeAttributes(attributes)}>`)
 
-  const previousArea = parseRef(currentRef)
-  xml = rewriteColumns(xml, edit, area, previousArea)
+  const prefix = prefixOf(root.name)
+  const children = scopedChildren(root)
+  const child = (name: string) => children.find((entry) => isElement(entry, name, root.namespace))
+  const patches: XmlPatch[] = []
+  const columns = child('tableColumns')
+  if (!columns) throw new TableEditError(`Table "${edit.tableName}" has no tableColumns.`)
+  const rewrittenColumns = rewriteColumns(columns, edit, area, previousArea)
+  if (rewrittenColumns !== columns.xml) patches.push(patchElement(columns, rewrittenColumns))
 
-  const filterPattern = /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/
-  const existingFilter = filterPattern.exec(xml)?.[0]
-  const wantsFilter =
-    headerRows > 0 &&
-    (edit.filterButton ?? (edit.headerRow === true ? true : existingFilter !== undefined)) === true
+  const filter = child('autoFilter')
+  const wantsFilter = headerRows > 0 && (edit.filterButton ?? (edit.headerRow === true || !!filter))
   const columnsMoved =
     area.startColumn !== previousArea.startColumn || area.endColumn !== previousArea.endColumn
-  const filterRef = autoFilterRef(area, totalsRows)
-  if (!wantsFilter) {
-    xml = xml.replace(filterPattern, '')
-  } else if (existingFilter === undefined) {
-    xml = xml.replace(/<table\b[^>]*>/, (open) => `${open}<autoFilter ref="${filterRef}"/>`)
-  } else if (columnsMoved || edit.headerRow !== undefined) {
-    // Criteria index columns from the filter's left edge: a column shift or
-    // a re-headed table would point them at the wrong cells, so they drop.
-    xml = xml.replace(filterPattern, `<autoFilter ref="${filterRef}"/>`)
-  } else {
-    xml = xml.replace(
-      existingFilter,
-      existingFilter.replace(/(<autoFilter\b[^>]*?\bref=")[^"]*(")/, `$1${filterRef}$2`),
-    )
+  if (wantsFilter) {
+    const ref = autoFilterRef(area, totalsRows)
+    const replacement = `<${prefix}autoFilter ref="${ref}"/>`
+    if (!filter) {
+      patches.push({ start: 0, length: 0, xml: replacement })
+    } else if (columnsMoved || edit.headerRow !== undefined) {
+      // Criteria are indexed from the old filter's left edge.
+      patches.push(patchElement(filter, replacement))
+    } else if (filter.attributes.get('ref') !== ref) {
+      patches.push(patchElement(filter, updateElementOpening(filter,
+        updateWorksheetTagAttribute(filter.opening, 'ref', ref),
+      )))
+    }
+  } else if (filter) {
+    patches.push(patchElement(filter, ''))
   }
 
-  return rewriteStyleInfo(xml, edit)
+  const style = child('tableStyleInfo')
+  const rewrittenStyle = rewriteStyleInfo(style, prefix, edit)
+  if (style) {
+    if (rewrittenStyle !== style.xml) patches.push(patchElement(style, rewrittenStyle))
+  } else {
+    patches.push({ start: child('extLst')?.start ?? root.inner.length, length: 0, xml: rewrittenStyle })
+  }
+
+  const closing = root.xml.slice(root.opening.length + root.inner.length)
+  return applyPatches(table.xml, [patchElement(root, opening + applyPatches(root.inner, patches) + closing)])
+}
+
+function updateElementOpening(element: ScopedElement, opening: string): string {
+  return opening + element.xml.slice(element.opening.length)
 }
 
 async function assertRenameAllowed(
   pkg: MutablePackage,
   edit: TableEdit,
   table: LocatedTable,
+  checkWorkbookNames: boolean,
 ): Promise<void> {
   const name = edit.name ?? ''
   if (
@@ -240,13 +256,13 @@ async function assertRenameAllowed(
   ) {
     throw new TableEditError(`"${name}" is not a valid table name.`)
   }
-  const own = new Set(tableNames(table.xml).map((value) => value.toLowerCase()))
+  const own = new Set(tablePartNames(table.xml).map((value) => value.toLowerCase()))
   const reserved = await collectExistingTableNames(pkg)
   for (const value of own) reserved.delete(value)
   if (reserved.has(name.toLowerCase())) {
     throw new TableEditError(`Table name "${name}" is already taken in this workbook.`)
   }
-  await assertNameNotDefined(pkg, name)
+  if (checkWorkbookNames) await assertNameNotDefined(pkg, name)
 }
 
 async function assertAreaFree(
@@ -254,46 +270,37 @@ async function assertAreaFree(
   edit: TableEdit,
   table: LocatedTable,
   area: TableArea,
+  previousArea: TableArea,
 ): Promise<void> {
   for (const part of await sheetTableParts(pkg, edit.worksheetPath)) {
     if (part.path === table.path) continue
-    const ref = /<table\b[^>]*\bref="([^"]+)"/.exec(part.xml)?.[1]
+    const rawRef = readWorksheetTagAttribute(readRootStartTag(part.xml), 'ref')
+    const ref = rawRef && decodeAttribute(rawRef)
     if (ref && areasOverlap(area, parseRef(ref))) {
       throw new TableEditError(`Table "${edit.tableName}" would overlap table ${ref}.`)
     }
   }
-  const worksheetXml = await pkg.readText(edit.worksheetPath)
-  for (const match of worksheetXml.matchAll(/<mergeCell\b[^>]*\bref="([^"]+)"/g)) {
-    const ref = match[1]
-    if (ref && areasOverlap(area, parseRef(ref))) {
-      throw new TableEditError(
-        `Table "${edit.tableName}" would overlap merged cells (${ref}) — unmerge them first.`,
-      )
-    }
-  }
+  const conflict = tableWorksheetConflict(await pkg.readText(edit.worksheetPath), area, previousArea)
+  if (conflict) throw new TableEditError(`Table "${edit.tableName}" would overlap ${conflict}`)
 }
 
 /// Existing <tableColumn> elements follow their sheet column, so a left-edge
 /// resize keeps ids, formulas and totals metadata with the right cells.
 function rewriteColumns(
-  xml: string,
+  block: ScopedElement,
   edit: TableEdit,
   area: TableArea,
   previousArea: TableArea,
 ): string {
   const width = area.endColumn - area.startColumn + 1
-  const block = /<tableColumns\b[^>]*>([\s\S]*?)<\/tableColumns>/.exec(xml)
-  if (!block) throw new TableEditError(`Table "${edit.tableName}" has no tableColumns.`)
-  const existing = [
-    ...(block[1] ?? '').matchAll(/<tableColumn\b[^>]*?(?:\/>|>[\s\S]*?<\/tableColumn>)/g),
-  ].map((match) => match[0])
+  const existing = scopedChildren(block).filter((entry) => isElement(entry, 'tableColumn', block.namespace))
   if (edit.columnNames === undefined) {
     if (existing.length !== width) {
       throw new TableEditError(
         `Table "${edit.tableName}" spans ${width} columns but lists ${existing.length} column names.`,
       )
     }
-    return xml
+    return block.xml
   }
   if (edit.columnNames.length !== width) {
     throw new TableEditError(
@@ -310,74 +317,41 @@ function rewriteColumns(
     }
     seen.add(key)
   }
-  let nextId = existing.reduce(
-    (max, element) => Math.max(max, Number(/\bid="(\d+)"/.exec(element)?.[1] ?? 0)),
-    0,
-  )
+  let nextId = existing.reduce((max, entry) => {
+    const id = Number(entry.attributes.get('id'))
+    return Number.isSafeInteger(id) ? Math.max(max, id) : max
+  }, 0)
+  const prefix = prefixOf(block.name)
   const columns = edit.columnNames.map((name, index) => {
-    const previousIndex = area.startColumn + index - previousArea.startColumn
-    const element = previousIndex >= 0 ? existing[previousIndex] : undefined
+    const element = existing[area.startColumn + index - previousArea.startColumn]
     const escaped = escapeAttribute(name)
-    if (element === undefined) {
-      nextId += 1
-      return `<tableColumn id="${nextId}" name="${escaped}"/>`
-    }
-    return /\bname="/.test(element)
-      ? element.replace(/\bname="[^"]*"/, `name="${escaped}"`)
-      : element.replace(/<tableColumn\b/, `<tableColumn name="${escaped}"`)
+    if (!element) return `<${prefix}tableColumn id="${++nextId}" name="${escaped}"/>`
+    if (element.attributes.get('name') === name) return element.xml
+    return updateElementOpening(element, updateWorksheetTagAttribute(element.opening, 'name', escaped))
   })
-  return xml.replace(
-    block[0],
-    `<tableColumns count="${columns.length}">${columns.join('')}</tableColumns>`,
-  )
+  const patches = existing.map((entry, index) => patchElement(entry, columns[index] ?? ''))
+  const inner = applyPatches(block.inner, patches) + columns.slice(existing.length).join('')
+  const opening = updateWorksheetTagAttribute(block.opening, 'count', String(columns.length))
+  const closing = block.xml.slice(block.opening.length + block.inner.length)
+  return opening + inner + closing
 }
 
-function rewriteStyleInfo(xml: string, edit: TableEdit): string {
-  const existing =
-    /<tableStyleInfo\b[^>]*\/>|<tableStyleInfo\b[^>]*>[\s\S]*?<\/tableStyleInfo>/.exec(xml)
-  const attributes = existing
-    ? parseAttributes(existing[0])
-    : new Map<string, string>([
-        ['showFirstColumn', '0'],
-        ['showLastColumn', '0'],
-        ['showRowStripes', '1'],
-        ['showColumnStripes', '0'],
-      ])
-  if (edit.style !== undefined) attributes.set('name', escapeAttribute(edit.style))
-  const flags: [keyof TableEdit, string][] = [
+function rewriteStyleInfo(existing: ScopedElement | undefined, prefix: string, edit: TableEdit): string {
+  const name = edit.style === undefined ? '' : ` name="${escapeAttribute(edit.style)}"`
+  let opening = existing?.opening ??
+    `<${prefix}tableStyleInfo showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"${name}/>`
+  if (existing && edit.style !== undefined) {
+    opening = updateWorksheetTagAttribute(opening, 'name', escapeAttribute(edit.style))
+  }
+  const flags = [
     ['firstColumn', 'showFirstColumn'],
     ['lastColumn', 'showLastColumn'],
     ['bandedRows', 'showRowStripes'],
     ['bandedColumns', 'showColumnStripes'],
-  ]
+  ] as const
   for (const [key, attribute] of flags) {
     const value = edit[key]
-    if (typeof value === 'boolean') attributes.set(attribute, value ? '1' : '0')
+    if (value !== undefined) opening = updateWorksheetTagAttribute(opening, attribute, value ? '1' : '0')
   }
-  const element = `<tableStyleInfo ${serializeAttributes(attributes)}/>`
-  if (existing) return xml.replace(existing[0], element)
-  const extLstAt = xml.search(/<extLst\b/)
-  if (extLstAt >= 0) return xml.slice(0, extLstAt) + element + xml.slice(extLstAt)
-  return xml.replace('</table>', `${element}</table>`)
-}
-
-function parseAttributes(openTag: string): Map<string, string> {
-  const attributes = new Map<string, string>()
-  const body = openTag.replace(/^<[^\s/>]+/, '').replace(/\/?>$/, '')
-  for (const match of body.matchAll(/([^\s=]+)="([^"]*)"/g)) {
-    attributes.set(match[1]!, match[2]!)
-  }
-  return attributes
-}
-
-function serializeAttributes(attributes: Map<string, string>): string {
-  return [...attributes].map(([key, value]) => `${key}="${value}"`).join(' ')
-}
-
-function unescapeAttribute(input: string): string {
-  return input
-    .replace(/&quot;/g, '"')
-    .replace(/&gt;/g, '>')
-    .replace(/&lt;/g, '<')
-    .replace(/&amp;/g, '&')
+  return existing ? updateElementOpening(existing, opening) : opening
 }

@@ -4,10 +4,17 @@
  * pageMargins / printOptions / headerFooter plus the workbook-level
  * _xlnm.Print_Area / _xlnm.Print_Titles defined names).
  */
-import { columnIndex, columnLabel, parseRange } from '@genoffice/xlsx-gateway/domain/cell-address'
+import { columnLabel, parseRange } from '@genoffice/xlsx-gateway/domain/cell-address'
+import {
+  encodeHeaderFooterSections, formatPrintTitleSpan, readPrintTitleSpans, type PrintTitleSpan,
+} from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import type { WorkbookPagePrintSettings } from '../shared/desktop-api'
-import type { HeaderFooterParts, PageSetupJournalState, StructuralJournalOp } from './edit-journal'
-import { fileRangeToScreenRange, fileToScreen } from './view-transform'
+import {
+  shiftPrintArea, shiftPrintTitleSpan,
+  type HeaderFooterParts, type PageSetupJournalState, type StructuralJournalOp,
+} from './edit-journal'
+import { matchHeaderFooterFormat } from './print-hf-codes'
 
 export interface PrintMargins {
   readonly left: number
@@ -33,6 +40,7 @@ export type HeaderFooterPictureSlot = NonNullable<
 /// Concrete values the print layout consumes; every field resolved.
 export interface EffectivePageSetup {
   readonly orientation: 'portrait' | 'landscape'
+  readonly pageOrder: NonNullable<WorkbookPagePrintSettings['pageOrder']>
   /// OOXML paper-size code.
   readonly paperSize: number
   /// Percent; applies only when fitToPage is off.
@@ -46,6 +54,12 @@ export interface EffectivePageSetup {
   readonly margins: PrintMargins
   readonly printGridlines: boolean
   readonly printHeadings: boolean
+  readonly blackAndWhite: boolean
+  readonly draft: boolean
+  readonly horizontalCentered: boolean
+  readonly verticalCentered: boolean
+  /// Starting page number saved in the file, or undefined for automatic numbering.
+  readonly firstPageNumber?: number | undefined
   /// Plain A1 ranges to print ([] = the used range).
   readonly printAreas: readonly string[]
   /// Rows repeated at the top of every page ("1:2"), or null.
@@ -56,8 +70,7 @@ export interface EffectivePageSetup {
   /// The odd-page (default) header/footer.
   readonly header: HeaderFooterParts | null
   readonly footer: HeaderFooterParts | null
-  /// differentFirst: page 1's header/footer (blank halves print nothing),
-  /// or null when page 1 uses the default.
+  /// differentFirst: the sheet's first page header/footer, or null when it uses the default.
   readonly firstPage: HeaderFooterPair | null
   /// differentOddEven: even pages' header/footer, or null when off.
   readonly evenPages: HeaderFooterPair | null
@@ -77,78 +90,22 @@ const MARGIN_PRESETS: Record<'normal' | 'wide' | 'narrow', PrintMargins> = {
 /// The export wire caps margins at 3in per side.
 const MAX_MARGIN_INCHES = 3
 
-/// File-space title columns → screen space (column axis only).
-function mapTitleColumnsToScreen(
-  titles: string | null,
-  ops: readonly StructuralJournalOp[],
-): string | null {
-  if (titles === null || ops.length === 0) return titles
-  const match = /^([A-Z]{1,3}):([A-Z]{1,3})$/.exec(titles)
-  if (!match) return null
-  const columns: number[] = []
-  const first = columnIndex(match[1] ?? 'A')
-  const last = columnIndex(match[2] ?? 'A')
-  for (let column = first; column <= last; column += 1) {
-    const screen = fileToScreen(ops, 'column', column)
-    if (screen !== null) columns.push(screen)
-  }
-  if (columns.length === 0) return null
-  const start = Math.min(...columns)
-  const end = Math.max(...columns)
-  if (end - start > 20) return null
-  return `${columnLabel(start)}:${columnLabel(end)}`
-}
-
 export interface FilePrintNames {
   readonly printArea?: string | undefined
   readonly printTitles?: string | undefined
 }
 
-/// File-space A1 areas → this session's screen space (envelope semantics,
-/// like streamed merges). Fully deleted areas drop out; when nothing
-/// survives the caller falls back to the used range.
-function mapAreasToScreen(areas: readonly string[], ops: readonly StructuralJournalOp[]): string[] {
-  if (ops.length === 0) return [...areas]
-  const mapped: string[] = []
-  for (const area of areas) {
-    let bounds
-    try {
-      bounds = parseRange(area)
-    } catch {
-      continue
-    }
-    const screen = fileRangeToScreenRange(ops, bounds)
-    if (screen === null) continue
-    mapped.push(
-      `${columnLabel(screen.startColumn)}${screen.startRow + 1}` +
-        `:${columnLabel(screen.endColumn)}${screen.endRow + 1}`,
-    )
+export function resolveEffectivePrintFit(
+  journal: PageSetupJournalState,
+  file: WorkbookPagePrintSettings | null,
+): Pick<EffectivePageSetup, 'fitToPage' | 'fitToWidth' | 'fitToHeight'> {
+  // OOXML defaults an omitted fit count to one page when fit mode is active.
+  const fileDefault = file?.fitToPage === true ? 1 : 0
+  return {
+    fitToPage: journal.fitToPage ?? file?.fitToPage ?? false,
+    fitToWidth: journal.fitToWidth ?? file?.fitToWidth ?? fileDefault,
+    fitToHeight: journal.fitToHeight ?? file?.fitToHeight ?? fileDefault,
   }
-  return mapped
-}
-
-/// File-space title rows → screen space (row axis only — column edits must
-/// not drop them). Deleted rows shrink the span; all deleted → null.
-function mapTitleRowsToScreen(
-  titles: string | null,
-  ops: readonly StructuralJournalOp[],
-): string | null {
-  if (titles === null || ops.length === 0) return titles
-  const match = /^([0-9]{1,7}):([0-9]{1,7})$/.exec(titles)
-  if (!match) return null
-  const rows: number[] = []
-  for (let row = Number(match[1]) - 1; row <= Number(match[2]) - 1; row += 1) {
-    const screen = fileToScreen(ops, 'row', row)
-    if (screen !== null) rows.push(screen)
-  }
-  if (rows.length === 0) return null
-  const start = Math.min(...rows)
-  const end = Math.max(...rows)
-  // Inserts/moves between title rows can stretch the surviving span past
-  // the layout's 21-row cap (parseTitleRows would throw): drop the titles
-  // instead, matching the cap semantics at parse time.
-  if (end - start > 20) return null
-  return `${start + 1}:${end + 1}`
 }
 
 export function resolveEffectivePageSetup(
@@ -175,39 +132,30 @@ export function resolveEffectivePageSetup(
             footer: clampMargin(fileMargins.footer),
           }
         : MARGIN_PRESETS.normal
-  const fitToPage = journal.fitToPage ?? file?.fitToPage ?? false
-  // OOXML default when fitToPage is on and fitToWidth/fitToHeight are
-  // absent is 1 page on that axis.
-  const fitToWidth = journal.fitToWidth ?? file?.fitToWidth ?? (file?.fitToPage === true ? 1 : 0)
-  const fitToHeight = journal.fitToHeight ?? file?.fitToHeight ?? (file?.fitToPage === true ? 1 : 0)
   const printArea =
     journal.printArea !== undefined
-      ? journal.printArea === null
-        ? []
-        : [journal.printArea]
-      : mapAreasToScreen(printAreasFromFormula(names?.printArea), ops)
+      ? printAreasFromFormula(journal.printArea ?? undefined)
+      : printAreasFromFormula(names?.printArea)
+          .map((area) => shiftPrintArea(area, ops))
+          .filter((area) => area !== null)
   const printTitles =
     journal.printTitles !== undefined
       ? printTitleRowsFromFormula(journal.printTitles ?? undefined)
       : journal.clearPrintTitleRows
         ? null
-        : mapTitleRowsToScreen(printTitleRowsFromFormula(names?.printTitles), ops)
-  const header =
-    journal.header !== undefined
-      ? journal.header
-      : file?.oddHeader !== undefined
-        ? decodeHeaderFooter(file.oddHeader)
-        : null
-  const footer =
-    journal.footer !== undefined
-      ? journal.footer
-      : file?.oddFooter !== undefined
-        ? decodeHeaderFooter(file.oddFooter)
-        : null
-  // The session edits the odd header/footer only (like Excel's Page Setup
-  // dialog); the file's first/even variants keep applying to their pages.
+        : printTitleRowsFromFormula(names?.printTitles, ops)
+  // Use the same encoding for pending edits as on save.
   const decodeOptional = (encoded: string | undefined): HeaderFooterParts | null =>
-    encoded === undefined ? null : decodeHeaderFooter(encoded)
+    encoded === undefined ? null : decodeHeaderFooter(encoded, true)
+  const header =
+    journal.header === undefined
+      ? decodeOptional(file?.oddHeader)
+      : journal.header && decodeHeaderFooter(encodeHeaderFooterSections(journal.header), true)
+  const footer =
+    journal.footer === undefined
+      ? decodeOptional(file?.oddFooter)
+      : journal.footer && decodeHeaderFooter(encodeHeaderFooterSections(journal.footer), true)
+  // The session edits the odd header/footer only.
   const firstPage =
     file?.differentFirst === true
       ? { header: decodeOptional(file.firstHeader), footer: decodeOptional(file.firstFooter) }
@@ -218,20 +166,24 @@ export function resolveEffectivePageSetup(
       : null
   return {
     orientation: journal.orientation ?? file?.orientation ?? 'portrait',
+    pageOrder: file?.pageOrder ?? 'downThenOver',
     paperSize: journal.paperSize ?? file?.paperSize ?? 9,
     scale: journal.scale ?? file?.scale ?? 100,
-    fitToWidth,
-    fitToHeight,
-    fitToPage,
+    ...resolveEffectivePrintFit(journal, file),
     margins,
     printGridlines: journal.printGridlines ?? file?.printGridlines ?? false,
     printHeadings: journal.printHeadings ?? file?.printHeadings ?? false,
+    blackAndWhite: file?.blackAndWhite ?? false,
+    draft: file?.draft ?? false,
+    horizontalCentered: file?.horizontalCentered ?? false,
+    verticalCentered: file?.verticalCentered ?? false,
+    firstPageNumber: file?.firstPageNumber,
     printAreas: printArea,
     printTitles,
-    printTitleColumns: mapTitleColumnsToScreen(
-      printTitleColumnsFromFormula(names?.printTitles),
-      ops,
-    ),
+    printTitleColumns:
+      journal.printTitles === null || journal.clearPrintTitleColumns
+        ? null
+        : printTitleColumnsFromFormula(names?.printTitles, ops),
     header,
     footer,
     firstPage,
@@ -275,47 +227,46 @@ export function printAreasFromFormula(formula: string | undefined): string[] {
   if (formula === undefined || formula === '') return []
   const areas: string[] = []
   for (const part of splitAreas(formula)) {
-    if (/#REF!/i.test(part)) continue
+    if (/#REF!/i.test(part.replace(/'(?:[^']|'')*'/g, ''))) continue
     const reference = plainReference(part).toUpperCase()
-    if (/^[A-Z]{1,3}[0-9]{1,7}$/.test(reference)) {
-      areas.push(`${reference}:${reference}`)
-      continue
-    }
-    if (/^[A-Z]{1,3}[0-9]{1,7}:[A-Z]{1,3}[0-9]{1,7}$/.test(reference)) {
-      areas.push(normaliseArea(reference))
-      continue
-    }
-    return []
+    if (!/^[A-Z]{1,3}[1-9]\d{0,6}(?::[A-Z]{1,3}[1-9]\d{0,6})?$/.test(reference)) return []
+    const bounds = parseRange(reference)
+    if (bounds.endRow >= MAX_GRID_ROWS || bounds.endColumn >= MAX_GRID_COLUMNS) return []
+    areas.push(
+      `${columnLabel(bounds.startColumn)}${bounds.startRow + 1}:` +
+        `${columnLabel(bounds.endColumn)}${bounds.endRow + 1}`,
+    )
   }
   return areas
 }
 
-/// `'S'!$1:$2` → '1:2'; column-repeat parts are skipped (unsupported), spans
-/// beyond the layout's 21-row title cap are dropped.
-export function printTitleRowsFromFormula(formula: string | undefined): string | null {
-  if (formula === undefined || formula === '') return null
-  for (const part of splitAreas(formula)) {
-    const match = /^([0-9]{1,7}):([0-9]{1,7})$/.exec(plainReference(part))
-    if (!match) continue
-    const start = Number(match[1])
-    const end = Number(match[2])
-    if (start <= end && end - start <= 20) return `${start}:${end}`
+function printTitleFromFormula(
+  formula: string | undefined,
+  axis: PrintTitleSpan['axis'],
+  ops: readonly StructuralJournalOp[],
+): string | null {
+  for (const span of readPrintTitleSpans(formula)) {
+    if (span.axis !== axis) continue
+    const shifted = shiftPrintTitleSpan(span, ops)
+    if (shifted && shifted.end - shifted.start <= 20) return formatPrintTitleSpan(shifted)
   }
   return null
 }
 
-/// `'S'!$A:$B,'S'!$1:$2` → 'A:B'; row parts are skipped, spans beyond the
-/// 21-column cap are dropped.
-export function printTitleColumnsFromFormula(formula: string | undefined): string | null {
-  if (formula === undefined || formula === '') return null
-  for (const part of splitAreas(formula)) {
-    const match = /^([A-Za-z]{1,3}):([A-Za-z]{1,3})$/.exec(plainReference(part))
-    if (!match) continue
-    const start = columnIndex((match[1] ?? 'A').toUpperCase())
-    const end = columnIndex((match[2] ?? 'A').toUpperCase())
-    if (start <= end && end - start <= 20) return `${columnLabel(start)}:${columnLabel(end)}`
-  }
-  return null
+/// `'S'!$1:$2` → '1:2', within the print layout's 21-row cap.
+export function printTitleRowsFromFormula(
+  formula: string | undefined,
+  ops: readonly StructuralJournalOp[] = [],
+): string | null {
+  return printTitleFromFormula(formula, 'row', ops)
+}
+
+/// `'S'!$A:$B,'S'!$1:$2` → 'A:B', within the print layout's 21-column cap.
+export function printTitleColumnsFromFormula(
+  formula: string | undefined,
+  ops: readonly StructuralJournalOp[] = [],
+): string | null {
+  return printTitleFromFormula(formula, 'column', ops)
 }
 
 /// Print-title rows repeat atop every page: the layout caps the span at 21 rows.
@@ -332,24 +283,12 @@ export function clampTitleRows(start: number, end: number): string {
   return `${safeStart}:${Math.min(Math.max(safeEnd, safeStart), safeStart + MAX_PRINT_TITLE_ROWS - 1)}`
 }
 
-/// `$B$4:$A$1` → A1:B4; the print layout reads corners positionally.
-function normaliseArea(reference: string): string {
-  const bounds = parseRange(reference)
-  return (
-    `${columnLabel(bounds.startColumn)}${bounds.startRow + 1}:` +
-    `${columnLabel(bounds.endColumn)}${bounds.endRow + 1}`
-  )
-}
-
-/// Formatting toggles and codes the layout cannot render; any other &X is literal text.
-const STRIPPED_CODES = new Set(['B', 'I', 'U', 'S', 'E', 'X', 'Y', 'Z', 'O', 'H'])
-
-/// Excel's encoded header/footer → left/center/right parts. Field codes the
-/// layout resolves (&P &N &D &T &F &A &G picture, && literal) stay verbatim;
-/// formatting codes (font/size/color/bold/…) and unsupported codes (&Z path)
-/// are stripped, while an unrecognised &X is kept as the literal text Excel
-/// prints. Text before the first section marker is centered.
-export function decodeHeaderFooter(encoded: string): HeaderFooterParts | null {
+/// Excel's encoded header/footer → left/center/right parts. Unmarked text
+/// goes in the center. Editing and printing both keep the original codes.
+export function decodeHeaderFooter(
+  encoded: string,
+  preserveFormatting = false,
+): HeaderFooterParts | null {
   const sections = { L: '', C: '', R: '' }
   let current: 'L' | 'C' | 'R' = 'C'
   let index = 0
@@ -361,53 +300,30 @@ export function decodeHeaderFooter(encoded: string): HeaderFooterParts | null {
       continue
     }
     const next = encoded[index + 1]
-    if (next === undefined) break
+    if (next === undefined) {
+      if (preserveFormatting) sections[current] += '&'
+      break
+    }
     if (next === '&') {
       sections[current] += '&&'
       index += 2
       continue
     }
-    // &"Font Name,Style" — skip the whole quoted spec.
-    if (next === '"') {
-      const close = encoded.indexOf('"', index + 2)
-      index = close === -1 ? encoded.length : close + 1
-      continue
-    }
-    // &nn font size.
-    if (/[0-9]/.test(next)) {
-      index += 2
-      while (index < encoded.length && /[0-9]/.test(encoded[index] ?? '')) index += 1
+    const format = matchHeaderFooterFormat(encoded, index)
+    if (format !== null) {
+      if (preserveFormatting) sections[current] += format[0]
+      index += format[0].length
       continue
     }
     const code = next.toUpperCase()
-    // &K followed by an RRGGBB or theme color spec.
-    if (code === 'K') {
-      index += 8
-      continue
-    }
     if (code === 'L' || code === 'C' || code === 'R') {
       current = code
       index += 2
       continue
     }
-    if (
-      code === 'P' ||
-      code === 'N' ||
-      code === 'D' ||
-      code === 'T' ||
-      code === 'F' ||
-      code === 'A' ||
-      code === 'G'
-    ) {
-      sections[current] += `&${code}`
-      index += 2
-      continue
+    if (preserveFormatting || code !== 'Z') {
+      sections[current] += preserveFormatting ? encoded.slice(index, index + 2) : `&${code}`
     }
-    if (STRIPPED_CODES.has(code)) {
-      index += 2
-      continue
-    }
-    sections[current] += `&${code}`
     index += 2
   }
   if (sections.L === '' && sections.C === '' && sections.R === '') return null

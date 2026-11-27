@@ -41,16 +41,37 @@ test('web gateway uses the desktop save mapping for cells, names, styles and she
    const zip=await JSZip.loadAsync(bytes);zip.file('xl/workbook.xml',xml)
    assert.match((await planFromWorkbook(await zip.generateAsync({type:'nodebuffer'}),nativeRequest)).replaced.get('xl/worksheets/sheet1.xml'),/<v>23<\/v>/)
  }
- for(const patch of [
-   xml=>xml.replace('</sheets>','<sheet name="Duplicate" sheetId="1" r:id="rId1"/></sheets>'),
-   xml=>xml.replace('sheetId="1"',''),
-   xml=>xml.replace('r:id="rId1"','r:id="missing"'),
-   xml=>xml.replace('sheetId="1"',"sheetId='1'"),
-   xml=>xml.replace('<sheet name=', '<sheet custom=\' name="Forged" sheetId="2"\' name='),
-   xml=>xml.replace('<sheets>','<sheets><!--<sheet name="Forged" sheetId="2" r:id="rId1"/>-->'),
+ async function withWorkbook(xml){
+   assert.notEqual(xml,workbook)
+   const zip=await JSZip.loadAsync(bytes)
+   zip.file('xl/workbook.xml',xml)
+   return zip.generateAsync({type:'nodebuffer'})
+ }
+ for(const [reason,xml] of [
+   ['duplicate identity',workbook.replace('</sheets>','<sheet name="Duplicate" sheetId="1" r:id="rId1"/></sheets>')],
+   ['missing identity',workbook.replace('sheetId="1"','')],
+   ['no readable worksheet',workbook.replace('r:id="rId1"','r:id="missing"')],
  ]){
-   const zip=await JSZip.loadAsync(bytes);zip.file('xl/workbook.xml',patch(workbook))
-   await assert.rejects(async()=>planFromWorkbook(await zip.generateAsync({type:'nodebuffer'}),nativeRequest),{statusCode:400})
+   await assert.rejects(async()=>planFromWorkbook(await withWorkbook(xml),nativeRequest),{statusCode:400},reason)
+ }
+ // Valid XML may use single quotes or contain sheet-like text in attributes
+ // and comments. Only the real declaration should contribute an editable ID.
+ const comment='<!--<sheet name="Forged" sheetId="2" r:id="rId1"/>-->'
+ for(const xml of [
+   workbook.replace('sheetId="1"', "sheetId='1'"),
+   workbook.replace('<sheet name=', `<sheet custom=' name="Forged" sheetId="2"' name=`),
+   workbook.replace('<sheets>','<sheets>'+comment),
+ ]){
+   const source=await withWorkbook(xml)
+   const saved=await planFromWorkbook(source,nativeRequest)
+   assert.match(saved.replaced.get('xl/worksheets/sheet1.xml'),/<v>23<\/v>/)
+   await assert.rejects(()=>planFromWorkbook(source,sheetsSaveRequest('sheet-2',[{row:1,column:0,writeValue:true,value:1}])),{statusCode:400})
+   if(xml.includes(comment)){
+     const rename=await planFromWorkbook(source,{...nativeRequest,sheetOps:[{kind:'rename-sheet',sheetId:'sheet-1',newName:'Renamed'}]})
+     const changed=rename.replaced.get('xl/workbook.xml')
+     assert.ok(changed.includes(comment))
+     assert.ok(changed.includes('name="Renamed"'))
+   }
  }
  await assert.rejects(()=>planFromWorkbook(bytes,sheetsSaveRequest('forged-id',[{row:1,column:0,writeValue:true,value:1}])),{statusCode:400})
  await assert.rejects(()=>planFromWorkbook(bytes,{...nativeRequest,targetPath:'/tmp/escape.xlsx'}),{statusCode:400})

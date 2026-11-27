@@ -60,6 +60,32 @@ test(
         )
       ).bytes
     const read = (bytes, name = 'Acceptance') => native.readRange(bytes, name, bounds)
+    await t.test('keeps blank typed values, decoded errors and nonstandard numbers through a save', async () => {
+      const source = await book(xml => xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/,
+        '<sheetData><row r="1"><c r="A1" t="b" s="1"><v> </v></c><c r="B1" t="b"><v>0</v></c>' +
+        '<c r="C1" t="b"><v>true</v></c><c r="D1" t="e"><v>_x0023_REF!</v></c>' +
+        '<c r="E1" t="str"><v></v></c><c r="F1" t="n"><v>0x10</v></c>' +
+        '<c r="G1"><v>1e999</v></c><c r="H1"><v>_x0031_</v></c>' +
+        '<c r="I1"><v>-1.25e2</v></c></row></sheetData>'))
+      const expected = [null, false, true, '#REF!', '', '0x10', '1e999', '1', -125]
+      assert.deepEqual((await read(source)).cells.map(({ value }) => value), expected)
+      const saved = await save(source, { structuralOps: [insert[0]] })
+      assert.deepEqual((await read(saved)).cells.map(({ row, value }) => [row, value]),
+        expected.map(value => [1, value]))
+    })
+
+    await t.test('keeps mixed encoded and implicit addresses through a structural save', async () => {
+      const encoded = await book(xml => xml.replace(/<sheetData>[\s\S]*?<\/sheetData>/,
+        '<sheetData><row r="&#51;"><c r="&#x43;3" s="1"><v>101</v></c><c><v>102</v></c></row>' +
+        '<row><c><v>103</v></c></row></sheetData>'))
+      const cells = async input => (await read(input)).cells
+        .map(({ row, column, value }) => [row, column, value])
+      assert.deepEqual(await cells(encoded), [[2, 2, 101], [2, 3, 102], [3, 0, 103]])
+      const saved = await save(encoded, { structuralOps: [insert[0]] })
+      assert.deepEqual(await cells(saved), [[3, 2, 101], [3, 3, 102], [4, 0, 103]])
+      assert.equal((await read(saved)).cells[0].styleIndex, 1)
+    })
+
     await t.test(
       'moves the source and target of same-sheet links and renames a quoted target',
       async () => {
@@ -83,6 +109,35 @@ test(
         ).hyperlinks
         assert.deepEqual(inserted, [{ row: 2, column: 4, target: '#Acceptance!C3' }])
         assert.deepEqual(single, [{ row: 2, column: 4, target: "#'New Tab'!C3" }])
+      },
+    )
+    await t.test(
+      'edits and shifts only SpreadsheetML hyperlinks',
+      async () => {
+        const namespace = 'xmlns="urn:example:links"'
+        const foreignSection = `<hyperlinks ${namespace}><hyperlink ref="D2" location="Foreign!A1"/></hyperlinks>`
+        const foreignLink = `<hyperlink ${namespace} ref="F2" location="Acceptance!A1"/>`
+        const input = await book((xml) => beforeDrawing(xml, foreignSection +
+          `<hyperlinks>${foreignLink}<hyperlink ref='$D$2:$E$2' location="Acceptance!B2"/></hyperlinks>`))
+        const links = async (bytes) => (await read(bytes)).hyperlinks
+        assert.deepEqual(await links(input), [{ row: 1, column: 3, target: '#Acceptance!B2' }])
+        const edited = await save(input, {
+          hyperlinkEdits: [{ sheetId: 'sheet-1', row: 1, column: 3, target: '#Acceptance!C2' }],
+        })
+        assert.deepEqual(await links(edited), [{ row: 1, column: 3, target: '#Acceptance!C2' }])
+        const moved = await save(edited, { structuralOps: insert })
+        assert.deepEqual(await links(moved), [{ row: 2, column: 4, target: '#Acceptance!D3' }])
+        const cleared = await save(moved, {
+          hyperlinkEdits: [{ sheetId: 'sheet-1', row: 2, column: 4, target: null }],
+        })
+        assert.deepEqual(await links(cleared), [])
+        for (const bytes of [edited, moved, cleared]) {
+          const xml = await (await JSZip.loadAsync(bytes)).file(sheet).async('string')
+          assert.ok(xml.includes(foreignSection))
+          assert.ok(xml.includes(foreignLink))
+        }
+        const editedXml = await (await JSZip.loadAsync(edited)).file(sheet).async('string')
+        assert.ok(editedXml.includes('<hyperlink ref="$D$2:$E$2" location="Acceptance!C2"/>'))
       },
     )
     await t.test(
@@ -137,6 +192,35 @@ test(
       },
     )
     await t.test(
+      'reads and updates only worksheet protection and permission ranges',
+      async () => {
+        const foreign = 'xmlns="urn:example:protection"'
+        const protection = `<sheetProtection ${foreign} sheet="0" insertRows="1"/>`
+        const ranges = `<protectedRanges ${foreign}><protectedRange name="Foreign" sqref="I5"/></protectedRanges>`
+        const child = `<protectedRange ${foreign} name="Other" sqref="H4"/>`
+        const input = await book((xml) => beforeDrawing(xml, protection +
+          "<sheetProtection sheet='1' insertRows='0'/>" + ranges +
+          `<protectedRanges>${child}<protectedRange name="Inputs" sqref="B2:C3"/></protectedRanges>`))
+        const initial = await read(input)
+        assert.equal(initial.sheetProtection.protected, true)
+        assert.equal(initial.sheetProtection.allow.insertRows, true)
+        assert.deepEqual(initial.protectedRanges, [{ name: 'Inputs', sqref: 'B2:C3', hasPassword: false }])
+        const moved = await save(input, { structuralOps: [insert[0]] })
+        assert.deepEqual((await read(moved)).protectedRanges, [{ name: 'Inputs', sqref: 'B3:C4', hasPassword: false }])
+        const edited = await save(moved, {
+          protectedRangeStates: [{ sheetId: 'sheet-1', ranges: [{ name: 'Updated inputs', sqref: 'C3' }] }],
+          sheetProtections: [{ sheetId: 'sheet-1', protected: false }],
+        })
+        const after = await read(edited)
+        assert.equal(after.sheetProtection, null)
+        assert.deepEqual(after.protectedRanges, [{ name: 'Updated inputs', sqref: 'C3', hasPassword: false }])
+        for (const output of [moved, edited]) {
+          const xml = await (await JSZip.loadAsync(output)).file(sheet).async('string')
+          for (const preserved of [protection, ranges, child]) assert.ok(xml.includes(preserved))
+        }
+      },
+    )
+    await t.test(
       'moves the quoted conditional formatting target and formula together',
       async () => {
         const fixture = (q) =>
@@ -155,6 +239,52 @@ test(
           control = await get('"')
         assert.deepEqual(quoted, [[area(2, 3, 3)], ['$C3>10']])
         assert.deepEqual(control, [[area(2, 3, 3)], ['$C3>10']])
+      },
+    )
+    await t.test(
+      'reads and moves only conditional rules in the worksheet namespace',
+      async () => {
+        const foreignBlock = '<conditionalFormatting xmlns="urn:example:cf" sqref="F2"><cfRule type="expression"><formula>A2</formula></cfRule></conditionalFormatting>'
+        const foreignRule = '<cfRule xmlns="urn:example:cf" type="expression"><formula>A2</formula></cfRule>'
+        const foreignFormula = '<formula xmlns="urn:example:cf">A2</formula>'
+        const foreignNestedFormula = '<extra xmlns="urn:example:cf"><formula>Acceptance!A2</formula></extra>'
+        const fixture = await book(xml => beforeDrawing(xml,
+          foreignBlock + '<conditionalFormatting xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main" sqref="C2:C3">' + foreignRule +
+          '<cfRule type="expression" priority="1">' + foreignFormula + foreignNestedFormula +
+          '<s:formula><![CDATA[Acceptance!$B2>10]]></s:formula></cfRule></conditionalFormatting>'))
+        const rules = async (bytes, name) => (await read(bytes, name)).conditionalRules.map(({ ranges, formulas }) => [ranges, formulas])
+        assert.deepEqual(await rules(fixture), [[[area(1, 2, 2)], ['Acceptance!$B2>10']]])
+
+        const moved = await save(fixture, { structuralOps: insert })
+        assert.deepEqual(await rules(moved), [[[area(2, 3, 3)], ['Acceptance!$C3>10']]])
+        const renamed = await save(moved, { sheetOps: rename })
+        assert.deepEqual(await rules(renamed, 'New Tab'), [[[area(2, 3, 3)], ["'New Tab'!$C3>10"]]])
+        for (const bytes of [moved, renamed]) {
+          const xml = await (await JSZip.loadAsync(bytes)).file(sheet).async('string')
+          for (const preserved of [foreignBlock, foreignRule, foreignFormula, foreignNestedFormula]) {
+            assert.ok(xml.includes(preserved), preserved)
+          }
+        }
+      },
+    )
+    await t.test(
+      'moves and renames a cell formula while preserving embedded formulas',
+      async () => {
+        const extension = '<extLst><ext uri="urn:example:cell"><f xmlns="urn:example:cell">Acceptance!A2</f></ext></extLst>'
+        const namesake = '<other xmlns="urn:example:cell"><f>Acceptance!A2</f></other>'
+        const fixture = await book((xml) => beforeDrawing(
+          xml.replace('<c r="E2" s="3"><v>1234.567</v></c>',
+            '<c r="E2" s="3"><s:f xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><![CDATA[Acceptance!A2+A2]]></s:f><v>25</v>' +
+            extension + '</c>'), namesake,
+        ))
+        const cellFormula = async (bytes, tab, row, column) =>
+          (await read(bytes, tab)).cells.find((cell) => cell.row === row && cell.column === column)?.formula
+        assert.equal(await cellFormula(fixture, 'Acceptance', 1, 4), '=Acceptance!A2+A2')
+        const moved = await save(fixture, { structuralOps: insert, sheetOps: rename })
+        assert.equal(await cellFormula(moved, 'New Tab', 2, 5), "='New Tab'!B3+B3")
+        const xml = await (await JSZip.loadAsync(moved)).file(sheet).async('string')
+        assert.ok(xml.includes(extension))
+        assert.ok(xml.includes(namesake))
       },
     )
     await t.test(

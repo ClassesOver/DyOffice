@@ -6,6 +6,7 @@
  * page-layout view), everything lands in the saved file.
  */
 import { isMetafileMime, metafileToDataUrl } from '@genoffice/docx-engine/metafile'
+import { iconMap } from '@univerjs/preset-sheets-conditional-formatting'
 import type { PrinterInfo, WorkbookExportPdfRequest } from '../shared/desktop-api'
 import type { FWorksheet } from '@univerjs/sheets/facade'
 import type { WorkbookOperation } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
@@ -13,11 +14,13 @@ import type { ApplyOutcome } from '@genoffice/xlsx-gateway/domain/workbook.types
 
 import { columnLabel } from '@genoffice/xlsx-gateway/domain/cell-address'
 import {
+  hyperlinkEditAt,
   isSheetRemoved,
   journalSize,
   recordPageSetup,
   recordThemeColors,
   recordThemeFonts,
+  type HeaderFooterParts,
   type PageSetupJournalState,
 } from './edit-journal'
 import type { HeaderFooterResult } from './HeaderFooterDialog'
@@ -27,7 +30,7 @@ import { COLOR_SCHEMES, FONT_SCHEMES, rethemeStyles, THEME_PRESETS } from './the
 import { settleFormulas } from './formula-settle'
 import { startFullLoad } from './full-load'
 import { fitsFullLoad, workbookCellCounts } from './load-budget'
-import { ensureSheetFileState, loadVisibleRange } from './univer-sync'
+import { ensureSheetFileState, loadVisibleRange, projectVisualEdits, readChartRangeVector } from './univer-sync'
 import {
   layoutSheetPrint,
   PrintError,
@@ -38,11 +41,13 @@ import {
 } from './print-html'
 import {
   clampTitleRows,
+  decodeHeaderFooter,
   resolveEffectivePageSetup,
   type EffectivePageSetup,
   type HeaderFooterPictureSlot,
 } from './print-settings'
-import { settleVisualNodes, snapshotPrintVisuals } from './print-visuals'
+import { settleVisualNodes, snapshotPrintVisuals, snapshotSheetVisuals } from './print-visuals'
+import { sheetIsRightToLeft } from './sheet-rtl-view'
 import { installedVisualFrames, type InstalledVisualFrame } from './WorkbookVisuals'
 import type { LazyWorkbookState, UniverRuntime } from './univer-state'
 
@@ -89,6 +94,14 @@ const PAGE_SETUP_OP_FIELDS = new Set([
   'printArea',
 ])
 
+function selectedPrintAreas(worksheet: FWorksheet | null | undefined): string[] {
+  return (worksheet?.getSelection()?.getActiveRangeList() ?? []).map((range) => {
+    const row = range.getRow()
+    const column = range.getColumn()
+    return `${columnLabel(column)}${row + 1}:${columnLabel(column + range.getWidth() - 1)}${row + range.getHeight()}`
+  })
+}
+
 export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): void {
   const runtime = ctx.univerRef.current
   const state = ctx.lazyWorkbookRef.current
@@ -133,7 +146,6 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
   const separator = rest.indexOf(':')
   const key = separator === -1 ? rest : rest.slice(0, separator)
   const value = separator === -1 ? '' : rest.slice(separator + 1)
-  const prior = state.editJournal.pageSetup.get(sheetId) ?? {}
   switch (key) {
     case 'orientation':
       if (value !== 'portrait' && value !== 'landscape') return
@@ -170,14 +182,10 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
     case 'fit-width':
     case 'fit-height': {
       const pages = Number(value)
-      if (!Number.isInteger(pages) || pages < 0 || pages > 1_000) return
-      // Excel treats the untouched other axis as Automatic (0) once
-      // fit-to-page engages.
-      const fitToWidth = key === 'fit-width' ? pages : (prior.fitToWidth ?? 0)
-      const fitToHeight = key === 'fit-height' ? pages : (prior.fitToHeight ?? 0)
+      if (!Number.isInteger(pages) || pages < 0 || pages > 32_767) return
       const fitValue = pages === 0 ? t('appFitAutomatic') : t('appFitPages', { count: pages })
       record(
-        { fitToWidth, fitToHeight, fitToPage: fitToWidth > 0 || fitToHeight > 0 },
+        key === 'fit-width' ? { fitToWidth: pages } : { fitToHeight: pages },
         key === 'fit-width'
           ? t('appFitWidthNote', { value: fitValue })
           : t('appFitHeightNote', { value: fitValue }),
@@ -187,7 +195,8 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
     case 'fit': {
       const [width, height] = value.split(',').map(Number)
       if (!Number.isInteger(width) || !Number.isInteger(height)) return
-      if (width === undefined || height === undefined || width < 0 || height < 0) return
+      if (width === undefined || height === undefined ||
+          width < 0 || height < 0 || width > 32_767 || height > 32_767) return
       record(
         { fitToWidth: width, fitToHeight: height, fitToPage: width > 0 || height > 0 },
         t('appFitWidthNote', {
@@ -213,16 +222,11 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
         record({ printArea: null }, t('appPrintAreaCleared'))
         return
       }
-      const range = runtime.univerAPI.getActiveWorkbook()?.getActiveRange()
-      if (!range) {
+      const area = selectedPrintAreas(worksheet).join(',')
+      if (!area) {
         ctx.setMessage(t('appSelectPrintRange'))
         return
       }
-      const startColumn = range.getColumn()
-      const startRow = range.getRow()
-      const area =
-        `${columnLabel(startColumn)}${startRow + 1}` +
-        `:${columnLabel(startColumn + range.getWidth() - 1)}${startRow + range.getHeight()}`
       record({ printArea: area }, t('appPrintAreaNote', { area }))
       return
     }
@@ -351,25 +355,62 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
   }
 }
 
-/// Insert → Header & Footer OK: journals the printed header/footer of the
-/// active sheet; the save writes the worksheet's <headerFooter> element.
-export function handleApplyHeaderFooter(
-  ctx: PageLayoutContext,
-  result: HeaderFooterResult,
-): string | null {
+export interface HeaderFooterEditor extends HeaderFooterResult {
+  apply(result: HeaderFooterResult): string | null
+}
+
+function sameHeaderFooter(a: HeaderFooterParts | null, b: HeaderFooterParts | null): boolean {
+  return (
+    (a?.left ?? '') === (b?.left ?? '') &&
+    (a?.center ?? '') === (b?.center ?? '') &&
+    (a?.right ?? '') === (b?.right ?? '')
+  )
+}
+
+export async function openHeaderFooterEditor(ctx: PageLayoutContext): Promise<HeaderFooterEditor | null> {
   const state = ctx.lazyWorkbookRef.current
-  if (!state) return t('appHfNeedsFile')
-  const sheetId = ctx.univerRef.current?.univerAPI
+  if (!state) {
+    ctx.setMessage(t('appHfNeedsFile'))
+    return null
+  }
+  const activeSheetId = () => ctx.univerRef.current?.univerAPI
     .getActiveWorkbook()
     ?.getActiveSheet()
     ?.getSheetId()
-  if (!sheetId || isSheetRemoved(state.editJournal, sheetId)) {
-    return t('appActiveSheetUnavailable')
+  const sheetId = activeSheetId()
+  if (!sheetId || isSheetRemoved(state.editJournal, sheetId) ||
+      !(await ensureSheetFileState(state, sheetId, ctx.lazyWorkbookRef))) {
+    ctx.setMessage(t('appActiveSheetUnavailable'))
+    return null
   }
-  recordPageSetup(state.editJournal, sheetId, { header: result.header, footer: result.footer })
-  ctx.setPendingEdits(journalSize(state.editJournal))
-  ctx.setMessage(t('appHfUpdated'))
-  return null
+  const isCurrent = (): boolean =>
+    ctx.lazyWorkbookRef.current === state && activeSheetId() === sheetId &&
+    !isSheetRemoved(state.editJournal, sheetId)
+  if (!isCurrent()) return null
+
+  const saved = state.sheetFilePageSetups.get(sheetId)
+  const pending = state.editJournal.pageSetup.get(sheetId)
+  const header = pending?.header === undefined
+    ? decodeHeaderFooter(saved?.oddHeader ?? '', true)
+    : pending.header
+  const footer = pending?.footer === undefined
+    ? decodeHeaderFooter(saved?.oddFooter ?? '', true)
+    : pending.footer
+  return {
+    header,
+    footer,
+    apply(result) {
+      if (!isCurrent()) return t('appActiveSheetUnavailable')
+      const patch: PageSetupJournalState = {}
+      if (!sameHeaderFooter(header, result.header)) patch.header = result.header
+      if (!sameHeaderFooter(footer, result.footer)) patch.footer = result.footer
+      if (Object.keys(patch).length === 0) return null
+      recordPageSetup(state.editJournal, sheetId, patch)
+      ctx.setPendingEdits(journalSize(state.editJournal))
+      ctx.setMessage(t('appHfUpdated'))
+      return null
+    },
+  }
 }
 
 /// One sheet laid out as print pages with its Page Layout settings, the
@@ -380,10 +421,9 @@ async function sheetPrintDocument(
   state: LazyWorkbookState | null,
   worksheet: FWorksheet,
   overrides: PageSetupJournalState,
-  selection: string | null,
+  selectionAreas: readonly string[] | null,
   now: Date,
-  /// Only the active sheet has installed float DOM to snapshot.
-  withVisuals: boolean,
+  useLiveVisuals: boolean,
 ): Promise<SheetPrintDocument> {
   const sheetId = worksheet.getSheetId()
   // A sheet the viewport never visited has no captured file state, so its
@@ -404,18 +444,55 @@ async function sheetPrintDocument(
     state?.editJournal.structuralOps.get(sheetId) ?? [],
   )
   const baseName = (state?.file.name ?? 'Book1').replace(/\.[^.]+$/, '')
-  const pictures = state
+  const chartSheet = fileSheet?.chartSheet === true
+  const printGraphics = chartSheet || !setup.draft
+  const pictures = state && printGraphics
     ? await loadHeaderFooterPictures(state.file.sessionId, setup.headerFooterPictures)
     : new Map<string, HeaderFooterPictureImage>()
-  const frames = withVisuals ? await settledVisualFrames(ctx, state, sheetId) : []
+  const runtime = ctx.univerRef.current
+  const visuals = !printGraphics
+    ? undefined
+    : (!useLiveVisuals || chartSheet) && state && runtime
+      ? await snapshotSheetVisuals(
+          document,
+          worksheet,
+          {
+            sessionId: state.file.sessionId,
+            visuals: [
+              ...projectVisualEdits(state.file.visuals, state.editJournal.visualEdits),
+              ...state.editJournal.visualAdds,
+            ].filter((visual) => visual.sheetId === sheetId),
+          },
+          {
+            edits: state.editJournal.chartEdits,
+            onEdit: () => undefined,
+            readVector: (chartPath, range) => readChartRangeVector(state, runtime, chartPath, range),
+          },
+        )
+      : snapshotPrintVisuals(document, await settledVisualFrames(ctx, state, sheetId))
+  const savedLinks = state?.hyperlinkTargets.get(sheetId)
   return layoutSheetPrint(
     worksheet as unknown as PrintWorksheet,
     setup,
     baseName,
     worksheet.getSheetName(),
     pictures,
-    snapshotPrintVisuals(document, frames),
-    { breaks: state ? effectivePageBreaks(state, sheetId) : null, selection, now },
+    visuals,
+    {
+      chartSheet,
+      conditionalIcons: iconMap,
+      cellHyperlink: state && (savedLinks?.size || state.editJournal.hyperlinks.get(sheetId)?.size)
+        ? (row, column) => {
+            const pending = hyperlinkEditAt(state.editJournal, sheetId, row, column)
+            return pending === undefined ? savedLinks?.get(`${row}:${column}`) : pending
+          }
+        : undefined,
+      rightToLeft: journal.rightToLeft ?? fileSheet?.rightToLeft ?? sheetIsRightToLeft(worksheet),
+      breaks: state ? effectivePageBreaks(state, sheetId) : null,
+      selectionAreas,
+      now,
+      headerFooterTheme: { colors: state?.file.themeColors, fonts: state?.file.themeFonts },
+    },
   )
 }
 
@@ -437,9 +514,11 @@ export interface PrintOutputSettings {
 
 /// What the Print dialog needs from the App; built fresh per open.
 export interface PrintPreviewHost {
+  readonly browserPrintDialog?: boolean
   readonly setup: EffectivePageSetup
   readonly marginsPreset: 'normal' | 'wide' | 'narrow' | 'custom'
   readonly hasSelection: boolean
+  readonly chartSheet: boolean
   readonly sheetCount: number
   buildJob(range: PrintRange, overrides: PageSetupJournalState): Promise<PrintJob>
   listPrinters(): Promise<PrinterInfo[]>
@@ -467,6 +546,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
   }
   const sheetId = worksheet.getSheetId()
   const journal = state?.editJournal.pageSetup.get(sheetId) ?? {}
+  const browserPrintDialog = window.desktopApi.browserPrintDialog === true
   const fileSetup = state?.sheetFilePageSetups.get(sheetId) ?? null
   const fileSheet = state?.file.sheets.find((sheet) => sheet.id === sheetId)
   const setup = resolveEffectivePageSetup(
@@ -478,19 +558,8 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     },
     state?.editJournal.structuralOps.get(sheetId) ?? [],
   )
-  const activeRange = workbook.getActiveRange()
-  const hasSelection =
-    activeRange !== null && (activeRange.getWidth() > 1 || activeRange.getHeight() > 1)
-  const selectionA1 = (): string | null => {
-    const range = workbook.getActiveRange()
-    if (!range) return null
-    const startColumn = range.getColumn()
-    const startRow = range.getRow()
-    return (
-      `${columnLabel(startColumn)}${startRow + 1}` +
-      `:${columnLabel(startColumn + range.getWidth() - 1)}${startRow + range.getHeight()}`
-    )
-  }
+  const chartSheet = fileSheet?.chartSheet === true
+  const selectionAreas = chartSheet ? [] : selectedPrintAreas(worksheet)
   const printableSheets = () =>
     workbook
       .getSheets()
@@ -504,10 +573,15 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     pages === null ? undefined : (page: number) => page >= pages.from && page <= pages.to
   return {
     setup,
+    browserPrintDialog,
     marginsPreset: journal.margins ?? (fileSetup?.margins === undefined ? 'normal' : 'custom'),
-    hasSelection,
+    hasSelection: selectionAreas.length > 0,
+    chartSheet,
     sheetCount: printableSheets().length,
     async buildJob(range, overrides) {
+      if (range === 'selection' && selectionAreas.length === 0) {
+        throw new PrintError(t('appSelectPrintRange'))
+      }
       const now = new Date()
       const sheets = range === 'workbook' ? printableSheets() : [worksheet]
       const documents: SheetPrintDocument[] = []
@@ -519,7 +593,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
             state,
             sheet,
             isActive ? overrides : {},
-            range === 'selection' ? selectionA1() : null,
+            range === 'selection' ? selectionAreas : null,
             now,
             isActive,
           ),
@@ -538,7 +612,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
         copies: output.copies,
         collate: output.collate,
       })
-      if (result.ok) return t('appPrintSent')
+      if (result.ok) return browserPrintDialog ? t('dlgPrintSystemDialog') : t('appPrintSent')
       return result.error === undefined ? t('appPrintCanceled') : t('appPrintFailed')
     },
     async exportPdf(job, pages) {
@@ -613,6 +687,10 @@ export async function openPrintPreviewHost(
     if (!loaded) return null
   }
   await settleFormulas(ctx.univerRef.current)
+  const activeId = ctx.univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getSheetId()
+  if (state && activeId && state.file.sheets.some((sheet) => sheet.id === activeId && sheet.chartSheet)) {
+    await ensureSheetFileState(state, activeId, ctx.lazyWorkbookRef)
+  }
   if (ctx.lazyWorkbookRef.current !== state) return null
   return createPrintPreviewHost(ctx)
 }
@@ -649,10 +727,7 @@ async function activeSheetPrintPayload(
 }
 
 /// Every visible, non-removed sheet laid out in order: the headless export's
-/// PDF stands for the whole file, so a chart or table on any other sheet must
-/// print too. Each sheet is made active before its layout — floating visuals
-/// install for the active sheet only — and the originally active sheet is
-/// restored afterwards.
+/// PDF stands for the whole file, including drawings on inactive sheets.
 async function workbookPrintPayload(
   ctx: PageLayoutContext,
   messages: { readonly notLoaded: string; readonly preparing: string; readonly failed: string },
@@ -686,11 +761,9 @@ async function workbookPrintPayload(
   const now = new Date()
   const documents: SheetPrintDocument[] = []
   for (const sheet of sheets) {
-    if (sheet.getSheetId() !== activeId) sheet.activate()
     if (ctx.lazyWorkbookRef.current !== state) return null
-    documents.push(await sheetPrintDocument(ctx, state, sheet, {}, null, now, true))
+    documents.push(await sheetPrintDocument(ctx, state, sheet, {}, null, now, sheet.getSheetId() === activeId))
   }
-  if (activeId !== undefined) current.getSheetBySheetId(activeId)?.activate()
   const baseName = (state?.file.name ?? 'Book1').replace(/\.[^.]+$/, '')
   return printRequest(documents, `${baseName}.pdf`)
 }
@@ -711,6 +784,11 @@ export async function handleExportPdf(ctx: PageLayoutContext, outPath?: string):
       ? await workbookPrintPayload(ctx, messages)
       : await activeSheetPrintPayload(ctx, messages)
     if (!payload) return false
+    if (!outPath && window.desktopApi.browserPrintDialog) {
+      const result = await window.desktopApi.printWorkbook(payload)
+      ctx.setMessage(result.ok ? t('dlgPrintSystemDialog') : t('appPdfExportFailed'))
+      return false // The browser does not report whether a file was saved.
+    }
     const result = await window.desktopApi.exportPdf({
       ...payload,
       ...(outPath ? { outPath } : {}),

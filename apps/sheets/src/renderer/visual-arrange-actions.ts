@@ -40,6 +40,7 @@ import {
 } from './visual-arrange'
 import {
   anchorForBox,
+  anchorSizeInEmu,
   cellOrigin,
   frameBox,
   sheetMetrics,
@@ -259,7 +260,7 @@ function reorder(
   )
   const order = part.map((candidate) => candidate.id)
   const after = reorderZ(order, visual.id, op)
-  const changes = changedPositions(order, after)
+  const changes = changedPositions(order, after, id => journal.visualEdits.get(id)?.zIndex)
   if (changes.size === 0) return
   const snapshots = new Map(
     [...changes.keys()].map((id) => [id, captureVisualJournal(state, id, undefined)] as const),
@@ -389,7 +390,9 @@ function arrangeSelection(
   )
   for (const move of moves) {
     const box = boxes.find((candidate) => candidate.id === move.id)!
-    if (!journalAnchor(state, move.id, anchorForBox({ ...box, x: move.x, y: move.y }, metrics))) {
+    const absolute = frames.find(frame => frame.visual.id === move.id)?.visual.anchor.absolute
+    const anchor = anchorForBox({ ...box, x: move.x, y: move.y }, metrics, absolute)
+    if (!journalAnchor(state, move.id, anchor)) {
       for (const [id, snapshot] of snapshots) restoreVisualJournal(state, id, undefined, snapshot)
       ctx.setMessage(t('appVisualNoMove'))
       return
@@ -437,9 +440,11 @@ export function frameChangeEdit(
       height: aabb.height,
     },
     metrics,
+    visual.anchor.absolute,
   )
   return {
     anchor,
+    anchorSize: anchorSizeInEmu(anchor, metrics),
     rotation,
     frameSize: {
       width: Math.max(1, Math.round(next.width * EMU_PER_PIXEL)),

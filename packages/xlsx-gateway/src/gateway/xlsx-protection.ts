@@ -2,6 +2,10 @@
 /// and password hash. Also: workbook structure protection
 /// (`<workbookProtection>`) and allow-edit ranges (`<protectedRanges>`).
 import type { SheetPasswordHash } from './xlsx-protection-hash.ts'
+import { readRootOpening } from './xlsx-namespace.ts'
+import { omitWorksheetTagAttributes, updateWorksheetTagAttribute, worksheetChildren } from './xlsx-structure.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, withNamespaces, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class SheetProtectionError extends Error {}
 
@@ -69,29 +73,34 @@ export interface ParsedSheetProtection {
   readonly password: SheetPasswordHash | null
 }
 
-const ELEMENT_PATTERN = /<sheetProtection\b[^>]*\/>|<sheetProtection\b[^>]*>\s*<\/sheetProtection>/
-
-function readAttribute(element: string, name: string): string | undefined {
-  return new RegExp(`\\s${name}="([^"]*)"`).exec(element)?.[1]
-}
-
 function isTrue(value: string | undefined): boolean {
   return value === '1' || value === 'true'
 }
 
-function unescapeAttr(value: string): string {
-  return value
-    .replaceAll('&quot;', '"')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&amp;', '&')
+export function parseSheetProtectionElement(element: string): ParsedSheetProtection {
+  const [node] = childElements(element)
+  const attributes = node && withNamespaces(node, new Map()).attributes
+  return parseSheetProtectionAttributes((name) => attributes?.get(name))
 }
 
-export function parseSheetProtectionElement(element: string): ParsedSheetProtection {
-  return parseSheetProtectionAttributes(name => {
-    const value = readAttribute(element, name)
-    return value === undefined ? undefined : unescapeAttr(value)
-  })
+function protectionChildren(xml: string, rootName = readRootOpening(xml)?.name ?? ''): ScopedElement[] {
+  if (rootName.slice(prefixOf(rootName).length) === 'worksheet') return worksheetChildren(xml)
+  // The gateway also accepts worksheet fragments without a root wrapper.
+  return childElements(xml).map((child) => withNamespaces(child, new Map()))
+    .filter((child) => child.namespace === '')
+}
+
+function insertProtectionPart(xml: string, children: readonly ScopedElement[], element: string, afterProtection = false): string {
+  const data = children.find((child) => child.local === 'sheetData')
+  if (!data) throw new SheetProtectionError('Worksheet has no sheetData element.')
+  const anchor = (afterProtection ? children.find((child) => child.local === 'sheetProtection') : undefined)
+    ?? children.find((child) => child.local === 'sheetCalcPr') ?? data
+  const at = anchor.start + anchor.xml.length
+  return xml.slice(0, at) + element + xml.slice(at)
+}
+
+function hasPassword(element: ScopedElement): boolean {
+  return element.attributes.has('password') || element.attributes.has('hashValue')
 }
 
 export function parseSheetProtectionAttributes(
@@ -121,8 +130,8 @@ export function parseSheetProtectionAttributes(
 
 /// Worksheet-level parse: null when the sheet has no `<sheetProtection>`.
 export function readSheetProtection(worksheetXml: string): ParsedSheetProtection | null {
-  const existing = ELEMENT_PATTERN.exec(worksheetXml)
-  return existing ? parseSheetProtectionElement(existing[0]) : null
+  const existing = protectionChildren(worksheetXml).find((child) => child.local === 'sheetProtection')
+  return existing ? parseSheetProtectionAttributes((name) => existing.attributes.get(name)) : null
 }
 
 function escapeAttrValue(value: string): string {
@@ -182,15 +191,17 @@ export function applySheetProtection(
   state: boolean | SheetProtectionWrite,
 ): string {
   const write: SheetProtectionWrite = typeof state === 'boolean' ? { protected: state } : state
-  const existing = ELEMENT_PATTERN.exec(worksheetXml)
+  const rootName = readRootOpening(worksheetXml)?.name ?? ''
+  const children = protectionChildren(worksheetXml, rootName)
+  const existing = children.find((child) => child.local === 'sheetProtection')
   if (!write.protected) {
     if (!existing) return worksheetXml
-    if (!write.verified && /\b(?:password|hashValue)="/.test(existing[0])) {
+    if (!write.verified && hasPassword(existing)) {
       throw new SheetProtectionError(
         'This sheet is protected with a password — removing its protection is not ' + 'supported.',
       )
     }
-    return worksheetXml.replace(existing[0], '')
+    return applyPatches(worksheetXml, [patchElement(existing, '')])
   }
   const element =
     write.allow === undefined && write.password === undefined
@@ -200,24 +211,24 @@ export function applySheetProtection(
           write.password ?? null,
         )
   if (existing) {
-    if (element) return worksheetXml.replace(existing[0], element)
-    if (/\bsheet="(?:1|true)"/.test(existing[0])) return worksheetXml
-    const updated = existing[0].includes(' sheet="')
-      ? existing[0].replace(/ sheet="[^"]*"/, ' sheet="1"')
-      : existing[0].replace(/<sheetProtection\b/, '<sheetProtection sheet="1"')
-    return worksheetXml.replace(existing[0], updated)
+    if (element) {
+      const managed = ['sheet', 'password', 'algorithmName', 'hashValue', 'saltValue', 'spinCount',
+        ...SHEET_PROTECTION_PERMISSIONS]
+      const kept = omitWorksheetTagAttributes(existing.opening, managed)
+      const attrs = element.slice('<sheetProtection'.length, -2)
+      const opening = kept.replace(/(\s*\/?>)$/, (_end, suffix) => attrs + suffix)
+      const replacement = opening + existing.xml.slice(existing.opening.length)
+      return applyPatches(worksheetXml, [patchElement(existing, replacement)])
+    }
+    if (isTrue(existing.attributes.get('sheet'))) return worksheetXml
+    const updated = updateWorksheetTagAttribute(existing.opening, 'sheet', '1') +
+      existing.xml.slice(existing.opening.length)
+    return applyPatches(worksheetXml, [patchElement(existing, updated)])
   }
-  // Schema order: the element follows sheetData (and sheetCalcPr when present).
-  const anchor =
-    /<sheetCalcPr\b[^>]*\/?>/.exec(worksheetXml) ??
-    /<\/sheetData>|<sheetData\b[^>]*\/>/.exec(worksheetXml)
-  if (!anchor) throw new SheetProtectionError('Worksheet has no sheetData element.')
-  const at = anchor.index + anchor[0].length
-  return (
-    worksheetXml.slice(0, at) +
-    (element ?? '<sheetProtection sheet="1" objects="1" scenarios="1"/>') +
-    worksheetXml.slice(at)
-  )
+  const qualifier = prefixOf(rootName)
+  const replacement = (element ?? '<sheetProtection sheet="1" objects="1" scenarios="1"/>')
+    .replace('<sheetProtection', `<${qualifier}sheetProtection`)
+  return insertProtectionPart(worksheetXml, children, replacement)
 }
 
 const WORKBOOK_PROTECTION_PATTERN =
@@ -273,8 +284,11 @@ export interface ProtectedRangeState {
   readonly password?: SheetPasswordHash | null | undefined
 }
 
-const PROTECTED_RANGES_PATTERN =
-  /<protectedRanges\b[^>]*\/>|<protectedRanges\b[^>]*>[\s\S]*?<\/protectedRanges>/
+export function protectedRangeHasCredentials(range: ScopedElement): boolean {
+  return hasPassword(range) ||
+    [...range.attributes.keys()].some((name) => name.slice(prefixOf(name).length) === 'securityDescriptor') ||
+    scopedChildren(range).some((child) => child.local === 'securityDescriptor')
+}
 
 function escapeAttr(value: string): string {
   return value
@@ -291,20 +305,19 @@ export function applyProtectedRanges(
   worksheetXml: string,
   ranges: readonly ProtectedRangeState[],
 ): string {
-  const existing = PROTECTED_RANGES_PATTERN.exec(worksheetXml)
-  // securityDescriptor carries per-user permissions (attribute or child
-  // element form); rewriting name+sqref only would silently fail open.
-  if (existing && /\b(?:password|hashValue)="|securityDescriptor/.test(existing[0])) {
+  const rootName = readRootOpening(worksheetXml)?.name ?? ''
+  const children = protectionChildren(worksheetXml, rootName)
+  const existing = children.find((child) => child.local === 'protectedRanges')
+  const stored = existing
+    ? scopedChildren(existing).filter((child) => isElement(child, 'protectedRange', existing.namespace))
+    : []
+  if (stored.some(protectedRangeHasCredentials)) {
     throw new SheetProtectionError(
       'This sheet has password- or permission-protected edit ranges — editing them is not ' +
         'supported.',
     )
   }
-  const stripped = existing
-    ? worksheetXml.slice(0, existing.index) +
-      worksheetXml.slice(existing.index + existing[0].length)
-    : worksheetXml
-  if (ranges.length === 0) return stripped
+  const qualifier = prefixOf(existing?.name ?? rootName)
   const body = ranges
     .map((range) => {
       const passwordAttrs = range.password
@@ -312,17 +325,18 @@ export function applyProtectedRanges(
           ? ` password="${range.password.legacy}"`
           : ` algorithmName="${escapeAttr(range.password.algorithmName)}" hashValue="${escapeAttr(range.password.hashValue)}" saltValue="${escapeAttr(range.password.saltValue)}" spinCount="${range.password.spinCount}"`
         : ''
-      return `<protectedRange sqref="${escapeAttr(range.sqref)}" name="${escapeAttr(range.name)}"${passwordAttrs}/>`
+      return `<${qualifier}protectedRange sqref="${escapeAttr(range.sqref)}" name="${escapeAttr(range.name)}"${passwordAttrs}/>`
     })
     .join('')
-  const element = `<protectedRanges>${body}</protectedRanges>`
-  // Schema order: protectedRanges follows sheetProtection (or sheetCalcPr/
-  // sheetData when absent) and precedes scenarios/autoFilter.
-  const anchor =
-    /<sheetProtection\b[^>]*\/?>/.exec(stripped) ??
-    /<sheetCalcPr\b[^>]*\/?>/.exec(stripped) ??
-    /<\/sheetData>|<sheetData\b[^>]*\/>/.exec(stripped)
-  if (!anchor) throw new SheetProtectionError('Worksheet has no sheetData element.')
-  const at = anchor.index + anchor[0].length
-  return stripped.slice(0, at) + element + stripped.slice(at)
+  if (!existing) {
+    return body === '' ? worksheetXml : insertProtectionPart(
+      worksheetXml, children, `<${qualifier}protectedRanges>${body}</${qualifier}protectedRanges>`, true,
+    )
+  }
+  let retained = existing.inner
+  for (const range of stored.reverse()) {
+    retained = retained.slice(0, range.start) + retained.slice(range.start + range.xml.length)
+  }
+  const replacement = (body + retained).trim() ? withBody(existing, body + retained) : ''
+  return applyPatches(worksheetXml, [patchElement(existing, replacement)])
 }

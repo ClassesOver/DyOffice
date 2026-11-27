@@ -3,6 +3,7 @@ import {
   SHEET_PROTECTION_PERMISSIONS,
   type SheetProtectionPermission,
 } from '../gateway/xlsx-protection.ts'
+import { WORKBOOK_CHART_PATH } from '../shared/workbook-chart-path.ts'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import {
   normalizePivotPageFields,
@@ -298,7 +299,7 @@ const editChartSchema = z.object({
   op: z.literal('edit_chart'),
   chartPath: z
     .string()
-    .regex(/^(xl\/charts\/[A-Za-z0-9._-]+\.xml|(added|demo)-chart-[A-Za-z0-9._-]+)$/),
+    .regex(new RegExp(WORKBOOK_CHART_PATH.source + '|^(?:added|demo)-chart-[A-Za-z0-9._-]+$', 'u')),
   title: z.string().max(255).optional(),
   chartType: z.enum(['column', 'bar', 'line', 'area', 'pie', 'doughnut']).optional(),
   /** series index ("0"-based, as string) → #RRGGBB */
@@ -859,14 +860,22 @@ const setPageSetupSchema = z.object({
   /** print scale percent */
   scale: z.number().int().min(10).max(400).optional(),
   /** pages wide (0 = automatic) */
-  fitToWidth: z.number().int().min(0).max(1000).optional(),
+  fitToWidth: z.number().int().min(0).max(32_767).optional(),
   /** pages tall (0 = automatic) */
-  fitToHeight: z.number().int().min(0).max(1000).optional(),
+  fitToHeight: z.number().int().min(0).max(32_767).optional(),
   margins: z.enum(['normal', 'wide', 'narrow']).optional(),
   printGridlines: z.boolean().optional(),
   printHeadings: z.boolean().optional(),
-  /** A1 range to print; null clears the print area */
-  printArea: cellRangeSchema.nullable().optional(),
+  /** Comma-separated A1 ranges to print; null clears the print area */
+  printArea: z
+    .string()
+    .max(255)
+    .refine(
+      (areas) => areas.split(',').every((area) => cellRangeSchema.safeParse(area).success),
+      'Print area must contain comma-separated cell ranges inside the worksheet grid',
+    )
+    .nullable()
+    .optional(),
   /** title rows ("1:1") and/or columns ("A:A") repeated on every printed page; null clears */
   printTitles: z
     .string()

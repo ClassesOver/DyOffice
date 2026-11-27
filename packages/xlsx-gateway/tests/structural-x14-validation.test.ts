@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { readWorksheetValidations } from '../src/gateway/xlsx-dv'
+import { applyDvRules, readWorksheetValidations } from '../src/gateway/xlsx-dv'
 import { renameSheetReferencesInWorksheet } from '../src/gateway/xlsx-sheets'
 import { applyStructuralOps, shiftCrossSheetFormulas } from '../src/gateway/xlsx-structure'
+import { rewriteTableReferencesInPart } from '../src/gateway/xlsx-table-references'
 
 const DV_URI = '{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}'
 const DV_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
@@ -117,5 +118,81 @@ describe('structural replay of x14 data validations', () => {
       { sqref: 'E3', formulas: ["'New Tab'!A3"] },
     ])
     expect(renamed).toContain(unrelated)
+  })
+
+  it('preserves foreign children when replacing an x14 validation snapshot', () => {
+    const foreign = '<dv:dataValidation xmlns:dv="urn:other" name="keep"/>'
+    const xml = worksheet(
+      `<dv:dataValidations count="1">${foreign}${validation('A1', 'A1')}</dv:dataValidations>`,
+    )
+    const saved = applyDvRules(xml, [])
+    expect(readWorksheetValidations(saved)).toEqual([])
+    expect(saved).toContain(foreign)
+    expect(saved).toContain('count="0"')
+  })
+})
+
+describe('legacy worksheet data validation', () => {
+  const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  const foreignFormula = '<formula1 xmlns="urn:other">Data!A2</formula1>'
+  const foreignRule =
+    '<dataValidation xmlns="urn:other" sqref="A1"><formula1>Data!A2</formula1></dataValidation>'
+  const foreignSection =
+    '<dataValidations xmlns="urn:other" count="1">' + foreignRule + '</dataValidations>'
+  const sheet =
+    `<worksheet xmlns="${ns}" xmlns:s="${ns}"><sheetData/>` +
+    foreignSection +
+    '<s:dataValidations count="2">' +
+    foreignRule +
+    '<s:dataValidation type="custom" sqref="A1"><s:formula1>A1</s:formula1></s:dataValidation>' +
+    '<s:dataValidation type="custom" sqref="C3">' +
+    foreignFormula +
+    '<s:formula1><![CDATA[Data!A2+Other!A2+A2]]></s:formula1></s:dataValidation>' +
+    '</s:dataValidations></worksheet>'
+
+  it('shifts and renames real ranges and formulas while preserving foreign nodes', () => {
+    const shifted = applyStructuralOps(sheet, [{ kind: 'remove-rows', index: 0, count: 1 }], 'Data')
+    const renamed = renameSheetReferencesInWorksheet(shifted, 'Data', 'New Tab')
+    expect(readWorksheetValidations(renamed)).toMatchObject([
+      { sqref: 'C2', formulas: ["'New Tab'!A1+Other!A2+A1"] },
+    ])
+    expect(renamed).toContain('<s:dataValidations count="1">')
+    expect(renamed).toContain(foreignSection)
+    expect(renamed).toContain(foreignRule)
+    expect(renamed).toContain(foreignFormula)
+  })
+
+  it('updates only a referenced sheet on a cross-sheet shift', () => {
+    const shifted = shiftCrossSheetFormulas(sheet, 'Data', [
+      { kind: 'insert-rows', index: 0, count: 1 },
+    ])
+    expect(readWorksheetValidations(shifted)).toMatchObject([
+      { sqref: 'A1', formulas: ['A1'] },
+      { sqref: 'C3', formulas: ['Data!A3+Other!A2+A2'] },
+    ])
+    expect(shifted).toContain(foreignSection)
+    expect(shifted).toContain(foreignFormula)
+  })
+
+  it('keeps foreign entries inside a legacy section when saving a rules snapshot', () => {
+    const saved = applyDvRules(sheet, [])
+    expect(readWorksheetValidations(saved)).toEqual([])
+    expect(saved).toContain(
+      foreignSection + '<s:dataValidations count="0">' + foreignRule + '</s:dataValidations>',
+    )
+  })
+
+  it('rewrites structured references only inside real validation rules', () => {
+    const formula = 'SUM(Sales[Total])'
+    const source = sheet.replaceAll('Data!A2', formula)
+    const updated = rewriteTableReferencesInPart(source, 'worksheet', (value) =>
+      value.replaceAll('Sales[', 'Orders['),
+    )
+    expect(readWorksheetValidations(updated)).toMatchObject([
+      { sqref: 'A1', formulas: ['A1'] },
+      { sqref: 'C3', formulas: ['SUM(Orders[Total])+Other!A2+A2'] },
+    ])
+    expect(updated).toContain(foreignSection.replaceAll('Data!A2', formula))
+    expect(updated).toContain(foreignFormula.replaceAll('Data!A2', formula))
   })
 })

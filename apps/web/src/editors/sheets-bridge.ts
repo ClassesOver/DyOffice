@@ -3,6 +3,7 @@ import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {messages} from './messages.ts'
 import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
+import {printSheetsInBrowser} from './sheets-browser-print.ts'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
   workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,externalLinksUpdateResultSchema,
@@ -12,6 +13,7 @@ import {
   workbookRecalcRequestSchema,workbookRecalcResultSchema,
   workbookConnectionsResultSchema, workbookSaveRequestSchema,
   workbookFindCellsRequestSchema, workbookFindCellsResultSchema,
+  workbookExportPdfRequestSchema,
   type DesktopApi, type WorkbookFile, type WorkbookSaveRequest, type WorkbookRangeResult,
 } from '../../../sheets/src/shared/desktop-api'
 
@@ -458,7 +460,18 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     readExternalLinkUsage:unavailable,
     // Browser editors use the typed-range picker for external workbook links.
     async listWorkbookTabs(){return {tabs:[]}},
-    writeWorkbookRecovery:unavailable,exportPdf:unavailable,printWorkbook:unavailable,exportCsv:unavailable,
+    browserPrintDialog:true,
+    async listPrinters(){return []},
+    async printWorkbook(input){
+      const request=workbookExportPdfRequestSchema.parse(input)
+      try{
+        await printSheetsInBrowser(request.html,request.fileName)
+        return {ok:true}
+      }catch{
+        return {ok:false,error:prefs.language==='en'?'Browser printing is unavailable.':'浏览器打印不可用。'}
+      }
+    },
+    writeWorkbookRecovery:unavailable,exportPdf:unavailable,exportCsv:unavailable,
     openAiModelSettings:async()=>{
       const parent=typeof window!=='undefined'?(window.parent as unknown as {dyofficeOpenEditorSettings?:(tab:'models'|'skills',source:Window)=>Promise<void>}):undefined
       if(parent&&typeof parent.dyofficeOpenEditorSettings==='function')return parent.dyofficeOpenEditorSettings('models',window)

@@ -70,14 +70,35 @@ describe('applyChartStateEdit', () => {
     expect(next.series[0]?.categories).toEqual(['a', 'b'])
   })
 
-  it('drops the parsed outer-level groups when an edit replaces the categories', () => {
+  it('recolors authored and default strokes while preserving hidden strokes and line widths', () => {
     const chart = base()
-    const first = chart.series[0]
-    if (first) first.categoryGroups = [{ label: '2008', start: 0, end: 2 }]
+    chart.chartTypes = ['lineChart']
+    chart.series[0] = { ...chart.series[0]!, lineColor: '#344455', lineWidth: 3, marker: 'diamond' }
+    chart.series[1] = { ...chart.series[1]!, lineColor: 'none', lineWidth: 4 }
+    chart.series.push({ name: 'Default stroke', categories: ['a', 'b'], values: [5, 6] })
+    const edited = applyChartStateEdit(chart, {
+      seriesColors: { 0: '#0099CC', 1: '#112233', 2: '#998877' },
+    })
+    expect(edited.series).toMatchObject([
+      { color: '#0099CC', lineColor: '#0099CC', lineWidth: 3, marker: 'diamond' },
+      { color: '#112233', lineColor: 'none', lineWidth: 4 },
+      { color: '#998877', lineColor: '#998877' },
+    ])
+  })
+
+  it('keeps parsed outer-level groups on the same range and drops them on replacement', () => {
+    const chart = base()
+    const first = chart.series[0]!
+    first.categoriesRef = 'Sheet1!$A$2:$B$3'
+    first.categoryGroups = [{ label: '2008', start: 0, end: 2 }]
     const kept = applyChartStateEdit(chart, { series: [{ index: 0, values: [5, 6] }] })
-    expect(kept.series[0]?.categoryGroups).toEqual([{ label: '2008', start: 0, end: 2 }])
+    expect(kept.series[0]?.categoryGroups).toEqual(first.categoryGroups)
+    const refreshed = applyChartStateEdit(chart, {
+      series: [{ index: 0, categories: ['x', 'y'], categoriesRef: first.categoriesRef }],
+    })
+    expect(refreshed.series[0]).toMatchObject({ categories: ['x', 'y'], categoryGroups: first.categoryGroups })
     const replaced = applyChartStateEdit(chart, {
-      series: [{ index: 0, categories: ['x', 'y'] }],
+      series: [{ index: 0, categories: ['x', 'y'], categoriesRef: 'Sheet1!$D$2:$D$3' }],
     })
     expect(replaced.series[0]?.categoryGroups).toBeUndefined()
   })

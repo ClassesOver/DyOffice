@@ -1,14 +1,20 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { applyPageSetupState } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import {
   handleExportPdf,
+  handlePageLayoutCommand,
+  openHeaderFooterEditor,
   openPrintPreviewHost,
   type PageLayoutContext,
 } from '../src/renderer/page-layout-actions'
-import { createEditJournal } from '../src/renderer/edit-journal'
+import { createEditJournal, recordHyperlinkEdit, toSavePageSetupStates } from '../src/renderer/edit-journal'
 import { startFullLoad } from '../src/renderer/full-load'
 import { workbookCellCounts } from '../src/renderer/load-budget'
 import { setModuleLang } from '../src/renderer/i18n/locale'
+import { applyChangePlan, planFromOps, type OpExecutorContext } from '../src/renderer/op-executor'
+import { assemblePrintHtml } from '../src/renderer/print-html'
+import { resolveEffectivePageSetup } from '../src/renderer/print-settings'
 import { fullLoadGate } from '../src/renderer/reorder-gate'
 import type { LazyWorkbookState, UniverRuntime } from '../src/renderer/univer-state'
 import { preloadEntireWorkbook } from '../src/renderer/univer-sync'
@@ -95,6 +101,7 @@ describe('print and PDF workbook readiness coordination', () => {
       file: { name: 'test.xlsx', sessionId: 'session-123', sheets, visuals: [] },
       flags: { preloadComplete: false, preloadRunning },
       editJournal: createEditJournal(),
+      hyperlinkTargets: new Map(),
       sheetFilePageSetups: new Map(),
       sheetPageBreaks: new Map(),
       sheetProtections: new Map(),
@@ -102,7 +109,19 @@ describe('print and PDF workbook readiness coordination', () => {
     } as unknown as LazyWorkbookState
   }
 
-  function createMockContext(state: LazyWorkbookState | null): PageLayoutContext {
+  function createMockContext(
+    state: LazyWorkbookState | null,
+    selection: readonly (readonly [row: number, column: number])[] = [],
+  ): PageLayoutContext {
+    const grid = [['A1', 'B1'], ['A2', 'B2']]
+    const selectedRanges = selection.map(([row, column]) => ({
+      getRow: () => row,
+      getColumn: () => column,
+      getWidth: () => 1,
+      getHeight: () => 1,
+    }))
+    const valuesAt = (row: number, column: number, rowCount: number, columnCount: number) =>
+      grid.slice(row, row + rowCount).map((cells) => cells.slice(column, column + columnCount))
     const worksheet = {
       getSheetId: () => 'sheet-1',
       getSheetName: () => 'Sheet1',
@@ -111,9 +130,10 @@ describe('print and PDF workbook readiness coordination', () => {
       getRowHeight: () => 20,
       getColumnWidth: () => 100,
       getMergedRanges: () => [],
-      getRange: () => ({
-        getValues: () => [['A1']],
-        getDisplayValues: () => [['A1']],
+      getSelection: () => ({ getActiveRangeList: () => selectedRanges }),
+      getRange: (row: number, column: number, rowCount = 1, columnCount = 1) => ({
+        getValues: () => valuesAt(row, column, rowCount, columnCount),
+        getDisplayValues: () => valuesAt(row, column, rowCount, columnCount),
         getCellStyleData: () => null,
       }),
       getMaxRows: () => 10,
@@ -121,8 +141,9 @@ describe('print and PDF workbook readiness coordination', () => {
       isSheetHidden: () => false,
     }
     const workbook = {
+      getId: () => undefined,
       getActiveSheet: () => worksheet,
-      getActiveRange: () => null,
+      getActiveRange: () => selectedRanges.at(-1) ?? null,
       getSheets: () => [worksheet],
       getSheetBySheetId: () => worksheet,
       getSnapshot: () => ({ sheets: {} }),
@@ -143,6 +164,150 @@ describe('print and PDF workbook readiness coordination', () => {
     }
   }
 
+  it('loads the saved header and footer and preserves formatting in untouched sections', async () => {
+    const state = createMockState()
+    const ctx = createMockContext(state)
+    const oddHeader = '&LOld&C&BReport&B'
+    const oddFooter = '&R&"Calibri,Bold"&12Page &P'
+    const readWorkbookRange = vi.fn().mockResolvedValue(fileStateResult({ oddHeader, oddFooter }))
+    vi.stubGlobal('window', { desktopApi: { readWorkbookRange } })
+    const editor = await openHeaderFooterEditor(ctx)
+    expect(readWorkbookRange).toHaveBeenCalledOnce()
+    expect(editor).toMatchObject({
+      header: { left: 'Old', center: '&BReport&B' },
+      footer: { right: '&"Calibri,Bold"&12Page &P' },
+    })
+    if (editor === null) throw new Error('Header and footer editor did not open')
+    expect(editor.apply({ header: editor.header, footer: editor.footer })).toBeNull()
+    expect(toSavePageSetupStates(state.editJournal)).toEqual([])
+    expect(editor.apply({
+      header: { ...editor.header, left: 'Updated' },
+      footer: editor.footer,
+    })).toBeNull()
+
+    const changes = toSavePageSetupStates(state.editJournal)
+    expect(changes).toEqual([
+      { sheetId: 'sheet-1', header: { left: 'Updated', center: '&BReport&B' } },
+    ])
+    const originalFooter = '<oddFooter>&amp;R&amp;"Calibri,Bold"&amp;12Page &amp;P</oddFooter>'
+    const output = applyPageSetupState(
+      `<worksheet><sheetData/><headerFooter><oddHeader>&amp;LOld&amp;C&amp;BReport&amp;B</oddHeader>${originalFooter}</headerFooter></worksheet>`,
+      { sheetName: 'Sheet1', ...changes[0] },
+    )
+    expect(output).toContain('<oddHeader>&amp;LUpdated&amp;C&amp;BReport&amp;B</oddHeader>')
+    expect(output).toContain(originalFooter)
+    expect(resolveEffectivePageSetup(changes[0] ?? {}, { oddHeader, oddFooter }, null).header)
+      .toEqual({ left: 'Updated', center: '&BReport&B' })
+
+    const reopened = await openHeaderFooterEditor(ctx)
+    if (reopened === null) throw new Error('Header and footer editor did not reopen')
+    expect(reopened.header).toEqual({ left: 'Updated', center: '&BReport&B' })
+    expect(reopened.apply({ header: reopened.header, footer: null })).toBeNull()
+    expect(toSavePageSetupStates(state.editJournal)[0]?.footer).toBeNull()
+  })
+
+  it('prints saved header and footer references with the current workbook theme', async () => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.file.themeColors = ['#FFFFFF', '#000000', '#EEEEEE', '#333333', '#234567']
+    state.file.themeFonts = { major: 'Georgia', minor: 'Verdana' }
+    state.sheetProtections.set('sheet-1', null)
+    state.sheetFilePageSetups.set('sheet-1', {
+      oddHeader: '&C&"+"&K04+000Report',
+      oddFooter: '&R&"-"Page &P',
+    })
+    const host = await openPrintPreviewHost(createMockContext(state))
+    if (host === null) throw new Error('Print preview failed to open')
+    const job = await host.buildJob('active', {})
+    const html = assemblePrintHtml(job.documents).html
+    expect(html).toContain('<span style="font-family:&quot;Georgia&quot;;color:#234567">Report</span>')
+    expect(html).toContain('<span style="font-family:&quot;Verdana&quot;">Page 1</span>')
+  })
+
+  it('prints saved cell links with pending edits applied', async () => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    state.hyperlinkTargets.set('sheet-1', new Map([
+      ['0:0', 'https://example.test/replaced'],
+      ['0:1', 'https://example.test/removed'],
+      ['1:0', 'https://example.test/saved'],
+    ]))
+    recordHyperlinkEdit(state.editJournal, 'sheet-1', 0, 0, 'https://example.test/current')
+    recordHyperlinkEdit(state.editJournal, 'sheet-1', 0, 1, null)
+    recordHyperlinkEdit(state.editJournal, 'sheet-1', 1, 1, 'https://example.test/new')
+    const host = await openPrintPreviewHost(createMockContext(state))
+    if (host === null) throw new Error('Print preview failed to open')
+    const job = await host.buildJob('active', {})
+    const html = assemblePrintHtml(job.documents).html
+
+    expect(html).toMatch(/href="https:\/\/example\.test\/current"[^>]*>A1<\/a>/)
+    expect(html).toMatch(/href="https:\/\/example\.test\/saved"[^>]*>A2<\/a>/)
+    expect(html).toMatch(/href="https:\/\/example\.test\/new"[^>]*>B2<\/a>/)
+    expect(html).toContain('>B1</span>')
+    expect(html).not.toContain('https://example.test/replaced')
+    expect(html).not.toContain('https://example.test/removed')
+  })
+
+  it.each([
+    { selection: [[0, 0]] as const, labels: ['A1'] },
+    { selection: [[0, 0], [1, 1]] as const, labels: ['A1', 'B2'] },
+  ])('prints every selected region in its own page ($labels)', async ({ selection, labels }) => {
+    const state = createMockState([sheet({ printArea: 'Sheet1!$B$1:$B$1' })])
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    const host = await openPrintPreviewHost(createMockContext(state, selection))
+    if (host === null) throw new Error('Print preview failed to open')
+
+    expect(host.hasSelection).toBe(true)
+    const job = await host.buildJob('selection', {})
+    expect(job.pageCount).toBe(labels.length)
+    expect(job.documents[0]?.pages.map((page) => page.body.match(/>([AB][12])<\/span>/g)))
+      .toEqual(labels.map((label) => [`>${label}</span>`]))
+    await host.print(job, { deviceName: null, pages: null, copies: 1, collate: true })
+    expect(printWorkbookMock.mock.calls[0]?.[0].html).toBe(assemblePrintHtml(job.documents).html)
+  })
+
+  it('sets the print area from the full worksheet selection', () => {
+    const runOps = vi.fn().mockResolvedValue({ ok: true })
+    const ctx = createMockContext(createMockState(), [[0, 0], [1, 1]])
+    handlePageLayoutCommand({ ...ctx, runOps }, 'print-area:set')
+
+    expect(runOps).toHaveBeenCalledWith([{
+      op: 'set_page_setup',
+      sheetId: 'sheet-1',
+      printArea: 'A1:A1,B2:B2',
+    }], expect.any(String))
+  })
+
+  it.each([
+    { saved: { fitToPage: true, fitToHeight: 3 }, height: 3 },
+    { saved: { fitToPage: true, fitToHeight: 16_384 }, height: 16_384 },
+    { saved: { fitToPage: true }, height: 1 },
+    { saved: { fitToPage: false, fitToHeight: 4 }, height: 0 },
+  ])('keeps the effective fit height when changing only the width ($height)', async ({ saved, height }) => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    state.sheetFilePageSetups.set('sheet-1', saved)
+    const ctx = createMockContext(state)
+    const runtime = ctx.univerRef.current!
+    const workbook = runtime.univerAPI.getActiveWorkbook()!
+    const runOps = vi.fn<PageLayoutContext['runOps']>((ops) =>
+      applyChangePlan(planFromOps(ops, workbook, 'fit width'), {
+        ...ctx, state, runtime, workbook,
+      } as unknown as OpExecutorContext),
+    )
+
+    handlePageLayoutCommand({ ...ctx, runOps }, 'fit-width:2')
+    await expect(runOps.mock.results[0]?.value).resolves.toMatchObject({ ok: true })
+    expect(toSavePageSetupStates(state.editJournal)).toEqual([{
+      sheetId: 'sheet-1', fitToPage: true, fitToWidth: 2, fitToHeight: height,
+    }])
+    const host = await openPrintPreviewHost(ctx)
+    expect(host?.setup).toMatchObject({ fitToPage: true, fitToWidth: 2, fitToHeight: height })
+  })
+
   it('PDF export of a streamed workbook preloads it first and exports', async () => {
     const state = createMockState()
     const ctx = createMockContext(state)
@@ -155,6 +320,20 @@ describe('print and PDF workbook readiness coordination', () => {
       'PDF export needs the fully loaded workbook — wait for loading to finish.',
     )
     expect(messages).toContain('Exported D:/test.pdf.')
+  })
+
+  it('opens the Web print dialog for PDF output without reporting a saved file', async () => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    const printWorkbook = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('window', { desktopApi: { browserPrintDialog: true, printWorkbook, exportPdf: exportPdfMock } })
+
+    expect(await handleExportPdf(createMockContext(state))).toBe(false)
+    expect(printWorkbook).toHaveBeenCalledOnce()
+    expect(printWorkbook.mock.calls[0]?.[0].html).toContain('class="page ')
+    expect(exportPdfMock).not.toHaveBeenCalled()
+    expect(messages).toContain('System print dialog…')
   })
 
   it('Print of a streamed workbook preloads it first and opens the dialog host', async () => {
@@ -345,6 +524,7 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
     return {
       getSheetId: () => id,
       getSheetName: () => name,
+      getSelection: () => null,
       getLastRow: () => 1,
       getLastColumn: () => 1,
       getRowHeight: () => 20,
@@ -407,6 +587,7 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
       },
       flags: { preloadComplete: true, preloadRunning: false },
       editJournal: createEditJournal(),
+      hyperlinkTargets: new Map(),
       sheetFilePageSetups: new Map(),
       sheetPageBreaks: new Map(),
       sheetProtections: new Map(),
@@ -436,7 +617,86 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
     }
   }
 
-  it('prints every visible sheet, each activated for its visuals, and restores the active one', async () => {
+  it('prints inactive sheet drawings with live edits and media without activating the sheet', async () => {
+    const h = headlessContext()
+    const state = h.ctx.lazyWorkbookRef.current!
+    const anchor = {
+      fromRow: 0, fromColumn: 0, toRow: 2, toColumn: 2,
+      fromRowOffset: 0, fromColumnOffset: 0, toRowOffset: 0, toColumnOffset: 0,
+    }
+    state.file.visuals = [
+      {
+        id: 'inactive-chart', sheetId: 'sheet-2', kind: 'chart', anchor,
+        chartPath: 'xl/charts/chart1.xml',
+        chart: { chartTypes: ['barChart'], title: 'Original chart',
+          series: [{ name: 'Revenue', categories: ['Jan'], values: [42] }] },
+      },
+      {
+        id: 'inactive-image', sheetId: 'sheet-2', kind: 'image', anchor,
+        altText: 'Printed logo',
+      },
+    ]
+    state.editJournal.chartEdits.set('xl/charts/chart1.xml', { title: 'Edited chart' })
+    const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jT4sAAAAASUVORK5CYII='
+    const readWorkbookMedia = vi.fn().mockResolvedValue({ mediaType: 'image/png', base64 })
+    Object.assign(window.desktopApi, { readWorkbookMedia })
+    const host = await openPrintPreviewHost(h.ctx)
+    if (!host) throw new Error('Print preview failed to open')
+    const job = await host.buildJob('workbook', {})
+    const html = assemblePrintHtml(job.documents).html
+    expect(html).toContain('Edited chart')
+    expect(html).toContain(`data:image/png;base64,${base64}`)
+    expect(readWorkbookMedia).toHaveBeenCalledWith({
+      sessionId: 'session-123', visualId: 'inactive-image',
+    })
+    expect(document.querySelector('[data-print-stage]')).toBeNull()
+    expect(await handleExportPdf(h.ctx, 'D:/book.pdf')).toBe(true)
+    const request = exportPdfMock.mock.calls[0]?.[0]
+    expect(request.html).toContain('Edited chart')
+    expect(request.html).toContain(`data:image/png;base64,${base64}`)
+    expect(h.sheet1.activate).not.toHaveBeenCalled()
+    expect(h.sheet2.activate).not.toHaveBeenCalled()
+  })
+
+  it('opens a chart sheet with its saved setup and prints one chart-only page', async () => {
+    const h = headlessContext()
+    const state = h.ctx.lazyWorkbookRef.current!
+    state.file.sheets[0]!.chartSheet = true
+    state.file.visuals = [{
+      id: 'standalone-chart',
+      sheetId: 'sheet-1',
+      kind: 'chart',
+      anchor: {
+        fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+        fromRowOffset: 0, fromColumnOffset: 0,
+        toRowOffset: 600 * 9525, toColumnOffset: 1_200 * 9525,
+      },
+      chart: { chartTypes: ['barChart'], title: 'Standalone revenue',
+        series: [{ name: 'Sales', values: [42], categories: ['Jan'] }] },
+    }]
+    const readWorkbookRange = vi.fn().mockResolvedValue(fileStateResult({
+      orientation: 'landscape',
+      paperSize: 9,
+      firstPageNumber: 8,
+      oddFooter: '&RChart &P',
+    }))
+    Object.assign(window.desktopApi, { readWorkbookRange })
+
+    const host = await openPrintPreviewHost(h.ctx)
+    if (!host) throw new Error('Print preview failed to open')
+    expect(host.chartSheet).toBe(true)
+    expect(host.setup.orientation).toBe('landscape')
+    expect(host.hasSelection).toBe(false)
+    const job = await host.buildJob('active', {})
+    expect(job.pageCount).toBe(1)
+    const html = assemblePrintHtml(job.documents).html
+    expect(html).toContain('Standalone revenue')
+    expect(html).toContain('Chart 8')
+    expect(html).not.toContain('<table ')
+    expect(h.sheet1.activate).not.toHaveBeenCalled()
+  })
+
+  it('prints every visible sheet without changing its active tab', async () => {
     const h = headlessContext()
     expect(await handleExportPdf(h.ctx, 'D:/book.pdf')).toBe(true)
     const request = exportPdfMock.mock.calls[0]?.[0]
@@ -444,10 +704,8 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
     // one page block per sheet: the hidden third sheet is not in the file
     const pages = request.html.match(/<div class="page /g) ?? []
     expect(pages).toHaveLength(2)
-    // the non-active sheet was activated before its layout; the active one
-    // is re-activated once at the end (the restore), never inside the loop
-    expect(h.sheet2.activate).toHaveBeenCalledTimes(1)
-    expect(h.sheet1.activate).toHaveBeenCalledTimes(1)
+    expect(h.sheet2.activate).not.toHaveBeenCalled()
+    expect(h.sheet1.activate).not.toHaveBeenCalled()
     expect(messages).toContain('Exported D:/book.pdf.')
   })
 

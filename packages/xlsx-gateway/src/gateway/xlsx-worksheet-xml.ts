@@ -1,7 +1,8 @@
-import { decodeXmlText } from './xlsx-escapes.ts'
+import { decodeXlsxEscapes, decodeXmlText } from './xlsx-escapes.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 
 export const X14_CF_EXT_URI = '{78C0D931-6437-407D-A8EE-F0AAD7539E65}'
+export const X14_CF_RULE_ID_EXT_URI = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
 export const X14_XMLNS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 export const XM_XMLNS = 'http://schemas.microsoft.com/office/excel/2006/main'
 const WORKSHEET_NAMESPACES = new Set([
@@ -43,13 +44,23 @@ export function withNamespaces(element: ChildElement, inherited: Attributes): Sc
 }
 
 export function worksheetRoot(xml: string): ScopedElement | undefined {
+  const root = spreadsheetSheetRoot(xml)
+  return root?.local === 'worksheet' ? root : undefined
+}
+
+export function isSpreadsheetNamespace(namespace: string | undefined): boolean {
+  return namespace !== undefined && WORKSHEET_NAMESPACES.has(namespace)
+}
+
+export function spreadsheetPartRoot(xml: string): ScopedElement | undefined {
   const node = childElements(xml)[0]
   const root = node && withNamespaces(node, new Map([['', '']]))
-  return root?.local === 'worksheet' &&
-    root.namespace !== undefined &&
-    WORKSHEET_NAMESPACES.has(root.namespace)
-    ? root
-    : undefined
+  return root && isSpreadsheetNamespace(root.namespace) ? root : undefined
+}
+
+export function spreadsheetSheetRoot(xml: string): ScopedElement | undefined {
+  const root = spreadsheetPartRoot(xml)
+  return root?.local === 'worksheet' || root?.local === 'chartsheet' ? root : undefined
 }
 
 export function scopedChildren(parent: ScopedElement): ScopedElement[] {
@@ -62,6 +73,10 @@ export function isElement(
   namespace: string | undefined,
 ): boolean {
   return element.local === local && element.namespace === namespace
+}
+
+export function lastWorksheetView(views: ScopedElement | undefined): ScopedElement | undefined {
+  return views && scopedChildren(views).reverse().find((child) => isElement(child, 'sheetView', views.namespace))
 }
 
 export function patchElement(element: ChildElement, xml: string): XmlPatch {
@@ -95,6 +110,33 @@ export function elementText(inner: string): string {
           : decodeXmlText(text),
     )
     .join('')
+}
+
+export function booleanCellValue(value: string): boolean | null {
+  switch (value.trim()) {
+    case '1':
+    case 'true':
+      return true
+    case '0':
+    case 'false':
+      return false
+    default:
+      return null
+  }
+}
+
+export function sharedStringAt<T>(entries: readonly T[], indexText: string): T | undefined {
+  const index = indexText.trim()
+  return /^\+?\d+$/.test(index) ? entries[Number(index)] : undefined
+}
+
+/// Mirrors the sidecar: raw CRLF folds first so `_x000D_` + LF (Excel's CR LF)
+/// ends up as one line break.
+export function decodeCellText(input: string, preserveSpace = true): string {
+  let text = elementText(input).replace(/\r\n?/g, '\n')
+  // The XML whitespace policy applies before escaped spreadsheet characters.
+  if (!preserveSpace) text = text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')
+  return decodeXlsxEscapes(text).replace(/\r\n?/g, '\n')
 }
 
 export function extensionUri(extension: ScopedElement): string | undefined {

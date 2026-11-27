@@ -3,7 +3,15 @@
 /// custom properties resolved to their light-theme values so a dark UI prints
 /// the way Excel would. The layout places each snapshot by its anchor frame.
 
-import type { InstalledVisualFrame } from './WorkbookVisuals'
+import { createElement } from 'react'
+import { createRoot } from 'react-dom/client'
+import {
+  measureWorkbookVisualFrame,
+  WorkbookVisual,
+  type ChartEditing,
+  type InstalledVisualFrame,
+  type VisualHost,
+} from './WorkbookVisuals'
 
 export interface PrintVisual {
   readonly id: string
@@ -26,27 +34,38 @@ export interface PrintVisualSnapshot {
 
 const SETTLE_POLL_MS = 60
 
-function visualNode(doc: Document, id: string): HTMLElement | null {
-  const node = doc.querySelector<HTMLElement>(`[data-print-visual="${id}"]`)
-  return node?.isConnected && node.firstElementChild ? node : null
+function visualNodes(root: Document | HTMLElement): Map<string, HTMLElement> {
+  const nodes = new Map<string, HTMLElement>()
+  for (const node of root.querySelectorAll<HTMLElement>('[data-print-visual]')) {
+    const id = node.dataset.printVisual
+    if (id && node.isConnected && node.firstElementChild &&
+        (root.nodeType !== 9 || !node.closest('[data-print-stage]'))) {
+      nodes.set(id, node)
+    }
+  }
+  return nodes
 }
 
-function laidOut(doc: Document, id: string): boolean {
-  const child = visualNode(doc, id)?.firstElementChild
-  return child !== undefined && child !== null && child.getBoundingClientRect().width > 0
-}
+const PENDING_VISUAL = '.xlsx-visual-loading, [data-print-pending]'
 
 /// Float DOM attaches a beat after install; wait for every frame's node to
 /// exist and lay out (charts that never paint, e.g. an empty figure, still
 /// have their frame). Gives up quietly: a missing node prints nothing.
 export async function settleVisualNodes(
-  doc: Document,
+  root: Document | HTMLElement,
   frames: readonly InstalledVisualFrame[],
   timeoutMs = 2000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (frames.every((frame) => laidOut(doc, frame.visual.id))) return
+    const nodes = visualNodes(root)
+    if (frames.every(({ visual }) => {
+      const node = nodes.get(visual.id)
+      if (!node || node.querySelector(PENDING_VISUAL)) return false
+      const child = node.firstElementChild
+      return child &&
+        (root.nodeType !== 9 || child.getBoundingClientRect().width > 0)
+    })) return
     await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS))
   }
 }
@@ -54,12 +73,14 @@ export async function settleVisualNodes(
 export function snapshotPrintVisuals(
   doc: Document,
   frames: readonly InstalledVisualFrame[],
+  root: Document | HTMLElement = doc,
 ): PrintVisualSnapshot {
   const visuals: PrintVisual[] = []
   const roots: Element[] = []
+  const nodes = visualNodes(root)
   for (const frame of frames) {
-    const node = visualNode(doc, frame.visual.id)
-    if (!node) continue
+    const node = nodes.get(frame.visual.id)
+    if (!node || node.querySelector('.xlsx-visual-loading')) continue
     roots.push(node)
     const clone = node.cloneNode(true) as HTMLElement
     stripInteractive(clone)
@@ -77,6 +98,46 @@ export function snapshotPrintVisuals(
     })
   }
   return { visuals, css: roots.length ? collectPrintCss(doc, roots) : '' }
+}
+
+/// Mount a sheet's drawing components at their unzoomed print dimensions.
+/// This uses the normal drawing/media renderer without touching the grid.
+export async function snapshotSheetVisuals(
+  doc: Document,
+  worksheet: Parameters<typeof measureWorkbookVisualFrame>[0],
+  file: VisualHost,
+  chartEditing: ChartEditing,
+): Promise<PrintVisualSnapshot> {
+  const frames = file.visuals
+    .map((visual) => measureWorkbookVisualFrame(worksheet, visual))
+    .filter(({ framed }) => framed)
+    .map(({ frame }) => frame)
+  if (frames.length === 0) return { visuals: [], css: '' }
+  const stage = doc.createElement('div')
+  stage.setAttribute('aria-hidden', 'true')
+  stage.setAttribute('data-print-stage', '')
+  stage.inert = true
+  Object.assign(stage.style, { position: 'fixed', left: '0', top: '0', opacity: '0', pointerEvents: 'none' })
+  doc.body.appendChild(stage)
+  const root = createRoot(stage)
+  try {
+    root.render(frames.map((frame) => {
+      const drawing = createElement(WorkbookVisual, { file, visual: frame.visual, chartEditing, frame })
+      const content = createElement('div', {
+        className: 'xlsx-print-visual',
+        'data-print-visual': frame.visual.id,
+      }, drawing)
+      return createElement('div', {
+        key: frame.visual.id,
+        style: { width: frame.width, height: frame.height },
+      }, content)
+    }))
+    await settleVisualNodes(stage, frames, 8_000)
+    return snapshotPrintVisuals(doc, frames, stage)
+  } finally {
+    root.unmount()
+    stage.remove()
+  }
 }
 
 function stripInteractive(root: HTMLElement): void {

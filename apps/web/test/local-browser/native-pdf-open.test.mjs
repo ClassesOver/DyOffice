@@ -210,10 +210,16 @@ test('native PDF OCR reads a real scan and saves a searchable layer without chan
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'OCR test model'}],defaultId:'mock'}}))
  const calls=[{name:'read_pages',input:{start:1,end:4}},{name:'search_text',input:{query:'OCR Smoke Fixture'}},{name:'search_text',input:{query:'文件识别测试'}}]
+ const instruction='Read the four pages and find the scan headings.'
+ const isScanTurn=request=>{
+  if(request.method()!=='POST'||!request.url().endsWith('/api/v1/ai/turns'))return false
+  const payload=request.postDataJSON()?.request
+  return payload?.format==='pdf'&&payload.messages?.some(message=>message.role==='user'&&message.text?.startsWith(instruction))
+ }
  let turn=0
  await page.route('**/api/v1/ai/turns',route=>{
-  if(isHomeHeroRequest(route.request()))return route.fallback()
-  if(turn>0)results.push(route.request().postDataJSON().request.messages.at(-1).results[0])
+  if(!isScanTurn(route.request()))return route.fallback()
+  if(turn>0)results.push(route.request().postDataJSON().request.messages.at(-1).results?.[0])
   const call=calls[turn++]
   const body=call?'event: tool_call\ndata: '+JSON.stringify({id:'scan-'+turn,...call}):'event: delta\ndata: {"text":"Scanned page read"}'
   return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
@@ -227,9 +233,16 @@ test('native PDF OCR reads a real scan and saves a searchable layer without chan
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
- await assistant.getByRole('textbox',{name:'消息'}).fill('Read the four pages and find the scan headings.')
- await assistant.getByRole('button',{name:'发送',exact:true}).click()
+ const composer=assistant.getByRole('textbox',{name:'消息'})
+ await composer.fill(instruction)
+ await expect(composer).toHaveValue(instruction)
+ await expect(assistant.getByRole('button',{name:'发送',exact:true})).toBeEnabled()
+ // The dock and OCR progress can reflow after opening. Use the composer
+ // shortcut, then require the PDF turn to reach the mock before waiting on OCR.
+ await Promise.all([page.waitForRequest(isScanTurn,{timeout:8000}),composer.press('Enter')])
  await expect(assistant.getByText('Scanned page read',{exact:true})).toBeVisible({timeout:25000})
+ assert.deepEqual(results.map(result=>result?.name),calls.map(call=>call.name))
+ assert.ok(results.every(result=>result&&!result.isError))
  const recognizedPages=results[0].output.split(/\[Page \d+\]/).slice(1)
  assert.match(recognizedPages[0],/OCR.*OCR Smoke Fixture/s)
  assert.match(recognizedPages[1],/Digital second page/)

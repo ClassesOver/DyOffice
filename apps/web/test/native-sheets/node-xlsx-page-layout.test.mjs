@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { XMLValidator } from 'fast-xml-parser'
 import JSZip from 'jszip'
+import { workbookRangeResultSchema } from '../../../sheets/src/shared/desktop-api.ts'
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
 import { sheetsSaveRequest } from '../helpers/sheets-request.mjs'
@@ -44,7 +45,8 @@ test('Web XLSX saves view and print settings without changing other worksheet st
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
   const sheetXml = async (bytes) => (await JSZip.loadAsync(bytes)).file(sheetPart).async('string')
-  const pageSetup = async (bytes) => (await native.readRange(bytes, 'Acceptance', range)).pageSetup
+  const pageSetup = async (bytes) =>
+    workbookRangeResultSchema.parse(await native.readRange(bytes, 'Acceptance', range)).pageSetup
 
   await t.test(
     'updates single-quoted attributes and clears settings restored to their default',
@@ -57,20 +59,31 @@ test('Web XLSX saves view and print settings without changing other worksheet st
           )
           .replace(
             '<drawing ',
-            "<pageSetup orientation = 'portrait' scale='75' paperSize='9' xmlns:audit='urn:test' audit:note=\"orientation='portrait' >\"/><drawing ",
+            "<printOptions horizontalCentered='1' verticalCentered='true' gridLines='1' gridLinesSet='0'/>" +
+              "<pageSetup orientation = 'portrait' scale='75' paperSize='9' pageOrder='overThenDown' xmlns:audit='urn:test' audit:note=\"orientation='portrait' >\"/><drawing ",
           ),
       )
       assert.equal((await native.inspect(bytes)).sheets[0].showGridLines, false)
+      const initial = await pageSetup(bytes)
+      assert.equal(initial.pageOrder, 'overThenDown')
+      assert.equal(initial.horizontalCentered, true)
+      assert.equal(initial.verticalCentered, true)
+      assert.equal(initial.printGridlines, undefined)
       const saved = await save(bytes, {
         showGridlines: true,
         zoomScale: 100,
         orientation: 'landscape',
         scale: 100,
+        printGridlines: true,
       })
       const xml = await sheetXml(saved)
       assert.equal(XMLValidator.validate(xml), true)
       assert.ok(xml.includes(`audit:note="orientation='portrait' >"`))
       const layout = await pageSetup(saved)
+      assert.equal(layout.pageOrder, 'overThenDown')
+      assert.equal(layout.horizontalCentered, true)
+      assert.equal(layout.verticalCentered, true)
+      assert.equal(layout.printGridlines, true)
       assert.deepEqual(
         [layout.orientation, layout.paperSize, layout.scale],
         ['landscape', 9, undefined],
@@ -113,34 +126,80 @@ test('Web XLSX saves view and print settings without changing other worksheet st
   )
 
   await t.test(
-    'saves and clears the first view pane without changing the second view',
+    'reads, saves and clears the last workbook view without changing the earlier view',
     async () => {
       const first =
-        '<sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+        '<sheetView workbookViewId="0" zoomScale="75"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
         "<selection pane='bottomLeft' activeCell='A2' sqref='A2'/></sheetView>"
       const second =
-        '<sheetView workbookViewId="1"><pane xSplit="2" topLeftCell="C1" activePane="topRight" state="frozen"/>' +
+        '<sheetView workbookViewId="1" zoomScale="130" showGridLines="0"><pane xSplit="2" topLeftCell="C1" activePane="topRight" state="frozen"/>' +
         '<selection pane="topRight" activeCell="D1" sqref="D1"/></sheetView>'
       const bytes = await workbook(
         (xml) => xml.replace('<sheetView workbookViewId="0"/>', first + second),
         (xml) => xml.replace('<workbookView/>', '<workbookView/><workbookView/>'),
       )
-      const frozen = await save(bytes, { frozenRows: 2, frozenColumns: 0 })
+      const initial = (await native.inspect(bytes)).sheets[0]
+      assert.equal(initial.zoomScale, 130)
+      assert.equal(initial.showGridLines, false)
+      assert.deepEqual(initial.freeze, { frozenRows: 0, frozenColumns: 2 })
+      const frozen = await save(bytes, { frozenRows: 2, frozenColumns: 0, zoomScale: 90 })
       const xml = await sheetXml(frozen)
-      assert.ok(xml.includes(second))
-      assert.doesNotMatch(xml, /<selection pane='bottomLeft'/)
+      assert.ok(xml.includes(first))
+      assert.doesNotMatch(xml, /<selection pane="topRight"/)
+      assert.equal((await native.inspect(frozen)).sheets[0].zoomScale, 90)
       assert.deepEqual((await native.inspect(frozen)).sheets[0].freeze, {
         frozenRows: 2,
         frozenColumns: 0,
       })
       const cleared = await save(frozen, { frozenRows: 0, frozenColumns: 0 })
-      assert.ok((await sheetXml(cleared)).includes(second))
+      assert.ok((await sheetXml(cleared)).includes(first))
       assert.equal((await native.inspect(cleared)).sheets[0].freeze, null)
     },
   )
 
   const customView = (contents) =>
     `<customSheetViews><customSheetView guid="{11111111-1111-1111-1111-111111111111}">${contents}</customSheetView></customSheetViews>`
+
+  await t.test('uses only SpreadsheetML views and panes for freeze and zoom', async () => {
+    const foreign = 'xmlns="urn:example:view"'
+    const foreignViews = `<sheetViews ${foreign}><sheetView zoomScale="30"/></sheetViews>`
+    const foreignView = `<sheetView ${foreign} zoomScale="40"/>`
+    const foreignPane = `<pane ${foreign} xSplit="9" state="frozen"/>`
+    const foreignSelection = `<selection ${foreign} pane="topRight" activeCell="D1"/>`
+    const input = await workbook((xml) => xml.replace(
+      '<sheetViews><sheetView workbookViewId="0"/></sheetViews>',
+      foreignViews + `<sheetViews><sheetView workbookViewId="0" zoomScale="125">${foreignPane}` +
+      '<pane xSplit="2" state="frozen"/><selection pane="topRight" activeCell="C1"/>' +
+      `${foreignSelection}</sheetView>${foreignView}</sheetViews>`,
+    ))
+    const readView = async (bytes) => (await native.inspect(bytes)).sheets[0]
+    const initial = await readView(input)
+    assert.equal(initial.zoomScale, 125)
+    assert.deepEqual(initial.freeze, { frozenRows: 0, frozenColumns: 2 })
+    const saved = await save(input, { frozenRows: 2, frozenColumns: 1, zoomScale: 95, showGridlines: false })
+    const cleared = await save(saved, { frozenRows: 0, frozenColumns: 0 })
+    const edited = await readView(saved)
+    assert.equal(edited.zoomScale, 95)
+    assert.equal(edited.showGridLines, false)
+    assert.deepEqual(edited.freeze, { frozenRows: 2, frozenColumns: 1 })
+    assert.equal((await readView(cleared)).freeze, null)
+    for (const output of [saved, cleared]) {
+      const xml = await sheetXml(output)
+      for (const preserved of [foreignViews, foreignView, foreignPane, foreignSelection]) {
+        assert.ok(xml.includes(preserved), preserved)
+      }
+      assert.ok(!xml.includes('<selection pane="topRight" activeCell="C1"/>'))
+    }
+  })
+
+  await t.test('creates a view before real sheet data when a comment contains a decoy', async () => {
+    const comment = '<!-- <sheetData/> -->'
+    const input = await workbook((xml) => xml.replace('<sheetViews><sheetView workbookViewId="0"/></sheetViews>', comment))
+    const saved = await save(input, { zoomScale: 90 })
+    assert.ok((await sheetXml(saved)).includes(comment))
+    assert.equal((await native.inspect(saved)).sheets[0].zoomScale, 90)
+  })
+
   const beforeDrawing = (xml, contents) => xml.replace('<drawing ', contents + '<drawing ')
   const header = (text) => `<headerFooter><oddHeader>&amp;C${text}</oddHeader></headerFooter>`
   const rowBreak = (row) =>
@@ -202,6 +261,45 @@ test('Web XLSX saves view and print settings without changing other worksheet st
   )
 
   await t.test(
+    'edits and reads print settings without changing foreign elements',
+    async () => {
+      const foreign = 'xmlns="urn:example:print"'
+      const foreignPr = `<sheetPr ${foreign}><pageSetUpPr fitToPage="0"/></sheetPr>`
+      const foreignFit = `<pageSetUpPr ${foreign} fitToPage="0"/>`
+      const foreignSetup = `<pageSetup ${foreign} orientation="portrait"/>`
+      const foreignOptions = `<printOptions ${foreign} gridLines="0"/>`
+      const foreignHeader = `<oddHeader ${foreign}>&amp;CForeign header</oddHeader>`
+      const foreignBreaks = `<rowBreaks ${foreign}><brk id="20" man="1"/></rowBreaks>`
+      const foreignBreak = `<brk ${foreign} id="30" man="1"/>`
+      const input = await workbook((xml) => beforeDrawing(
+        xml.replace('<dimension ', foreignPr +
+          `<sheetPr>${foreignFit}<pageSetUpPr fitToPage="0"/></sheetPr><dimension `),
+        foreignOptions + '<printOptions gridLines="0"/>' + foreignSetup + '<pageSetup orientation="portrait"/>' +
+          `<headerFooter>${foreignHeader}<oddHeader>&amp;COld header</oddHeader></headerFooter>` +
+          foreignBreaks + `<rowBreaks>${foreignBreak}<brk id="2" man="1"/></rowBreaks>`,
+      ))
+      const saved = await save(input, {
+        orientation: 'landscape', fitToPage: true, printGridlines: true,
+        header: { center: 'New header' }, rowBreaks: [1],
+      })
+      const cleared = await save(saved, { header: null, rowBreaks: [] })
+      for (const output of [saved, cleared]) {
+        const xml = await sheetXml(output)
+        for (const preserved of [foreignPr, foreignFit, foreignSetup, foreignOptions, foreignHeader, foreignBreaks, foreignBreak]) {
+          assert.ok(xml.includes(preserved), preserved)
+        }
+        const result = await pageSetup(output)
+        assert.equal(result.orientation, 'landscape')
+        assert.equal(result.fitToPage, true)
+        assert.equal(result.printGridlines, true)
+      }
+      assert.equal((await pageSetup(saved)).oddHeader, '&CNew header')
+      assert.equal((await pageSetup(cleared)).oddHeader, undefined)
+      assert.deepEqual((await native.readRange(saved, 'Acceptance', range)).rowBreaks, [1])
+      assert.deepEqual((await native.readRange(cleared, 'Acceptance', range)).rowBreaks, [])
+    },
+  )
+  await t.test(
     'replaces and clears quoted print names and preserves the existing title columns',
     async () => {
       const oldArea =
@@ -227,6 +325,9 @@ test('Web XLSX saves view and print settings without changing other worksheet st
       assert.equal(clearedSheet.printArea, undefined)
       assert.equal(clearedSheet.printTitles, undefined)
       assert.match(await workbookXml(cleared), /<definedName name="Revenue">/)
+
+      const replacedAfterClear = await save(bytes, { printTitles: '3:4', clearPrintTitleColumns: true })
+      assert.equal((await info(replacedAfterClear)).printTitles, "'Acceptance'!$3:$4")
     },
   )
 

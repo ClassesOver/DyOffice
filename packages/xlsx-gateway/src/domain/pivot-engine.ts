@@ -5,6 +5,7 @@ import type {
   PivotLayoutLine,
   PivotSharedItem,
 } from '../gateway/xlsx-pivot.ts'
+import { finiteDecimalCellValue } from '../shared/decimal-cell-value.ts'
 import { allowedByValueFilter, matchesLabelFilter } from './pivot-filters.ts'
 import { evaluatePivotFormula, parsePivotFormula, type PivotFormulaAst } from './pivot-formula.ts'
 import { groupLabel } from './pivot-grouping.ts'
@@ -30,8 +31,6 @@ function groupKey(value: PivotSharedItem | SourceCell): string {
   if (value === null || value === undefined || value === '') return '\u0000blank'
   if (typeof value === 'number') return `n:${value}`
   if (typeof value === 'boolean') return `b:${value}`
-  const numeric = Number(value)
-  if (String(value).trim() !== '' && Number.isFinite(numeric)) return `n:${numeric}`
   return `s:${String(value).trim().toLowerCase()}`
 }
 
@@ -43,9 +42,44 @@ interface AxisPredicate {
 /// Grouping key of a source cell on a dimension field: grouped fields
 /// (date/numeric ranges) are first bucketed into labels, then keyed with pivot
 /// semantics — the cache's sharedItems are the group labels, so both sides agree.
-function sourceKey(definition: PivotDefinition, field: number, value: SourceCell): string {
-  const grouping = definition.fields[field]?.grouping
-  return groupKey(grouping ? groupLabel(grouping, value) : value)
+function pivotSourceKey(definition: PivotDefinition): (field: number, value: SourceCell) => string {
+  const membersByField = new Map<number, {
+    keys: Set<string>
+    numericLabels: Map<number, string | null>
+  }>()
+  return (field, value) => {
+    const cache = definition.fields[field]
+    if (cache?.grouping) return groupKey(groupLabel(cache.grouping, value))
+    const key = groupKey(value)
+    if (value === null || value === undefined || value === '') return key
+    let members = membersByField.get(field)
+    if (!members) {
+      const shared = cache?.sharedItems ?? []
+      const numericLabels = new Map<number, string | null>()
+      for (const item of shared) {
+        if (typeof item !== 'string' || item.trim() === '') continue
+        const number = Number(item)
+        if (!Number.isFinite(number)) continue
+        const label = groupKey(item)
+        const prior = numericLabels.get(number)
+        numericLabels.set(number, prior === undefined || prior === label ? label : null)
+      }
+      members = { keys: new Set(shared.map(groupKey)), numericLabels }
+      membersByField.set(field, members)
+    }
+    // A member explicitly cached with this type or label takes priority.
+    if (members.keys.has(key)) return key
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      const label = groupKey(String(value))
+      if (members.keys.has(label)) return label
+      return typeof value === 'number' ? members.numericLabels.get(value) ?? key : key
+    }
+    // Formatted source numbers can read as text. Use a typed numeric member
+    // as a fallback without collapsing distinct text labels already in the cache.
+    const number = value.trim() === '' ? Number.NaN : Number(value)
+    const numericKey = groupKey(number)
+    return Number.isFinite(number) && members.keys.has(numericKey) ? numericKey : key
+  }
 }
 
 /// Fixed members of a layout line as source-value predicates. The data-field
@@ -79,21 +113,20 @@ function linePredicates(
   return { predicates, dataField }
 }
 
-function aggregate(subtotal: string, values: readonly SourceCell[]): number | null {
+function aggregate(
+  subtotal: string,
+  values: readonly SourceCell[],
+  emptySum: number | null = 0,
+): number | null {
   if (subtotal === 'count') {
     return values.filter((value) => value !== null && value !== undefined && value !== '').length
   }
-  const numbers = values
-    .map((value) => (typeof value === 'number' ? value : Number(String(value ?? '').trim())))
-    .filter((value, index) => {
-      const raw = values[index]
-      return raw !== null && raw !== undefined && raw !== '' && Number.isFinite(value)
-    })
+  const numbers = values.map(finiteDecimalCellValue).filter((value) => value !== null)
   switch (subtotal) {
     case 'countNums':
       return numbers.length
     case 'sum':
-      return numbers.reduce((total, value) => total + value, 0)
+      return numbers.length === 0 ? emptySum : numbers.reduce((total, value) => total + value, 0)
     case 'average':
       return numbers.length === 0 ? null : numbers.reduce((t, v) => t + v, 0) / numbers.length
     case 'max':
@@ -172,12 +205,30 @@ function axisFields(definition: PivotDefinition): Set<number> {
   return fields
 }
 
+function hiddenMemberKeys(
+  definition: PivotDefinition,
+  fields: Iterable<number>,
+): Map<number, Set<string>> {
+  const hiddenKeys = new Map<number, Set<string>>()
+  for (const field of fields) {
+    const hidden = new Set<string>()
+    for (const item of definition.fieldItems[field] ?? []) {
+      if (!item.hidden || item.x === null) continue
+      const shared = definition.fields[field]?.sharedItems[item.x]
+      if (shared !== undefined) hidden.add(groupKey(shared))
+    }
+    if (hidden.size > 0) hiddenKeys.set(field, hidden)
+  }
+  return hiddenKeys
+}
+
 /// sourceValues: the worksheetSource range INCLUDING its header row.
 export function recomputePivotData(
   definition: PivotDefinition,
   sourceValues: readonly (readonly SourceCell[])[],
 ): PivotRecomputeResult {
   assertSourceMatchesCache(definition, sourceValues)
+  const sourceKey = pivotSourceKey(definition)
   const rows = sourceValues.slice(1)
 
   // Layout drift: a new distinct value in an axis/page column cannot be
@@ -188,7 +239,7 @@ export function recomputePivotData(
   for (const field of axisFieldSet) {
     const known = new Set(definition.fields[field]?.sharedItems.map(groupKey) ?? [])
     for (const row of rows) {
-      if (!known.has(sourceKey(definition, field, row[field]))) {
+      if (!known.has(sourceKey(field, row[field]))) {
         throw new PivotRefreshError(
           `The source data column "${definition.fields[field]?.name}" contains a new item not in the cache ` +
             `("${String(row[field])}") — refresh the layout in Excel before it can be recomputed.`,
@@ -198,16 +249,7 @@ export function recomputePivotData(
   }
 
   // Hidden items filter out their rows everywhere (including totals).
-  const hiddenKeys = new Map<number, Set<string>>()
-  for (const field of axisFieldSet) {
-    const hidden = new Set<string>()
-    for (const item of definition.fieldItems[field] ?? []) {
-      if (!item.hidden || item.x === null) continue
-      const shared = definition.fields[field]?.sharedItems[item.x]
-      if (shared !== undefined) hidden.add(groupKey(shared))
-    }
-    if (hidden.size > 0) hiddenKeys.set(field, hidden)
-  }
+  const hiddenKeys = hiddenMemberKeys(definition, axisFieldSet)
   const pagePredicates: AxisPredicate[] = []
   for (const page of definition.pageFields) {
     if (page.item === null) continue
@@ -224,10 +266,10 @@ export function recomputePivotData(
 
   const visibleRows = rows.filter((row) => {
     for (const [field, hidden] of hiddenKeys) {
-      if (hidden.has(sourceKey(definition, field, row[field]))) return false
+      if (hidden.has(sourceKey(field, row[field]))) return false
     }
     for (const page of pagePredicates) {
-      if (sourceKey(definition, page.field, row[page.field]) !== page.key) return false
+      if (sourceKey(page.field, row[page.field]) !== page.key) return false
     }
     return true
   })
@@ -237,7 +279,7 @@ export function recomputePivotData(
       .filter((row) =>
         predicates.every(
           (predicate) =>
-            sourceKey(definition, predicate.field, row[predicate.field]) === predicate.key,
+            sourceKey(predicate.field, row[predicate.field]) === predicate.key,
         ),
       )
       .map((row) => row[field])
@@ -560,6 +602,7 @@ export function growPivotDefinition(
   sourceValues: readonly (readonly SourceCell[])[],
 ): PivotGrowth {
   assertSourceMatchesCache(definition, sourceValues)
+  const sourceKey = pivotSourceKey(definition)
   const rows = sourceValues.slice(1)
 
   // For each axis/filter field: collect members missing from the cache (in
@@ -571,10 +614,10 @@ export function growPivotDefinition(
     const known = new Set(definition.fields[field]?.sharedItems.map(groupKey) ?? [])
     const additions: PivotSharedItem[] = []
     for (const row of rows) {
-      const value = grouping ? groupLabel(grouping, row[field]) : row[field]
-      const key = groupKey(value)
+      const key = sourceKey(field, row[field])
       if (known.has(key)) continue
       known.add(key)
+      const value = grouping ? groupLabel(grouping, row[field]) : row[field]
       // Blank cells are represented in the cache as <m/> (null).
       additions.push(value === undefined || value === '' ? null : value)
     }
@@ -692,9 +735,8 @@ export function applyPivotSlicer(
 
 /// Recompute member visibility for each filtered field per definition.filters:
 /// label filters match member labels directly; value filters first aggregate
-/// each candidate member (scoped to report filters plus all label filters,
-/// without stacking other value filters, avoiding order dependence), then
-/// keep members by top/greater-than/between. Returns the updated fieldItems
+/// each candidate member over the rows visible under the current selections,
+/// then keep members by top/greater-than/between. Returns the updated fieldItems
 /// and the set of fields whose hidden bits changed; returns as-is if no filters.
 function reapplyPivotFilters(
   definition: PivotDefinition,
@@ -708,20 +750,29 @@ function reapplyPivotFilters(
     return { fieldItems: definition.fieldItems, changedFields }
   }
 
+  const sourceKey = pivotSourceKey(definition)
+  const filteredFields = new Set(definition.filters.map(({ field }) => field))
+  const valueFields = new Set(definition.filters.flatMap((filter) =>
+    filter.kind === 'value' ? [filter.field] : [],
+  ))
+  const hiddenKeys = hiddenMemberKeys(definition,
+    [...axisFields(definition)].filter((field) => !filteredFields.has(field)),
+  )
+
   const itemsOf = (field: number): readonly PivotFieldItem[] => definition.fieldItems[field] ?? []
   const memberLabel = (field: number, item: PivotFieldItem): string => {
     const shared = item.x === null ? undefined : definition.fields[field]?.sharedItems[item.x]
     return shared === null || shared === undefined ? '' : String(shared)
   }
-  // Candidate member sets (in fieldItems order), lazily initialized per field
-  // to all real items.
+  // Label-only visibility is stable for existing members. Value-filtered
+  // fields must reconsider previously hidden members as aggregates change.
   const allowedByField = new Map<number, Set<number>>()
   const ensureAllowed = (field: number): Set<number> => {
     let allowed = allowedByField.get(field)
     if (!allowed) {
       allowed = new Set<number>()
       itemsOf(field).forEach((item, member) => {
-        if (item.x !== null) allowed!.add(member)
+        if (item.x !== null && (!item.hidden || valueFields.has(field))) allowed!.add(member)
       })
       allowedByField.set(field, allowed)
     }
@@ -769,11 +820,14 @@ function reapplyPivotFilters(
     return keys
   }
   const rowPassesBase = (row: readonly SourceCell[]): boolean => {
+    for (const [field, hidden] of hiddenKeys) {
+      if (hidden.has(sourceKey(field, row[field]))) return false
+    }
     for (const page of pagePredicates) {
-      if (sourceKey(definition, page.field, row[page.field]) !== page.key) return false
+      if (sourceKey(page.field, row[page.field]) !== page.key) return false
     }
     for (const [field, allowed] of allowedByField) {
-      const member = ensureMemberKeys(field).get(sourceKey(definition, field, row[field]))
+      const member = ensureMemberKeys(field).get(sourceKey(field, row[field]))
       if (member === undefined || !allowed.has(member)) return false
     }
     return true
@@ -787,19 +841,21 @@ function reapplyPivotFilters(
       )
     const allowed = ensureAllowed(filter.field)
     const keys = ensureMemberKeys(filter.field)
-    const baseRows = rows.filter(rowPassesBase)
+    const rowsByMember = new Map<number, (readonly SourceCell[])[]>()
+    for (const row of rows) {
+      if (!rowPassesBase(row)) continue
+      const member = keys.get(sourceKey(filter.field, row[filter.field]))
+      if (member === undefined) continue
+      const bucket = rowsByMember.get(member)
+      if (bucket) bucket.push(row)
+      else rowsByMember.set(member, [row])
+    }
     const totals = [...allowed]
       .sort((a, b) => a - b)
-      .map((member) => ({
-        key: member,
-        total: aggregateDataFieldOverRows(
-          definition,
-          dataField,
-          baseRows.filter(
-            (row) => keys.get(sourceKey(definition, filter.field, row[filter.field])) === member,
-          ),
-        ),
-      }))
+      .map((member) => {
+        const bucket = rowsByMember.get(member)
+        return { key: member, total: bucket ? aggregateDataFieldOverRows(definition, dataField, bucket) : null }
+      })
     const kept = allowedByValueFilter(filter, totals)
     for (const member of [...allowed]) {
       if (!kept.has(member)) allowed.delete(member)
@@ -856,6 +912,7 @@ function aggregateDataFieldOverRows(
   return aggregate(
     dataField.subtotal,
     rows.map((row) => row[dataField.field]),
+    null,
   )
 }
 
@@ -935,8 +992,9 @@ function rebuildAxisLines(
     // (same result as a refresh).
     if (resolvable) addCombo(keys)
   }
+  const sourceKey = pivotSourceKey(definition)
   for (const row of rows) {
-    addCombo(realLevels.map(({ field }) => sourceKey(definition, field, row[field])))
+    addCombo(realLevels.map(({ field }) => sourceKey(field, row[field])))
   }
 
   const subtotalDepths = new Set(

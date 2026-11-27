@@ -3,7 +3,7 @@
 /// consumes. Anything outside the supported envelope lands in `unsupported`
 /// (with a reason) instead of producing a silently wrong refresh.
 
-import type { PivotFilterDef } from '../domain/pivot-filters.ts'
+import type { PivotFilterDef, PivotValueFilter } from '../domain/pivot-filters.ts'
 import { parsePivotFormula } from '../domain/pivot-formula.ts'
 import { isValidGrouping, type PivotFieldGrouping } from '../domain/pivot-grouping.ts'
 import {
@@ -15,6 +15,17 @@ import {
   showDataAsNeedsBaseItem,
   type PivotShowDataAs,
 } from '../domain/pivot-value-modes.ts'
+
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
+import { workbookDefinedNameElements } from './xlsx-defined-names.ts'
+import type { MutablePackage } from './xlsx-drawing-add.ts'
+import { resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
+import { decodeXmlText } from './xlsx-escapes.ts'
+import { readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
+import { localPivotWorksheetSource, parseRelationships, parseSheetElements, parseWorkbookTabIndex, relationshipIdsMatch, tablePartNames } from './xlsx-sheets.ts'
+import { readDefinedNameText, readWorksheetTagAttribute, updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { areaToRef, parseRef, sheetTableParts } from './xlsx-table-add.ts'
+import { isElement, scopedChildren, spreadsheetPartRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PivotParseError extends Error {}
 
@@ -100,53 +111,69 @@ export interface PivotDefinition {
   readonly unsupported: readonly string[]
 }
 
-function attr(element: string, name: string): string | null {
-  const found = new RegExp(` ${name}="([^"]*)"`).exec(element)
-  return found?.[1] ?? null
+function pivotRoot(xml: string, name: string): ScopedElement | null {
+  const root = spreadsheetPartRoot(xml)
+  return root?.local === name ? root : null
 }
 
-function decodeEntities(value: string): string {
-  return value
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&')
+function attr(element: ScopedElement, name: string): string | null {
+  return element.attributes.get(name) ?? null
 }
 
-/// All <tag …>…</tag> or <tag …/> occurrences at any depth (regex-scoped —
-/// fine for pivot parts, which never nest a tag inside itself). The self-closing
-/// branch is matched first on its own: otherwise, when <tag …/> is followed by a
-/// paired tag of the same name, the `>[\s\S]*?` branch would swallow both elements
-/// as one (mixing both forms inside filters triggers this).
-function elements(xml: string, tag: string): string[] {
-  const pattern = new RegExp(`<${tag}(?:\\s[^>]*)?/>|<${tag}(?:\\s[^>]*)?>[\\s\\S]*?</${tag}>`, 'g')
-  return [...xml.matchAll(pattern)].map((match) => match[0])
+function elements(scope: ScopedElement | null, tag: string): ScopedElement[] {
+  return scope ? scopedChildren(scope).filter((child) => isElement(child, tag, scope.namespace)) : []
 }
 
-function firstElement(xml: string, tag: string): string | null {
-  return elements(xml, tag)[0] ?? null
+function firstElement(scope: ScopedElement | null, tag: string): ScopedElement | null {
+  return elements(scope, tag)[0] ?? null
 }
 
-function parseSharedItems(cacheFieldXml: string): PivotSharedItem[] {
-  const container = firstElement(cacheFieldXml, 'sharedItems')
+function parseSharedItems(cacheField: ScopedElement): PivotSharedItem[] {
+  const container = firstElement(cacheField, 'sharedItems')
   if (!container) return []
   const items: PivotSharedItem[] = []
-  const pattern = /<(s|n|b|d|m|e)(\s[^>]*)?\/?>(?:<\/\1>)?/g
-  for (const match of container.matchAll(pattern)) {
-    const kind = match[1]
-    const value = attr(match[0], 'v')
-    if (kind === 's') items.push(decodeEntities(value ?? ''))
-    else if (kind === 'n') items.push(Number(value ?? '0'))
-    else if (kind === 'b') items.push(value === '1' || value === 'true')
-    else if (kind === 'd') items.push(decodeEntities(value ?? ''))
-    else if (kind === 'm') items.push(null)
-    else items.push(decodeEntities(value ?? '#ERROR'))
+  for (const item of scopedChildren(container)) {
+    if (item.namespace !== container.namespace) continue
+    const value = attr(item, 'v')
+    switch (item.local) {
+      case 's':
+      case 'd':
+        items.push(value ?? '')
+        break
+      case 'n':
+        items.push(Number(value ?? '0'))
+        break
+      case 'b':
+        items.push(value === '1' || value === 'true')
+        break
+      case 'm':
+        items.push(null)
+        break
+      case 'e':
+        items.push(value ?? '#ERROR')
+        break
+    }
   }
   return items
 }
 
-function parseLayoutLines(containerXml: string | null, axisFieldCount: number): PivotLayoutLine[] {
+function readFieldItems(field: ScopedElement): PivotFieldItem[] {
+  const source = elements(firstElement(field, 'items'), 'item')
+  let lastData = -1
+  const items = source.map((item, index) => {
+    const type = attr(item, 't')
+    if (type !== null && type !== 'data') return { x: null, hidden: false }
+    lastData = index
+    const shared = attr(item, 'x')
+    const hidden = attr(item, 'h')
+    return { x: shared === null ? null : Number(shared), hidden: hidden === '1' || hidden === 'true' }
+  })
+  // Row, column and report-filter selections address positions in the XML
+  // list. Non-data items before the last member must leave a slot.
+  return items.slice(0, lastData + 1)
+}
+
+function parseLayoutLines(containerXml: ScopedElement | null, axisFieldCount: number): PivotLayoutLine[] {
   if (!containerXml) {
     // No axis fields: the implicit single line covers everything.
     return [{ t: 'data', members: [], depth: 0, dataField: 0 }]
@@ -181,48 +208,243 @@ function parseLayoutLines(containerXml: string | null, axisFieldCount: number): 
 /// Marks a pivotCacheDefinition so Excel rebuilds the cache on open — the
 /// recomputed output cells and the stale cacheRecords then re-converge.
 export function setPivotRefreshOnLoad(cacheDefinitionXml: string): string {
-  const root = /<pivotCacheDefinition\b[^>]*>/.exec(cacheDefinitionXml)
-  if (!root) throw new PivotParseError('pivotCacheDefinition part has no root element.')
-  const updated = root[0].includes(' refreshOnLoad="')
-    ? root[0].replace(/ refreshOnLoad="[^"]*"/, ' refreshOnLoad="1"')
-    : root[0].replace('<pivotCacheDefinition', '<pivotCacheDefinition refreshOnLoad="1"')
+  const root = readRootOpening(cacheDefinitionXml)
+  if (!root || root.name.slice(root.name.lastIndexOf(':') + 1) !== 'pivotCacheDefinition') {
+    throw new PivotParseError('pivotCacheDefinition part has no root element.')
+  }
+  const updated = updateWorksheetTagAttribute(root.opening, 'refreshOnLoad', '1')
   return (
-    cacheDefinitionXml.slice(0, root.index) +
+    cacheDefinitionXml.slice(0, root.start) +
     updated +
-    cacheDefinitionXml.slice(root.index + root[0].length)
+    cacheDefinitionXml.slice(root.start + root.opening.length)
   )
+}
+
+type PivotWorkbookSource = Pick<MutablePackage, 'has' | 'readText'>
+type PivotSourceRange = Pick<PivotDefinition, 'sourceSheet' | 'sourceRef'>
+interface ResolvedPivotSource {
+  readonly sourceSheet: string
+  readonly sourceRef?: string
+}
+
+export async function readPivotDefinitionWithSource(
+  pivotXml: string,
+  cacheXml: string,
+  workbook: PivotWorkbookSource,
+): Promise<PivotDefinition> {
+  const attributes = localPivotWorksheetSource(cacheXml)?.element.attributes
+  const name = attributes?.get('name')
+  const range = name ? await resolveNamedSource(workbook, name, attributes?.get('sheet')) : undefined
+  return parsePivotDefinition(pivotXml, cacheXml, range?.sourceRef
+    ? { sourceSheet: range.sourceSheet, sourceRef: range.sourceRef }
+    : undefined)
+}
+
+export async function readPivotSourceSheetNames(
+  cacheXml: string,
+  workbook: PivotWorkbookSource,
+  workbookXml: string,
+): Promise<string[]> {
+  const attributes = localPivotWorksheetSource(cacheXml)?.element.attributes
+  const sheet = attributes?.get('sheet')
+  const name = attributes?.get('name')
+  const resolved = name ? await resolveNamedSource(workbook, name, sheet, workbookXml) : undefined
+  return [sheet, resolved?.sourceSheet].filter((value): value is string => !!value)
+}
+
+interface PivotSourceSheet {
+  readonly name: string
+  readonly index: number
+  readonly path: string
+}
+
+async function resolveNamedSource(
+  workbook: PivotWorkbookSource,
+  name: string,
+  sheetHint: string | undefined,
+  currentWorkbookXml?: string,
+): Promise<ResolvedPivotSource | undefined> {
+  const key = name.toLowerCase()
+  const [workbookXml, relsXml] = await Promise.all([
+    currentWorkbookXml ?? workbook.readText('xl/workbook.xml'),
+    workbook.readText('xl/_rels/workbook.xml.rels'),
+  ])
+  const relationships = parseRelationships(relsXml).filter((relationship) =>
+    !relationship.external && relationship.type.endsWith('/worksheet'),
+  )
+  const sheets = parseSheetElements(workbookXml).flatMap((sheet, index): PivotSourceSheet[] => {
+    const relationship = relationships.find(({ id }) => relationshipIdsMatch(id, sheet.relationshipId))
+    return relationship ? [{ name: sheet.name, index,
+      path: resolveWorkbookSheetTarget(relationship.target) }] : []
+  })
+  const hint = sheetHint?.toLowerCase()
+  const candidates = hint ? sheets.filter((sheet) => sheet.name.toLowerCase() === hint) : sheets
+  if (hint && candidates.length !== 1) return undefined
+  const table = await resolveTableSource(workbook, key, candidates)
+  if (table !== undefined) return table ?? undefined
+  return resolveDefinedNameSource(workbook, workbookXml, key, sheets, hint ? candidates[0]?.index : undefined)
+}
+
+async function resolveTableSource(
+  workbook: PivotWorkbookSource,
+  key: string,
+  sheets: readonly PivotSourceSheet[],
+): Promise<ResolvedPivotSource | null | undefined> {
+  let found: ResolvedPivotSource | undefined
+  for (const sheet of sheets) {
+    const { path } = sheet
+    if (!(await workbook.has(path))) continue
+    for (const table of await sheetTableParts(workbook, path)) {
+      if (!tablePartNames(table.xml).some((candidate) => candidate.toLowerCase() === key)) continue
+      if (found) return null
+      // Ownership is useful to structural edits even for a table that cannot
+      // supply a valid grid of headers and data to the refresh engine.
+      found = { sourceSheet: sheet.name }
+      const sourceRef = readTablePivotSourceRef(table.xml)
+      if (sourceRef) found = { sourceSheet: sheet.name, sourceRef }
+    }
+  }
+  return found
+}
+
+export function readTablePivotSourceRef(tableXml: string): string | undefined {
+  const opening = readRootStartTag(tableXml)
+  const headers = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'headerRowCount') ?? '1'))
+  const totals = Number(decodeXmlText(readWorksheetTagAttribute(opening, 'totalsRowCount') ?? '0'))
+  const ref = readWorksheetTagAttribute(opening, 'ref')
+  if (headers !== 1 || !Number.isSafeInteger(totals) || totals < 0 || !ref) return undefined
+  try {
+    const area = parseRef(decodeXmlText(ref))
+    const endRow = area.endRow - totals
+    if (endRow > area.startRow && area.endColumn >= area.startColumn &&
+      area.startRow >= 0 && area.endRow < MAX_GRID_ROWS && area.endColumn < MAX_GRID_COLUMNS) {
+      return areaToRef({ ...area, endRow })
+    }
+  } catch {
+    // An unreadable range still belongs to its named table's worksheet.
+  }
+  return undefined
+}
+
+async function resolveDefinedNameSource(
+  workbook: PivotWorkbookSource,
+  workbookXml: string,
+  key: string,
+  sheets: readonly PivotSourceSheet[],
+  sheetIndex: number | undefined,
+): Promise<ResolvedPivotSource | undefined> {
+  const matches = workbookDefinedNameElements(workbookXml).filter(
+    (entry) => entry.attributes.get('name')?.toLowerCase() === key,
+  )
+  const local = sheetIndex === undefined ? [] : matches.filter(
+    (entry) => parseWorkbookTabIndex(entry.attributes.get('localSheetId')) === sheetIndex,
+  )
+  const candidates = local.length > 0 ? local : matches.filter((entry) => !entry.attributes.has('localSheetId'))
+  const [entry] = candidates
+  if (candidates.length !== 1 || !entry) return undefined
+  const formula = readDefinedNameText(entry.inner)?.trim().replace(/^=/, '')
+  // Use one absolute rectangle on a local worksheet; evaluating a formula,
+  // union or relative name would require context the cache does not store.
+  const absoluteRange = /^(?:'((?:[^']|'')+)'|([\p{L}\p{N}_.]+))!(\$[A-Z]{1,3}\$[1-9]\d*:\$[A-Z]{1,3}\$[1-9]\d*)$/iu
+  const match = formula && absoluteRange.exec(formula)
+  if (!match?.[3]) return undefined
+  const qualifier = (match[1] ?? match[2] ?? '').replaceAll("''", "'").toLowerCase()
+  const sheet = sheets.find((candidate) => candidate.name.toLowerCase() === qualifier)
+  if (!sheet || !(await workbook.has(sheet.path))) return undefined
+  const area = parseRef(match[3].toUpperCase())
+  if (area.endRow <= area.startRow || area.endColumn < area.startColumn ||
+    area.endRow >= MAX_GRID_ROWS || area.endColumn >= MAX_GRID_COLUMNS) return { sourceSheet: sheet.name }
+  return { sourceSheet: sheet.name, sourceRef: areaToRef(area) }
+}
+
+function numericFilterValue(element: ScopedElement | null): number {
+  const value = element?.attributes.get('val')?.trim()
+  return value ? Number(value) : Number.NaN
+}
+
+function readValueFilter(
+  filter: ScopedElement,
+  type: string,
+  field: number,
+  dataField: number,
+): PivotValueFilter | undefined {
+  const columns = elements(firstElement(filter, 'autoFilter'), 'filterColumn')
+  const [column] = columns
+  if (columns.length !== 1 || !column) return undefined
+  if (type === 'count') {
+    const top10 = firstElement(column, 'top10')
+    const count = numericFilterValue(top10)
+    const top = top10?.attributes.get('top') ?? 'true'
+    const percent = top10?.attributes.get('percent') ?? 'false'
+    if (Number.isInteger(count) && count >= 1 &&
+      (top === 'true' || top === '1') && (percent === 'false' || percent === '0')) {
+      return { kind: 'value', field, dataField, op: 'top', count }
+    }
+    return undefined
+  }
+
+  const custom = firstElement(column, 'customFilters')
+  const conditions = elements(custom, 'customFilter')
+  const [condition] = conditions
+  if (type === 'valueGreaterThan' && conditions.length === 1 &&
+    condition?.attributes.get('operator') === 'greaterThan') {
+    const from = numericFilterValue(condition)
+    if (Number.isFinite(from)) return { kind: 'value', field, dataField, op: 'greaterThan', from }
+  }
+  const conjunction = custom?.attributes.get('and')
+  if (type === 'valueBetween' && conditions.length === 2 &&
+    (conjunction === 'true' || conjunction === '1')) {
+    const from = numericFilterValue(conditions.find((entry) =>
+      attr(entry, 'operator') === 'greaterThanOrEqual',
+    ) ?? null)
+    const to = numericFilterValue(conditions.find((entry) =>
+      attr(entry, 'operator') === 'lessThanOrEqual',
+    ) ?? null)
+    if (Number.isFinite(from) && Number.isFinite(to)) {
+      return { kind: 'value', field, dataField, op: 'between', from, to }
+    }
+  }
+  return undefined
 }
 
 export function parsePivotDefinition(
   pivotTableXml: string,
   cacheDefinitionXml: string,
+  resolvedSource?: PivotSourceRange,
 ): PivotDefinition {
   const unsupported: string[] = []
 
-  const location = firstElement(pivotTableXml, 'location')
+  const table = pivotRoot(pivotTableXml, 'pivotTableDefinition')
+  const cache = pivotRoot(cacheDefinitionXml, 'pivotCacheDefinition')
+  const location = firstElement(table, 'location')
   if (!location) throw new PivotParseError('pivotTable part has no location element.')
   const outputRef = attr(location, 'ref')
   if (!outputRef) throw new PivotParseError('pivotTable location has no ref.')
   const firstDataRow = Number(attr(location, 'firstDataRow') ?? '1')
   const firstDataCol = Number(attr(location, 'firstDataCol') ?? '1')
 
-  const worksheetSource = firstElement(cacheDefinitionXml, 'worksheetSource')
-  if (!worksheetSource) {
+  const source = localPivotWorksheetSource(cacheDefinitionXml)?.element.attributes
+  const named = !!source?.get('name')
+  const sourceSheet = resolvedSource?.sourceSheet ?? (named ? '' : source?.get('sheet') ?? '')
+  const sourceRef = resolvedSource?.sourceRef ?? (named ? '' : source?.get('ref') ?? '')
+  if (!source) {
     unsupported.push('the data source is not a worksheet range (external/consolidated source)')
-  }
-  const sourceSheet = decodeEntities(attr(worksheetSource ?? '', 'sheet') ?? '')
-  const sourceRef = attr(worksheetSource ?? '', 'ref') ?? ''
-  if (worksheetSource && (!sourceSheet || !sourceRef)) {
-    unsupported.push('the data source uses a defined name, recompute not supported yet')
+  } else if (!sourceSheet || !sourceRef) {
+    unsupported.push('the named data source could not be resolved to a local table or fixed worksheet range')
   }
 
   // Our own grouped-field metadata: stored in a private pivotTable extLst
   // extension (fieldIndex → grouping rule). Corrupt/invalid metadata fails closed.
   const groupingByField = new Map<number, PivotFieldGrouping>()
-  const groupingExt = /<(?:\w+:)?aioPivotGroupings\b[^>]*\bv="([^"]*)"/.exec(pivotTableXml)
+  const groupingExt = elements(firstElement(table, 'extLst'), 'ext').find(
+    (extension) => attr(extension, 'uri') === '{AIO-PIVOT-GROUPINGS}',
+  )
+  const grouping = groupingExt && scopedChildren(groupingExt).find(
+    (child) => isElement(child, 'aioPivotGroupings', 'urn:aioffice:pivot'),
+  )
   if (groupingExt) {
     try {
-      const entries = JSON.parse(decodeEntities(groupingExt[1] ?? '')) as unknown
+      const entries = JSON.parse(grouping?.attributes.get('v') ?? '') as unknown
       if (!Array.isArray(entries)) throw new Error('not an array')
       for (const entry of entries) {
         const { fieldIndex, ...grouping } = entry as { fieldIndex?: unknown }
@@ -236,17 +458,17 @@ export function parsePivotDefinition(
     }
   }
 
-  const cacheFieldsBlock = firstElement(cacheDefinitionXml, 'cacheFields')
-  const cacheFields = cacheFieldsBlock === null ? [] : elements(cacheFieldsBlock, 'cacheField')
+  const cacheFieldsBlock = firstElement(cache, 'cacheFields')
+  const cacheFields = elements(cacheFieldsBlock, 'cacheField')
   // Calculated fields (cacheField@formula): strip the optional leading = and
   // validate against source field names.
   const formulaByField = new Map<number, string>()
   cacheFields.forEach((fieldXml, index) => {
     const formula = attr(fieldXml, 'formula')
-    if (formula !== null) formulaByField.set(index, decodeEntities(formula).replace(/^\s*=/, ''))
+    if (formula !== null) formulaByField.set(index, formula.replace(/^\s*=/, ''))
   })
   const fields: PivotCacheField[] = cacheFields.map((fieldXml, index) => ({
-    name: decodeEntities(attr(fieldXml, 'name') ?? ''),
+    name: attr(fieldXml, 'name') ?? '',
     sharedItems: parseSharedItems(fieldXml),
     ...(groupingByField.has(index) ? { grouping: groupingByField.get(index)! } : {}),
     ...(formulaByField.has(index) ? { formula: formulaByField.get(index)! } : {}),
@@ -284,31 +506,20 @@ export function parsePivotDefinition(
     }
   })
 
-  const pivotFieldsBlock = firstElement(pivotTableXml, 'pivotFields')
-  const pivotFields = pivotFieldsBlock === null ? [] : elements(pivotFieldsBlock, 'pivotField')
-  const fieldItems: PivotFieldItem[][] = pivotFields.map((fieldXml) => {
-    const itemsBlock = firstElement(fieldXml, 'items')
-    if (!itemsBlock) return []
-    return elements(itemsBlock, 'item')
-      .filter((item) => attr(item, 't') === null)
-      .map((item) => ({
-        x: attr(item, 'x') === null ? null : Number(attr(item, 'x')),
-        hidden: attr(item, 'h') === '1',
-      }))
-  })
+  const pivotFieldsBlock = firstElement(table, 'pivotFields')
+  const pivotFields = elements(pivotFieldsBlock, 'pivotField')
+  const fieldItems = pivotFields.map(readFieldItems)
 
   const readAxis = (tag: string): number[] => {
-    const block = firstElement(pivotTableXml, tag)
+    const block = firstElement(table, tag)
     if (!block) return []
     return elements(block, 'field').map((field) => Number(attr(field, 'x') ?? '0'))
   }
   const rowFields = readAxis('rowFields')
   const colFields = readAxis('colFields')
 
-  const dataFieldsBlock = firstElement(pivotTableXml, 'dataFields')
-  const dataFields: PivotDataField[] = (
-    dataFieldsBlock === null ? [] : elements(dataFieldsBlock, 'dataField')
-  ).map((fieldXml) => {
+  const dataFieldsBlock = firstElement(table, 'dataFields')
+  const dataFields: PivotDataField[] = elements(dataFieldsBlock, 'dataField').map((fieldXml) => {
     // showDataAs="normal" (or absent) = normal display, not recorded; the file
     // spelling "percent" maps to our "% Of…" mode. Unsupported display modes
     // only record an unsupported reason, and the mode itself is not carried
@@ -320,7 +531,7 @@ export function parsePivotDefinition(
       unsupported.push(`"show values as" mode "${ooxmlMode}" does not support recompute`)
     }
     const field = Number(attr(fieldXml, 'fld') ?? '0')
-    const dataFieldName = decodeEntities(attr(fieldXml, 'name') ?? '')
+    const dataFieldName = attr(fieldXml, 'name') ?? ''
     // Base-field modes: the base field must be a row/column axis field and the
     // base item a concrete member of it — Excel's "(previous)"/"(next)" special
     // values and anything out of range fail closed.
@@ -351,7 +562,7 @@ export function parsePivotDefinition(
             item === null ||
             !Number.isInteger(item) ||
             item < 0 ||
-            fieldItems[parsedField!]?.[item] === undefined
+            fieldItems[parsedField!]?.[item]?.x == null
           ) {
             unsupported.push(
               `the base item of data field "${dataFieldName}" does not support recompute`,
@@ -381,8 +592,8 @@ export function parsePivotDefinition(
   }
   if (dataFields.length === 0) unsupported.push('this pivot table has no data fields')
 
-  const pageFieldsBlock = firstElement(pivotTableXml, 'pageFields')
-  const pageFields = (pageFieldsBlock === null ? [] : elements(pageFieldsBlock, 'pageField')).map(
+  const pageFieldsBlock = firstElement(table, 'pageFields')
+  const pageFields = elements(pageFieldsBlock, 'pageField').map(
     (fieldXml) => {
       const item = attr(fieldXml, 'item')
       return {
@@ -416,53 +627,26 @@ export function parsePivotDefinition(
     captionBeginsWith: 'beginsWith',
   }
   const filters: PivotFilterDef[] = []
-  const filtersBlock = firstElement(pivotTableXml, 'filters')
-  for (const filterXml of filtersBlock === null ? [] : elements(filtersBlock, 'filter')) {
+  const filtersBlock = firstElement(table, 'filters')
+  for (const filterXml of elements(filtersBlock, 'filter')) {
     const type = attr(filterXml, 'type') ?? ''
     const field = Number(attr(filterXml, 'fld') ?? '0')
     const dataField = Number(attr(filterXml, 'iMeasureFld') ?? '0')
-    const customValues = elements(filterXml, 'customFilter').map((custom) =>
-      Number(attr(custom, 'val') ?? 'NaN'),
-    )
     const labelOp = LABEL_FILTER_OPS[type]
     if (labelOp !== undefined) {
       filters.push({
         kind: 'label',
         field,
         op: labelOp,
-        value: decodeEntities(attr(filterXml, 'stringValue1') ?? ''),
+        value: attr(filterXml, 'stringValue1') ?? '',
       })
-    } else if (type === 'count') {
-      const top10 = firstElement(filterXml, 'top10')
-      const count = Number(top10 === null ? 'NaN' : (attr(top10, 'val') ?? 'NaN'))
-      // top="0" means bottom N, which is unsupported.
-      if (!Number.isFinite(count) || count < 1 || (top10 !== null && attr(top10, 'top') === '0')) {
-        unsupported.push(
-          `value/label filter (pivotFilters) type "${type}" does not support recompute`,
-        )
-        continue
-      }
-      filters.push({ kind: 'value', field, dataField, op: 'top', count })
-    } else if (type === 'valueGreaterThan' && Number.isFinite(customValues[0])) {
-      filters.push({ kind: 'value', field, dataField, op: 'greaterThan', from: customValues[0]! })
-    } else if (
-      type === 'valueBetween' &&
-      Number.isFinite(customValues[0]) &&
-      Number.isFinite(customValues[1])
-    ) {
-      filters.push({
-        kind: 'value',
-        field,
-        dataField,
-        op: 'between',
-        from: Math.min(customValues[0]!, customValues[1]!),
-        to: Math.max(customValues[0]!, customValues[1]!),
-      })
-    } else {
-      unsupported.push(
-        `value/label filter (pivotFilters) type "${type}" does not support recompute`,
-      )
+      continue
     }
+    const valueFilter = readValueFilter(filterXml, type, field, dataField)
+    if (valueFilter) filters.push(valueFilter)
+    else unsupported.push(
+      `value/label filter (pivotFilters) type "${type}" does not support recompute`,
+    )
   }
 
   return {
@@ -473,8 +657,8 @@ export function parsePivotDefinition(
     fieldItems,
     rowFields,
     colFields,
-    rowLines: parseLayoutLines(firstElement(pivotTableXml, 'rowItems'), rowFields.length),
-    colLines: parseLayoutLines(firstElement(pivotTableXml, 'colItems'), colFields.length),
+    rowLines: parseLayoutLines(firstElement(table, 'rowItems'), rowFields.length),
+    colLines: parseLayoutLines(firstElement(table, 'colItems'), colFields.length),
     dataFields,
     pageFields,
     filters,

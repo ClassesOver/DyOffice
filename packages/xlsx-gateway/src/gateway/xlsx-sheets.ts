@@ -1,31 +1,35 @@
 import {
+  findStructuredTableReference,
   FORMULA_REFERENCE_PATTERN,
   formulaCodeSegments,
   qualifierMatches,
   readDefinedNameText,
   readWorksheetTagAttribute,
   rewriteDefinedNames,
-  rewriteWorksheetCore,
+  rewriteWorksheetCellFormulas,
   rewriteWorksheetHyperlinks,
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { chartFormulaElements, rewriteChartReferences } from './xlsx-chart-references.ts'
-import { rewriteX14DataValidations } from './xlsx-dv.ts'
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
-import { findRootChild } from './xlsx-root-tail.ts'
-import { childElements } from './xlsx-style-entries.ts'
+import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
+import { rewriteWorksheetValidations } from './xlsx-dv.ts'
+import { ensureRelationshipNamespace, readRelationshipId, readRelationshipIdAttribute, readRootStartTag, relationshipNamespaceOverride } from './xlsx-namespace.ts'
+import { childElements, type ChildElement } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
   applyPatches,
   elementText,
+  isElement,
   patchElement,
   prefixOf,
+  scopedChildren,
+  spreadsheetPartRoot,
+  spreadsheetSheetRoot,
   withBody,
+  withNamespaces,
+  worksheetRoot,
+  type ScopedElement,
 } from './xlsx-worksheet-xml.ts'
-
-/// '>' is legal inside XML attribute values (sheet names can carry it), so
-/// element scans consume quoted runs atomically instead of using [^>]*.
-const TAG_ATTRIBUTES = `(?:"[^"]*"|'[^']*'|[^>"'])*?`
 
 /// Sheet-level workbook surgery: rename, add, and remove worksheets. Renames
 /// rewrite every qualified reference (other sheets' formulas, defined names,
@@ -60,6 +64,7 @@ export interface SheetAllocation {
   readonly path: string
   readonly sheetId: number
   readonly relationshipId: string
+  readonly chartSheetRelationshipType?: string | undefined
 }
 
 const INVALID_NAME_CHARACTERS = /[\\/?*[\]:]/
@@ -130,8 +135,6 @@ export interface WorksheetRenameExemptions {
   readonly sparklineSources: ReadonlyMap<string, string>
 }
 
-const WORKSHEET_FORMULA =
-  /(<(f|formula[12]?)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/\2>)/g
 const HYPERLINK_LOCATION = /^('(?:[^']|'')+'|[^'!]+)!([\s\S]*)$/
 function sheetNameLookup(renames: SheetEditPlan['renames']): SheetNameLookup {
   const names = new Map(renames.map(({ sheetName, newName }) => [sheetName.toLowerCase(), newName]))
@@ -202,22 +205,13 @@ function rewriteWorksheetReferences(
   rewriteLocation: ReferenceRewrite,
   preserve?: WorksheetRenameExemptions,
 ): string {
-  let xml = rewriteWorksheetCore(worksheetXml, (core) =>
-    core.replace(
-      WORKSHEET_FORMULA,
-      (full, opening: string, _tag: string, body: string, closing: string) => {
-        const formula = decodeEntities(body)
-        const rewritten = rewriteFormula(formula)
-        return rewritten === formula ? full : opening + escapeXmlText(rewritten) + closing
-      },
-    ),
-  )
+  let xml = rewriteWorksheetCellFormulas(worksheetXml, rewriteFormula)
   xml = rewriteWorksheetHyperlinks(xml, (location, cell) =>
     cell !== undefined && preserve?.hyperlinkLocations.get(cell) === location
       ? location
       : rewriteLocation(location),
   )
-  xml = rewriteX14DataValidations(xml, rewriteFormula)
+  xml = rewriteWorksheetValidations(xml, rewriteFormula)
   return rewriteWorksheetVisualReferences(
     xml,
     rewriteFormula,
@@ -278,29 +272,48 @@ export function chartReferencesSheet(chartXml: string, sheetName: string): boole
 /// relationships clone verbatim (ids are part-scoped, targets are external or
 /// workbook-internal anchors). Printer settings reference a part the copy
 /// must not share, so they are dropped — the caller strips the matching
-/// r:id attributes. Anything else (drawings, tables, comments, pivots) would
+/// r:id attributes. Drawing relationships are retained for the part copier
+/// to retarget. Background images can be shared. Anything else (tables, comments, pivots) would
 /// leave the clone pointing at parts that cannot be shared: fail closed.
 export function prepareClonedSheetRels(
   relsXml: string,
   sourceName: string,
 ): { relsXml: string | null; droppedPrinterSettings: boolean } {
-  let droppedPrinterSettings = false
-  let result = relsXml
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*?\bType="([^"]+)"[^>]*?\/>\s*/g)) {
-    if (/\/hyperlink$/.test(match[1] ?? '')) continue
-    if (/\/printerSettings$/.test(match[1] ?? '')) {
-      droppedPrinterSettings = true
-      result = result.replace(match[0], '')
+  const root = findRelationshipsRoot(relsXml)
+  if (!root) throw new SheetEditError(`Sheet "${sourceName}" has an invalid relationships part.`)
+  const printerSettings = []
+  let hasClonedRelationships = false
+  for (const entry of scopedChildren(root)) {
+    if (entry.namespace !== root.namespace) {
+      hasClonedRelationships = true
       continue
     }
+    const type = entry.attributes.get('Type') ?? ''
+    const external = entry.attributes.get('TargetMode') === 'External'
+    if (entry.local === 'Relationship') {
+      if (
+        type.endsWith('/hyperlink') ||
+        (!external && (type.endsWith('/drawing') || type.endsWith('/image')))
+      ) {
+        hasClonedRelationships = true
+        continue
+      }
+      if (type.endsWith('/printerSettings')) {
+        printerSettings.push(patchElement(entry, ''))
+        continue
+      }
+    }
     throw new SheetEditError(
-      `Sheet "${sourceName}" carries charts, images, tables, or comments — ` +
-        'duplicating it is not supported yet.',
+      `Sheet "${sourceName}" has a relationship that cannot be copied (${type || entry.name}).`,
     )
   }
   return {
-    relsXml: /<Relationship\b/.test(result) ? result : null,
-    droppedPrinterSettings,
+    relsXml: hasClonedRelationships
+      ? applyPatches(relsXml, [
+          patchElement(root, withBody(root, applyPatches(root.inner, printerSettings))),
+        ])
+      : null,
+    droppedPrinterSettings: printerSettings.length > 0,
   }
 }
 
@@ -308,18 +321,35 @@ export function prepareClonedSheetRels(
 /// printerSettings relationship was not cloned; the copy falls back to
 /// default print settings instead of a dangling reference.
 export function stripPageSetupRelIds(worksheetXml: string): string {
-  return worksheetXml.replace(
-    /(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,
-    (_full, prefix: string) => prefix,
-  )
+  const root = worksheetRoot(worksheetXml)
+  const pageSetup = root
+    ? scopedChildren(root).find((child) => isElement(child, 'pageSetup', root.namespace))
+    : childElements(worksheetXml).find((child) => child.name === 'pageSetup')
+  if (!pageSetup) return worksheetXml
+  const attribute = readRelationshipIdAttribute(pageSetup.opening, '', root?.opening ?? '')
+  if (!attribute) return worksheetXml
+  const opening = updateWorksheetTagAttribute(pageSetup.opening, attribute.name, null)
+  const offset = (root ? root.start + root.opening.length : 0) + pageSetup.start
+  return worksheetXml.slice(0, offset) + opening + worksheetXml.slice(offset + pageSetup.opening.length)
 }
 
 /// A clone must not claim the selected-tab state of its source.
 export function sanitizeClonedWorksheetXml(worksheetXml: string): string {
-  return worksheetXml.replace(
-    /(<sheetView\b[^>]*?)\s+tabSelected="[^"]*"/g,
-    (_full, prefix: string) => prefix,
-  )
+  const root = spreadsheetSheetRoot(worksheetXml)
+  const children = root
+    ? scopedChildren(root)
+    : childElements(worksheetXml).map((child) => withNamespaces(child, new Map()))
+  const views = children.find((child) => isElement(child, 'sheetViews', root?.namespace ?? ''))
+  if (!views) return worksheetXml
+  const patches = scopedChildren(views).flatMap((view) => {
+    if (!isElement(view, 'sheetView', views.namespace) || !view.attributes.has('tabSelected')) return []
+    const opening = updateWorksheetTagAttribute(view.opening, 'tabSelected', null)
+    return [patchElement(view, opening + view.xml.slice(view.opening.length))]
+  })
+  if (patches.length === 0) return worksheetXml
+  const offset = (root ? root.start + root.opening.length : 0) + views.start
+  const replacement = withBody(views, applyPatches(views.inner, patches))
+  return worksheetXml.slice(0, offset) + replacement + worksheetXml.slice(offset + views.xml.length)
 }
 
 /// Excel clones sheet-scoped defined names when copying a sheet; this save
@@ -328,7 +358,9 @@ export function sanitizeClonedWorksheetXml(worksheetXml: string): string {
 export function assertNoSheetScopedDefinedNames(workbookXml: string, sourceName: string): void {
   const index = parseSheetElements(workbookXml).findIndex((sheet) => sheet.name === sourceName)
   if (index < 0) throw new SheetEditError(`Sheet "${sourceName}" was not found in the workbook.`)
-  if (new RegExp(`<definedName\\b[^>]*?\\blocalSheetId="${index}"`).test(workbookXml)) {
+  if (workbookDefinedNameElements(workbookXml).some(({ attributes }) =>
+    parseWorkbookTabIndex(attributes.get('localSheetId')) === index,
+  )) {
     throw new SheetEditError(
       `Sheet "${sourceName}" has sheet-scoped defined names — duplicating it is ` +
         'not supported yet.',
@@ -349,60 +381,96 @@ export function buildWorksheetPartXml(): string {
 
 export interface SheetElement {
   readonly xml: string
+  readonly start: number
   readonly name: string
+  readonly sheetId: string | undefined
   readonly hidden: boolean
   readonly veryHidden: boolean
   readonly relationshipId: string | undefined
 }
 
 export function parseSheetElements(workbookXml: string): SheetElement[] {
+  const list = workbookSection(workbookXml, 'sheets')
+  return list ? readSheetElements(list) : []
+}
+
+function readSheetElements(list: NonNullable<ReturnType<typeof workbookSection>>): SheetElement[] {
+  const { section: sheets, root, start } = list
+  const bodyStart = start + sheets.opening.length
   const elements: SheetElement[] = []
-  for (const match of workbookXml.matchAll(
-    new RegExp(`<sheet\\b${TAG_ATTRIBUTES}(?:/>|>[\\s\\S]*?</sheet>)`, 'g'),
-  )) {
-    const xml = match[0]
-    const name = readAttribute(xml, 'name')
+  for (const sheet of workbookSectionEntries(sheets, 'sheet')) {
+    const { xml, opening, attributes } = sheet
+    const name = attributes.get('name')
     if (name === undefined) continue
-    const state = readAttribute(xml, 'state')
+    const state = attributes.get('state')
     elements.push({
       xml,
-      name: decodeAttribute(name),
+      start: bodyStart + sheet.start,
+      name,
+      sheetId: attributes.get('sheetId'),
       hidden: state === 'hidden' || state === 'veryHidden',
       veryHidden: state === 'veryHidden',
-      // The relationships namespace is conventionally bound to "r", but any
-      // prefix is legal — fall back to whatever prefix the producer chose.
-      relationshipId:
-        readAttribute(xml, 'r:id') ?? /(?:^|\s)[A-Za-z_][\w.-]*:id="([^"]*)"/.exec(xml)?.[1],
+      relationshipId: readRelationshipId(opening, sheets.opening, root.opening),
     })
   }
   return elements
 }
 
+function* sheetIdsInWorkbook(workbookXml: string): Iterable<number> {
+  for (const { sheetId } of parseSheetElements(workbookXml)) {
+    if (sheetId === undefined || !/^[0-9]+$/.test(sheetId)) continue
+    const id = Number(sheetId)
+    if (Number.isSafeInteger(id)) yield id
+  }
+}
+
 export function maxSheetIdInWorkbook(workbookXml: string): number {
   let max = 0
-  for (const match of workbookXml.matchAll(
-    new RegExp(`<sheet\\b${TAG_ATTRIBUTES}\\bsheetId="([0-9]+)"`, 'g'),
-  )) {
-    max = Math.max(max, Number(match[1]))
-  }
+  for (const id of sheetIdsInWorkbook(workbookXml)) max = Math.max(max, id)
   return max
 }
 
-/// Relationship ids are read quote-agnostically, for the same reason as
-/// pptx-engine's maxRelationshipIdNumber: a .rels part that spells its ids
-/// with single quotes still holds them, so no id may be handed out twice.
-const RELATIONSHIP_ID = /\bId\s*=\s*(["'])rId(\d+)\1/g
+// Excel requires sheet IDs in 1..65534 (MS-OI29500 2.1.578).
+const MAX_EXCEL_SHEET_ID = 65_534
+
+export function nextWorkbookSheetIds(workbookXml: string, count: number): number[] {
+  const first = maxSheetIdInWorkbook(workbookXml) + 1
+  if (first + count - 1 <= MAX_EXCEL_SHEET_ID) {
+    return Array.from({ length: count }, (_, index) => first + index)
+  }
+
+  const used = new Set(sheetIdsInWorkbook(workbookXml))
+  const ids: number[] = []
+  let next = first
+  while (ids.length < count) {
+    if (next > MAX_EXCEL_SHEET_ID) next = 1
+    while (next <= MAX_EXCEL_SHEET_ID && used.has(next)) next += 1
+    if (next > MAX_EXCEL_SHEET_ID) throw new SheetEditError('No unused worksheet IDs remain.')
+    used.add(next)
+    ids.push(next++)
+  }
+  return ids
+}
 
 export function maxRelationshipId(relationshipsXml: string): number {
   let max = 0
-  for (const match of relationshipsXml.matchAll(RELATIONSHIP_ID)) {
-    max = Math.max(max, Number(match[2]))
+  for (const id of relationshipIds(relationshipsXml)) {
+    const match = /^rId(\d+)$/.exec(id)
+    if (match) max = Math.max(max, Number(match[1]))
   }
   return max
 }
 
 function relationshipIds(relationshipsXml: string): Set<string> {
-  return new Set([...relationshipsXml.matchAll(RELATIONSHIP_ID)].map((match) => `rId${match[2]}`))
+  const elements = childElements(relationshipsXml)
+  const root = elements.find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Relationships')
+  const used = new Set<string>()
+  for (const { name, opening } of root ? childElements(root.inner) : elements) {
+    if (name.slice(name.lastIndexOf(':') + 1) !== 'Relationship') continue
+    const id = readWorksheetTagAttribute(opening, 'Id')
+    if (id !== undefined) used.add(decodeAttribute(id))
+  }
+  return used
 }
 
 function firstFreeRelationshipId(used: ReadonlySet<string>): string {
@@ -435,8 +503,13 @@ export function applySheetPlanToWorkbookXml(
   workbookXml: string,
   plan: SheetEditPlan,
   additions: readonly SheetAllocation[],
+  unavailableSheets: ReadonlySet<string> = new Set(),
 ): string {
-  const elements = parseSheetElements(workbookXml)
+  const sheetList = workbookSection(workbookXml, 'sheets')
+  if (!sheetList) throw new SheetEditError('The workbook has no sheet list.')
+  const sheetPrefix = prefixOf(sheetList.section.name)
+  const relationshipBinding = relationshipNamespaceOverride(sheetList.section.opening, sheetList.root.opening)
+  const elements = readSheetElements(sheetList)
   const originalNames = elements.map((element) => element.name)
   const renameByOriginal = new Map(plan.renames.map((rename) => [rename.sheetName, rename.newName]))
   const removedSet = new Set(plan.removals)
@@ -445,15 +518,14 @@ export function applySheetPlanToWorkbookXml(
   for (const element of elements) {
     if (removedSet.has(element.name)) continue
     const newName = renameByOriginal.get(element.name)
-    const xml =
-      newName === undefined
-        ? element.xml
-        : element.xml.replace(/\bname="[^"]*"/, () => `name="${escapeXmlAttribute(newName)}"`)
+    const opening = readRootStartTag(element.xml)
+    const xml = newName === undefined ? element.xml
+      : updateWorksheetTagAttribute(opening, 'name', escapeXmlAttribute(newName)) + element.xml.slice(opening.length)
     finalElements.set(newName ?? element.name, { xml, hidden: element.hidden })
   }
   for (const addition of additions) {
     finalElements.set(addition.name, {
-      xml: `<sheet name="${escapeXmlAttribute(addition.name)}" sheetId="${addition.sheetId}" r:id="${addition.relationshipId}"/>`,
+      xml: `<${sheetPrefix}sheet name="${escapeXmlAttribute(addition.name)}" sheetId="${addition.sheetId}"${relationshipBinding} r:id="${addition.relationshipId}"/>`,
       hidden: false,
     })
   }
@@ -473,16 +545,19 @@ export function applySheetPlanToWorkbookXml(
   ) {
     throw new SheetEditError('The sheet order does not match the final sheet set.')
   }
-  const firstVisible = plan.order.findIndex((name) => !finalElements.get(name)?.hidden)
+  const isVisible = (name: string) => !unavailableSheets.has(name) && !finalElements.get(name)?.hidden
+  const firstVisible = plan.order.findIndex(isVisible)
   if (firstVisible === -1) {
     throw new SheetEditError('A workbook needs at least one visible sheet.')
   }
 
-  const sheetsInner = plan.order.map((name) => finalElements.get(name)?.xml ?? '').join('')
-  let result = workbookXml.replace(
-    /<sheets>[\s\S]*?<\/sheets>/,
-    () => `<sheets>${sheetsInner}</sheets>`,
+  const ordered = plan.order.map((name) => finalElements.get(name)!.xml)
+  const slots = workbookSectionEntries(sheetList.section, 'sheet').filter(({ attributes }) =>
+    attributes.has('name'),
   )
+  const inner = applyPatches(sheetList.section.inner, slots.map((slot, index) => patchElement(slot, ordered[index] ?? '')))
+    + ordered.slice(slots.length).join('')
+  let result = workbookXml.slice(0, sheetList.start) + withBody(sheetList.section, inner) + workbookXml.slice(sheetList.end)
 
   // Defined-name scopes are positional (localSheetId = tab index).
   const oldIndexToNew = (oldIndex: number): number | null => {
@@ -491,10 +566,11 @@ export function applySheetPlanToWorkbookXml(
     const mapped = plan.order.indexOf(renameByOriginal.get(originalName) ?? originalName)
     return mapped < 0 ? null : mapped
   }
-  const definedNames = workbookSection(result, 'definedNames')
-  if (definedNames) {
-    const patches = workbookSectionEntries(definedNames.section, 'definedName').flatMap((name) => {
-      const localId = readTabIndex(name.opening, 'localSheetId')
+  const definedNames = workbookNameParts(result)
+  if (definedNames?.section) {
+    const { bodyStart, section, entries } = definedNames
+    const patches = entries.flatMap((name) => {
+      const localId = parseWorkbookTabIndex(name.attributes.get('localSheetId'))
       if (localId === undefined) return []
       const mapped = oldIndexToNew(localId)
       if (mapped === localId) return []
@@ -506,28 +582,39 @@ export function applySheetPlanToWorkbookXml(
       return [patchElement(name, updated)]
     })
     if (patches.length > 0) {
-      const inner = applyPatches(definedNames.section.inner, patches)
+      const inner = applyPatches(section.inner, patches)
+      const offset = bodyStart + section.start
       result =
-        result.slice(0, definedNames.start) +
-        (inner.trim() ? withBody(definedNames.section, inner) : '') +
-        result.slice(definedNames.end)
+        result.slice(0, offset) +
+        (inner.trim() ? withBody(section, inner) : '') +
+        result.slice(offset + section.xml.length)
     }
   }
 
+  // Both editors open the first visible sheet when the saved active tab is
+  // stale. Resolve that fallback in the old order before remapping it.
+  const originallyVisible = ({ name, hidden }: SheetElement) => !hidden && !unavailableSheets.has(name)
+  const firstOriginallyVisible = elements.findIndex(originallyVisible)
   const activeIndex = (oldIndex: number): number => {
-    const mapped = oldIndexToNew(oldIndex)
+    const previous = elements[oldIndex]
+    const original = previous && originallyVisible(previous) ? oldIndex : firstOriginallyVisible
+    const mapped = oldIndexToNew(original)
     if (mapped === null) return firstVisible
-    const newlyHidden =
-      !elements[oldIndex]?.hidden && finalElements.get(plan.order[mapped]!)?.hidden
-    return newlyHidden ? firstVisible : mapped
+    return isVisible(plan.order[mapped]!) ? mapped : firstVisible
   }
-  // The active tab defaults to the original first tab, even without a book view.
+  // A missing workbook view has the same implicit active index as an empty one.
   const implicitActiveIndex = activeIndex(0)
   const bookViews = workbookSection(result, 'bookViews')
   if (bookViews) {
     const views = workbookSectionEntries(bookViews.section, 'workbookView')
-    const patches = views.flatMap((view) => {
-      const index = readTabIndex(view.opening, 'activeTab') ?? 0
+    const savedTabs = views.map((view) => view.attributes.get('activeTab'))
+    const hasSavedTab = savedTabs.some((tab) => tab !== undefined)
+    const patches = views.flatMap((view, viewIndex) => {
+      const saved = savedTabs[viewIndex]
+      // Both readers choose the last explicit active tab. A synthesized tab
+      // on an implicit view could override the workbook's opening sheet.
+      if (saved === undefined && hasSavedTab) return []
+      const index = parseWorkbookTabIndex(saved) ?? 0
       const mapped = activeIndex(index)
       if (index === mapped) return []
       const opening = updateWorksheetTagAttribute(view.opening, 'activeTab', String(mapped))
@@ -544,9 +631,9 @@ export function applySheetPlanToWorkbookXml(
         result.slice(bookViews.end)
     }
   } else if (implicitActiveIndex !== 0) {
-    const sheets = findRootChild(result, 'workbook', 'sheets')
+    const sheets = workbookSection(result, 'sheets')
     if (sheets) {
-      const prefix = prefixOf(childElements(result)[0]?.name ?? '')
+      const prefix = prefixOf(sheets.root.name)
       result =
         result.slice(0, sheets.start) +
         `<${prefix}bookViews><${prefix}workbookView activeTab="${implicitActiveIndex}"/></${prefix}bookViews>` +
@@ -559,33 +646,29 @@ export function applySheetPlanToWorkbookXml(
   return additions.length > 0 ? ensureRelationshipNamespace(result) : result
 }
 
-function readTabIndex(
-  opening: string,
-  attribute: 'localSheetId' | 'activeTab',
-): number | undefined {
-  const raw = readWorksheetTagAttribute(opening, attribute)
-  const value = raw === undefined ? '' : decodeAttribute(raw).trim()
-  return /^\+?\d+$/.test(value) ? Number(value) : undefined
+export function parseWorkbookTabIndex(raw: string | undefined): number | undefined {
+  const value = raw?.trim() ?? ''
+  const index = Number(value)
+  return /^\+?\d+$/.test(value) && Number.isSafeInteger(index) ? index : undefined
 }
 
 function workbookSection(workbookXml: string, name: string) {
-  const position = findRootChild(workbookXml, 'workbook', name)
-  if (!position) return undefined
-  const [section] = childElements(workbookXml.slice(position.start, position.end))
-  return section ? { ...position, section } : undefined
+  const [element] = childElements(workbookXml)
+  const root = element && withNamespaces(element, new Map())
+  if (root?.local !== 'workbook') return undefined
+  const [section] = workbookSectionEntries(root, name)
+  if (!section) return undefined
+  const start = root.start + root.opening.length + section.start
+  return { root, section, start, end: start + section.xml.length }
 }
 
-function workbookSectionEntries(section: { inner: string }, name: string) {
-  return childElements(section.inner).filter(
-    (entry) => entry.name.slice(prefixOf(entry.name).length) === name,
-  )
+function workbookSectionEntries(section: ScopedElement, name: string) {
+  return scopedChildren(section).filter((entry) => isElement(entry, name, section.namespace))
 }
 
 function* survivingDefinedNameFormulas(workbookXml: string, removedLocalIds: ReadonlySet<number>) {
-  const names = workbookSection(workbookXml, 'definedNames')
-  if (!names) return
-  for (const name of workbookSectionEntries(names.section, 'definedName')) {
-    const localId = readTabIndex(name.opening, 'localSheetId')
+  for (const name of workbookDefinedNameElements(workbookXml)) {
+    const localId = parseWorkbookTabIndex(name.attributes.get('localSheetId'))
     if (localId !== undefined && removedLocalIds.has(localId)) continue
     const formula = readDefinedNameText(name.inner)
     if (formula !== undefined) yield formula
@@ -596,47 +679,143 @@ function* survivingDefinedNameFormulas(workbookXml: string, removedLocalIds: Rea
 /// veryHidden when re-hidden; unhiding clears either state (the renderer
 /// never emits that for veryHidden, so only an explicit op reaches here).
 function setSheetStateAttribute(sheetXml: string, hidden: boolean): string {
-  if (hidden && /\sstate="veryHidden"/.test(sheetXml)) return sheetXml
-  const withoutState = sheetXml.replace(/\s+state="[^"]*"/, '')
-  if (!hidden) return withoutState
-  return withoutState.replace(/^<sheet\b/, '<sheet state="hidden"')
+  const opening = readRootStartTag(sheetXml)
+  const state = readWorksheetTagAttribute(opening, 'state')
+  if (hidden && state !== undefined && decodeAttribute(state) === 'veryHidden') return sheetXml
+  const withoutState = updateWorksheetTagAttribute(opening, 'state', null)
+  const updated = hidden ? withoutState.replace(/^<[^\s/>]+/, '$& state="hidden"') : withoutState
+  return updated + sheetXml.slice(opening.length)
 }
 
-export function addWorksheetOverride(contentTypesXml: string, partPath: string): string {
-  const override = `<Override PartName="/${partPath}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
-  if (!contentTypesXml.includes('</Types>')) {
-    throw new SheetEditError('The workbook has no [Content_Types].xml Types element.')
-  }
-  return contentTypesXml.replace('</Types>', () => `${override}</Types>`)
+export function addWorksheetOverride(contentTypesXml: string, partPath: string, isChartSheet = false): string {
+  const kind = isChartSheet ? 'chartsheet' : 'worksheet'
+  const updated = addContentTypeEntry(
+    contentTypesXml, 'Override', `/${partPath}`, `application/vnd.openxmlformats-officedocument.spreadsheetml.${kind}+xml`,
+  )
+  if (updated === undefined) throw new SheetEditError('The workbook has no [Content_Types].xml Types element.')
+  return updated
+}
+
+function findTypesRoot(xml: string) {
+  return childElements(xml).find(({ name }) => name.slice(name.lastIndexOf(':') + 1) === 'Types')
+}
+
+export function addContentTypeEntry(
+  xml: string,
+  kind: 'Default' | 'Override',
+  value: string,
+  contentType: string,
+): string | undefined {
+  const root = findTypesRoot(xml)
+  if (!root) return undefined
+  const name = root.name.slice(0, -'Types'.length) + kind
+  const key = kind === 'Default' ? 'Extension' : 'PartName'
+  const exists = childElements(root.inner).some((element) => {
+    if (element.name !== name) return false
+    const raw = readWorksheetTagAttribute(element.opening, key)
+    if (raw === undefined) return false
+    const registered = decodeAttribute(raw)
+    return kind === 'Default' ? registered.toLowerCase() === value.toLowerCase() : registered === value
+  })
+  if (exists) return xml
+  const element = `<${name} ${key}="${escapeXmlAttribute(value)}" ContentType="${escapeXmlAttribute(contentType)}"/>`
+  return appendChildAtRoot(xml, root, element)
 }
 
 /// Removes the [Content_Types].xml Override for any part path (worksheets,
 /// drawings, charts, comments, tables). Parts covered by a Default extension
 /// mapping have no Override; the call is a no-op for them.
 export function removePartOverride(contentTypesXml: string, partPath: string): string {
-  return contentTypesXml.replace(
-    new RegExp(`<Override\\b[^>]*PartName="/${escapeRegExp(partPath)}"[^>]*/>\\s*`),
-    '',
-  )
+  const root = findTypesRoot(contentTypesXml)
+  if (!root) return contentTypesXml
+  const name = root.name.slice(0, -'Types'.length) + 'Override'
+  const expected = '/' + partPath
+  let literalMatch
+  let entry
+  for (const element of childElements(root.inner)) {
+    if (element.name !== name) continue
+    const raw = readWorksheetTagAttribute(element.opening, 'PartName')
+    if (raw === undefined) continue
+    const part = decodeAttribute(raw)
+    if (part === expected) literalMatch ??= element
+    try {
+      if (decodeURIComponent(part) === expected) {
+        entry = element
+        break
+      }
+    } catch {
+      // Tolerate a producer's literal percent sign in a part name.
+    }
+  }
+  entry ??= literalMatch
+  if (!entry) return contentTypesXml
+  const start = root.start + root.opening.length + entry.start
+  return contentTypesXml.slice(0, start) + contentTypesXml.slice(start + entry.xml.length)
 }
 
 export function addWorksheetRelationship(
   relationshipsXml: string,
   relationshipId: string,
   target: string,
+  type = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet',
 ): string {
-  const relationship = `<Relationship Id="${relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${target}"/>`
-  if (!relationshipsXml.includes('</Relationships>')) {
-    throw new SheetEditError('The workbook has no relationships part.')
+  const added = appendRelationshipRecord(
+    relationshipsXml, relationshipId, type, target,
+  )
+  if (added === undefined) throw new SheetEditError('The workbook has no relationships part.')
+  return added
+}
+
+export function findRelationshipsRoot(xml: string): ScopedElement | undefined {
+  const [element] = childElements(xml)
+  if (!element) return undefined
+  const root = withNamespaces(element, new Map())
+  return root.local === 'Relationships' &&
+    (root.namespace === '' ||
+      root.namespace === 'http://schemas.openxmlformats.org/package/2006/relationships')
+    ? root
+    : undefined
+}
+
+export function appendRelationshipRecord(
+  xml: string,
+  id: string,
+  type: string,
+  target: string,
+  targetMode?: 'External',
+): string | undefined {
+  const root = findRelationshipsRoot(xml)
+  if (!root) return undefined
+  const name = root.name.slice(0, -1)
+  const element = `<${name} Id="${escapeXmlAttribute(id)}" Type="${escapeXmlAttribute(type)}" ` +
+    `Target="${escapeXmlAttribute(target)}"${targetMode ? ` TargetMode="${targetMode}"` : ''}/>`
+  return appendChildAtRoot(xml, root, element)
+}
+
+function appendChildAtRoot(xml: string, root: ChildElement, element: string): string {
+  const endOfOpening = root.start + root.opening.length
+  if (root.opening.endsWith('/>')) {
+    return xml.slice(0, endOfOpening - 2) + `>${element}</${root.name}>` + xml.slice(endOfOpening)
   }
-  return relationshipsXml.replace('</Relationships>', () => `${relationship}</Relationships>`)
+  const close = endOfOpening + root.inner.length
+  return xml.slice(0, close) + element + xml.slice(close)
+}
+
+export function relationshipIdsMatch(id: string | undefined, reference: string | undefined): boolean {
+  return id !== undefined && reference !== undefined && decodeAttribute(id) === decodeAttribute(reference)
 }
 
 export function removeRelationshipById(relationshipsXml: string, relationshipId: string): string {
-  return relationshipsXml.replace(
-    new RegExp(`<Relationship\\b[^>]*\\bId="${escapeRegExp(relationshipId)}"[^>]*/>\\s*`),
-    '',
+  const root = findRelationshipsRoot(relationshipsXml)
+  if (!root) return relationshipsXml
+  const entry = scopedChildren(root).find(
+    (child) =>
+      isElement(child, 'Relationship', root.namespace) &&
+      relationshipIdsMatch(readWorksheetTagAttribute(child.opening, 'Id'), relationshipId),
   )
+  if (!entry) return relationshipsXml
+  const start = root.start + root.opening.length + entry.start
+  return relationshipsXml.slice(0, start) + relationshipsXml.slice(start + entry.xml.length)
 }
 
 /// Relationship types whose targets never block a sheet removal: hyperlink
@@ -660,16 +839,18 @@ export interface ParsedRelationship {
 
 export function parseRelationships(relsXml: string): ParsedRelationship[] {
   const entries: ParsedRelationship[] = []
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*?\/>/g)) {
-    const element = match[0]
-    const type = readAttribute(element, 'Type')
-    const target = readAttribute(element, 'Target')
+  const root = findRelationshipsRoot(relsXml)
+  if (!root) return entries
+  for (const entry of scopedChildren(root)) {
+    if (!isElement(entry, 'Relationship', root.namespace)) continue
+    const type = entry.attributes.get('Type')
+    const target = entry.attributes.get('Target')
     if (type === undefined || target === undefined) continue
     entries.push({
-      id: readAttribute(element, 'Id'),
-      type: decodeAttribute(type),
-      target: decodeAttribute(target),
-      external: readAttribute(element, 'TargetMode') === 'External',
+      id: readWorksheetTagAttribute(entry.opening, 'Id'),
+      type,
+      target,
+      external: entry.attributes.get('TargetMode') === 'External',
     })
   }
   return entries
@@ -706,10 +887,13 @@ export function classifyRemovedSheetRels(relsXml: string, sheetName: string): st
 /// displayName of the table defined in a table part — the token surviving
 /// formulas would use in structured references (Table1[Amount]).
 export function tableDisplayName(tableXml: string): string | undefined {
-  const openTag = /<table\b[^>]*>/.exec(tableXml)?.[0]
-  if (!openTag) return undefined
-  const name = readAttribute(openTag, 'displayName') ?? readAttribute(openTag, 'name')
-  return name === undefined ? undefined : decodeAttribute(name)
+  return tablePartNames(tableXml)[0]
+}
+
+export function tablePartNames(tableXml: string): string[] {
+  const root = spreadsheetPartRoot(tableXml)
+  if (root?.local !== 'table') return []
+  return ['displayName', 'name'].flatMap((attribute) => root.attributes.get(attribute) || [])
 }
 
 /// True when a defined name that survives the removal mentions the token
@@ -721,27 +905,38 @@ export function definedNamesUseToken(
   token: string,
   removedLocalIds: ReadonlySet<number>,
 ): boolean {
-  const needle = token.toLowerCase()
+  return (
+    token.endsWith('[') &&
+    findDefinedNameTableReference(
+      workbookXml,
+      new Set([token.slice(0, -1).toLowerCase()]),
+      removedLocalIds,
+    ) !== undefined
+  )
+}
+
+export function findDefinedNameTableReference(
+  workbookXml: string,
+  tableNames: ReadonlySet<string>,
+  removedLocalIds: ReadonlySet<number>,
+): string | undefined {
   for (const formula of survivingDefinedNameFormulas(workbookXml, removedLocalIds)) {
-    if (formula.toLowerCase().includes(needle)) return true
+    const name = findStructuredTableReference(formula, tableNames)
+    if (name !== undefined) return name
   }
-  return false
+  return undefined
 }
 
 /// True when a pivotCacheDefinition part reads its source rows from the
 /// sheet (cacheSource/worksheetSource@sheet). Sheet names compare
 /// case-insensitively, matching Excel.
 export function pivotCacheReadsFromSheet(cacheXml: string, sheetName: string): boolean {
-  const target = sheetName.toLowerCase()
-  for (const [element] of cacheXml.matchAll(WORKSHEET_SOURCE)) {
-    if (pivotSourceSheet(element)?.toLowerCase() === target) return true
-  }
-  return false
+  const source = localPivotWorksheetSource(cacheXml)
+  return source?.element.attributes.get('sheet')?.toLowerCase() === sheetName.toLowerCase()
 }
 
 /// Rewrites worksheetSource@sheet in a pivotCacheDefinition part when the
-/// pivot's source sheet is renamed — the attribute holds the plain sheet
-/// name, so the formula-oriented rename helpers never see it.
+/// pivot's source sheet is renamed.
 export function renameSheetInPivotCacheSource(
   cacheXml: string,
   oldName: string,
@@ -751,20 +946,63 @@ export function renameSheetInPivotCacheSource(
 }
 
 function rewritePivotCacheSource(cacheXml: string, lookup: SheetNameLookup): string {
-  return cacheXml.replace(WORKSHEET_SOURCE, (element) => {
-    const sheet = pivotSourceSheet(element)
-    const newName = sheet === undefined ? undefined : lookup(sheet)
-    return newName === undefined
-      ? element
-      : updateWorksheetTagAttribute(element, 'sheet', escapeXmlAttribute(newName))
-  })
+  return rewritePivotWorksheetSource(cacheXml, 'sheet', lookup)
 }
 
-const WORKSHEET_SOURCE = new RegExp(`<worksheetSource(?=[\\s/>])${TAG_ATTRIBUTES}/?>`, 'g')
+export function renameTableInPivotCacheSource(
+  cacheXml: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  return rewritePivotWorksheetSource(cacheXml, 'name', (name) => names.get(name.toLowerCase()))
+}
 
-function pivotSourceSheet(element: string): string | undefined {
-  const raw = readWorksheetTagAttribute(element, 'sheet')
-  return raw === undefined ? undefined : decodeAttribute(raw)
+function rewritePivotWorksheetSource(
+  xml: string,
+  attribute: 'sheet' | 'name',
+  lookup: (name: string) => string | undefined,
+): string {
+  const source = localPivotWorksheetSource(xml)
+  if (!source) return xml
+  const { element, start } = source
+  const old = element.attributes.get(attribute)
+  const next = old === undefined ? undefined : lookup(old)
+  if (next === undefined || next === old) return xml
+  const opening = updateWorksheetTagAttribute(element.opening, attribute, escapeXmlAttribute(next))
+  return xml.slice(0, start) + opening + xml.slice(start + element.opening.length)
+}
+
+export function convertPivotTableSourceToRange(
+  xml: string,
+  resolve: (name: string, sheet: string | undefined) => { sheet: string; ref: string } | undefined,
+): string {
+  const source = localPivotWorksheetSource(xml)
+  if (!source) return xml
+  const { element, start } = source
+  const name = element.attributes.get('name')
+  const range = name && resolve(name, element.attributes.get('sheet'))
+  if (!range) return xml
+  let opening = updateWorksheetTagAttribute(element.opening, 'name', null)
+  opening = updateWorksheetTagAttribute(opening, 'sheet', escapeXmlAttribute(range.sheet))
+  opening = updateWorksheetTagAttribute(opening, 'ref', escapeXmlAttribute(range.ref))
+  return xml.slice(0, start) + opening + xml.slice(start + element.opening.length)
+}
+
+export function localPivotWorksheetSource(xml: string) {
+  if (!xml.includes('worksheetSource')) return undefined
+  const root = spreadsheetPartRoot(xml)
+  if (!root) return undefined
+  const cache = root.local === 'cacheSource' ? root
+    : root.local === 'pivotCacheDefinition'
+      ? scopedChildren(root).find((entry) => isElement(entry, 'cacheSource', root.namespace))
+      : undefined
+  if (cache?.attributes.get('type') !== 'worksheet') return undefined
+  const source = scopedChildren(cache).find((entry) => isElement(entry, 'worksheetSource', cache.namespace))
+  if (!source || readRelationshipId(source.opening, cache.opening, root.opening) !== undefined) {
+    return undefined
+  }
+  const cacheBody = cache === root ? root.start + root.opening.length
+    : root.start + root.opening.length + cache.start + cache.opening.length
+  return { element: source, start: cacheBody + source.start }
 }
 
 /// DefinedNames scoped to a removed sheet are dropped with it, so their

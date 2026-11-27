@@ -3,8 +3,10 @@
 /// worksheet/drawing relationships, and the [Content_Types].xml overrides.
 
 import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart.ts'
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
-import { nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { ensureRelationshipNamespace, readRelationshipId, relationshipNamespaceOverride } from './xlsx-namespace.ts'
+import { addContentTypeEntry, appendRelationshipRecord, findRelationshipsRoot, nextFreeRelationshipId, parseRelationships, relationshipIdsMatch } from './xlsx-sheets.ts'
+import { updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, worksheetRoot } from './xlsx-worksheet-xml.ts'
 
 export class VisualAddError extends Error {}
 
@@ -189,8 +191,13 @@ export async function applyVisualAdditions(
   additions: readonly VisualAddition[],
   touchedEntries: Set<string>,
 ): Promise<void> {
+  const drawingByWorksheet = new Map<string, { path: string }>()
   for (const addition of additions) {
-    const drawing = await ensureSheetDrawing(pkg, addition.worksheetPath, touchedEntries)
+    let drawing = drawingByWorksheet.get(addition.worksheetPath)
+    if (!drawing) {
+      drawing = await ensureSheetDrawing(pkg, addition.worksheetPath, touchedEntries)
+      drawingByWorksheet.set(addition.worksheetPath, drawing)
+    }
     if (addition.chart) {
       const chartPath = await allocatePartPath(pkg, 'xl/charts/chart', '.xml')
       pkg.add(chartPath, buildChartXml(addition.chart))
@@ -250,19 +257,34 @@ export async function applyVisualAdditions(
   }
 }
 
+/// CT_Worksheet places drawing before these optional trailing members.
+const AFTER_DRAWING_ELEMENTS = new Set([
+  'legacyDrawing', 'legacyDrawingHF', 'picture', 'oleObjects', 'controls',
+  'webPublishItems', 'tableParts', 'extLst',
+])
+
 /// Finds the sheet's drawing part, creating (and wiring) one if absent.
 export async function ensureSheetDrawing(
   pkg: MutablePackage,
   worksheetPath: string,
   touchedEntries: Set<string>,
 ): Promise<{ path: string }> {
+  const xml = await pkg.readText(worksheetPath)
+  const root = worksheetRoot(xml)
+  if (!root || root.opening.endsWith('/>')) {
+    throw new VisualAddError(`${worksheetPath} has no closing worksheet tag.`)
+  }
+  const children = scopedChildren(root)
+  const drawing = children.find((child) => isElement(child, 'drawing', root.namespace))
   const sheetRelsPath = relsPathFor(worksheetPath)
-  if (await pkg.has(sheetRelsPath)) {
-    const rels = await pkg.readText(sheetRelsPath)
-    const existing = matchRelationship(rels, DRAWING_REL_TYPE)
-    if (existing) {
-      return { path: resolveRelTarget(worksheetPath, existing.target) }
-    }
+  if (drawing) {
+    const id = readRelationshipId(drawing.opening, '', root.opening)
+    const rels = await pkg.has(sheetRelsPath) ? await pkg.readText(sheetRelsPath) : ''
+    const existing = parseRelationships(rels).find((entry) =>
+      !entry.external && entry.type === DRAWING_REL_TYPE && relationshipIdsMatch(entry.id, id),
+    )
+    if (!existing) throw new VisualAddError(`${worksheetPath} already has a drawing element but no drawing rel.`)
+    return { path: resolveRelTarget(worksheetPath, existing.target) }
   }
   const drawingPath = await allocatePartPath(pkg, 'xl/drawings/drawing', '.xml')
   pkg.add(
@@ -280,43 +302,15 @@ export async function ensureSheetDrawing(
     relativeTarget(worksheetPath, drawingPath),
   )
   touchedEntries.add(sheetRelsPath)
-  await insertWorksheetDrawingElement(pkg, worksheetPath, relId, touchedEntries)
-  return { path: drawingPath }
-}
-
-/// `<drawing>` sits near the end of CT_Worksheet — before the trailing
-/// optional members if any of them are present.
-const AFTER_DRAWING_ELEMENTS = [
-  'legacyDrawing',
-  'legacyDrawingHF',
-  'picture',
-  'oleObjects',
-  'controls',
-  'webPublishItems',
-  'tableParts',
-  'extLst',
-] as const
-
-async function insertWorksheetDrawingElement(
-  pkg: MutablePackage,
-  worksheetPath: string,
-  relId: string,
-  touchedEntries: Set<string>,
-): Promise<void> {
-  let xml = await pkg.readText(worksheetPath)
-  if (/<drawing[\s/>]/.test(xml)) {
-    throw new VisualAddError(`${worksheetPath} already has a drawing element but no drawing rel.`)
-  }
-  xml = ensureRelationshipNamespace(xml)
-  const element = `<drawing r:id="${escapeXmlAttribute(relId)}"/>`
-  let insertAt = xml.lastIndexOf('</worksheet>')
-  if (insertAt < 0) throw new VisualAddError(`${worksheetPath} has no closing worksheet tag.`)
-  for (const name of AFTER_DRAWING_ELEMENTS) {
-    const match = xml.search(new RegExp(`<${name}[\\s/>]`))
-    if (match >= 0 && match < insertAt) insertAt = match
-  }
-  pkg.write(worksheetPath, xml.slice(0, insertAt) + element + xml.slice(insertAt))
+  const anchor = children.find(({ local, namespace }) =>
+    namespace === root.namespace && AFTER_DRAWING_ELEMENTS.has(local),
+  )
+  const offset = root.start + root.opening.length + (anchor?.start ?? root.inner.length)
+  const binding = relationshipNamespaceOverride('', root.opening)
+  const element = `<${prefixOf(root.name)}drawing${binding} r:id="${escapeXmlAttribute(relId)}"/>`
+  pkg.write(worksheetPath, ensureRelationshipNamespace(xml.slice(0, offset) + element + xml.slice(offset)))
   touchedEntries.add(worksheetPath)
+  return { path: drawingPath }
 }
 
 async function hyperlinkRelationship(
@@ -498,14 +492,14 @@ function shapeXml(shapeId: number, shape: ShapeAdd, linkRelId: string | undefine
   )
 }
 
-export function solidFillXml(color: string): string {
+export function solidFillXml(color: string, prefix = 'a:', namespaceDeclaration = ''): string {
   return color === 'none'
-    ? '<a:noFill/>'
-    : `<a:solidFill><a:srgbClr val="${color.slice(1).toUpperCase()}"/></a:solidFill>`
+    ? `<${prefix}noFill${namespaceDeclaration}/>`
+    : `<${prefix}solidFill${namespaceDeclaration}><${prefix}srgbClr val="${color.slice(1).toUpperCase()}"/></${prefix}solidFill>`
 }
 
-export function outlineXml(color: string): string {
-  return `<a:ln w="9525">${solidFillXml(color)}</a:ln>`
+export function outlineXml(color: string, prefix = 'a:', namespaceDeclaration = ''): string {
+  return `<${prefix}ln${namespaceDeclaration} w="9525">${solidFillXml(color, prefix)}</${prefix}ln>`
 }
 
 function nextShapeId(drawingXml: string): number {
@@ -942,15 +936,91 @@ export function relativeTarget(fromPart: string, toPart: string): string {
   return `${'../'.repeat(ups)}${toSegments.slice(common).join('/')}`
 }
 
-function matchRelationship(relsXml: string, type: string): { id: string; target: string } | null {
-  for (const match of relsXml.matchAll(/<Relationship\b[^>]*\/?>(?:<\/Relationship>)?/g)) {
-    const tag = match[0]
-    if (!tag.includes(`Type="${type}"`)) continue
-    const id = /\bId=(["'])([^"']+)\1/.exec(tag)?.[2]
-    const target = /\bTarget=(["'])([^"']+)\1/.exec(tag)?.[2]
-    if (id && target) return { id, target }
+/// A sheet copy owns its drawing and editable charts. Ancillary assets such
+/// as image parts and chart styles can still be referenced by both copies.
+export async function cloneSheetDrawingParts(
+  pkg: MutablePackage,
+  sourceSheet: string,
+  destinationSheet: string,
+  sheetRelationships: string,
+  touchedEntries: Set<string>,
+): Promise<string[]> {
+  type OwnedPart = 'drawing' | 'chart'
+  const parts = {
+    drawing: { prefix: 'xl/drawings/drawing', contentType: DRAWING_CONTENT_TYPE },
+    chart: { prefix: 'xl/charts/chart', contentType: CHART_CONTENT_TYPE },
   }
-  return null
+  const copies = new Map<string, string>()
+  const chartPaths: string[] = []
+  const directory = (path: string) => path.slice(0, path.lastIndexOf('/'))
+
+  async function copyPart(source: string, kind: OwnedPart): Promise<string> {
+    const existing = copies.get(source)
+    if (existing !== undefined) return existing
+    const { prefix, contentType } = parts[kind]
+    const path = await allocatePartPath(pkg, prefix, '.xml')
+    pkg.add(path, await pkg.readText(source))
+    copies.set(source, path)
+    if (kind === 'chart') chartPaths.push(path)
+    await registerContentTypeOverride(pkg, path, contentType, touchedEntries)
+    await copyRelationships(source, path, kind === 'drawing' ? 'chart' : undefined)
+    return path
+  }
+
+  async function copyRelationships(
+    source: string,
+    destination: string,
+    ownedKind?: OwnedPart,
+    relationshipXml?: string,
+  ) {
+    const sourceRels = relsPathFor(source)
+    const xml =
+      relationshipXml ?? ((await pkg.has(sourceRels)) ? await pkg.readText(sourceRels) : undefined)
+    if (xml === undefined) return
+    const root = findRelationshipsRoot(xml)
+    if (!root) throw new VisualAddError(`${sourceRels} is not a relationships part.`)
+    const patches = []
+    for (const entry of scopedChildren(root)) {
+      if (
+        !isElement(entry, 'Relationship', root.namespace) ||
+        entry.attributes.get('TargetMode') === 'External'
+      )
+        continue
+      const target = entry.attributes.get('Target')
+      const type = entry.attributes.get('Type')
+      if (target === undefined || type === undefined) continue
+      const owned = ownedKind !== undefined && type.endsWith(`/${ownedKind}`)
+      const background = ownedKind === 'drawing' && type.endsWith('/image')
+      const sameDirectory = directory(source) === directory(destination)
+      if (!owned && !background && sameDirectory) continue
+      const part = resolveRelTarget(source, target)
+      if (background && !(await pkg.has(part))) {
+        throw new VisualAddError(`Workbook is missing ${part}.`)
+      }
+      if (!owned && sameDirectory) continue
+      const path = owned ? await copyPart(part, ownedKind) : part
+      const fragmentAt = target.indexOf('#')
+      const fragment = fragmentAt === -1 ? '' : target.slice(fragmentAt)
+      const relative = relativeTarget(destination, path)
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/')
+      const opening = updateWorksheetTagAttribute(
+        entry.opening,
+        'Target',
+        escapeXmlAttribute(relative + fragment),
+      )
+      patches.push(patchElement(entry, opening + entry.xml.slice(entry.opening.length)))
+    }
+    const updated =
+      patches.length === 0
+        ? xml
+        : applyPatches(xml, [patchElement(root, withBody(root, applyPatches(root.inner, patches)))])
+    pkg.add(relsPathFor(destination), updated)
+  }
+
+  await copyRelationships(sourceSheet, destinationSheet, 'drawing', sheetRelationships)
+  return chartPaths
 }
 
 export function resolveRelTarget(fromPart: string, target: string): string {
@@ -1007,12 +1077,8 @@ export async function appendRelationship(
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
       '</Relationships>'
   const id = nextFreeRelationshipId(xml)
-  const element =
-    `<Relationship Id="${id}" Type="${escapeXmlAttribute(type)}" ` +
-    `Target="${escapeXmlAttribute(target)}"${targetMode ? ` TargetMode="${targetMode}"` : ''}/>`
-  const closeAt = xml.lastIndexOf('</Relationships>')
-  if (closeAt < 0) throw new VisualAddError(`${relsPath} is not a relationships part.`)
-  const patched = xml.slice(0, closeAt) + element + xml.slice(closeAt)
+  const patched = appendRelationshipRecord(xml, id, type, target, targetMode)
+  if (patched === undefined) throw new VisualAddError(`${relsPath} is not a relationships part.`)
   if (exists) pkg.write(relsPath, patched)
   else pkg.add(relsPath, patched)
   return id
@@ -1027,13 +1093,10 @@ export async function registerContentTypeDefault(
 ): Promise<void> {
   const path = '[Content_Types].xml'
   const xml = await pkg.readText(path)
-  if (new RegExp(`<Default[^>]*Extension="${extension}"`, 'i').test(xml)) return
-  const closeAt = xml.lastIndexOf('</Types>')
-  if (closeAt < 0) throw new VisualAddError('[Content_Types].xml is malformed.')
-  const element =
-    `<Default Extension="${escapeXmlAttribute(extension)}" ` +
-    `ContentType="${escapeXmlAttribute(contentType)}"/>`
-  pkg.write(path, xml.slice(0, closeAt) + element + xml.slice(closeAt))
+  const updated = addContentTypeEntry(xml, 'Default', extension, contentType)
+  if (updated === undefined) throw new VisualAddError('[Content_Types].xml is malformed.')
+  if (updated === xml) return
+  pkg.write(path, updated)
   touchedEntries.add(path)
 }
 
@@ -1045,14 +1108,10 @@ export async function registerContentTypeOverride(
 ): Promise<void> {
   const path = '[Content_Types].xml'
   const xml = await pkg.readText(path)
-  const partName = `/${partPath}`
-  if (xml.includes(`PartName="${partName}"`)) return
-  const closeAt = xml.lastIndexOf('</Types>')
-  if (closeAt < 0) throw new VisualAddError('[Content_Types].xml is malformed.')
-  const element =
-    `<Override PartName="${escapeXmlAttribute(partName)}" ` +
-    `ContentType="${escapeXmlAttribute(contentType)}"/>`
-  pkg.write(path, xml.slice(0, closeAt) + element + xml.slice(closeAt))
+  const updated = addContentTypeEntry(xml, 'Override', `/${partPath}`, contentType)
+  if (updated === undefined) throw new VisualAddError('[Content_Types].xml is malformed.')
+  if (updated === xml) return
+  pkg.write(path, updated)
   touchedEntries.add(path)
 }
 

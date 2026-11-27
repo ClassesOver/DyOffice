@@ -11,10 +11,12 @@ import {
   definedNamesUseToken,
   formatSheetQualifier,
   partPathForRels,
+  parseRelationships,
   pivotCacheReadsFromSheet,
   prepareClonedSheetRels,
   renameSheetInFormula,
   renameSheetInPivotCacheSource,
+  removeRelationshipById,
   sanitizeClonedWorksheetXml,
   SheetEditError,
   stripPageSetupRelIds,
@@ -461,6 +463,49 @@ describe('sheet remove save', () => {
     ).rejects.toThrow(/source data/)
   })
 
+  it('protects a pivot source sheet referenced by table name from deletion and row insertion', async () => {
+    const zip = await JSZip.loadAsync(await buildSatelliteSheetFixture({ pivotSourceCache: true }))
+    const path = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const cache = await zip.file(path)!.async('text')
+    zip.file(path, cache.replace(/<worksheetSource\b[^>]*\/>/, "<worksheetSource name='decotable'/>"))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+
+    await expect(applyCellEditsToXlsx(bytes, [], [], [], {
+      renames: [], additions: [], removals: ['Deco'], order: ['Keep'],
+    }).then(() => 'saved')).rejects.toThrow(/source data from "Deco"/)
+    await expect(applyCellEditsToXlsx(bytes, [], [{
+      sheetName: 'Deco', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }]).then(() => 'saved')).rejects.toThrow(/source data from "Deco"/)
+    const other = await applyCellEditsToXlsx(bytes, [], [{
+      sheetName: 'Keep', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }])
+    expect(await entryText(other.buffer, path)).toContain("<worksheetSource name='decotable'/>")
+
+    const tablePath = 'xl/tables/table1.xml'
+    const table = await zip.file(tablePath)!.async('text')
+    zip.file(tablePath, table.replace(/\bref="[^"]+"/, 'ref="invalid"'))
+    const unreadable = await zip.generateAsync({ type: 'nodebuffer' })
+    const repaired = await applyCellEditsToXlsx(unreadable, [], [{
+      sheetName: 'Keep', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }])
+    expect(await entryText(repaired.buffer, path)).toContain("<worksheetSource name='decotable'/>")
+  })
+
+  it('protects a fixed defined range used by a pivot from row insertion', async () => {
+    const zip = await JSZip.loadAsync(await buildSatelliteSheetFixture({ pivotSourceCache: true }))
+    const path = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const workbookPath = 'xl/workbook.xml'
+    const cache = await zip.file(path)!.async('text')
+    const workbook = await zip.file(workbookPath)!.async('text')
+    zip.file(path, cache.replace(/<worksheetSource\b[^>]*\/>/, '<worksheetSource name="PivotInput"/>'))
+    zip.file(workbookPath, workbook.replace('</sheets>',
+      '</sheets><definedNames><definedName name="PivotInput">Deco!$A$1:$A$2</definedName></definedNames>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(applyCellEditsToXlsx(bytes, [], [{
+      sheetName: 'Deco', ops: [{ kind: 'insert-rows', index: 0, count: 1 }],
+    }]).then(() => 'saved')).rejects.toThrow(/source data from "Deco"/)
+  })
+
   it('rewrites a pivot cache worksheetSource when its source sheet is renamed', async () => {
     const mutation = await applyCellEditsToXlsx(
       await buildSatelliteSheetFixture({ pivotSourceCache: true }),
@@ -482,6 +527,41 @@ describe('sheet remove save', () => {
 })
 
 describe('sheet duplicate save', () => {
+  it('rejects a scoped name with a single-quoted, encoded sheet index', async () => {
+    const zip = await JSZip.loadAsync(await buildSheetsFixture())
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    zip.file(workbookPath, workbook.replace('</definedNames>',
+      "<definedName name='LocalData' localSheetId='&#43;0'>Data!$A$1</definedName></definedNames>"))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(applyCellEditsToXlsx(bytes, [], [], [], {
+      renames: [], additions: [{ name: 'Data Copy', sourceSheetName: 'Data' }], removals: [],
+      order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
+    })).rejects.toThrow('sheet-scoped defined names')
+  })
+
+  it('copies a selected sheet without inheriting its selection or changing comments', async () => {
+    const zip = await JSZip.loadAsync(await buildSheetsFixture())
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    const nameComment = '<!-- <definedName name="Ghost" localSheetId="0">Data!$A$1</definedName> -->'
+    zip.file(workbookPath, workbook.replace('</definedNames>', nameComment + '</definedNames>'))
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(sheetPath)!.async('text')
+    const viewComment = '<!-- <sheetView tabSelected="1"/> -->'
+    const view = "<sheetView workbookViewId='0' tabSelected='1' zoomScale='125'/>"
+    zip.file(sheetPath, sheet.replace('<sheetData>', `<sheetViews>${viewComment}${view}</sheetViews><sheetData>`))
+    const mutation = await applyCellEditsToXlsx(await zip.generateAsync({ type: 'nodebuffer' }), [], [], [], {
+      renames: [], additions: [{ name: 'Data Copy', sourceSheetName: 'Data' }], removals: [],
+      order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
+    })
+    expect(await entryText(mutation.buffer, 'xl/worksheets/sheet4.xml')).toContain(
+      `<sheetViews>${viewComment}<sheetView workbookViewId='0' zoomScale='125'/></sheetViews>`,
+    )
+    expect(await entryText(mutation.buffer, sheetPath)).toContain(view)
+    expect(await entryText(mutation.buffer, workbookPath)).toContain(nameComment)
+  })
+
   it('seeds the new part from the source and applies edits on top', async () => {
     const mutation = await applyCellEditsToXlsx(
       await buildSheetsFixture(),
@@ -550,7 +630,55 @@ describe('sheet duplicate save', () => {
     expect(copy).not.toContain('r:id="rId2"')
   })
 
-  it('fails closed on drawings, tables, and sheet-scoped defined names', async () => {
+  it('copies prefixed hyperlink relationships and removes only the real page setup relationship attribute', async () => {
+    const zip = await JSZip.loadAsync(await buildSheetsFixture())
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const pkg = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    const worksheet = await zip.file(sheetPath)!.async('text')
+    const comment = '<!-- <pageSetup r:id="rId2"/> -->'
+    zip.file(sheetPath, worksheet.replace('</worksheet>',
+      `${comment}<pageSetup xmlns:p="${office}" xmlns:e="urn:example" p:id='rId2' e:id="rId2" orientation='landscape'/></worksheet>`))
+    const hyperlink = `<p:Relationship Target='https://example.com' Id='rId1' Type='${office}/hyperlink' TargetMode='External'></p:Relationship>`
+    zip.file(relsPath, `<p:Relationships xmlns:p="${pkg}">${hyperlink}` +
+      `<p:Relationship Id='rId2' Type='${office}/printerSettings' Target='../printerSettings/settings.bin'/>` +
+      `<!-- <Relationship Id="fake" Type="${office}/drawing" Target="fake.xml"/> -->` +
+      '</p:Relationships>')
+
+    const mutation = await applyCellEditsToXlsx(await zip.generateAsync({ type: 'nodebuffer' }), [], [], [], {
+      renames: [], additions: [{ name: 'Data Copy', sourceSheetName: 'Data' }], removals: [],
+      order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
+    })
+
+    const clone = await entryText(mutation.buffer, 'xl/worksheets/sheet4.xml')
+    const clonedRels = await entryText(mutation.buffer, 'xl/worksheets/_rels/sheet4.xml.rels')
+    expect(clone).toContain(comment)
+    expect(clone).toContain(`<pageSetup xmlns:p="${office}" xmlns:e="urn:example" e:id="rId2" orientation='landscape'/>`)
+    expect(clonedRels).toContain('https://example.com')
+    expect(clonedRels).not.toContain('printerSettings')
+    expect(() => assertOnlyTouchedEntriesChanged(mutation)).not.toThrow()
+  })
+
+  it('keeps a real drawing relationship with a prefix and a paired tag', () => {
+    const rels = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      "<p:Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/draw&#105;ng' Target='../drawings/drawing1.xml'></p:Relationship>" +
+      '</p:Relationships>'
+    expect(prepareClonedSheetRels(rels, 'Data')).toEqual({ relsXml: rels, droppedPrinterSettings: false })
+  })
+
+  it('preserves foreign relationship metadata and the internal background image', () => {
+    const foreign = '<Relationship xmlns="urn:example:opaque" Id="rId1" Type="urn:example:printerSettings" Target="opaque"/>'
+    const rels = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      foreign +
+      '<p:Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/background.png"/>' +
+      '</p:Relationships>'
+    expect(prepareClonedSheetRels(rels, 'Data')).toEqual({ relsXml: rels, droppedPrinterSettings: false })
+    expect(parseRelationships(rels).map(({ target }) => target)).toEqual(['../media/background.png'])
+    expect(removeRelationshipById(rels, 'rId1')).toBe(rels.replace(/<p:Relationship Id[^>]*\/>/, ''))
+  })
+
+  it('rejects a missing drawing and still protects sheet-scoped defined names', async () => {
     const zip = await JSZip.loadAsync(await buildSheetsFixture())
     zip.file(
       'xl/worksheets/_rels/sheet1.xml.rels',
@@ -566,7 +694,7 @@ describe('sheet duplicate save', () => {
         removals: [],
         order: ['Data', 'Data Copy', 'Other', 'My Sheet'],
       }),
-    ).rejects.toThrow('not supported yet')
+    ).rejects.toThrow('Workbook is missing xl/drawings/drawing1.xml')
 
     // "Other" carries a sheet-scoped Print_Area (localSheetId=1).
     await expect(
@@ -603,6 +731,7 @@ describe('sheet duplicate save', () => {
     const commentRels =
       '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/></Relationships>'
     expect(() => prepareClonedSheetRels(commentRels, 'Data')).toThrow(SheetEditError)
+    expect(() => prepareClonedSheetRels(commentRels.replace('/comments', '/table'), 'Data')).toThrow(SheetEditError)
   })
 })
 

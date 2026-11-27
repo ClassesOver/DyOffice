@@ -28,12 +28,71 @@ test('Node XLSX keeps existing notes and comment threads when a new note is save
   const plan=await runtime.sheetsWorkbookPlanner(bytes,request)
   return (await native.savePlan(bytes,plan)).bytes
  }
+ await t.test('binds the VML relationship when the worksheet uses r for an extension',async()=>{
+  const input=await JSZip.loadAsync(source), path='xl/worksheets/sheet1.xml'
+  const ns='http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const comment='<!-- <legacyDrawing r:id="fake"/> -->'
+  input.file(path,(await input.file(path).async('string'))
+    .replace('xmlns:r="'+ns+'"','xmlns:r="urn:example:extension"')
+    .replace('<drawing ','<drawing xmlns:r="'+ns+'" ')
+    .replace('</worksheet>',comment+'</worksheet >'))
+  const note={row:0,column:0,author:'Audit',text:'A note'}
+  const saved=await saveNotes(await input.generateAsync({type:'nodebuffer'}),[note])
+  const xml=await (await JSZip.loadAsync(saved)).file(path).async('string')
+  assert.ok(xml.includes(comment))
+  assert.ok(xml.includes('xmlns:r="urn:example:extension"'))
+  assert.ok(xml.includes('<legacyDrawing xmlns:r="'+ns+'" r:id='))
+  assert.deepEqual((await native.inspect(saved)).sheets[0].comments,[note])
+ })
+ await t.test('registers a first legacy note when package XML contains comments and closing-tag whitespace',async()=>{
+  const input=await JSZip.loadAsync(source)
+  const relsPath='xl/worksheets/_rels/sheet1.xml.rels', typesPath='[Content_Types].xml'
+  const relComment='<!-- </Relationships> -->', typeComment='<!-- </Types> -->'
+  input.file(relsPath,(await input.file(relsPath).async('string')).replace('</Relationships>',relComment+'</Relationships >'))
+  input.file(typesPath,(await input.file(typesPath).async('string')).replace('</Types>',typeComment+'</Types >'))
+  const note={row:0,column:0,author:'Audit',text:'First note'}
+  const saved=await saveNotes(await input.generateAsync({type:'nodebuffer'}),[note])
+  const output=await JSZip.loadAsync(saved)
+  const rels=await output.file(relsPath).async('string')
+  const types=await output.file(typesPath).async('string')
+  assert.ok(rels.includes(relComment+'<Relationship'))
+  assert.ok(types.includes(typeComment+'<Override'))
+  assert.ok(rels.includes('Target="../comments1.xml"'))
+  assert.ok(rels.includes('Target="../drawings/vmlDrawing1.vml"'))
+  assert.ok(types.includes('PartName="/xl/comments1.xml"'))
+  assert.ok(types.includes('Extension="vml"'))
+  assert.deepEqual((await native.inspect(saved)).sheets[0].comments,[note])
+ })
  const legacy={row:1,column:0,author:'Audit & review',text:'Existing note <A2>\nSecond line'}
  const reply={id:'{33333333-3333-3333-3333-333333333333}',personId:'{44444444-4444-4444-4444-444444444444}',
   author:'Grace',dT:'2026-09-02T08:30:00',text:'Reply for A4'}
  const thread={id:'{11111111-1111-1111-1111-111111111111}',personId:'{22222222-2222-2222-2222-222222222222}',
   author:'Ada',dT:'2026-09-01T08:30:00',done:true,replies:[reply]}
  const modern={row:3,column:0,author:'Ada',text:'Root for A4',thread}
+ await t.test('registers first threaded comments and persons at their actual XML roots',async()=>{
+  const sourceZip=await JSZip.loadAsync(source)
+  const sheetRels='xl/worksheets/_rels/sheet1.xml.rels', workbookRels='xl/_rels/workbook.xml.rels'
+  const typesPath='[Content_Types].xml'
+  const relComment='<!-- </Relationships> -->', typeComment='<!-- </Types> -->'
+  for(const path of [sheetRels,workbookRels]){
+   sourceZip.file(path,(await sourceZip.file(path).async('string')).replace('</Relationships>',relComment+'</Relationships >'))
+  }
+  sourceZip.file(typesPath,(await sourceZip.file(typesPath).async('string')).replace('</Types>',typeComment+'</Types >'))
+  const saved=await saveNotes(await sourceZip.generateAsync({type:'nodebuffer'}),[modern])
+  const output=await JSZip.loadAsync(saved)
+  const workbookXml=await output.file(workbookRels).async('string')
+  const worksheetXml=await output.file(sheetRels).async('string')
+  const types=await output.file(typesPath).async('string')
+  assert.match(workbookXml,/<!-- <\/Relationships> --><Relationship[^>]+Target="persons\/person\.xml"/)
+  assert.match(worksheetXml,/<!-- <\/Relationships> --><Relationship[^>]+Target="\.\.\/threadedComments\/threadedComment1\.xml"/)
+  assert.ok(types.includes(typeComment+'<Override'))
+  assert.ok(types.includes('PartName="/xl/persons/person.xml"'))
+  assert.ok(types.includes('PartName="/xl/threadedComments/threadedComment1.xml"'))
+  const [comment]=(await native.inspect(saved)).sheets[0].comments
+  assert.equal(comment.thread.author,'Ada')
+  assert.equal(comment.thread.replies[0].author,'Grace')
+  assert.equal(comment.thread.replies[0].text,'Reply for A4')
+ })
  const base64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
  const picture={mediaType:'image/png',base64,widthPx:1,heightPx:1,name:'Note.png'}
  const input=await saveNotes(source,[{...legacy,picture},modern])

@@ -116,8 +116,8 @@ import { InsertFunctionFlow } from './InsertFunctionFlow'
 import { SubtotalDialog, type SubtotalConfig } from './SubtotalDialog'
 import { ConsolidateDialog } from './ConsolidateDialog'
 import type { ConsolidateConfig } from './consolidate'
-import { HeaderFooterDialog, type HeaderFooterResult } from './HeaderFooterDialog'
-import type { PrintPreviewHost } from './page-layout-actions'
+import { HeaderFooterDialog } from './HeaderFooterDialog'
+import type { HeaderFooterEditor, PrintPreviewHost } from './page-layout-actions'
 import { PrintDialog } from './PrintDialog'
 import type { HeaderFooterParts } from './edit-journal'
 import { useModalDialog } from './modal-dialog'
@@ -172,6 +172,7 @@ export interface SelectedChartRibbon {
   readonly convertible: string | null
   readonly currentType: string | null
   readonly canEdit: boolean
+  readonly canDelete: boolean
   readonly isPie: boolean
   readonly hasAxes: boolean
   /// Whether the save pipeline can write plot-level data labels for this
@@ -423,8 +424,7 @@ interface ExcelShellProps {
   readonly onCreateConsolidate: (config: ConsolidateConfig) => string | null
   /// Prefill for the Consolidate reference input (current multi-cell selection).
   readonly onGetConsolidateDefault: () => string
-  /// Header & Footer dialog OK; returns an error message, or null on success.
-  readonly onApplyHeaderFooter: (result: HeaderFooterResult) => string | null
+  readonly onOpenHeaderFooter: () => Promise<HeaderFooterEditor | null>
   /// Print with Preview, open while non-null.
   readonly printHost: PrintPreviewHost | null
   readonly onClosePrint: () => void
@@ -551,7 +551,7 @@ export function ExcelShell({
   onCreateSubtotal,
   onCreateConsolidate,
   onGetConsolidateDefault,
-  onApplyHeaderFooter,
+  onOpenHeaderFooter,
   printHost,
   onClosePrint,
   onPromptChange,
@@ -729,7 +729,12 @@ export function ExcelShell({
     document.addEventListener('contextmenu', onContextMenu)
     return () => document.removeEventListener('contextmenu', onContextMenu)
   }, [])
-  const [showHeaderFooter, setShowHeaderFooter] = useState(false)
+  const [headerFooterEditor, setHeaderFooterEditor] = useState<HeaderFooterEditor | null>(null)
+  const openHeaderFooter = (): void => {
+    void onOpenHeaderFooter().then((editor) => {
+      if (editor) setHeaderFooterEditor(editor)
+    })
+  }
   const [printRevision, setPrintRevision] = useState(0)
   const [showAllowEditRanges, setShowAllowEditRanges] = useState(false)
   const [protectSheetMode, setProtectSheetMode] = useState<'protect' | 'unprotect' | null>(null)
@@ -765,7 +770,7 @@ export function ExcelShell({
     else if (command === 'queries-open') setShowQueries(true)
     else if (command === PASTE_SPECIAL_OPEN_SHELL_COMMAND) {
       void onReadPasteSpecialSource().then((source) => setPasteSpecialSource(source))
-    } else if (command === 'header-footer-open') setShowHeaderFooter(true)
+    } else if (command === 'header-footer-open') openHeaderFooter()
     else if (command === 'allow-edit-ranges-open') setShowAllowEditRanges(true)
     else if (command === 'sheet-protect') {
       const protection = onGetSheetProtection()
@@ -1455,17 +1460,17 @@ export function ExcelShell({
         <PrintDialog
           host={printHost}
           onClose={onClosePrint}
-          onPageSetup={() => setShowHeaderFooter(true)}
+          onPageSetup={openHeaderFooter}
           revision={printRevision}
         />
       )}
-      {showHeaderFooter && (
+      {headerFooterEditor && (
         <HeaderFooterDialog
-          initialHeader={pageLayout.header ?? null}
-          initialFooter={pageLayout.footer ?? null}
-          onApply={onApplyHeaderFooter}
+          initialHeader={headerFooterEditor.header}
+          initialFooter={headerFooterEditor.footer}
+          onApply={headerFooterEditor.apply}
           onClose={() => {
-            setShowHeaderFooter(false)
+            setHeaderFooterEditor(null)
             setPrintRevision((value) => value + 1)
           }}
         />
@@ -2316,6 +2321,7 @@ function Ribbon({
             label={t('appDeleteChart')}
             detail={selectedChart?.title ?? t('appRemoveFromSheet')}
             symbol="🗑"
+            disabled={!selectedChart?.canDelete}
             onClick={() => onCommand('chart-delete')}
           />
         </RibbonGroup>

@@ -483,13 +483,14 @@ import {
   type RibbonCommandContext,
 } from './ribbon-actions'
 import {
-  handleApplyHeaderFooter as handleApplyHeaderFooterImpl,
+  openHeaderFooterEditor,
   handleExportPdf as handleExportPdfImpl,
   handlePageLayoutCommand as handlePageLayoutCommandImpl,
   openPrintPreviewHost,
   type PrintPreviewHost,
   type PageLayoutContext,
 } from './page-layout-actions'
+import { resolveEffectivePrintFit } from './print-settings'
 import { handleExportCsv as handleExportCsvImpl, type CsvExportContext } from './csv-export'
 import { effectivePageBreaks, installPageBreakPreview } from './page-break-preview'
 import { mapProtectedRanges } from './protected-ranges'
@@ -586,6 +587,7 @@ import { TimelineFieldPicker, TimelinePanels, type TimelineUiState } from './Tim
 import type { DefinedNameAction, DefinedNameRow } from './NameManagerDialog'
 import { workbookMediaDataUrl } from './workbook-media'
 import {
+  canEditChartAnchor,
   clearVisualSelection,
   convertibleType,
   getChartElementSelection,
@@ -6378,6 +6380,7 @@ export function App({
       convertible,
       currentType,
       canEdit: !state || live.chartPath !== undefined || live.id.startsWith('added-'),
+      canDelete: canEditChartAnchor(live),
       isPie,
       hasAxes: currentType !== null && !isPie,
       // A pending conversion always lands on a labelable family.
@@ -6411,11 +6414,15 @@ export function App({
 
   const activePageLayout = (() => {
     const worksheet = univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()
-    const journalState = worksheet
-      ? (lazyWorkbookRef.current?.editJournal.pageSetup.get(worksheet.getSheetId()) ?? {})
-      : {}
+    const sheetId = worksheet?.getSheetId()
+    const state = lazyWorkbookRef.current
+    const journalState = sheetId ? state?.editJournal.pageSetup.get(sheetId) ?? {} : {}
+    const fileSetup = sheetId ? state?.sheetFilePageSetups.get(sheetId) ?? null : null
+    const fit = resolveEffectivePrintFit(journalState, fileSetup)
     return {
       ...journalState,
+      fitToWidth: fit.fitToPage ? fit.fitToWidth : 0,
+      fitToHeight: fit.fitToPage ? fit.fitToHeight : 0,
       showGridlines:
         journalState.showGridlines ?? (worksheet ? !worksheet.hasHiddenGridLines() : true),
       showHeadings:
@@ -6747,7 +6754,7 @@ export function App({
         onCreateSubtotal={(config) => handleCreateSubtotalImpl(dataToolsContext(), config)}
         onCreateConsolidate={(config) => handleCreateConsolidateImpl(dataToolsContext(), config)}
         onGetConsolidateDefault={() => consolidateDefaultReferenceImpl(dataToolsContext())}
-        onApplyHeaderFooter={(result) => handleApplyHeaderFooterImpl(pageLayoutContext(), result)}
+        onOpenHeaderFooter={() => openHeaderFooterEditor(pageLayoutContext())}
       />
       {openingWorkbook && !host?.inPlaceSave && (
         <div className="workbook-opening-screen" role="status" aria-live="polite">

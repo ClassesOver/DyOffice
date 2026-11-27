@@ -45,12 +45,33 @@ it('rewrites chart series and pivot sources using their original sheet names', (
   expect(renamer.chart('<c:f>Data!$A$2:$A$4</c:f><c:f>Summary!$B$2:$B$4</c:f>')).toBe(
     "<c:f>Summary!$A$2:$A$4</c:f><c:f>'Bright &amp; Clear'!$B$2:$B$4</c:f>",
   )
-  expect(renamer.pivotCache('<worksheetSource sheet="Data" ref="A1:B4"/>')).toBe(
-    '<worksheetSource sheet="Summary" ref="A1:B4"/>',
+  const cache = (sheet: string) =>
+    '<pivotCacheDefinition><cacheSource type="worksheet">' +
+    `<worksheetSource sheet="${sheet}" ref="A1:B4"/></cacheSource></pivotCacheDefinition>`
+  expect(renamer.pivotCache(cache('Data'))).toBe(cache('Summary'))
+  expect(renamer.pivotCache(cache('Summary'))).toBe(cache('Bright &amp; Clear'))
+})
+
+it('keeps cached extension formulas out of chart updates and sheet-deletion checks', () => {
+  const namespace = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
+  const aliased = `<v:extLst><v:ext uri="urn:private"><v:numRef><v:f>Summary!B2</v:f></v:numRef></v:ext></v:extLst>`
+  const foreign = '<ext:cache><v:numRef><v:f>Summary!B3</v:f></v:numRef></ext:cache>'
+  const alternate =
+    '<mc:AlternateContent><mc:Choice Requires="v"><v:strRef><v:f>Data!A2</v:f></v:strRef></mc:Choice>' +
+    '<mc:Fallback><v:numRef><v:f>Data!A3</v:f></v:numRef></mc:Fallback></mc:AlternateContent>'
+  const chart =
+    `<v:chartSpace xmlns:v="${namespace}" xmlns:ext="urn:private" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">` +
+    '<v:chart><v:numRef><v:f>Data!A1</v:f></v:numRef>' +
+    alternate +
+    foreign +
+    '</v:chart>' +
+    aliased +
+    '</v:chartSpace>'
+  expect(createSheetReferenceRenamer(rename).chart(chart)).toBe(
+    chart.replaceAll('Data!A', 'Summary!A'),
   )
-  expect(renamer.pivotCache('<worksheetSource sheet="Summary" ref="A1:B4"/>')).toBe(
-    '<worksheetSource sheet="Bright &amp; Clear" ref="A1:B4"/>',
-  )
+  expect(chartReferencesSheet(chart, 'Data')).toBe(true)
+  expect(chartReferencesSheet(chart, 'Summary')).toBe(false)
 })
 
 it('rewrites only local sheet references and checks the same scope before deletion', () => {

@@ -451,6 +451,14 @@ describe('extended operations', () => {
     ).not.toThrow()
   })
 
+  it('validates every range in a print area union', () => {
+    const op = { op: 'set_page_setup', sheetId: 's', printArea: 'A1:C3,F8' }
+    expect(workbookOperationSchema.parse(op)).toEqual(op)
+    for (const printArea of ['A1:C3,', 'A1:C3,XFE1', 'A1:C3,F:F']) {
+      expect(workbookOperationSchema.safeParse({ ...op, printArea }).success).toBe(false)
+    }
+  })
+
   it('rejects pivot cross-field violations at expansion', () => {
     expect(() =>
       expandToPrimitiveOps([

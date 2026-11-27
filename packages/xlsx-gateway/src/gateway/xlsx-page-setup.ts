@@ -3,9 +3,10 @@
 /// attributes), and maintains the sheet-scoped `_xlnm.Print_Area` defined
 /// name in workbook.xml. Untouched attributes and elements stay verbatim.
 
-import { columnIndex, parseRange } from '../domain/cell-address.ts'
-import { findRootChild } from './xlsx-root-tail.ts'
-import { decodeAttribute, parseSheetElements } from './xlsx-sheets.ts'
+import { columnIndex, columnLabel, parseRange } from '../domain/cell-address.ts'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
+import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
+import { parseSheetElements, parseWorkbookTabIndex } from './xlsx-sheets.ts'
 import {
   readDefinedNameText,
   readWorksheetTagAttribute,
@@ -13,6 +14,7 @@ import {
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
+import { isElement, lastWorksheetView, scopedChildren, spreadsheetSheetRoot, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PageSetupError extends Error {}
 
@@ -46,6 +48,7 @@ export interface SheetPageSetupState {
   readonly printArea?: string | null | undefined
   readonly printTitles?: string | null | undefined
   readonly clearPrintTitleRows?: true | undefined
+  readonly clearPrintTitleColumns?: true | undefined
   readonly frozenRows?: number | undefined
   readonly frozenColumns?: number | undefined
   /// Printed header/footer; null clears that half, undefined keeps it.
@@ -90,26 +93,23 @@ type PrintElement = (typeof PRINT_ELEMENT_ORDER)[number]
 const printElementRank = new Map<string, number>(
   PRINT_ELEMENT_ORDER.map((name, rank) => [name, rank]),
 )
-const TAG_BODY = `(?:[^>"']|"[^"]*"|'[^']*')*`
+type PrintElementEdit = (qualifiedName: string, existing?: ScopedElement) => string
 
-type PrintElementEdit = (qualifiedName: string, existing?: ChildElement) => string
-
-/// Uses only worksheet children so the edit cannot target custom views or
-/// insert a worksheet element inside a cell extension.
+/// Limits edits to direct SpreadsheetML sheet children.
 function editPrintElements(
   xml: string,
   edits: ReadonlyMap<PrintElement, PrintElementEdit>,
 ): string {
   if (edits.size === 0) return xml
-  const [root] = childElements(xml)
-  if (root === undefined || localName(root.name) !== 'worksheet') {
+  const root = spreadsheetSheetRoot(xml)
+  if (!root) {
     throw new PageSetupError('Worksheet has no root element.')
   }
-  const children = childElements(root.inner)
+  const children = scopedChildren(root).filter((child) => child.namespace === root.namespace)
   const patches: { start: number; end: number; rank: number; text: string }[] = []
   for (const [tag, render] of edits) {
     const rank = printElementRank.get(tag)!
-    const matches = children.filter((child) => localName(child.name) === tag)
+    const matches = children.filter((child) => child.local === tag)
     if (matches.length > 0) {
       matches.forEach((child, index) => {
         const duplicateBreaks = index > 0 && (tag === 'rowBreaks' || tag === 'colBreaks')
@@ -124,7 +124,7 @@ function editPrintElements(
       const text = render(prefix(root.name) + tag)
       if (text === '') continue
       const anchor = children.find(
-        (child) => (printElementRank.get(localName(child.name)) ?? -1) > rank,
+        (child) => (printElementRank.get(child.local) ?? -1) > rank,
       )
       const start = anchor?.start ?? root.inner.length
       patches.push({ start, end: start, rank, text })
@@ -164,13 +164,6 @@ function localName(name: string): string {
   return name.slice(prefix(name).length)
 }
 
-function rootChild(xml: string, root: string, name: string): ChildElement | undefined {
-  const position = findRootChild(xml, root, name)
-  if (!position) return undefined
-  const [element] = childElements(xml.slice(position.start, position.end))
-  return element && { ...element, start: position.start }
-}
-
 function replaceElement(xml: string, element: ChildElement, replacement: string): string {
   return xml.slice(0, element.start) + replacement + xml.slice(element.start + element.xml.length)
 }
@@ -185,10 +178,16 @@ function withChildren(element: ChildElement, body: string, opening = element.ope
 
 /// Fit-to-page lives in the worksheet's sheetPr, after tabColor and outlinePr.
 function setFitToPage(xml: string, enabled: boolean): string {
-  const sheetPr = rootChild(xml, 'worksheet', 'sheetPr')
+  const root = worksheetRoot(xml)
+  if (!root) {
+    if (!enabled) return xml
+    throw new PageSetupError('Worksheet has no root element.')
+  }
+  const sheetPr = scopedChildren(root).find((child) => isElement(child, 'sheetPr', root.namespace))
+  const start = root.start + root.opening.length
   if (sheetPr) {
-    const pageSetUpPr = childElements(sheetPr.inner).find((child) =>
-      /(?:^|:)pageSetUpPr$/.test(child.name),
+    const pageSetUpPr = scopedChildren(sheetPr).find((child) =>
+      isElement(child, 'pageSetUpPr', sheetPr.namespace),
     )
     if (!pageSetUpPr && !enabled) return xml
     const body = pageSetUpPr
@@ -199,92 +198,94 @@ function setFitToPage(xml: string, enabled: boolean): string {
             pageSetUpPr.xml.slice(pageSetUpPr.opening.length),
         )
       : `${sheetPr.inner}<${prefix(sheetPr.name)}pageSetUpPr fitToPage="1"/>`
-    return replaceElement(xml, sheetPr, withChildren(sheetPr, body))
+    return replaceElement(xml, { ...sheetPr, start: start + sheetPr.start }, withChildren(sheetPr, body))
   }
   if (!enabled) return xml
-  const worksheet = new RegExp(`<((?:[\\w.-]+:)?)worksheet(?=[\\s/>])${TAG_BODY}>`).exec(xml)
-  if (!worksheet) throw new PageSetupError('Worksheet has no root element.')
-  const at = worksheet.index + worksheet[0].length
-  const qualifier = worksheet[1] ?? ''
+  const qualifier = prefix(root.name)
   return (
-    xml.slice(0, at) +
+    xml.slice(0, start) +
     `<${qualifier}sheetPr><${qualifier}pageSetUpPr fitToPage="1"/></${qualifier}sheetPr>` +
-    xml.slice(at)
+    xml.slice(start)
   )
 }
 
-function updateFirstSheetView(
-  xml: string,
-  update: (view: ChildElement) => string,
-  create?: (name: string) => string,
-): string {
-  const views = rootChild(xml, 'worksheet', 'sheetViews')
-  if (views) {
-    const view = childElements(views.inner).find((child) => /(?:^|:)sheetView$/.test(child.name))
-    const body = view
-      ? replaceElement(views.inner, view, update(view))
-      : views.inner + (create?.(prefix(views.name) + 'sheetView') ?? '')
-    return replaceElement(xml, views, withChildren(views, body))
+function applyWorksheetViewState(xml: string, state: SheetPageSetupState): string {
+  const attributes: Record<string, string | null> = {}
+  if (state.showGridlines !== undefined) attributes.showGridLines = state.showGridlines ? null : '0'
+  if (state.showFormulas !== undefined) attributes.showFormulas = state.showFormulas ? '1' : null
+  if (state.zoomScale !== undefined) {
+    // zoomScaleNormal is used when the workbook opens in a print view.
+    const zoom = state.zoomScale === 100 ? null : String(state.zoomScale)
+    attributes.zoomScale = zoom
+    attributes.zoomScaleNormal = zoom
   }
-  if (!create) return xml
-  const anchor = /<((?:[\w.-]+:)?)(?:sheetFormatPr|cols|sheetData)(?=[\s/>])/.exec(xml)
-  if (!anchor) throw new PageSetupError('Worksheet has no sheetData element.')
-  const qualifier = anchor[1] ?? ''
-  const element = `<${qualifier}sheetViews>${create(qualifier + 'sheetView')}</${qualifier}sheetViews>`
-  return xml.slice(0, anchor.index) + element + xml.slice(anchor.index)
-}
+  if (state.showHeadings !== undefined) attributes.showRowColHeaders = state.showHeadings ? null : '0'
+  if (state.rightToLeft !== undefined) attributes.rightToLeft = state.rightToLeft ? '1' : null
 
-function setSheetViewAttr(xml: string, name: string, value: string | null): string {
-  return updateFirstSheetView(
-    xml,
-    (view) =>
-      updateWorksheetTagAttribute(view.opening, name, value) + view.xml.slice(view.opening.length),
-    value === null ? undefined : (tag) => `<${tag} workbookViewId="0" ${name}="${value}"/>`,
-  )
-}
-
-/// Column index (0-based) → letters, for the pane's topLeftCell.
-function paneColumnLabel(index: number): string {
-  let label = ''
-  for (let i = index; i >= 0; i = Math.floor(i / 26) - 1) {
-    label = String.fromCharCode(65 + (i % 26)) + label
+  const replacePane = state.frozenRows !== undefined || state.frozenColumns !== undefined
+  if (!replacePane && Object.keys(attributes).length === 0) return xml
+  const root = spreadsheetSheetRoot(xml)
+  const chartSheet = root?.local === 'chartsheet'
+  if (chartSheet && state.zoomScale !== undefined) {
+    delete attributes.zoomScaleNormal
+    attributes.zoomToFit = '0'
   }
-  return label
-}
-
-/// Replaces the first sheetView's frozen `<pane>` (both counts 0 removes it).
-/// Pane-scoped `<selection>` elements are dropped too: they reference panes
-/// that may no longer exist, and Excel restores a default selection anyway.
-function setFrozenPane(xml: string, rows: number, columns: number): string {
+  const changes = Object.entries(attributes)
+  const rows = state.frozenRows ?? 0
+  const columns = state.frozenColumns ?? 0
   const hasPane = rows > 0 || columns > 0
   const pane = (name: string) => {
-    const activePane =
-      rows > 0 && columns > 0 ? 'bottomRight' : rows > 0 ? 'bottomLeft' : 'topRight'
-    return (
-      `<${prefix(name)}pane` +
-      (columns > 0 ? ` xSplit="${columns}"` : '') +
-      (rows > 0 ? ` ySplit="${rows}"` : '') +
-      ` topLeftCell="${paneColumnLabel(columns)}${rows + 1}"` +
-      ` activePane="${activePane}" state="frozen"/>`
-    )
+    if (!hasPane) return ''
+    const active = rows > 0 && columns > 0 ? 'bottomRight' : rows > 0 ? 'bottomLeft' : 'topRight'
+    const x = columns > 0 ? ` xSplit="${columns}"` : ''
+    const y = rows > 0 ? ` ySplit="${rows}"` : ''
+    return `<${prefix(name)}pane${x}${y} topLeftCell="${columnLabel(columns)}${rows + 1}" activePane="${active}" state="frozen"/>`
   }
-  return updateFirstSheetView(
-    xml,
-    (view) => {
-      let body = view.inner
-      for (const child of childElements(body).reverse()) {
-        if (
-          /(?:^|:)pane$/.test(child.name) ||
-          (/(?:^|:)selection$/.test(child.name) &&
-            readWorksheetTagAttribute(child.opening, 'pane') !== undefined)
-        ) {
+  const openingWithUpdates = (opening: string) => changes.reduce(
+    (current, [name, value]) => updateWorksheetTagAttribute(current, name, value),
+    opening,
+  )
+
+  const create = hasPane || changes.some(([, value]) => value !== null)
+  if (!root) {
+    if (!create) return xml
+    throw new PageSetupError('Worksheet has no root element.')
+  }
+  const children = scopedChildren(root).filter((child) => child.namespace === root.namespace)
+  const views = children.find((child) => child.local === 'sheetViews')
+  const view = lastWorksheetView(views)
+  const offset = root.start + root.opening.length
+  if (views && view) {
+    let body = view.inner
+    if (replacePane) {
+      // Selections attached to removed panes become invalid. Keep ordinary selections.
+      for (const child of scopedChildren(view).reverse()) {
+        if (child.namespace === view.namespace && (child.local === 'pane' ||
+          (child.local === 'selection' && child.attributes.has('pane')))) {
           body = replaceElement(body, child, '')
         }
       }
-      return withChildren(view, (hasPane ? pane(view.name) : '') + body)
-    },
-    hasPane ? (tag) => `<${tag} workbookViewId="0">${pane(tag)}</${tag}>` : undefined,
-  )
+      body = pane(view.name) + body
+    }
+    const updated = withChildren(view, body, openingWithUpdates(view.opening))
+    const updatedViews = withChildren(views, replaceElement(views.inner, view, updated))
+    return replaceElement(xml, { ...views, start: offset + views.start }, updatedViews)
+  }
+  if (!create) return xml
+
+  const qualifier = prefix(views?.name ?? root.name)
+  const name = qualifier + 'sheetView'
+  const newAttributes = changes.flatMap(([key, value]) => value === null ? [] : [` ${key}="${value}"`]).join('')
+  const newOpening = `<${name} workbookViewId="0"${newAttributes}`
+  const newView = hasPane ? `${newOpening}>${pane(name)}</${name}>` : `${newOpening}/>`
+  if (views) {
+    return replaceElement(xml, { ...views, start: offset + views.start }, withChildren(views, views.inner + newView))
+  }
+  const anchor = chartSheet ? children.find(child => child.local !== 'sheetPr')
+    : children.find(child => child.local === 'sheetFormatPr' || child.local === 'cols' || child.local === 'sheetData')
+  if (!anchor && !chartSheet) throw new PageSetupError('Worksheet has no sheetData element.')
+  const at = offset + (anchor?.start ?? root.inner.length)
+  return xml.slice(0, at) + `<${qualifier}sheetViews>${newView}</${qualifier}sheetViews>` + xml.slice(at)
 }
 
 /// A lone `&` that does not start an Excel code (`&&` literal, section,
@@ -296,7 +297,7 @@ function escapeStrayAmpersands(text: string): string {
 
 /// Left/center/right → Excel's `&L..&C..&R..` code string, empty sections
 /// omitted; the caller XML-escapes the result.
-function encodeHeaderFooterSections(parts: HeaderFooterParts): string {
+export function encodeHeaderFooterSections(parts: HeaderFooterParts): string {
   const sections: readonly (readonly [string, string | undefined])[] = [
     ['&L', parts.left],
     ['&C', parts.center],
@@ -336,7 +337,7 @@ export function buildHeaderFooterXml(
 /// Updates the sheet's odd header/footer and retains the even and first-page variants.
 function renderHeaderFooter(
   name: string,
-  existing: ChildElement | undefined,
+  existing: ScopedElement | undefined,
   header: HeaderFooterParts | null | undefined,
   footer: HeaderFooterParts | null | undefined,
 ): string {
@@ -347,7 +348,9 @@ function renderHeaderFooter(
   ) => {
     if (parts === undefined) return
     const text = parts === null ? '' : escapeXml(encodeHeaderFooterSections(parts))
-    const children = childElements(body)
+    const children = existing
+      ? scopedChildren({ ...existing, inner: body }).filter((child) => child.namespace === existing.namespace)
+      : childElements(body)
     const previous = children.find((child) => localName(child.name) === tag)
     if (previous) {
       body = replaceElement(body, previous, text === '' ? '' : withChildren(previous, text))
@@ -374,13 +377,19 @@ function renderHeaderFooter(
 function renderPageBreaks(
   name: string,
   breaks: readonly number[],
-  existing?: ChildElement,
+  existing?: ScopedElement,
 ): string {
   const ids = [...new Set(breaks)].filter((id) => id > 0).sort((a, b) => a - b)
-  if (ids.length === 0) return ''
+  let remaining = existing?.inner ?? ''
+  if (existing) {
+    for (const child of scopedChildren(existing).reverse()) {
+      if (isElement(child, 'brk', existing.namespace)) remaining = replaceElement(remaining, child, '')
+    }
+  }
+  if (ids.length === 0 && remaining.trim() === '') return ''
   const max = localName(name) === 'rowBreaks' ? 16_383 : 1_048_575
   const tag = prefix(name) + 'brk'
-  const body = ids.map((id) => `<${tag} id="${id}" max="${max}" man="1"/>`).join('')
+  const body = ids.map((id) => `<${tag} id="${id}" max="${max}" man="1"/>`).join('') + remaining
   if (existing) {
     const count = updateWorksheetTagAttribute(existing.opening, 'count', String(ids.length))
     const opening = updateWorksheetTagAttribute(count, 'manualBreakCount', String(ids.length))
@@ -390,42 +399,14 @@ function renderPageBreaks(
 }
 
 export function applyPageSetupState(worksheetXml: string, state: SheetPageSetupState): string {
-  let xml = worksheetXml
-
-  if (state.frozenRows !== undefined || state.frozenColumns !== undefined) {
-    xml = setFrozenPane(xml, state.frozenRows ?? 0, state.frozenColumns ?? 0)
-  }
-
-  if (state.showGridlines !== undefined) {
-    // showGridLines defaults to true; write "0" to hide, drop the attribute
-    // to restore the default.
-    xml = setSheetViewAttr(xml, 'showGridLines', state.showGridlines ? null : '0')
-  }
-
-  if (state.showFormulas !== undefined) {
-    // showFormulas defaults to false; drop the attribute to restore it.
-    xml = setSheetViewAttr(xml, 'showFormulas', state.showFormulas ? '1' : null)
-  }
-  if (state.zoomScale !== undefined) {
-    // 100 is the default — drop the attributes. zoomScaleNormal keeps the
-    // normal-view zoom authoritative for files saved in page-layout /
-    // page-break view (the open path prefers it there).
-    const zoom = state.zoomScale === 100 ? null : String(state.zoomScale)
-    xml = setSheetViewAttr(xml, 'zoomScale', zoom)
-    xml = setSheetViewAttr(xml, 'zoomScaleNormal', zoom)
-  }
-  if (state.showHeadings !== undefined) {
-    // showRowColHeaders defaults to true; write "0" to hide.
-    xml = setSheetViewAttr(xml, 'showRowColHeaders', state.showHeadings ? null : '0')
-  }
-  if (state.rightToLeft !== undefined) {
-    // rightToLeft defaults to false; drop the attribute to restore it.
-    xml = setSheetViewAttr(xml, 'rightToLeft', state.rightToLeft ? '1' : null)
-  }
+  let xml = applyWorksheetViewState(worksheetXml, state)
 
   const edits = new Map<PrintElement, PrintElementEdit>()
   const printOptions: Record<string, string | null> = {}
-  if (state.printGridlines !== undefined) printOptions.gridLines = state.printGridlines ? '1' : null
+  if (state.printGridlines !== undefined) {
+    printOptions.gridLines = state.printGridlines ? '1' : null
+    if (state.printGridlines) printOptions.gridLinesSet = null // The schema defaults it to true.
+  }
   if (state.printHeadings !== undefined) printOptions.headings = state.printHeadings ? '1' : null
   if (Object.keys(printOptions).length > 0)
     edits.set('printOptions', mergePrintAttributes(printOptions))
@@ -466,6 +447,17 @@ export function applyPageSetupState(worksheetXml: string, state: SheetPageSetupS
   return editPrintElements(xml, edits)
 }
 
+const CHART_SHEET_SETUP_FIELDS = new Set([
+  'sheetName', 'zoomScale', 'orientation', 'paperSize', 'margins', 'header', 'footer',
+])
+
+export function applyChartSheetPageSetupState(xml: string, state: SheetPageSetupState): string {
+  if (Object.entries(state).some(([field, value]) => value !== undefined && !CHART_SHEET_SETUP_FIELDS.has(field))) {
+    throw new PageSetupError(`This page setup setting is unavailable on chart sheet "${state.sheetName}".`)
+  }
+  return applyPageSetupState(xml, state)
+}
+
 /// Maintains the sheet-scoped `_xlnm.Print_Area` / `_xlnm.Print_Titles`
 /// names. localSheetId is positional, so entries follow workbook.xml's final
 /// `<sheet>` order.
@@ -476,13 +468,14 @@ export function applyPrintAreas(
     printArea?: string | null | undefined
     printTitles?: string | null | undefined
     clearPrintTitleRows?: true | undefined
+    clearPrintTitleColumns?: true | undefined
   }[],
 ): string {
   let xml = workbookXml
   // Parse elements instead of pattern-matching serialized XML: attribute
   // order and entity encoding vary by producer.
   const sheetOrder = parseSheetElements(xml).map((element) => element.name)
-  for (const { sheetName, printArea, printTitles, clearPrintTitleRows } of areas) {
+  for (const { sheetName, printArea, printTitles, clearPrintTitleRows, clearPrintTitleColumns } of areas) {
     const sheetIndex = sheetOrder.indexOf(sheetName)
     if (sheetIndex === -1) {
       throw new PageSetupError(`Sheet "${sheetName}" was not found in the workbook.`)
@@ -493,36 +486,31 @@ export function applyPrintAreas(
         xml,
         '_xlnm.Print_Area',
         sheetIndex,
-        printArea === null ? null : `${quoted}!${toAbsoluteRange(printArea)}`,
+        printArea === null
+          ? null
+          : printArea.split(',').map((area) => `${quoted}!${toAbsoluteRange(area)}`).join(','),
       )
     }
-    if (printTitles !== undefined || clearPrintTitleRows) {
-      const columns =
-        clearPrintTitleRows && printTitles === undefined
-          ? existingTitleSpans(xml, sheetIndex).cols
-          : undefined
+    if (printTitles !== undefined || clearPrintTitleRows || clearPrintTitleColumns) {
       xml = setSheetScopedName(
         xml,
         '_xlnm.Print_Titles',
         sheetIndex,
-        typeof printTitles === 'string'
-          ? titleReference(xml, quoted, sheetIndex, printTitles)
-          : columns === undefined
-            ? null
-            : `${quoted}!${columns}`,
+        printTitles === null
+          ? null
+          : titleReference(xml, quoted, sheetIndex, printTitles, clearPrintTitleRows, clearPrintTitleColumns),
       )
     }
   }
   return xml
 }
 
-function scopedNames(section: ChildElement, name: string, sheetIndex: number): ChildElement[] {
-  return childElements(section.inner).filter((child) => {
-    if (localName(child.name) !== 'definedName') return false
-    const definedName = decodeAttribute(readWorksheetTagAttribute(child.opening, 'name') ?? '')
-    const scope = decodeAttribute(readWorksheetTagAttribute(child.opening, 'localSheetId') ?? '')
-    return definedName === name && /^[0-9]+$/.test(scope) && Number(scope) === sheetIndex
-  })
+function scopedNames(entries: readonly ScopedElement[], name: string, sheetIndex: number) {
+  return entries.filter(
+    ({ attributes }) =>
+      attributes.get('name') === name &&
+      parseWorkbookTabIndex(attributes.get('localSheetId')) === sheetIndex,
+  )
 }
 
 function setSheetScopedName(
@@ -534,9 +522,10 @@ function setSheetScopedName(
   const makeEntry = (tag: string, body: string) =>
     `<${tag} name="${name}" localSheetId="${sheetIndex}">${body}</${tag}>`
   const body = reference === null ? null : escapeXml(reference)
-  const section = rootChild(workbookXml, 'workbook', 'definedNames')
-  if (section) {
-    const matches = scopedNames(section, name, sheetIndex)
+  const parts = workbookNameParts(workbookXml)
+  if (parts?.section) {
+    const { bodyStart, section, entries: definedNames } = parts
+    const matches = scopedNames(definedNames, name, sheetIndex)
     const first = matches[0]
     let entries = section.inner
     for (const match of matches.reverse()) {
@@ -549,25 +538,22 @@ function setSheetScopedName(
     if (!first && body !== null) entries += makeEntry(prefix(section.name) + 'definedName', body)
     return replaceElement(
       workbookXml,
-      section,
+      { ...section, start: bodyStart + section.start },
       entries.trim() ? withChildren(section, entries) : '',
     )
   }
   if (body === null) return workbookXml
 
   // Schema order: definedNames follows sheets, functionGroups and externalReferences.
-  const [workbook] = childElements(workbookXml)
-  const anchor =
-    workbook &&
-    childElements(workbook.inner)
-      .reverse()
-      .find((child) =>
-        ['sheets', 'functionGroups', 'externalReferences'].includes(localName(child.name)),
-      )
-  if (!workbook || !anchor) throw new PageSetupError('workbook.xml has no sheets section.')
-  const qualifier = prefix(workbook.name)
+  if (!parts) throw new PageSetupError('workbook.xml has no sheets section.')
+  const { root, children, bodyStart } = parts
+  const anchor = ['externalReferences', 'functionGroups', 'sheets']
+    .map((name) => children.find((child) => isElement(child, name, root.namespace)))
+    .find((child) => child !== undefined)
+  if (!anchor) throw new PageSetupError('workbook.xml has no sheets section.')
+  const qualifier = prefix(root.name)
   const element = `<${qualifier}definedNames>${makeEntry(qualifier + 'definedName', body)}</${qualifier}definedNames>`
-  const at = workbook.start + workbook.opening.length + anchor.start + anchor.xml.length
+  const at = bodyStart + anchor.start + anchor.xml.length
   return workbookXml.slice(0, at) + element + workbookXml.slice(at)
 }
 
@@ -577,48 +563,69 @@ function titleReference(
   workbookXml: string,
   quoted: string,
   sheetIndex: number,
-  titles: string,
-): string {
-  const incoming = parseTitleSpans(titles)
+  titles: string | undefined,
+  clearRows = false,
+  clearColumns = false,
+): string | null {
+  const incoming = titles === undefined ? {} : parseTitleSpans(titles)
   const kept = existingTitleSpans(workbookXml, sheetIndex)
-  const rows = incoming.rows ?? kept.rows
-  const cols = incoming.cols ?? kept.cols
+  const rows = incoming.rows ?? (clearRows ? undefined : kept.rows)
+  const cols = incoming.cols ?? (clearColumns ? undefined : kept.cols)
   const spans: string[] = []
   if (cols !== undefined) spans.push(`${quoted}!${cols}`)
   if (rows !== undefined) spans.push(`${quoted}!${rows}`)
-  if (spans.length === 0) throw new PageSetupError(`Invalid print titles "${titles}".`)
-  return spans.join(',')
+  return spans.length > 0 ? spans.join(',') : null
+}
+
+export interface PrintTitleSpan {
+  readonly axis: 'row' | 'column'
+  readonly start: number
+  readonly end: number
+}
+
+export function parsePrintTitleSpan(reference: string): PrintTitleSpan | null {
+  const text = reference.trim()
+  const rows = /^\$?(\d{1,7}):\$?(\d{1,7})$/.exec(text)
+  if (rows) {
+    const start = Number(rows[1]) - 1
+    const end = Number(rows[2]) - 1
+    return start >= 0 && start <= end && end < MAX_GRID_ROWS ? { axis: 'row', start, end } : null
+  }
+  const columns = /^\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})$/.exec(text)
+  if (!columns?.[1] || !columns[2]) return null
+  const start = columnIndex(columns[1])
+  const end = columnIndex(columns[2])
+  return start <= end && end < MAX_GRID_COLUMNS ? { axis: 'column', start, end } : null
+}
+
+export function formatPrintTitleSpan({ axis, start, end }: PrintTitleSpan, absolute = false): string {
+  const anchor = absolute ? '$' : ''
+  const first = axis === 'row' ? String(start + 1) : columnLabel(start)
+  const last = axis === 'row' ? String(end + 1) : columnLabel(end)
+  return `${anchor}${first}:${anchor}${last}`
+}
+
+export function readPrintTitleSpans(formula: string | undefined): PrintTitleSpan[] {
+  if (!formula) return []
+  const spans: PrintTitleSpan[] = []
+  for (const part of splitPrintRangeUnion(formula)) {
+    if (/#REF!/i.test(part.replace(/'(?:[^']|'')*'/g, ''))) continue
+    const span = parsePrintTitleSpan(part.slice(part.lastIndexOf('!') + 1))
+    if (span) spans.push(span)
+  }
+  return spans
 }
 
 function parseTitleSpans(titles: string): { rows?: string; cols?: string } {
   const out: { rows?: string; cols?: string } = {}
   for (const raw of titles.split(',')) {
-    const span = raw.trim()
-    const rows = /^\$?(\d{1,7}):\$?(\d{1,7})$/.exec(span)
-    if (rows) {
-      if (Number(rows[1]) > Number(rows[2]) || out.rows !== undefined) {
-        throw new PageSetupError(`Invalid print titles "${titles}".`)
-      }
-      out.rows = `$${rows[1]}:$${rows[2]}`
-      continue
+    const span = parsePrintTitleSpan(raw)
+    if (!span) throw new PageSetupError(`Invalid print titles "${titles}".`)
+    const key = span.axis === 'row' ? 'rows' : 'cols'
+    if (out[key] !== undefined) {
+      throw new PageSetupError(`Invalid print titles "${titles}".`)
     }
-    const cols = /^\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})$/.exec(span)
-    if (cols) {
-      const first = cols[1]!.toUpperCase()
-      const second = cols[2]!.toUpperCase()
-      let ordered: boolean
-      try {
-        ordered = columnIndex(first) <= columnIndex(second)
-      } catch {
-        ordered = false
-      }
-      if (!ordered || out.cols !== undefined) {
-        throw new PageSetupError(`Invalid print titles "${titles}".`)
-      }
-      out.cols = `$${first}:$${second}`
-      continue
-    }
-    throw new PageSetupError(`Invalid print titles "${titles}".`)
+    out[key] = formatPrintTitleSpan(span, true)
   }
   return out
 }
@@ -627,31 +634,12 @@ function existingTitleSpans(
   workbookXml: string,
   sheetIndex: number,
 ): { rows?: string; cols?: string } {
-  const section = rootChild(workbookXml, 'workbook', 'definedNames')
-  const match = section && scopedNames(section, '_xlnm.Print_Titles', sheetIndex)[0]
+  const match = scopedNames(workbookDefinedNameElements(workbookXml), '_xlnm.Print_Titles', sheetIndex)[0]
   const formula = match && readDefinedNameText(match.inner)
-  if (!formula) return {}
   const out: { rows?: string; cols?: string } = {}
-  for (const part of splitPrintRangeUnion(formula)) {
-    const ref = part
-      .slice(part.lastIndexOf('!') + 1)
-      .replace(/\$/g, '')
-      .trim()
-    const rows = /^(\d{1,7}):(\d{1,7})$/.exec(ref)
-    if (rows && Number(rows[1]) <= Number(rows[2]) && out.rows === undefined) {
-      out.rows = `$${rows[1]}:$${rows[2]}`
-      continue
-    }
-    const cols = /^([A-Za-z]{1,3}):([A-Za-z]{1,3})$/.exec(ref)
-    if (cols && out.cols === undefined) {
-      try {
-        if (columnIndex(cols[1]!.toUpperCase()) <= columnIndex(cols[2]!.toUpperCase())) {
-          out.cols = `$${cols[1]!.toUpperCase()}:$${cols[2]!.toUpperCase()}`
-        }
-      } catch {
-        continue
-      }
-    }
+  for (const span of readPrintTitleSpans(formula)) {
+    const key = span.axis === 'row' ? 'rows' : 'cols'
+    out[key] ??= formatPrintTitleSpan(span, true)
   }
   return out
 }

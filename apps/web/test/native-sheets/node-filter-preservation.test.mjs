@@ -54,6 +54,119 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
   const save = async (bytes, request) =>
     (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
 
+  await t.test('reads, edits and shifts only SpreadsheetML filters and rows', async () => {
+    const foreign = 'xmlns="urn:example:filters"'
+    const extension = `<autoFilter ${foreign} ref="A1:G3"><filterColumn colId="0"><filters><filter val="Foreign"/></filters></filterColumn></autoFilter>`
+    const column = `<filterColumn ${foreign} colId="1"><filters><filter val="Foreign"/></filters></filterColumn>`
+    const row = `<row ${foreign} r="2" hidden="1"/>`
+    const sort = '<sortState ref="B2:C3"><sortCondition ref="B2:B3"/></sortState>'
+    const zip = await JSZip.loadAsync(source)
+    const xml = await zip.file(part).async('string')
+    zip.file(part, xml.replace('<row r="2">', row + "<row r=\"2\" hidden='1'>")
+      .replace('</sheetData>', '</sheetData>' + extension + `<autoFilter ref="A1:C3">${column}` +
+      '<filterColumn colId="1"><filters><filter val="25"/></filters></filterColumn>' + sort + '</autoFilter>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const read = async (file) => native.readRange(file, 'Acceptance', { ...span, endColumn: 6 })
+    const initial = await read(bytes)
+    assert.deepEqual(initial.autoFilter, span)
+    assert.deepEqual(initial.autoFilterColumns, [{ colId: 1, values: ['25'] }])
+    const filtered = await save(bytes, filterChange([{ colId: 1, values: ['15'] }], [2]))
+    const visible = await read(filtered)
+    assert.deepEqual(visible.autoFilterColumns, [{ colId: 1, values: ['15'] }])
+    assert.deepEqual(visible.rows.filter(({ hidden }) => hidden).map(({ row }) => row), [2])
+    const shifted = await save(filtered, { ...sheetsSaveRequest('sheet-1', []),
+      structuralOps: [{ sheetId: 'sheet-1', kind: 'insert-cols', index: 1, count: 1 }] })
+    const moved = await read(shifted)
+    assert.deepEqual(moved.autoFilter, { ...span, endColumn: 3 })
+    assert.deepEqual(moved.autoFilterColumns, [{ colId: 2, values: ['15'] }])
+    const filteredXml = await (await JSZip.loadAsync(filtered)).file(part).async('string')
+    const shiftedXml = await (await JSZip.loadAsync(shifted)).file(part).async('string')
+    assert.ok(filteredXml.includes(sort))
+    assert.ok(shiftedXml.includes('<sortState ref="C2:D3"><sortCondition ref="C2:C3"/></sortState>'))
+    for (const preserved of [extension, column, row]) {
+      assert.ok(filteredXml.includes(preserved))
+      assert.ok(shiftedXml.includes(preserved))
+    }
+  })
+
+  await t.test('uses defined name declarations when adding and renaming tables', async () => {
+    const zip = await JSZip.loadAsync(source)
+    const workbookPath = 'xl/workbook.xml'
+    const comment = '<!-- <definedName name="CommentOnly">1</definedName> -->'
+    const hidden = "<definedName name='Con&#102;lict' hidden='1'>1</definedName>"
+    zip.file(workbookPath, (await zip.file(workbookPath).async('string')).replace('</definedNames>',
+      comment + hidden + '</definedNames>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const request = sheetsSaveRequest('sheet-1', [])
+    request.tableAdditions = [{
+      sheetId: 'sheet-1', area: span, name: 'Conflict',
+      columnNames: ['Revenue', 'Formula', 'Date'], bandedRows: true,
+    }]
+    await assert.rejects(() => save(bytes, request), { statusCode: 400 })
+    request.definedNamesState = { names: [{ name: 'Revenue', formula: 'Acceptance!$A$2:$A$3' }], preserveNames: [] }
+    await assert.rejects(() => save(bytes, request), { statusCode: 400 })
+    request.tableAdditions[0].name = 'CommentOnly'
+    const saved = await save(bytes, request)
+    assert.equal((await native.inspect(saved)).sheets[0].tables[0].name, 'CommentOnly')
+    const rename = sheetsSaveRequest('sheet-1', [])
+    rename.tableEdits = [{ sheetId: 'sheet-1', tableName: 'CommentOnly', name: 'CONFLICT' }]
+    await assert.rejects(() => save(saved, rename), { statusCode: 400 })
+    const workbook = await (await JSZip.loadAsync(saved)).file(workbookPath).async('string')
+    assert.ok(workbook.includes(comment) && workbook.includes(hidden))
+
+    const referenced = await JSZip.loadAsync(saved)
+    const worksheet = await referenced.file(part).async('string')
+    const cached = '<custom><f>SUM(CommentOnly[Revenue])</f></custom>'
+    referenced.file(part, worksheet.replace('</sheetData>',
+      '<row r="5"><c r="A5"><f>SUM(CommentOnly[Revenue])</f><v>20</v>' + cached + '</c></row></sheetData>'))
+    const tablePath = Object.keys(referenced.files).find(path => /^xl\/tables\/table\d+\.xml$/.test(path))
+    const calculated = '<calculatedColumnFormula>SUM(CommentOnly[Revenue])</calculatedColumnFormula>'
+    const table = await referenced.file(tablePath).async('string')
+    referenced.file(tablePath, table.replace('<tableColumn id="2" name="Formula"/>',
+      '<tableColumn id="2" name="Formula">' + calculated + '</tableColumn>'))
+    rename.tableEdits[0].name = 'RenamedTable'
+    const renamed = await save(await referenced.generateAsync({ type: 'nodebuffer' }), rename)
+    const reopened = await native.readRange(renamed, 'Acceptance',
+      { startRow: 4, endRow: 4, startColumn: 0, endColumn: 0 })
+    assert.equal(reopened.cells[0].formula, '=SUM(RenamedTable[Revenue])')
+    const renamedZip = await JSZip.loadAsync(renamed)
+    assert.ok((await renamedZip.file(part).async('string')).includes(cached))
+    assert.ok((await renamedZip.file(tablePath).async('string')).includes(calculated.replace('CommentOnly', 'RenamedTable')))
+  })
+
+  await t.test('validates the table and defined names in the final save batch', async (t) => {
+    const table = (name) => ({ sheetId: 'sheet-1', area: span, name,
+      columnNames: ['Revenue', 'Formula', 'Date'], bandedRows: true })
+    const takeName = (name) => ({ names: [{ name, formula: 'Acceptance!$A$1' }], preserveNames: [] })
+    await t.test('rejects a newly defined name colliding with an added table', async () => {
+      const request = sheetsSaveRequest('sheet-1', [])
+      request.tableAdditions = [table('BatchName')]
+      request.definedNamesState = takeName('batchname')
+      await assert.rejects(() => save(source, request), { statusCode: 400 })
+    })
+    await t.test('lets a table take a name freed by the snapshot in the same save', async () => {
+      const zip = await JSZip.loadAsync(source)
+      const path = 'xl/workbook.xml'
+      zip.file(path, (await zip.file(path).async('string')).replace('</definedNames>',
+        '<definedName name="FreedName">Acceptance!$A$1</definedName></definedNames>'))
+      const request = sheetsSaveRequest('sheet-1', [])
+      request.tableAdditions = [table('FreedName')]
+      request.definedNamesState = takeName('Revenue')
+      const saved = await save(await zip.generateAsync({ type: 'nodebuffer' }), request)
+      const metadata = await native.inspect(saved)
+      assert.equal(metadata.sheets[0].tables[0].name, 'FreedName')
+      assert.deepEqual(metadata.definedNames.map(({ name }) => name), ['Revenue'])
+
+      const conflict = sheetsSaveRequest('sheet-1', [])
+      conflict.definedNamesState = takeName('FREEDNAME')
+      await assert.rejects(() => save(saved, conflict), { statusCode: 400 })
+      conflict.tableEdits = [{ sheetId: 'sheet-1', tableName: 'FreedName', remove: true }]
+      const converted = await native.inspect(await save(saved, conflict))
+      assert.deepEqual(converted.sheets[0].tables, [])
+      assert.deepEqual(converted.definedNames.map(({ name }) => name), ['FREEDNAME'])
+    })
+  })
+
   await t.test(
     'keeps Top 1 and date grouping when replacing a different worksheet column',
     async () => {
@@ -104,6 +217,31 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
     },
   )
 
+  await t.test('reads basic values alongside a date group and preserves the group on a different column edit', async () => {
+    const mixed = "<filterColumn colId='0'><filters blank='1'><filter val='Open &amp; ready'/><dateGroupItem year='2026' month='2' dateTimeGrouping='month'/></filters></filterColumn>"
+    const oversized = '<filterColumn colId="2"><filters><filter val="Open"/><filter val="' +
+      'a'.repeat(32_768) + '"/><dateGroupItem year="2026" dateTimeGrouping="year"/></filters></filterColumn>'
+    const zip = await JSZip.loadAsync(source)
+    const original = await zip.file(part).async('string')
+    zip.file(part, original.replace('</sheetData>', '</sheetData><autoFilter ref="A1:C3">' + mixed +
+      '<filterColumn colId="1"><filters><filter val="25"/></filters></filterColumn>' + oversized + '</autoFilter>'))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const { autoFilterColumns } = await native.readRange(bytes, 'Acceptance', span)
+    assert.deepEqual(autoFilterColumns, [
+      { colId: 0, values: ['Open & ready'], blank: true }, { colId: 1, values: ['25'] },
+    ])
+    const ordinary = await save(bytes, sheetsSaveRequest('sheet-1', [{ row: 1, column: 2, value: 19, writeValue: true }]))
+    assert.ok((await (await JSZip.loadAsync(ordinary)).file(part).async('string')).includes(mixed))
+    const edited = await save(bytes, filterChange([autoFilterColumns[0], { colId: 1, values: ['15'] }]))
+    const editedXml = await (await JSZip.loadAsync(edited)).file(part).async('string')
+    assert.ok(editedXml.includes(mixed))
+    assert.ok(editedXml.includes(oversized))
+    const replaced = await save(edited, filterChange([{ colId: 0, values: ['Closed'] }]))
+    const replacedXml = await (await JSZip.loadAsync(replaced)).file(part).async('string')
+    assert.equal([...replacedXml.matchAll(/<dateGroupItem\b/g)].length, 1)
+    assert.ok(replacedXml.includes(oversized))
+  })
+
   await t.test('keeps opaque criteria in the table part', async () => {
     const add = sheetsSaveRequest('sheet-1', [])
     add.tableAdditions = [
@@ -130,6 +268,34 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
     assert.match(retained, /<filter val="15"\/>/)
     assert.doesNotMatch(await saved.file(part).async('string'), /<autoFilter\b/)
   })
+
+  await t.test(
+    'routes a filter into a single-quoted table and excludes the totals row',
+    async () => {
+      const add = sheetsSaveRequest('sheet-1', [])
+      add.tableAdditions = [{
+        sheetId: 'sheet-1', area: span, name: 'QuotedTotals',
+        columnNames: ['Revenue', 'Formula', 'Date'], bandedRows: true,
+        totalsRow: true, filterButton: false,
+      }]
+      const zip = await JSZip.loadAsync(await save(source, add))
+      const table = zip.file(/^xl\/tables\/table\d+\.xml$/)[0]
+      const comment = '<!-- <table ref="Z1:Z4" totalsRowCount="0"/> -->'
+      zip.file(table.name, (await table.async('string')).replaceAll('"', "'")
+        .replace('<table ', comment + '<table '))
+      const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+      const saved = await save(bytes, filterChange([{ colId: 0, values: ['12.5'] }]))
+      const result = await JSZip.loadAsync(saved)
+      const xml = await result.file(table.name).async('string')
+      assert.ok(xml.includes(comment))
+      assert.match(xml, /<autoFilter ref="A1:C2"><filterColumn colId="0">/)
+      assert.doesNotMatch(await result.file(part).async('string'), /<autoFilter\b/)
+      const [updated] = (await native.inspect(saved)).sheets[0].tables
+      assert.equal(updated.name, 'QuotedTotals')
+      assert.equal(updated.totalsRowCount, 1)
+      assert.equal(updated.filterActive, true)
+    },
+  )
 
   await t.test(
     'updates the active worksheet filter independently of the filter in a custom view',

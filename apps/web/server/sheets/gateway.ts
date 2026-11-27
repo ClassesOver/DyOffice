@@ -1,13 +1,17 @@
+import { randomUUID } from 'node:crypto'
+import { XMLValidator } from 'fast-xml-parser'
 import { readWorkbookRedactionSource } from '../../../sheets/src/node/workbook-redactions'
 import { parseSlicerState } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connections'
 import { refreshableQueriesOf } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connection-refresh'
-import { parsePivotDefinition } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-pivot'
+import { readPivotDefinitionWithSource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-pivot'
 import { workbookPivotDefinitionSchema, workbookSaveRequestSchema } from '../../../sheets/src/shared/desktop-api'
 import { mapWorkbookSaveRequest } from '../../../sheets/src/shared/workbook-save-plan'
 import { createBufferEntrySource, type EntrySource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway'
-import { parseSheetElements, readAttribute, decodeAttribute, parseRelationships } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
-import { resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add'
+import { countRootNamespaceElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace'
+import { parseSheetElements, readAttribute, parseRelationships, relationshipIdsMatch } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
+import { applyPatches } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml'
+import { isWorkbookSheetRelationship, resolveWorkbookSheetTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts'
 import { planWorkbookMutation } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-package-io'
 import {readWorkbookExternalLinks} from './external-links.ts'
 import type {WorkbookPackageQuery} from '../../worker/src/native/gateway.ts'
@@ -25,49 +29,104 @@ export async function planWorkbookSave(
   }
 }
 
+const ambiguousXml = (xml: string) => /<!--|<!\[CDATA\[|<!DOCTYPE|<!ENTITY|<\?(?!xml\s)/i.test(xml)
+
+function prepareXmlLiterals(xml: string, prefix: string, marker: RegExp, comments: string[]) {
+  const text = xml.replace(/<!--[\s\S]*?-->|<!\[CDATA\[([\s\S]*?)\]\]>/g, (literal, cdata: string | undefined) => {
+    if (cdata !== undefined) return cdata.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    return `${prefix}${comments.push(literal) - 1}-->`
+  })
+  // Keep declarations and other ambiguous constructs outside literal text rejected.
+  if (ambiguousXml(text.replace(marker, '')) || XMLValidator.validate(xml) !== true) {
+    throw new Error('Ambiguous XML part')
+  }
+  return text
+}
+
+function canonicalSheetDeclaration(xml: string): string {
+  const match = /^<sheet((?:\s+[A-Za-z_][\w.:-]*\s*=\s*(?:"[^"<]*"|'[^'<]*'))*)\s*(?:\/>|>\s*<\/sheet\s*>)$/.exec(xml)
+  if (!match) throw new Error('Unsupported sheet declaration')
+  const attributes = [...match[1]!.matchAll(/\s+([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"<]*)"|'([^'<]*)')/g)]
+    .map(([, name, double, single]) => [name!, double ?? single!.replaceAll('"', '&quot;')] as const)
+  if (new Set(attributes.map(([name]) => name)).size !== attributes.length) throw new Error('Duplicate sheet attributes')
+  const canonical = '<sheet' + attributes.map(([name, value]) => ` ${name}="${value}"`).join('') + '/>'
+  const result = /^<sheet(?:\s+[A-Za-z_][\w.:-]*="[^"<]*")*\s*\/>$/.test(xml) ? xml : canonical
+  if (attributes.some(([name, value]) => readAttribute(result, name) !== value)) throw new Error('Ambiguous sheet attributes')
+  return result
+}
+
 /** Isolated-runner opt-in: derive the native sheet-<sheetId> mapping from the
  * exact entry source being planned. No browser mapping and no second ZIP load. */
 export async function planFromWorkbook(bytes: Buffer, input: unknown) {
   try {
     const source = await createBufferEntrySource(bytes)
     const request = workbookSaveRequestSchema.parse(input)
-    const editedSheets = new Set([...request.edits, ...request.formulaValues].map(edit => edit.sheetId))
-    const workbook = await source.readText('xl/workbook.xml')
-    // The existing text-based sheet planner cannot safely interpret these XML
-    // constructs. Reject ambiguity instead of letting a comment forge a sheet.
-    const ambiguous = (xml: string) => /<!--|<!\[CDATA\[|<!DOCTYPE|<!ENTITY|<\?(?!xml\s)/i.test(xml)
-    if (ambiguous(workbook)) throw new Error('Ambiguous workbook')
+    const editedSheets = new Set([
+      ...request.edits,
+      ...request.formulaValues,
+      ...(request.bulkConstantFills ?? []),
+      ...request.structuralOps,
+    ].map(edit => edit.sheetId))
+    const touchesCrossSheetReferences = request.structuralOps.some(op => 'index' in op)
+      || request.sheetOps.some(op => op.kind === 'rename-sheet' || op.kind === 'remove-sheet')
+    const preparedEntries = new Map<string, string>()
+    const comments: string[] = []
+    const prefix = `<!--dyoffice-${randomUUID()}-`
+    const marker = new RegExp(`${prefix}(\\d+)-->`, 'g')
+    const preparePart = async (path: string) => {
+      const xml = await source.readText(path)
+      if (!ambiguousXml(xml)) return xml
+      const prepared = prepareXmlLiterals(xml, prefix, marker, comments)
+      preparedEntries.set(path, prepared)
+      return prepared
+    }
+    const workbook = await preparePart('xl/workbook.xml')
     const elements = parseSheetElements(workbook)
-    // Fail closed on declarations outside the shared parser's supported
-    // double-quoted, empty-element grammar, rather than silently omitting a
-    // sheet or reading an attribute-shaped substring inside another value.
-    if ([...workbook.matchAll(/<(?:[\w.-]+:)?sheet(?=[\s/>])/g)].length !== elements.length) throw new Error('Unsupported sheets')
-    const relationshipsXml = await source.readText('xl/_rels/workbook.xml.rels')
-    if (ambiguous(relationshipsXml)) throw new Error('Ambiguous relationships')
+    if (countRootNamespaceElements(workbook, 'sheet') !== elements.length) throw new Error('Unsupported sheets')
+    const sheetPatches = []
+    const relationshipsXml = await preparePart('xl/_rels/workbook.xml.rels')
     const relationships = parseRelationships(relationshipsXml)
     const ids = new Set<string>(), names = new Set<string>()
     const worksheetPaths = new Set<string>()
     if (elements.length < 1 || elements.length > 256) throw new Error('Invalid sheets')
     const sheets = []
     for (const element of elements) {
-      if (!/^<sheet(?:\s+[A-Za-z_][\w.:-]*="[^"<]*")*\s*\/>$/.test(element.xml)) throw new Error('Unsupported sheet declaration')
-      const attributes = [...element.xml.matchAll(/\s+([A-Za-z_][\w.:-]*)="([^"<]*)"/g)]
-      if (new Set(attributes.map(match => match[1])).size !== attributes.length || attributes.some(match => readAttribute(element.xml, match[1]!) !== match[2])) throw new Error('Ambiguous sheet attributes')
-      const rawId = readAttribute(element.xml, 'sheetId')
-      if (!rawId || !element.relationshipId) throw new Error('Missing sheet identity')
-      const id = `sheet-${decodeAttribute(rawId)}`, name = element.name
+      const canonical = canonicalSheetDeclaration(element.xml)
+      if (!element.sheetId) throw new Error('Missing sheet identity')
+      const id = `sheet-${element.sheetId}`, name = element.name
       if (id.length > 512 || !name.length || name.length > 255 || ids.has(id) || names.has(name)) throw new Error('Ambiguous sheets')
-      const rels = relationships.filter(rel => rel.id === element.relationshipId)
+      ids.add(id)
+      names.add(name)
+      // Keep dangling declarations in the package, outside the editable sheet map.
+      if (!element.relationshipId) continue
+      const rels = relationships.filter(rel => relationshipIdsMatch(rel.id, element.relationshipId))
       const rel = rels[0]
-      if (rels.length !== 1 || !rel || rel.external || !rel.type.endsWith('/worksheet')) throw new Error('Invalid worksheet relationship')
-      const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
+      if (rels.length > 1) throw new Error('Ambiguous sheet relationship')
+      if (!rel || !isWorkbookSheetRelationship(rel)) continue
+      const path = resolveWorkbookSheetTarget(rel.target)
+      if (!await source.has(path)) continue
       if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')
-      if (!await source.has(path)) throw new Error('Missing worksheet')
-      if (editedSheets.has(id) && ambiguous(await source.readText(path))) throw new Error('Ambiguous worksheet')
+      if (canonical !== element.xml) {
+        sheetPatches.push({ start: element.start, length: element.xml.length, xml: canonical })
+      }
+      if (editedSheets.has(id)) await preparePart(path)
       worksheetPaths.add(path)
-      ids.add(id); names.add(name); sheets.push({ id, name })
+      sheets.push({ id, name })
     }
-    return await planSave(source, sheets, request)
+    if (!sheets.length) throw new Error('Workbook contains no readable worksheets')
+    if (sheetPatches.length) preparedEntries.set('xl/workbook.xml', applyPatches(workbook, sheetPatches))
+    if (!preparedEntries.size && !touchesCrossSheetReferences) return await planSave(source, sheets, request)
+    const plan = await planSave({
+      ...source,
+      // Reference rewrites can read worksheets outside the explicit edit set.
+      readText: async (path) => preparedEntries.get(path) ?? (
+        touchesCrossSheetReferences && worksheetPaths.has(path) ? preparePart(path) : source.readText(path)
+      ),
+    }, sheets, request)
+    const restoreComments = (entries: ReadonlyMap<string, string>) => new Map(
+      [...entries].map(([path, text]) => [path, text.replace(marker, (original, index) => comments[Number(index)] ?? original)]),
+    )
+    return comments.length ? { ...plan, replaced: restoreComments(plan.replaced), added: restoreComments(plan.added) } : plan
   } catch {
     throw Object.assign(new Error('Invalid workbook edits'), { statusCode: 400 })
   }
@@ -114,7 +173,7 @@ export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, 
     if (!/^xl\/pivotTables\/[A-Za-z0-9._-]+\.xml$/.test(pivot.path) || !/^xl\/pivotCache\/[A-Za-z0-9._-]+\.xml$/.test(pivot.cachePath)) throw Object.assign(new Error('Invalid pivot parts'), {statusCode:400})
     try {
       const [pivotXml,cacheXml] = await Promise.all([source.readText(pivot.path),source.readText(pivot.cachePath)])
-      return workbookPivotDefinitionSchema.parse(parsePivotDefinition(pivotXml,cacheXml))
+      return workbookPivotDefinitionSchema.parse(await readPivotDefinitionWithSource(pivotXml,cacheXml,source))
     } catch {
       throw Object.assign(new Error('Invalid pivot definition'), {statusCode:400})
     }

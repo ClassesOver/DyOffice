@@ -14,6 +14,8 @@ import {
   updateVisualAdd,
   toSaveVisualAdds,
 } from '../src/renderer/edit-journal'
+import { anchorForBox } from '../src/renderer/visual-geometry'
+import { changedPositions, reorderZ } from '../src/renderer/visual-arrange'
 import { projectVisualEdits } from '../src/renderer/univer-sync'
 import {
   workbookChartEditSchema,
@@ -214,6 +216,38 @@ describe('recordVisualEdit', () => {
     ])
   })
 
+  it('keeps absolute coordinates when arranging across different row and column sizes', () => {
+    const anchor = anchorForBox({ x: 35, y: 70, width: 12, height: 17 }, {
+      columnWidth: index => index === 0 ? 30 : 50,
+      rowHeight: index => index === 0 ? 60 : 25,
+      maxColumn: 8,
+      maxRow: 8,
+    }, true)
+    expect(anchor).toEqual({
+      absolute: true, fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+      fromColumnOffset: 35 * 9525, fromRowOffset: 70 * 9525,
+      toColumnOffset: 47 * 9525, toRowOffset: 87 * 9525,
+    })
+  })
+
+  it('preserves a resized anchor extent when the visual is moved again before saving', () => {
+    const journal = createEditJournal()
+    const visual = fileImage()
+    const resized = { ...visual.anchor, toRow: 12 }
+    const anchorSize = { width: 333, height: 555 }
+    expect(recordVisualEdit(journal, visual, { anchor: resized, anchorSize })).toBe(true)
+    const moved = { ...resized, fromRow: 8, toRow: 14 }
+    expect(recordVisualEdit(journal, visual, { anchor: moved })).toBe(true)
+
+    const [edit] = toSaveVisualEdits(journal)
+    expect(workbookVisualEditSchema.parse(edit)).toMatchObject({ anchor: moved, anchorSize })
+
+    const twoCellJournal = createEditJournal()
+    const twoCellVisual = { ...visual, anchor: { ...visual.anchor, explicitTo: true } }
+    expect(recordVisualEdit(twoCellJournal, twoCellVisual, { anchor: resized, anchorSize })).toBe(true)
+    expect(toSaveVisualEdits(twoCellJournal)[0]).not.toHaveProperty('anchorSize')
+  })
+
   it('records paint edits alone and merges them with a later move', () => {
     const journal = createEditJournal()
     const shape = { ...fileImage(), kind: 'shape' as const, shapeType: 'rect' }
@@ -326,6 +360,27 @@ describe('arrange properties', () => {
       'added-shape-abc-2',
     ])
     expect(reorderVisualAdd(journal, 'missing', 0)).toBe(false)
+  })
+
+  it('keeps the requested layer order after deleting an already reordered visual', () => {
+    const journal = createEditJournal()
+    const visuals = ['a', 'b', 'c', 'd'].map((id, drawingIndex) => ({ ...fileShape(), id, drawingIndex }))
+    const layerOrder = () => projectVisualEdits(visuals, journal.visualEdits).map(visual => visual.id)
+    const bringToFront = (id: string) => {
+      const before = layerOrder()
+      const after = reorderZ(before, id, 'front')
+      for (const [visualId, zIndex] of changedPositions(before, after, id => journal.visualEdits.get(id)?.zIndex)) {
+        recordVisualEdit(journal, visuals.find(visual => visual.id === visualId)!, { zIndex })
+      }
+    }
+
+    bringToFront('a')
+    expect(layerOrder()).toEqual(['b', 'c', 'd', 'a'])
+    recordVisualEdit(journal, visuals[1]!, { remove: true })
+    bringToFront('d')
+    expect(layerOrder()).toEqual(['c', 'a', 'd'])
+    expect(toSaveVisualEdits(journal).sort((left, right) => left.drawingIndex - right.drawingIndex))
+      .toMatchObject([{ zIndex: 1 }, { remove: true }, { zIndex: 0 }, { zIndex: 2 }])
   })
 
   it('projects edits onto file visuals and sorts a drawing part by zIndex', () => {

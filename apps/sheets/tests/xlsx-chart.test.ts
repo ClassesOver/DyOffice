@@ -79,11 +79,12 @@ describe('chart planner style relationships', () => {
 
 describe('applyChartEdit title', () => {
   it('replaces the first run text, blanks the rest, keeps run styling', () => {
-    const xml = applyChartEdit(BAR_CHART, {
+    const source = BAR_CHART.replace('<a:t>Old title', '<a:t xml:space="preserve">Old title')
+    const xml = applyChartEdit(source, {
       chartPath: 'xl/charts/chart1.xml',
       title: 'New <Title>',
     })
-    expect(xml).toContain('<a:rPr b="1"/><a:t>New &lt;Title&gt;</a:t>')
+    expect(xml).toContain('<a:rPr b="1"/><a:t xml:space="preserve">New &lt;Title&gt;</a:t>')
     expect(xml).toContain('<a:r><a:t></a:t></a:r>')
     expect(xml).not.toContain('Old title')
   })
@@ -109,6 +110,17 @@ describe('applyChartEdit title', () => {
     const chartLevel = xml.slice(0, xml.indexOf('<c:plotArea>'))
     expect(chartLevel).toContain('<a:t>My Chart</a:t>')
     expect(xml.match(/<c:autoTitleDeleted /g)).toHaveLength(1)
+  })
+
+  it('replaces a linked title with text while keeping its layout and font defaults', () => {
+    const layout = '<c:layout><c:manualLayout><c:x val="0.2"/></c:manualLayout></c:layout>'
+    const font = '<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1600"/></a:pPr></a:p></c:txPr>'
+    const linked = BAR_CHART.replace(/<c:title>[\s\S]*?<\/c:title>/,
+      '<c:title><c:tx><c:strRef><c:f>Data!A1</c:f></c:strRef></c:tx>' + layout + '<c:overlay val="1"/>' + font + '</c:title>')
+    const xml = applyChartEdit(linked, { chartPath: 'xl/charts/chart1.xml', title: 'Direct title' })
+    expect(xml).toContain('<a:t>Direct title</a:t>')
+    expect(xml).toContain(layout + '<c:overlay val="1"/>' + font)
+    expect(xml).not.toContain('<c:f>Data!A1</c:f>')
   })
 })
 
@@ -233,13 +245,32 @@ describe('applyChartEdit series colors', () => {
     )
   })
 
-  it('replaces an existing spPr', () => {
+  it('replaces the authored series fill', () => {
     const xml = applyChartEdit(BAR_CHART, {
       chartPath: 'xl/charts/chart1.xml',
       seriesColors: { 1: '#00AA55' },
     })
     expect(xml).toContain('<a:srgbClr val="00AA55"/>')
     expect(xml).not.toContain('112233')
+  })
+
+  it('recolors a series while preserving line and marker styling', () => {
+    const stroke = '<a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="010203"/></a:solidFill>' +
+      '<a:prstDash val="dash"/><a:round/></a:ln>'
+    const marker = '<c:marker><c:symbol val="diamond"/><c:spPr>' +
+      '<a:solidFill><a:srgbClr val="445566"/></a:solidFill></c:spPr></c:marker>'
+    const source = SCATTER_CHART.replace('<c:xVal>', '<c:spPr>' + stroke + '<a:effectLst/></c:spPr>' + marker + '<c:xVal>')
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      seriesColors: { 0: '#0099CC' },
+    })
+    expect(xml).toContain(stroke.replace('010203', '0099CC') + '<a:effectLst/></c:spPr>' + marker)
+    const noOutline = source.replace(stroke, '<a:ln w="19050"><a:noFill /></a:ln>')
+    const recolored = applyChartEdit(noOutline, {
+      chartPath: 'xl/charts/chart1.xml',
+      seriesColors: { 0: '#0099CC' },
+    })
+    expect(recolored).toContain('<a:ln w="19050"><a:noFill /></a:ln>')
   })
 
   it('fails closed on a missing series index', () => {
@@ -346,6 +377,20 @@ describe('applyChartEdit point colors', () => {
     expect(xml.match(/<c:dPt>/g)).toHaveLength(1)
   })
 
+  it('updates the direct point fill without recoloring its marker', () => {
+    const marker = '<c:marker><c:symbol val="circle"/><c:spPr>' +
+      '<a:solidFill><a:srgbClr val="445566"/></a:solidFill></c:spPr></c:marker>'
+    const source = PIE_WITH_DPT.replace('<c:idx val="1"/>', "<c:idx val='1' />" + marker)
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      pointColors: { 0: { 1: '#112233' } },
+    })
+    expect(xml).toContain(marker)
+    expect(xml).toContain('<a:srgbClr val="112233"/>')
+    expect(xml).not.toContain('ABCDEF')
+    expect(xml.match(/<c:dPt>/g)).toHaveLength(1)
+  })
+
   it('interleaves new dPt entries around an existing one by idx', () => {
     const xml = applyChartEdit(PIE_WITH_DPT, {
       chartPath: 'xl/charts/chart1.xml',
@@ -434,6 +479,14 @@ describe('applyChartEdit legend', () => {
     const xml = applyChartEdit(BAR_CHART, { chartPath: 'xl/charts/chart1.xml', legend: 'top' })
     expect(xml).toContain('</c:plotArea><c:legend><c:legendPos val="t"/>')
   })
+
+  it('moves a legend without changing its entries, layout, overlay, or text', () => {
+    const settings = '<c:legendEntry><c:idx val="1"/><c:delete/></c:legendEntry>' +
+      '<c:layout/><c:overlay val="1"/><c:txPr><a:bodyPr/></c:txPr>'
+    const source = AXIS_CHART.replace('<c:overlay val="0"/></c:legend>', settings + '</c:legend>')
+    const xml = applyChartEdit(source, { chartPath: 'xl/charts/chart1.xml', legend: 'left' })
+    expect(xml).toContain('<c:legend><c:legendPos val="l"/>' + settings + '</c:legend>')
+  })
 })
 
 describe('applyChartEdit axis titles', () => {
@@ -453,7 +506,7 @@ describe('applyChartEdit axis titles', () => {
       axisTitles: { value: 'Sales' },
     })
     expect(renamed).toContain(
-      '<c:majorGridlines/><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:crossAx val="111"/>',
+      '<c:majorGridlines/><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:crossAx val="111"/>',
     )
     expect(renamed).not.toContain('old axis')
     const cleared = applyChartEdit(AXIS_CHART, {
@@ -663,6 +716,24 @@ describe('applyChartEdit series data', () => {
     }
   })
 
+  it('refreshes multi-level category details on the same range and retains outer groups', () => {
+    const groupLevels = '<c:lvl><c:pt idx="0"><c:v>North &amp; West</c:v></c:pt></c:lvl>' +
+      '<c:lvl><c:pt idx="0"><c:v>All regions</c:v></c:pt></c:lvl>'
+    const ref = 'Data!$A$2:$C$3'
+    const source = BAR_CHART.replace('<c:cat/>',
+      `<c:cat><c:multiLvlStrRef><c:f>${ref}</c:f><c:multiLvlStrCache><c:ptCount val="2"/>` +
+      '<c:lvl><c:pt idx="0"><c:v>January</c:v></c:pt></c:lvl>' + groupLevels +
+      '</c:multiLvlStrCache></c:multiLvlStrRef></c:cat>')
+    const updated = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, categoriesRef: ref, categories: ['Jan & Feb', 'March'] }],
+    })
+    expect(updated).toContain(`<c:multiLvlStrRef><c:f>${ref}</c:f>` +
+      '<c:multiLvlStrCache><c:ptCount val="2"/><c:lvl>' +
+      '<c:pt idx="0"><c:v>Jan &amp; Feb</c:v></c:pt><c:pt idx="1"><c:v>March</c:v></c:pt></c:lvl>' +
+      groupLevels + '</c:multiLvlStrCache>')
+  })
+
   it('rewrites name, values, and categories with refs and caches', () => {
     const xml = applyChartEdit(AXIS_CHART, {
       chartPath: 'xl/charts/chart1.xml',
@@ -785,6 +856,14 @@ describe('applyChartEdit gridlines', () => {
     expect(applyChartEdit(AXIS_CHART, { chartPath: 'xl/charts/chart1.xml', gridlines: true })).toBe(
       AXIS_CHART,
     )
+  })
+
+  it('recognizes spaced gridline markup and inserts on an axis without axPos', () => {
+    const spaced = AXIS_CHART.replace('<c:majorGridlines/>', '<c:majorGridlines />')
+    expect(applyChartEdit(spaced, { chartPath: 'xl/charts/chart1.xml', gridlines: true })).toBe(spaced)
+    const noPosition = NO_GRID.replace('<c:delete val="0"/><c:axPos val="l"/>', '')
+    const edited = applyChartEdit(noPosition, { chartPath: 'xl/charts/chart1.xml', gridlines: true })
+    expect(edited).toContain('<c:axId val="222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:majorGridlines/>')
   })
 
   it('false removes the element, expanded form included', () => {
@@ -1114,6 +1193,26 @@ const SCATTER_CHART =
   '</c:plotArea></c:chart></c:chartSpace>'
 
 describe('applyChartEdit scatter series data', () => {
+  it('edits Y-axis bounds, title, and gridlines without changing the X axis', () => {
+    const gridlines = '<c:majorGridlines><c:spPr><a:ln w="12700">' +
+      '<a:solidFill><a:srgbClr val="336699"/></a:solidFill><a:prstDash val="dash"/>' +
+      '</a:ln></c:spPr></c:majorGridlines>'
+    const source = SCATTER_CHART.replace('<c:axPos val="l"/>',
+      "<c:axPos val='l' />" + gridlines)
+    const x = '<c:valAx><c:axId val="111"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
+      '<c:delete val="0"/><c:axPos val="b"/><c:crossAx val="222"/></c:valAx>'
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      valueAxis: { min: 10, max: 80 },
+      axisTitles: { value: 'Measured Y' },
+      gridlines: true,
+    })
+    expect(xml).toContain(x)
+    expect(xml).toContain('<c:axId val="222"/><c:scaling><c:orientation val="minMax"/><c:max val="80"/><c:min val="10"/></c:scaling>')
+    expect(xml).toContain("<c:axPos val='l' />" + gridlines + '<c:title>')
+    expect(xml).toContain('<a:t>Measured Y</a:t>')
+    expect(xml.match(/<c:majorGridlines[>/]/g)).toHaveLength(1)
+  })
   it('rewrites name, X values, and Y values with refs and caches', () => {
     const xml = applyChartEdit(SCATTER_CHART, {
       chartPath: 'xl/charts/chart1.xml',
@@ -1167,6 +1266,36 @@ describe('applyChartEdit scatter series data', () => {
       '<c:yVal><c:numRef><c:f>Data!$B$2:$B$3</c:f><c:numCache><c:formatCode>0.00</c:formatCode>' +
         '<c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt>',
     )
+  })
+
+  it('preserves the X number format when refreshing its values', () => {
+    const source = SCATTER_CHART.replace('<c:xVal><c:numLit>',
+      '<c:xVal><c:numLit><c:formatCode>0.000 &quot;ms&quot;</c:formatCode>')
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, categories: ['1.25', '2.5'] }],
+    })
+    expect(xml).toContain('<c:xVal><c:numLit><c:formatCode>0.000 &quot;ms&quot;</c:formatCode>' +
+      '<c:ptCount val="2"/><c:pt idx="0"><c:v>1.25</c:v></c:pt>')
+  })
+
+  it('writes a changed X reference without a cache when values are unavailable', () => {
+    const previous = '<c:xVal><c:numRef><c:f>Data!A2:A3</c:f><c:numCache>' +
+      '<c:formatCode>0.00</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt>' +
+      '</c:numCache></c:numRef></c:xVal>'
+    const source = SCATTER_CHART.replace(/<c:xVal>[\s\S]*?<\/c:xVal>/, previous)
+    const edit = { index: 0, categoriesRef: "'New & Old'!A2:A3" }
+    const expected = "<c:xVal><c:numRef><c:f>'New &amp; Old'!A2:A3</c:f></c:numRef></c:xVal>"
+    for (const series of [{ ...edit, name: 'Updated Series' }, { ...edit, categories: [] }]) {
+      const xml = applyChartEdit(source, { chartPath: 'xl/charts/chart1.xml', series: [series] })
+      expect(xml).toContain(expected)
+      expect(xml).not.toContain(previous)
+    }
+    const sameRange = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, categoriesRef: 'Data!A2:A3', categories: [] }],
+    })
+    expect(sameRange).toContain(previous)
   })
 
   it('inserts xVal before yVal on a series that lacks one', () => {
@@ -1302,6 +1431,33 @@ describe('applyChartEdit data label position and format', () => {
     })
     expect(cleared).not.toContain('<c:dLbls>')
     expect(cleared).not.toContain('dLblPos')
+  })
+
+  it('edits only the plot labels when the chart has whitespace and point formatting', () => {
+    const source = BAR_CHART.replace(
+      '</c:ser>',
+      '</c:ser>\n<!-- plot labels -->\n<c:dLbls>' +
+        '<c:dLbl><c:idx val="0"/><c:numFmt formatCode="0.000" sourceLinked="0"/></c:dLbl>' +
+        '<c:numFmt formatCode="0.0" sourceLinked="0"/><c:showVal/></c:dLbls>',
+    )
+    const edited = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      dataLabelPosition: 'inside-end',
+      dataLabelFormat: '#,##0',
+    })
+    expect(edited.match(/<c:dLbls>/g)).toHaveLength(1)
+    expect(edited).toContain('<c:numFmt formatCode="0.000" sourceLinked="0"/></c:dLbl>')
+    expect(edited).toContain('<c:numFmt formatCode="#,##0" sourceLinked="0"/><c:dLblPos val="inEnd"/>')
+    const stale = source.replace(
+      /<c:dLbls>[\s\S]*?<\/c:dLbls>/,
+      '<c:dLbls />\n<c:dLbls><c:showVal/></c:dLbls>',
+    )
+    const removed = applyChartEdit(stale, {
+      chartPath: 'xl/charts/chart1.xml',
+      dataLabels: 'none',
+    })
+    expect(removed).not.toMatch(/<c:dLbls\b/)
+    expect(removed).toContain('<!-- plot labels -->')
   })
 
   it('escapes quotes in the format code attribute', () => {

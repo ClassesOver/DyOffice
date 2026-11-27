@@ -47,7 +47,8 @@ import {
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
 import { insertRootExt } from './xlsx-root-tail.ts'
-import { parseRelationships, removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
+import { parseRelationships, parseSheetElements, relationshipIdsMatch, removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
+import { resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
 
 export class SlicerAddError extends Error {}
 
@@ -208,12 +209,10 @@ async function pivotBinding(
     ? await pkg.readText('xl/_rels/workbook.xml.rels')
     : ''
   const rels = parseRelationships(relsXml)
-  for (const sheet of workbookXml.matchAll(/<sheet\b[^>]*>/g)) {
-    const sheetId = attr(sheet[0], 'sheetId')
-    const relId = attr(sheet[0], 'r:id')
-    if (sheetId === undefined || relId === undefined) continue
-    const entry = rels.find((rel) => rel.id === relId)
-    if (entry === undefined || resolveRelTarget('xl/workbook.xml', entry.target) !== hostPath) {
+  for (const { sheetId, relationshipId } of parseSheetElements(workbookXml)) {
+    if (sheetId === undefined || relationshipId === undefined) continue
+    const entry = rels.find((rel) => relationshipIdsMatch(rel.id, relationshipId))
+    if (entry === undefined || resolveWorkbookSheetTarget(entry.target) !== hostPath) {
       continue
     }
     const parsed = Number(sheetId)
@@ -1383,7 +1382,7 @@ export async function parseSlicerState(reader: SlicerPartReader): Promise<Slicer
     : null
   const workbookRels = workbookRelsXml === null ? [] : parseRelationships(workbookRelsXml)
   const relTarget = (relId: string): string | null => {
-    const entry = workbookRels.find((rel) => rel.id === relId)
+    const entry = workbookRels.find((rel) => relationshipIdsMatch(rel.id, relId))
     if (!entry) return null
     return resolveRelTarget('xl/workbook.xml', entry.target)
   }
@@ -1418,12 +1417,10 @@ export async function parseSlicerState(reader: SlicerPartReader): Promise<Slicer
 
   // Worksheet part path → sidecar sheet id (sheet-<sheetId attr>).
   const sheetIdByWorksheet = new Map<string, string>()
-  for (const sheet of workbookXml.matchAll(/<sheet\b[^>]*>/g)) {
-    const sheetId = attr(sheet[0], 'sheetId')
-    const relId = attr(sheet[0], 'r:id')
-    if (sheetId === undefined || relId === undefined) continue
-    const target = relTarget(relId)
-    if (target !== null) sheetIdByWorksheet.set(target, `sheet-${decodeAttribute(sheetId)}`)
+  for (const { sheetId, relationshipId } of parseSheetElements(workbookXml)) {
+    if (sheetId === undefined || relationshipId === undefined) continue
+    const relationship = workbookRels.find((rel) => relationshipIdsMatch(rel.id, relationshipId))
+    if (relationship) sheetIdByWorksheet.set(resolveWorkbookSheetTarget(relationship.target), `sheet-${sheetId}`)
   }
 
   // Cache parts by @name.

@@ -107,15 +107,20 @@ export function reorderZ(order: readonly string[], id: string, op: ZOrderOp): st
   return next
 }
 
-/// Positions that actually changed between two orders — the only ones the
-/// journal needs to carry.
+/// Rebase previously recorded positions when another reorder changes the
+/// order. A pending deletion can shift those positions between commands.
 export function changedPositions(
   before: readonly string[],
   after: readonly string[],
+  recordedPosition?: (id: string) => number | undefined,
 ): Map<string, number> {
   const changes = new Map<string, number>()
+  if (before.length === after.length && before.every((id, index) => id === after[index])) return changes
   after.forEach((id, index) => {
-    if (before[index] !== id) changes.set(id, index)
+    const recorded = recordedPosition?.(id)
+    if (before[index] !== id || (recorded !== undefined && recorded !== index)) {
+      changes.set(id, index)
+    }
   })
   return changes
 }

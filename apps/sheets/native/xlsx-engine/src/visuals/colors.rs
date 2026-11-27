@@ -85,17 +85,7 @@ pub(crate) fn drawing_color(fill: Node<'_, '_>, colors: &ColorContext) -> Option
         .descendants()
         .find(|child| child.has_tag_name("sysClr"))
     {
-        // lastClr is Excel's resolved cache; window/windowText carry fixed
-        // meanings when it is missing.
-        let base = sys
-            .attribute("lastClr")
-            .and_then(parse_hex_rgb)
-            .or_else(|| match sys.attribute("val") {
-                Some("window") => Some((0xFF, 0xFF, 0xFF)),
-                Some("windowText") => Some((0, 0, 0)),
-                _ => None,
-            })?;
-        return Some(apply_color_modifiers(sys, base));
+        return Some(apply_color_modifiers(sys, system_color_rgb(sys)?));
     }
     let scheme = fill
         .descendants()
@@ -104,11 +94,27 @@ pub(crate) fn drawing_color(fill: Node<'_, '_>, colors: &ColorContext) -> Option
     Some(apply_color_modifiers(scheme, base))
 }
 
+fn system_color_rgb(node: Node<'_, '_>) -> Option<(u8, u8, u8)> {
+    // lastClr is Excel's resolved cache; window/windowText carry fixed
+    // meanings when it is missing.
+    node.attribute("lastClr")
+        .and_then(parse_hex_rgb)
+        .or_else(|| match node.attribute("val") {
+            Some("window") => Some((0xFF, 0xFF, 0xFF)),
+            Some("windowText") => Some((0, 0, 0)),
+            _ => None,
+        })
+}
+
 /// DrawingML child color transforms (a:lumMod/a:lumOff/a:tint/a:shade), the
 /// usual RGB approximations — enough for Excel's accent "40% lighter" dPt
 /// and legend variants.
 pub(crate) fn apply_color_modifiers(color_node: Node<'_, '_>, base: (u8, u8, u8)) -> String {
-    let modifiers = color_node
+    apply_modifier_values(base, &color_modifiers(color_node))
+}
+
+fn color_modifiers(color_node: Node<'_, '_>) -> Vec<(String, f64)> {
+    color_node
         .children()
         .filter(|child| child.is_element())
         .filter_map(|child| {
@@ -117,38 +123,67 @@ pub(crate) fn apply_color_modifiers(color_node: Node<'_, '_>, base: (u8, u8, u8)
                 child.attribute("val")?.parse::<f64>().ok()? / 100_000.0,
             ))
         })
-        .collect::<Vec<_>>();
-    apply_modifier_values(base, &modifiers)
+        .collect()
 }
 
-/// xdr:style fillRef pointing at a fmtScheme gradient entry: each phClr
-/// stop resolves against the reference's scheme color.
-pub(crate) fn style_fill_gradient(
+/// Resolve the referenced theme paint, with the fillRef's own color as
+/// the placeholder and fallback for an unavailable style entry.
+pub(crate) fn style_fill(
     style_node: Option<Node<'_, '_>>,
     colors: &ColorContext,
-) -> Option<FillGradient> {
-    let reference = style_node?
-        .children()
-        .find(|node| node.has_tag_name("fillRef"))?;
-    let idx = reference.attribute("idx")?.parse::<usize>().ok()?;
-    let gradient = colors.fill_styles.get(idx.checked_sub(1)?)?.as_ref()?;
-    let scheme = reference
-        .children()
-        .find(|node| node.has_tag_name("schemeClr"))?;
-    let base = scheme_color_rgb(scheme.attribute("val")?, colors)?;
-    let base = parse_hex_rgb(apply_color_modifiers(scheme, base).trim_start_matches('#'))?;
+) -> (Option<String>, Option<FillGradient>) {
+    let Some(reference) = style_node.and_then(|node| direct_child(node, "fillRef")) else {
+        return (None, None);
+    };
+    let idx = reference.attribute("idx").and_then(|value| value.parse::<usize>().ok());
+    let entry = match idx {
+        Some(0 | 1000) => return (Some("none".into()), None),
+        Some(idx @ 1..=999) => colors.fill_styles.get(idx - 1),
+        Some(idx) => colors.background_fill_styles.get(idx - 1001),
+        None => None,
+    };
+    let fallback = drawing_color(reference, colors);
+    let Some(fill) = entry.and_then(Option::as_ref) else {
+        return (fallback, None);
+    };
+    let placeholder = fallback.as_deref().and_then(|color| parse_hex_rgb(color.trim_start_matches('#')));
+    let resolve = |paint: &ThemePaintColor| {
+        let base = match &paint.base {
+            ThemePaintBase::Rgb(rgb) => Some(*rgb),
+            ThemePaintBase::Scheme(name) if name == "phClr" => placeholder,
+            ThemePaintBase::Scheme(name) => scheme_color_rgb(name, colors),
+        }?;
+        Some(apply_modifier_values(base, &paint.modifiers))
+    };
+    let gradient = match fill {
+        ThemeFill::Transparent => return (Some("none".into()), None),
+        ThemeFill::Solid(paint) => return (resolve(paint).or(fallback), None),
+        ThemeFill::Pattern { foreground, background } => {
+            let fg = foreground.as_ref().and_then(resolve);
+            let bg = background.as_ref().and_then(resolve);
+            let color = match (fg, bg) {
+                (Some(fg), Some(bg)) => mix_hex(&fg, &bg),
+                (fg, bg) => fg.or(bg),
+            };
+            return (color.or(fallback), None);
+        }
+        ThemeFill::Gradient(gradient) => gradient,
+    };
     let stops = gradient
         .stops
         .iter()
-        .map(|stop| FillGradientStop {
-            position: stop.position,
-            color: apply_modifier_values(base, &stop.modifiers),
+        .filter_map(|stop| {
+            Some(FillGradientStop {
+                position: stop.position,
+                color: resolve(&stop.color)?,
+            })
         })
-        .collect();
-    Some(FillGradient {
+        .collect::<Vec<_>>();
+    let resolved = (stops.len() >= 2).then_some(FillGradient {
         angle: gradient.angle,
         stops,
-    })
+    });
+    (fallback, resolved)
 }
 
 /// Data-driven twin of apply_color_modifiers, for theme gradient stops whose
@@ -208,6 +243,8 @@ pub(crate) fn scheme_color_rgb(name: &str, colors: &ColorContext) -> Option<(u8,
         "dk1" | "tx1" => 1,
         "lt2" | "bg2" => 2,
         "dk2" | "tx2" => 3,
+        "hlink" => 10,
+        "folHlink" => 11,
         _ => return None,
     };
     colors.theme.get(index).copied()
@@ -275,12 +312,13 @@ pub fn resolve_color(
 /// by workbooks converted from .xls. Entries are ARGB ("00RRGGBB").
 pub fn read_indexed_palette(
     archive: &mut ZipArchive<File>,
+    styles_path: &str,
     colors: &mut ColorContext,
 ) -> Result<(), SidecarError> {
-    let Some(xml) = read_optional_xml(archive, "xl/styles.xml")? else {
+    let Some(xml) = read_optional_xml(archive, styles_path)? else {
         return Ok(());
     };
-    let document = parse_document(&xml, "styles.xml")?;
+    let document = parse_document(&xml, styles_path)?;
     let Some(list) = document
         .descendants()
         .find(|node| node.has_tag_name("indexedColors"))
@@ -315,11 +353,14 @@ pub fn tint_to_hex(base: (u8, u8, u8), tint: f64) -> String {
     format!("#{red:02X}{green:02X}{blue:02X}")
 }
 
-pub fn read_theme_palette(archive: &mut ZipArchive<File>) -> Result<ColorContext, SidecarError> {
-    let Some(xml) = read_optional_xml(archive, "xl/theme/theme1.xml")? else {
+pub fn read_theme_palette(
+    archive: &mut ZipArchive<File>,
+    theme_path: &str,
+) -> Result<ColorContext, SidecarError> {
+    let Some(xml) = read_optional_xml(archive, theme_path)? else {
         return Ok(ColorContext::default());
     };
-    let document = parse_document(&xml, "theme1.xml")?;
+    let document = parse_document(&xml, theme_path)?;
     let Some(scheme) = document
         .descendants()
         .find(|node| node.has_tag_name("clrScheme"))
@@ -352,50 +393,60 @@ pub fn read_theme_palette(archive: &mut ZipArchive<File>) -> Result<ColorContext
             None => return Ok(ColorContext::default()),
         }
     }
-    let fill_styles = document
+    let format = document
         .descendants()
-        .find(|node| node.has_tag_name("fillStyleLst"))
-        .map(|list| {
-            list.children()
-                .filter(|node| node.is_element())
-                .map(|node| parse_theme_gradient(node))
-                .collect()
-        })
-        .unwrap_or_default();
+        .find(|node| node.has_tag_name("fmtScheme"));
+    let fill_list = |name| {
+        format.and_then(|format| direct_child(format, name))
+            .map(|list| list.children().filter(|node| node.is_element()).map(parse_theme_fill).collect())
+            .unwrap_or_default()
+    };
     Ok(ColorContext {
         theme,
-        fill_styles,
+        fill_styles: fill_list("fillStyleLst"),
+        background_fill_styles: fill_list("bgFillStyleLst"),
         indexed: Vec::new(),
     })
 }
 
-/// A fillStyleLst gradFill entry as data (the theme document does not
-/// outlive the palette); non-gradient entries map to None.
-pub(crate) fn parse_theme_gradient(node: Node<'_, '_>) -> Option<ThemeGradient> {
-    if !node.has_tag_name("gradFill") {
-        return None;
+/// Keep unsupported entries in the list so the remaining indices stay intact.
+pub(super) fn parse_theme_fill(node: Node<'_, '_>) -> Option<ThemeFill> {
+    match node.tag_name().name() {
+        "noFill" => Some(ThemeFill::Transparent),
+        "solidFill" => parse_theme_paint_color(node).map(ThemeFill::Solid),
+        "pattFill" => Some(ThemeFill::Pattern {
+            foreground: direct_child(node, "fgClr").and_then(parse_theme_paint_color),
+            background: direct_child(node, "bgClr").and_then(parse_theme_paint_color),
+        }),
+        "gradFill" => parse_theme_gradient(node).map(ThemeFill::Gradient),
+        _ => None,
     }
+}
+
+fn parse_theme_paint_color(scope: Node<'_, '_>) -> Option<ThemePaintColor> {
+    scope.children().find_map(|node| {
+        let base = match node.tag_name().name() {
+            "schemeClr" => ThemePaintBase::Scheme(node.attribute("val")?.to_owned()),
+            "srgbClr" => ThemePaintBase::Rgb(parse_hex_rgb(node.attribute("val")?)?),
+            "sysClr" => ThemePaintBase::Rgb(system_color_rgb(node)?),
+            _ => return None,
+        };
+        Some(ThemePaintColor { base, modifiers: color_modifiers(node) })
+    })
+}
+
+fn parse_theme_gradient(node: Node<'_, '_>) -> Option<ThemeGradient> {
     let stops = node
         .descendants()
         .filter(|child| child.has_tag_name("gs"))
         .filter_map(|gs| {
             let position = gs.attribute("pos")?.parse::<f64>().ok()? / 100_000.0;
-            let color = gs
-                .children()
-                .find(|child| child.has_tag_name("schemeClr") || child.has_tag_name("srgbClr"))?;
-            let modifiers = color
-                .children()
-                .filter(|child| child.is_element())
-                .filter_map(|child| {
-                    Some((
-                        child.tag_name().name().to_owned(),
-                        child.attribute("val")?.parse::<f64>().ok()? / 100_000.0,
-                    ))
-                })
-                .collect();
+            if !(0.0..=1.0).contains(&position) {
+                return None;
+            }
             Some(ThemeGradientStop {
                 position,
-                modifiers,
+                color: parse_theme_paint_color(gs)?,
             })
         })
         .collect::<Vec<_>>();
@@ -407,6 +458,7 @@ pub(crate) fn parse_theme_gradient(node: Node<'_, '_>) -> Option<ThemeGradient> 
         .find(|child| child.has_tag_name("lin"))
         .and_then(|lin| lin.attribute("ang"))
         .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
         .map(|value| value / 60_000.0)
         .unwrap_or(90.0);
     Some(ThemeGradient { stops, angle })

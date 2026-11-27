@@ -17,7 +17,7 @@ test('Node XLSX inspection exposes the table names, bands, and ranges used by th
  t.after(()=>rm(directory,{recursive:true,force:true}))
  const zip=await JSZip.loadAsync(await readFile(fixture))
  zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="${spreadsheet}" xmlns:r="${officeRels}">
-  <sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+  <sheetData><row r="1"><c r="A1" s="1"><v>1</v></c></row></sheetData>
   <tableParts count="3"><tablePart r:id="tableFirst"/><tablePart r:id="tableSecond"/><tablePart r:id="external"/></tableParts>
  </worksheet>`)
  zip.file('xl/worksheets/_rels/sheet1.xml.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -36,13 +36,24 @@ test('Node XLSX inspection exposes the table names, bands, and ranges used by th
   <tableColumns count="1"><tableColumn id="1" name="Units"/></tableColumns>
   <tableStyleInfo name="LocalBand" showFirstColumn="1" showRowStripes="1"/>
  </table>`)
- zip.file('xl/styles.xml',`<styleSheet xmlns="${spreadsheet}">
-  <dxfs count="2">
-   <dxf><fill><patternFill><bgColor rgb="FF234567"/></patternFill></fill></dxf>
-   <dxf><fill><patternFill><bgColor rgb="FFABCDEF"/></patternFill></fill></dxf>
+ zip.file('xl/styles.xml',`<styleSheet xmlns="${spreadsheet}" xmlns:x="${spreadsheet}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+  <fonts count="1"><font><name val="Example Sans"/><b/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="solid"><fgColor rgb="FFCC9933"/></patternFill></fill></fills>
+  <borders count="1"><border><bottom style="thin"><color rgb="FF222222"/></bottom></border></borders>
+  <cellXfs count="2"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/><xf numFmtId="2"/></cellXfs>
+  <dxfs count="3">
+   <dxf><fill><gradientFill><stop position="0"><color rgb="FFFF0000"/></stop><stop position="1"><color rgb="FF0000FF"/></stop></gradientFill></fill></dxf>
+   <mc:AlternateContent>
+    <mc:Choice Requires="x"><x:dxf><x:fill><x:patternFill><x:bgColor rgb="FF000000"/></x:patternFill></x:fill></x:dxf></mc:Choice>
+    <mc:Fallback><x:dxf><x:fill><x:patternFill><x:bgColor rgb="FFABCDEF"/></x:patternFill></x:fill></x:dxf></mc:Fallback>
+   </mc:AlternateContent>
+   <dxf><fill><patternFill><bgColor rgb="FF234567"/></patternFill></fill>
+    <border><horizontal style="dashed"><color rgb="FF556677"/></horizontal><vertical style="thin"/></border>
+   </dxf>
   </dxfs>
-  <tableStyles count="1"><tableStyle name="LocalBand" table="1" count="2">
+  <tableStyles count="1"><tableStyle name="LocalBand" table="1" count="3">
    <tableStyleElement type="firstRowStripe" dxfId="0"/><tableStyleElement type="firstColumn" dxfId="1"/>
+   <tableStyleElement type="wholeTable" dxfId="2"/>
   </tableStyle></tableStyles>
  </styleSheet>`)
  const path=join(directory,'tables.xlsx')
@@ -67,8 +78,17 @@ test('Node XLSX inspection exposes the table names, bands, and ranges used by th
  ])
  assert.equal(sheet.tables[0].headerFontColor,'#FFFFFF')
  assert.equal(sheet.tables[0].totalRowBorderStyle,'double')
- assert.equal(sheet.tables[1].stripeFill,'#234567')
+ assert.equal(sheet.tables[1].stripeFill,'#7F007F')
  assert.equal(sheet.tables[1].firstColumnFill,'#ABCDEF')
+ assert.equal(sheet.tables[1].wholeTableFill,'#234567')
+ assert.equal(sheet.tables[1].innerHorizontalBorderStyle,'dashed')
+ assert.equal(sheet.tables[1].innerHorizontalBorderColor,'#556677')
+ assert.equal(sheet.tables[1].innerVerticalBorderStyle,'thin')
+ const [normal, numeric]=response.result.styles
+ assert.deepEqual([normal.fontFamily,normal.bold,normal.fillColor,normal.borderBottom.color],
+  ['Example Sans',true,'#CC9933','#222222'])
+ assert.deepEqual([numeric.numberFormat,numeric.fontFamily,numeric.bold,numeric.fillColor,numeric.borderBottom],
+  ['0.00',undefined,false,undefined,undefined])
  assert.equal(sheet.rowCount,11)
  assert.equal(sheet.columnCount,5)
 })

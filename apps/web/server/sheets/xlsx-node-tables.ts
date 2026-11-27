@@ -1,16 +1,20 @@
 import { XMLParser } from 'fast-xml-parser'
 import { relsPathFor, resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import { decodeAttribute } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
-import { resolvedStyleEntries } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
 import { parseRef } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
 import { builtinTablePalette, TABLE_PALETTE_KEYS } from '../../../sheets/src/renderer/table-styles'
-import type { WorkbookFile } from '../../../sheets/src/shared/desktop-api.ts'
+import type { WorkbookCellStyle, WorkbookFile } from '../../../sheets/src/shared/desktop-api.ts'
 
 type Table = WorkbookFile['sheets'][number]['tables'][number]
 type TablePalette = Pick<Table, (typeof TABLE_PALETTE_KEYS)[number]>
 type XmlAttributes = { [name: `@_${string}`]: string | undefined }
 type XmlNode = XmlAttributes & { [name: string]: string | XmlNode | XmlNode[] | undefined }
-type ResolveColor = (node: XmlAttributes) => { rgb?: string }
+type Border = WorkbookCellStyle['borderTop']
+export type TableDxf = {
+  style: WorkbookCellStyle
+  horizontal: Border
+  vertical: Border
+}
 
 const listTags = new Set(['tablePart', 'Relationship', 'tableColumn', 'filterColumn', 'tableStyle', 'tableStyleElement'])
 const xmlParser = new XMLParser({
@@ -59,25 +63,18 @@ const fontBands: ReadonlyMap<string, keyof TablePalette> = new Map([
 ])
 
 /** Resolve only the differential styles used by table bands. */
-export function readCustomTableStyles(stylesXml: string, resolveColor: ResolveColor): ReadonlyMap<string, TablePalette> {
+export function readCustomTableStyles(stylesXml: string | undefined, dxfs: readonly TableDxf[]): ReadonlyMap<string, TablePalette> {
   const palettes = new Map<string, TablePalette>()
-  if (!/<(?:[\w.-]+:)?tableStyle\b/.test(stylesXml)) return palettes
-  const stylesheet = child(xmlParser.parse(stylesXml), 'styleSheet')
-  const styles = children(child(stylesheet, 'tableStyles'), 'tableStyle')
-  if (!styles.length) return palettes
-  const [, prefix = '', dxfXml = ''] = /<([\w.-]+:)?dxfs\b[^>]*>([\s\S]*?)<\/\1dxfs\s*>/.exec(stylesXml) ?? []
-  const dxfs = resolvedStyleEntries(dxfXml, `${prefix}dxf`).map(entry => child(xmlParser.parse(entry), 'dxf'))
-  const color = (node: XmlNode | undefined) => node ? resolveColor(node).rgb : undefined
+  if (!stylesXml) return palettes
+  const styles = children(child(xmlParser.parse(`<tableStyles>${stylesXml}</tableStyles>`), 'tableStyles'), 'tableStyle')
 
   for (const style of styles) {
     const styleName = attribute(style, 'name')
     if (styleName === undefined) continue
     const palette: TablePalette = {}
-    const addBorder = (key: 'wholeTable' | 'innerHorizontal' | 'innerVertical' | 'headerBottom' | 'totalRow', edge: XmlNode | undefined) => {
-      const style = attribute(edge, 'style')
-      if (!style || style === 'none') return
-      palette[`${key}BorderColor`] = color(child(edge, 'color'))
-      palette[`${key}BorderStyle`] = style
+    const addBorder = (key: 'wholeTable' | 'innerHorizontal' | 'innerVertical' | 'headerBottom' | 'totalRow', edge: Border) => {
+      palette[`${key}BorderColor`] = edge?.color
+      palette[`${key}BorderStyle`] = edge?.style
     }
     for (const band of children(style, 'tableStyleElement')) {
       const type = attribute(band, 'type')
@@ -85,20 +82,16 @@ export function readCustomTableStyles(stylesXml: string, resolveColor: ResolveCo
       const dxf = index === undefined ? undefined : dxfs[index]
       if (!type || !dxf) continue
       const fillKey = fillBands.get(type), fontKey = fontBands.get(type)
-      if (fillKey) {
-        const pattern = child(child(dxf, 'fill'), 'patternFill')
-        palette[fillKey] = color(child(pattern, 'bgColor') ?? child(pattern, 'fgColor'))
-      }
-      if (fontKey) palette[fontKey] = color(child(child(dxf, 'font'), 'color'))
-      const border = child(dxf, 'border')
+      if (fillKey) palette[fillKey] = dxf.style.fillColor
+      if (fontKey) palette[fontKey] = dxf.style.fontColor
       if (type === 'wholeTable') {
-        addBorder('wholeTable', child(border, 'left') ?? child(border, 'top'))
-        addBorder('innerHorizontal', child(border, 'horizontal'))
-        addBorder('innerVertical', child(border, 'vertical'))
+        addBorder('wholeTable', dxf.style.borderLeft ?? dxf.style.borderTop)
+        addBorder('innerHorizontal', dxf.horizontal)
+        addBorder('innerVertical', dxf.vertical)
       } else if (type === 'headerRow') {
-        addBorder('headerBottom', child(border, 'bottom'))
+        addBorder('headerBottom', dxf.style.borderBottom)
       } else if (type === 'totalRow') {
-        addBorder('totalRow', child(border, 'top'))
+        addBorder('totalRow', dxf.style.borderTop)
       }
     }
     palettes.set(styleName, palette)

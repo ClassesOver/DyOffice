@@ -11,6 +11,7 @@
 //! whole break is refused explicitly rather than silently leaving a dangling
 //! [n] behind.
 
+import { WORKBOOK_CHART_PATH } from '../shared/workbook-chart-path.ts'
 import { removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
 import type { EntrySource, MutationPlan } from './xlsx-gateway.ts'
 
@@ -394,7 +395,7 @@ export async function planExternalLinkBreak(
   }
   // chart ranges reference cells (and thus links) outside the sheet part
   for (const path of await source.paths()) {
-    if (!/^xl\/charts\/[^/]+\.xml$/.test(path)) continue
+    if (!WORKBOOK_CHART_PATH.test(path)) continue
     const xml = await source.readText(path)
     const transformed = transformChartForLinkBreak(xml, broken)
     if (transformed !== xml) {

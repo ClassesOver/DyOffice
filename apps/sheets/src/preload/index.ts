@@ -8,6 +8,7 @@ import type {
   GenSparkAccountStatus,
 } from '@genoffice/ai-provider'
 import type { ProjectApi } from '@genoffice/project-store'
+import { WORKBOOK_CHART_PATH } from '@genoffice/xlsx-gateway/shared/workbook-chart-path'
 import type {
   AttachmentAddResult,
   AttachmentImageResult,
@@ -75,6 +76,8 @@ import {
   MAX_CREATE_DOCUMENT_TITLE_CHARS,
   MAX_CSV_EXPORT_CHARS,
   MAX_PDF_TEMPLATE_CHARS,
+  MAX_PRINT_AREA_FORMULA_CHARS,
+  MAX_PRINT_AREA_SAVE_CHARS,
   MAX_SAVE_EDITS,
   MAX_SAVE_EDITS_TOTAL,
   SAVE_EDITS_CHUNK_JSON_MAX,
@@ -82,6 +85,8 @@ import {
 import { installDropOpenBridge } from '@genoffice/electron-utils/drop-open'
 
 const desktopApi: DesktopApi = {
+  // Only the Web bridge uses the browser's print/save dialog.
+  browserPrintDialog: false,
   // Native saves retain IPC chunking; only the same-process Web bridge opts in.
   saveEditsInlineMaxBytes: undefined,
   getLanguage: () => ipcRenderer.invoke('app:get-language'),
@@ -1368,7 +1373,7 @@ function parseWorkbookFile(input: unknown): WorkbookFile {
       pivotTables: parsePivotTableInfos(sheet.pivotTables ?? []),
       sparklines: parseSparklineGroups(sheet.sparklines ?? []),
       cellImages: parseCellImages(sheet.cellImages ?? []),
-      ...(isBoundedString(sheet.printArea, 2_000) ? { printArea: sheet.printArea } : {}),
+      ...(isBoundedString(sheet.printArea, MAX_PRINT_AREA_FORMULA_CHARS) ? { printArea: sheet.printArea } : {}),
       ...(isBoundedString(sheet.printTitles, 2_000) ? { printTitles: sheet.printTitles } : {}),
       ...(sheet.hasScopedDefinedNames === true ? { hasScopedDefinedNames: true } : {}),
     }
@@ -2651,6 +2656,7 @@ function parseSaveRequest(input: WorkbookSaveRequest): WorkbookSaveRequest {
       (update) =>
         !isRecord(update) ||
         typeof update.cachePath !== 'string' ||
+        (update.pivotPath !== undefined && typeof update.pivotPath !== 'string') ||
         typeof update.sheetId !== 'string' ||
         update.sheetId.length === 0 ||
         typeof update.newOutputRef !== 'string' ||
@@ -3010,7 +3016,7 @@ function parseSaveRequest(input: WorkbookSaveRequest): WorkbookSaveRequest {
     if (
       !isRecord(chartEdit) ||
       typeof chartEdit.chartPath !== 'string' ||
-      !/^xl\/charts\/[A-Za-z0-9._-]+\.xml$/.test(chartEdit.chartPath) ||
+      !WORKBOOK_CHART_PATH.test(chartEdit.chartPath) ||
       (chartEdit.title !== undefined &&
         (typeof chartEdit.title !== 'string' || chartEdit.title.length > 255)) ||
       (chartEdit.chartType !== undefined &&
@@ -3319,8 +3325,8 @@ function isPageSetupState(input: unknown): boolean {
     return false
   if (input.paperSize !== undefined && !isBoundedInt(input.paperSize, 1, 118)) return false
   if (input.scale !== undefined && !isBoundedInt(input.scale, 10, 400)) return false
-  if (input.fitToWidth !== undefined && !isBoundedInt(input.fitToWidth, 0, 1_000)) return false
-  if (input.fitToHeight !== undefined && !isBoundedInt(input.fitToHeight, 0, 1_000)) return false
+  if (input.fitToWidth !== undefined && !isBoundedInt(input.fitToWidth, 0, 32_767)) return false
+  if (input.fitToHeight !== undefined && !isBoundedInt(input.fitToHeight, 0, 32_767)) return false
   if (input.margins !== undefined && !['normal', 'wide', 'narrow'].includes(String(input.margins)))
     return false
   for (const key of [
@@ -3339,7 +3345,7 @@ function isPageSetupState(input: unknown): boolean {
     input.printArea !== null &&
     (typeof input.printArea !== 'string' ||
       input.printArea.length === 0 ||
-      input.printArea.length > 255)
+      input.printArea.length > MAX_PRINT_AREA_SAVE_CHARS)
   )
     return false
   if (
@@ -4342,6 +4348,7 @@ function parseChart(input: unknown): NonNullable<WorkbookVisualObject['chart']> 
       !isOptionalFiniteNumber(entry.explosionPct) ||
       !isOptionalString(entry.lineColor) ||
       !isOptionalFiniteNumber(entry.lineWidth) ||
+      !isOptionalString(entry.lineDash) ||
       (entry.smooth !== undefined && typeof entry.smooth !== 'boolean') ||
       !isOptionalString(entry.marker) ||
       !isOptionalString(entry.plot) ||
@@ -4371,6 +4378,7 @@ function parseChart(input: unknown): NonNullable<WorkbookVisualObject['chart']> 
       ...(pointExplosions === undefined ? {} : { pointExplosions }),
       ...(entry.lineColor === undefined ? {} : { lineColor: entry.lineColor }),
       ...(entry.lineWidth === undefined ? {} : { lineWidth: entry.lineWidth }),
+      ...(entry.lineDash === undefined ? {} : { lineDash: entry.lineDash }),
       ...(entry.smooth === undefined ? {} : { smooth: entry.smooth }),
       ...(entry.marker === undefined ? {} : { marker: entry.marker }),
       ...(entry.plot === undefined ? {} : { plot: entry.plot }),

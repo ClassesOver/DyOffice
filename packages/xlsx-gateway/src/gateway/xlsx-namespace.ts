@@ -1,10 +1,12 @@
 /// OpenXML SDK-family producers bind the spreadsheetml namespace to a prefix
 /// (<x:workbook><x:sheets>...), invisible to the text-based patch pipeline's
-/// unprefixed element patterns. Parts are normalized at read time instead:
-/// the prefix is stripped and re-declared as the default namespace. Only
+/// unprefixed element patterns. Parts are normalized at read time by making
+/// equivalent names use the default namespace. Only
 /// parts the planner rewrites reach the file, so untouched entries keep
 /// their bytes; anything ambiguous returns the input unchanged (the save
 /// then fails exactly as it did before this pass existed).
+
+import { decodeXmlText } from './xlsx-escapes.ts'
 
 const NORMALIZABLE_NAMESPACES = new Set([
   'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
@@ -13,69 +15,250 @@ const NORMALIZABLE_NAMESPACES = new Set([
 ])
 
 const SPREADSHEETML_NAMESPACE = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-const OFFICE_RELATIONSHIPS_NAMESPACE =
+export const OFFICE_RELATIONSHIPS_NAMESPACE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const STRICT_OFFICE_RELATIONSHIPS_NAMESPACE = 'http://purl.oclc.org/ooxml/officeDocument/relationships'
 
-/// Root start tag; the quote alternation keeps '>' inside attribute values
-/// (legal in XML) from ending the match early.
-const ROOT_START_TAG = /<(?![?!])(?:[^>"']|"[^"]*"|'[^']*')*?\/?>/
+// Literal markup is read atomically. Only real element names and attributes
+// participate in the namespace checks and the rewrite.
+const MARKUP = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE\b[^>]*>|<(\/?)([^\s/>"'<=!?]+)(?:[^>"']|"[^"]*"|'[^']*')*>/g
+const ATTRIBUTES = /\s+([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+
+function rootOpeningTag(xml: string) {
+  for (const match of xml.matchAll(MARKUP)) {
+    if (match[0].startsWith('<!DOCTYPE')) return undefined
+    if (match[2] !== undefined) return match[1] === '' ? match : undefined
+  }
+  return undefined
+}
+
+export function readRootStartTag(xml: string): string {
+  return rootOpeningTag(xml)?.[0] ?? ''
+}
+
+export function readRootOpening(xml: string): { name: string; opening: string; start: number } | undefined {
+  const root = rootOpeningTag(xml)
+  const name = root?.[2]
+  return name && root ? { name, opening: root[0], start: root.index } : undefined
+}
+
+/** Count real elements without treating extension tags or XML literals as declarations. */
+export function countRootNamespaceElements(xml: string, localName: string): number {
+  const bindings = new Map<string, string>([['', '']])
+  const scopes: Array<Array<[string, string | undefined]>> = []
+  let rootNamespace: string | undefined
+  let count = 0
+  const restore = (changes: Array<[string, string | undefined]>) => {
+    for (const [prefix, previous] of changes.reverse()) {
+      if (previous === undefined) bindings.delete(prefix)
+      else bindings.set(prefix, previous)
+    }
+  }
+  for (const [tag, closing, name] of xml.matchAll(MARKUP)) {
+    if (!name) continue
+    if (closing) {
+      const changes = scopes.pop()
+      if (!changes || scopes.length === 0) break
+      restore(changes)
+      continue
+    }
+    const changes: Array<[string, string | undefined]> = []
+    if (tag.includes('xmlns')) {
+      for (const [, attribute, double, single] of tag.matchAll(ATTRIBUTES)) {
+        if (attribute !== 'xmlns' && !attribute?.startsWith('xmlns:')) continue
+        const prefix = attribute === 'xmlns' ? '' : attribute.slice(6)
+        changes.push([prefix, bindings.get(prefix)])
+        bindings.set(prefix, decodeXmlText(double ?? single ?? ''))
+      }
+    }
+    const separator = name.indexOf(':')
+    const namespace = bindings.get(separator < 0 ? '' : name.slice(0, separator))
+    if (scopes.length === 0) rootNamespace = namespace
+    if (namespace !== undefined && namespace === rootNamespace &&
+        name.slice(separator + 1) === localName) count++
+    if (tag.endsWith('/>')) {
+      if (scopes.length === 0) break
+      restore(changes)
+    } else {
+      scopes.push(changes)
+    }
+  }
+  return count
+}
+
+export function hasXmlAttributeValue(xml: string, encodedValue: string): boolean {
+  const value = decodeXmlText(encodedValue)
+  for (const candidate of xmlAttributeValues(xml)) {
+    if (candidate === value) return true
+  }
+  return false
+}
+
+export function* xmlAttributeValues(xml: string): Iterable<string> {
+  for (const [tag, closing, name] of xml.matchAll(MARKUP)) {
+    if (!name || closing) continue
+    for (const [, , double, single] of tag.matchAll(ATTRIBUTES)) {
+      yield decodeXmlText(double ?? single ?? '')
+    }
+  }
+}
+
+export function isOfficeRelationshipNamespace(uri: string | undefined): boolean {
+  return uri === OFFICE_RELATIONSHIPS_NAMESPACE || uri === STRICT_OFFICE_RELATIONSHIPS_NAMESPACE
+}
+
+export function relationshipNamespaceOverride(parent: string, root: string): string {
+  for (const opening of [parent, root]) {
+    for (const [, name, double, single] of opening.matchAll(ATTRIBUTES)) {
+      if (name !== 'xmlns:r') continue
+      return isOfficeRelationshipNamespace(double ?? single) ? '' : ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"`
+    }
+  }
+  return ''
+}
+
+export function readRelationshipId(opening: string, parent: string, root: string): string | undefined {
+  return readRelationshipIdAttribute(opening, parent, root)?.value
+}
+
+export function readRelationshipIdAttribute(
+  opening: string, parent: string, root: string,
+): { name: string; value: string } | undefined {
+  const bindings = new Map<string, string>()
+  for (const tag of [root, parent, opening]) {
+    for (const [, name, double, single] of tag.matchAll(ATTRIBUTES)) {
+      if (name?.startsWith('xmlns:')) bindings.set(name.slice('xmlns:'.length), double ?? single ?? '')
+    }
+  }
+
+  let id: { name: string; value: string } | undefined
+  let unbound: typeof id
+  for (const [, name, double, single] of opening.matchAll(ATTRIBUTES)) {
+    if (!name?.endsWith(':id') || name === 'xmlns:id') continue
+    const alias = name.slice(0, -':id'.length)
+    const uri = bindings.get(alias)
+    const value = double ?? single
+    if (value === undefined) continue
+    if (isOfficeRelationshipNamespace(uri)) {
+      if (id !== undefined) return undefined
+      id = { name, value }
+    } else if (uri === undefined && (unbound === undefined || alias === 'r')) {
+      // Some producers and callers provide fragments with an undeclared prefix.
+      unbound = { name, value }
+    }
+  }
+  return id ?? unbound
+}
 
 /// Elements the pipeline appends carry r:-prefixed attributes; some
 /// producers bind r on individual elements only, so the host root gets the
 /// conventional binding before such an element is inserted.
 export function ensureRelationshipNamespace(partXml: string): string {
-  const root = ROOT_START_TAG.exec(partXml)?.[0]
-  if (!root || /\bxmlns:r\s*=/.test(root)) return partXml
-  const bound = root.replace(/^<([^\s/>]+)/, `<$1 xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"`)
-  // function replacer: a "$" inside the root tag's attribute values must not
-  // be read as a String.replace pattern
-  return partXml.replace(root, () => bound)
+  const root = rootOpeningTag(partXml)
+  if (!root || [...root[0].matchAll(ATTRIBUTES)].some(([, name]) => name === 'xmlns:r')) return partXml
+  const offset = root.index! + 1 + root[2]!.length
+  return partXml.slice(0, offset) + ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"` + partXml.slice(offset)
 }
 
 export function normalizeOoxmlPartPrefix(xml: string): string {
-  const root = /<(?![?!])([^\s/>]+)((?:[^>"']|"[^"]*"|'[^']*')*?)\/?>/.exec(xml)
-  if (!root?.[1]) return xml
-  const colon = root[1].indexOf(':')
-  if (colon <= 0) return xml
-  const prefix = root[1].slice(0, colon)
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix)) return xml
+  const root = rootOpeningTag(xml)
+  const rootName = root?.[2]
+  if (!root || !rootName) return xml
+  const colon = rootName.indexOf(':')
+  if (colon === 0) return xml
+  const prefix = colon < 0 ? '' : rootName.slice(0, colon)
+  const qualified = prefix ? `${prefix}:` : ''
+  const namespace = prefix ? `xmlns:${prefix}` : 'xmlns'
+  const rootAttrs = [...root[0].matchAll(ATTRIBUTES)]
+  const declarations = rootAttrs.filter(([, name]) => name === namespace)
+  const declaration = declarations[0]
+  const uri = declaration?.[2] ?? declaration?.[3]
+  if (!declaration || declarations.length !== 1 || uri === undefined || !NORMALIZABLE_NAMESPACES.has(uri)) return xml
 
-  const rootTag = root[0]
-  const declarationPattern = new RegExp(`xmlns:${prefix}\\s*=\\s*"([^"]*)"`)
-  const declaration = declarationPattern.exec(rootTag)
-  const uri = declaration?.[1]
-  if (declaration === null || uri === undefined || !NORMALIZABLE_NAMESPACES.has(uri)) return xml
-
-  // Sections where plain text substitution could corrupt content.
-  if (xml.includes('<![CDATA[') || xml.includes('<!--')) return xml
-  // An existing default binding would capture the de-prefixed elements.
-  if (/\sxmlns\s*=\s*["']/.test(xml)) return xml
-  // The prefix rebound to another namespace deeper in the tree.
-  for (const other of xml.matchAll(new RegExp(`\\sxmlns:${prefix}\\s*=\\s*"([^"]*)"`, 'g'))) {
-    if (other[1] !== uri) return xml
+  const rootAliases = new Set<string>()
+  for (const [, key, double, single] of rootAttrs) {
+    if (key?.startsWith('xmlns:') && (double ?? single) === uri) rootAliases.add(key.slice('xmlns:'.length))
   }
+  if (rootAliases.size === 0 && xml.indexOf(uri, root.index! + root[0].length) === -1) return xml
 
-  const stripped = xml.replaceAll(`<${prefix}:`, '<').replaceAll(`</${prefix}:`, '</')
-  // Attributes may still use the prefix; keep its binding alongside then.
-  const bindings = new RegExp(`\\s${prefix}:`).test(stripped)
-    ? `xmlns="${uri}" ${declaration[0]}`
-    : `xmlns="${uri}"`
-  let result = stripped.replace(declaration[0], bindings)
-
-  // The pipeline appends elements carrying r:-prefixed attributes (new
-  // <sheet r:id=...>); these producers bind r per element, not on the root,
-  // so a root-level binding keeps such additions well-formed.
-  if (
-    uri === SPREADSHEETML_NAMESPACE &&
-    !new RegExp(`xmlns:r\\s*=\\s*"`).test(ROOT_START_TAG.exec(result)?.[0] ?? '') &&
-    [...result.matchAll(/\sxmlns:r\s*=\s*"([^"]*)"/g)].every(
-      (other) => other[1] === OFFICE_RELATIONSHIPS_NAMESPACE,
-    )
-  ) {
-    result = result.replace(
-      `xmlns="${uri}"`,
-      `xmlns="${uri}" xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"`,
-    )
+  const defaults = new Map<number, { value: string; start: number; end: number }>()
+  const localAliases = new Map<number, Array<[alias: string, equivalent: boolean]>>()
+  let hasEquivalentAlias = rootAliases.size > 0
+  let retainPrefix = false
+  let addRelationshipBinding = prefix !== '' && uri === SPREADSHEETML_NAMESPACE && !rootAttrs.some(([, name]) => name === 'xmlns:r')
+  for (const match of xml.matchAll(MARKUP)) {
+    const [tag, closing, name] = match
+    if (!name || closing) continue
+    const attributes = tag.slice(name.length + 1)
+    if (!attributes.includes('xmlns') && !(qualified && attributes.includes(qualified))
+      && !attributes.includes('Requires') && !attributes.includes('Ignorable')
+      && !attributes.includes('MustUnderstand')) continue
+    for (const attribute of attributes.matchAll(ATTRIBUTES)) {
+      const [, key, double, single] = attribute
+      const value = double ?? single ?? ''
+      if (key === 'xmlns') {
+        const offset = match.index!
+        if (defaults.has(offset)) return xml
+        const start = attribute.index!
+        defaults.set(offset, { value, start, end: start + attribute[0].length })
+      }
+      if (key?.startsWith('xmlns:')) {
+        const alias = key.slice('xmlns:'.length)
+        const equivalent = value === uri
+        if (match.index !== root.index) {
+          const offset = match.index!
+          const bindings = localAliases.get(offset) ?? []
+          bindings.push([alias, equivalent])
+          localAliases.set(offset, bindings)
+          hasEquivalentAlias ||= equivalent
+        } else if (rootAliases.has(alias) && !equivalent) {
+          return xml
+        }
+      }
+      if (qualified && key?.startsWith(qualified)) retainPrefix = true
+      if (qualified && key && /(?:^|:)(?:Requires|Ignorable|MustUnderstand|ProcessContent|PreserveElements|PreserveAttributes)$/.test(key)
+        && value.trim().split(/\s+/).some(token => token === prefix || token.startsWith(qualified))) retainPrefix = true
+      if (key === 'xmlns:r' && value !== OFFICE_RELATIONSHIPS_NAMESPACE) addRelationshipBinding = false
+    }
   }
-  return result
+  if (!hasEquivalentAlias) return xml
+
+  const relationshipBinding = addRelationshipBinding ? ` xmlns:r="${OFFICE_RELATIONSHIPS_NAMESPACE}"` : ''
+  const bindings = ` xmlns="${uri}"` + (retainPrefix ? declaration[0] : '') + relationshipBinding
+  const declarationOffset = declaration.index! - rootName.length - 1
+  const scopes: Array<{ aliases: Set<string>; original: string; normalized: string }> = []
+  return xml.replace(MARKUP, (tag, closing: string, name: string | undefined, offset: number) => {
+    if (!name) return tag
+    const parent = closing ? scopes.pop() : scopes.at(-1)
+    let aliases = parent?.aliases ?? rootAliases
+    const local = localAliases.get(offset)
+    if (local) {
+      aliases = new Set(aliases)
+      for (const [alias, equivalent] of local) {
+        if (equivalent) aliases.add(alias)
+        else aliases.delete(alias)
+      }
+    }
+    const separator = name.indexOf(':')
+    const stripPrefix = separator > 0 && aliases.has(name.slice(0, separator))
+    const normalizedName = stripPrefix ? name.slice(separator + 1) : name
+    const tail = tag.slice(1 + closing.length + name.length)
+    if (closing) return `</${normalizedName}${tail}`
+    const localDefault = defaults.get(offset)
+    const original = localDefault?.value ?? parent?.original ?? ''
+    const inherited = localDefault?.value ?? parent?.normalized ?? ''
+    const normalized = stripPrefix ? uri : (separator > 0 ? inherited : original)
+    if (!tag.endsWith('/>')) scopes.push({ aliases, original, normalized })
+    if (offset === root.index && !localDefault) {
+      return `<${normalizedName}${tail.slice(0, declarationOffset)}${bindings}${tail.slice(declarationOffset + declaration[0].length)}`
+    }
+    const rootRelationships = offset === root.index ? relationshipBinding : ''
+    if (normalized === inherited) return `<${normalizedName}${rootRelationships}${tail}`
+    // Restore the original default on unqualified descendants if an ancestor's namespace changed.
+    const binding = ` xmlns="${normalized.replaceAll('"', '&quot;')}"`
+    if (localDefault) {
+      return `<${normalizedName}${rootRelationships}${tail.slice(0, localDefault.start)}${binding}${tail.slice(localDefault.end)}`
+    }
+    return `<${normalizedName}${binding}${tail}`
+  })
 }

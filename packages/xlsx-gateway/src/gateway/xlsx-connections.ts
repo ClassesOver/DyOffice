@@ -8,6 +8,7 @@ import { relsPathFor, resolveRelTarget } from './xlsx-drawing-add.ts'
 import {
   decodeAttribute,
   parseRelationships,
+  relationshipIdsMatch,
   parseSheetElements,
   readAttribute,
   tableDisplayName,
@@ -211,7 +212,7 @@ export async function listWorkbookQueries(read: PartReader): Promise<WorkbookQue
     return true
   }
   for (const [sheetIndex, sheet] of parseSheetElements(workbookXml).entries()) {
-    const rel = workbookRels.find((r) => r.id === sheet.relationshipId && !r.external)
+    const rel = workbookRels.find((r) => relationshipIdsMatch(r.id, sheet.relationshipId) && !r.external)
     const sheetPart = rel && resolve(WORKBOOK_PART, rel.target)
     if (!sheetPart) continue
     for (const sheetRel of await relationshipsOf(read, sheetPart)) {

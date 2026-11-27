@@ -1,3 +1,4 @@
+import { finiteDecimalCellValue } from '../shared/decimal-cell-value.ts'
 import { allowedByValueFilter, matchesLabelFilter, type PivotFilterDef } from './pivot-filters.ts'
 import { evaluatePivotFormula, parsePivotFormula } from './pivot-formula.ts'
 import { groupValue, type PivotFieldGrouping } from './pivot-grouping.ts'
@@ -13,15 +14,6 @@ import {
 import type { AddPivotOperation } from './workbook-dsl.ts'
 
 export type PivotScalar = string | number | boolean | null
-
-/// Mirror pivot-engine's numeric coercion so the grid baked here and a later
-/// refresh total the same thing. A cell holding the text "42" is a number to
-/// both; blank, empty and unparseable cells are not.
-function numericValue(value: PivotScalar): number | null {
-  if (value === null || value === '') return null
-  const numeric = typeof value === 'number' ? value : Number(String(value).trim())
-  return Number.isFinite(numeric) ? numeric : null
-}
 
 export type PivotLayoutErrorCode =
   | 'sourceNeedsRows'
@@ -341,7 +333,7 @@ export function buildPivotLayout(
       return evaluatePivotFormula(spec.ast, (name) => {
         const refIndex = fieldIndex(name)
         return rows
-          .map((row) => numericValue(row[refIndex] ?? null))
+          .map((row) => finiteDecimalCellValue(row[refIndex]))
           .filter((value): value is number => value !== null)
           .reduce((total, value) => total + value, 0)
       })
@@ -351,7 +343,7 @@ export function buildPivotLayout(
         .length
     }
     const numbers = rows
-      .map((row) => numericValue(row[spec.fieldIndex] ?? null))
+      .map((row) => finiteDecimalCellValue(row[spec.fieldIndex]))
       .filter((value): value is number => value !== null)
     if (spec.agg === 'countNums') return numbers.length
     if (numbers.length === 0) return null
@@ -426,16 +418,20 @@ export function buildPivotLayout(
     const spec = valueSpecs[filter.dataField]
     if (!spec)
       throw new PivotLayoutError('valueFilterFieldMissing', { index: filter.dataField + 1 })
-    const labelRows = dataRows.filter(rowVisible)
+    const rowsByMember = new Map<string, (readonly PivotScalar[])[]>()
+    for (const row of dataRows) {
+      if (!rowVisible(row)) continue
+      const member = dimValue(filter.field, row)
+      const bucket = rowsByMember.get(member)
+      if (bucket) bucket.push(row)
+      else rowsByMember.set(member, [row])
+    }
     const hidden = hiddenByField.get(filter.field) ?? new Set<string>()
     const candidates = membersOfField(filter.field).filter((member) => !hidden.has(member))
-    const totals = candidates.map((member) => ({
-      key: member,
-      total: aggregate(
-        labelRows.filter((row) => dimValue(filter.field, row) === member),
-        spec,
-      ),
-    }))
+    const totals = candidates.map((member) => {
+      const bucket = rowsByMember.get(member)
+      return { key: member, total: bucket ? aggregate(bucket, spec) : null }
+    })
     const kept = allowedByValueFilter(filter, totals)
     for (const member of candidates) {
       if (!kept.has(member)) hidden.add(member)

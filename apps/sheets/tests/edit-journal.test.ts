@@ -33,6 +33,7 @@ import {
   recordSheetRename,
   recordChartEdit,
   recordPivotAdd,
+  recordPivotRefreshUpdate,
   recordStructuralOp,
   recordTableAdd,
   recordVisualAdd,
@@ -50,6 +51,20 @@ import {
   toSaveStructuralOps,
   recordCellImageAdd,
 } from '../src/renderer/edit-journal'
+
+it('journals separate pivot refreshes that share one cache', () => {
+  const journal = createEditJournal()
+  const cachePath = 'xl/pivotCache/pivotCacheDefinition1.xml'
+  const first = 'xl/pivotTables/pivotTable1.xml'
+  const second = 'xl/pivotTables/pivotTable2.xml'
+  recordPivotRefreshUpdate(journal, first, cachePath, 'sheet-1', 'F1:G5')
+  recordPivotRefreshUpdate(journal, second, cachePath, 'sheet-1', 'J1:K5')
+  recordPivotRefreshUpdate(journal, first, cachePath, 'sheet-1', 'F1:G6')
+  expect([...journal.pivotRefreshUpdates]).toEqual([
+    [first, { cachePath, sheetId: 'sheet-1', newOutputRef: 'F1:G6' }],
+    [second, { cachePath, sheetId: 'sheet-1', newOutputRef: 'J1:K5' }],
+  ])
+})
 
 describe('bulk constant-fill journal', () => {
   it('stores a whole-column fill as one save entry', () => {
@@ -1399,6 +1414,14 @@ describe('recordStructuralOp page-break remapping', () => {
 })
 
 describe('recordStructuralOp print range remapping', () => {
+  it('moves surviving pending print areas and drops only the areas that were deleted', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printArea: 'A1:A1,B2:C3,F9' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'remove-rows', index: 0, count: 1 })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-cols', index: 0, count: 1 })
+    expect(toSavePageSetupStates(journal)).toEqual([{ sheetId: 'sheet-1', printArea: 'C1:D2,G8' }])
+  })
+
   it('saves pending print ranges at their post-insert coordinates', () => {
     const journal = createEditJournal()
     recordPageSetup(journal, 'sheet-1', { printArea: 'B2:D3', printTitles: '2:3' })
