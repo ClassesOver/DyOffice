@@ -694,6 +694,8 @@ function WorkbookVisual({
         chartPath={visual.chartPath}
         chartEditing={chartEditing}
         frame={frame}
+        flipH={visual.flipH}
+        flipV={visual.flipV}
       />
     )
   }
@@ -758,6 +760,8 @@ function GroupedChartVisual({
         chartPath={visual.chartPath}
         chartEditing={chartEditing}
         frame={frame}
+        flipH={visual.flipH}
+        flipV={visual.flipV}
         openEditorSignal={editorRequest}
       />
     </div>
@@ -2097,6 +2101,8 @@ function ChartVisual({
   chartEditing,
   frame,
   onRemove,
+  flipH,
+  flipV,
   openEditorSignal = 0,
 }: {
   readonly chart: ChartMetadata
@@ -2106,6 +2112,8 @@ function ChartVisual({
   /// Unzoomed frame size; the rendered figure over it is the sheet zoom.
   readonly frame?: ShapeFrame | undefined
   readonly onRemove?: (() => void) | undefined
+  readonly flipH?: boolean | undefined
+  readonly flipV?: boolean | undefined
   /// Bumped by the wrapper on double-click to open the inline editor.
   readonly openEditorSignal?: number
 }): React.JSX.Element {
@@ -2251,7 +2259,11 @@ function ChartVisual({
     ...(areaInk ? { color: areaInk, '--chart-ink': areaInk } : {}),
     ...(chart.dataLabelStyle?.color ? { '--chart-dlbl-color': chart.dataLabelStyle.color } : {}),
     ...(chart.dataLabelStyle?.size ? { '--chart-dlbl-pt': chart.dataLabelStyle.size } : {}),
+    ...(flipV ? { flexDirection: 'column-reverse' } : {}),
   } as React.CSSProperties
+  // Reflect the drawing while leaving the chart's editor controls upright.
+  const contentTransform =
+    flipH || flipV ? `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})` : undefined
   if (!primarySeries) {
     // No cached points and nothing hydrated: Excel shows a silent empty
     // frame, never a diagnostic.
@@ -2369,6 +2381,7 @@ function ChartVisual({
         <figcaption
           className={selectedEl?.kind === 'title' ? 'chart-el-selected' : undefined}
           style={{
+            transform: contentTransform,
             ...(chart.titleStyle?.size ? { fontSize: `${chart.titleStyle.size}pt` } : {}),
             ...(chart.titleStyle?.bold === false ? { fontWeight: 400 } : {}),
             ...(chart.titleStyle?.color ? { color: chart.titleStyle.color } : {}),
@@ -2385,7 +2398,11 @@ function ChartVisual({
           {chart.title}
         </figcaption>
       )}
-      <div className={`chart-body chart-legend-${chart.legend ?? 'default'}`} ref={bodyRef}>
+      <div
+        className={`chart-body chart-legend-${chart.legend ?? 'default'}`}
+        ref={bodyRef}
+        style={{ transform: contentTransform }}
+      >
         {isPie ? (
           <PieChart
             series={primarySeries}

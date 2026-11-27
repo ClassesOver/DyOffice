@@ -692,7 +692,6 @@ function readPicture(
   picture: XmlElement,
   base: VisualBase,
   references: DrawingReferences,
-  scaledFrame?: { width: number; height: number },
 ): WorkbookVisualObject | undefined {
   const fill = drawingMainPart(picture, 'blipFill')
   const blip = child(fill ?? { ...picture, drawingMainOnly: true }, 'blip')
@@ -708,8 +707,8 @@ function readPicture(
   const transform = child(drawingMainPart(picture, 'spPr'), 'xfrm')
   const rotation = finite(attribute(transform, 'rot', true))
   const extent = rotation ? child(transform, 'ext') : undefined
-  const frameWidth = rotation ? scaledFrame?.width ?? finite(attribute(extent, 'cx', true)) : undefined
-  const frameHeight = rotation ? scaledFrame?.height ?? finite(attribute(extent, 'cy', true)) : undefined
+  const frameWidth = finite(attribute(extent, 'cx', true))
+  const frameHeight = finite(attribute(extent, 'cy', true))
   return {
     ...base, kind: 'image', mediaPath, mediaType,
     opacity: blipOpacity(attribute(child(blip, 'alphaModFix'), 'amt', true)),
@@ -724,8 +723,6 @@ function readPicture(
 type GroupBox = { x: number; y: number; width: number; height: number }
 const groupTransform = (node: XmlElement) => child(drawingMainPart(node, 'grpSpPr'), 'xfrm')
 const transformValue = (transform: XmlElement | undefined, part: string, key: string) => integer(attribute(child(transform, part), key))
-const supportedGroupTransform = (transform: XmlElement | undefined) =>
-  !finite(attribute(transform, 'rot')) && !trueAttribute(transform, 'flipH') && !trueAttribute(transform, 'flipV')
 const groupChildTags = new Set(['grpSp', 'sp', 'cxnSp', 'pic', 'graphicFrame'])
 
 function groupedChartRelationshipId(frame: XmlElement): string | undefined {
@@ -746,9 +743,11 @@ async function readGroupVisuals(
   const height = transformValue(rootTransform, 'ext', 'cy')
   if (width === undefined || height === undefined || width <= 0 || height <= 0) return groupVisuals
   let ordinal = 0
-  async function expand(node: XmlElement, box: GroupBox, depth: number) {
+  async function expand(node: XmlElement, box: GroupBox, depth: number, parentFlipH: boolean, parentFlipV: boolean) {
     const transform = groupTransform(node)
-    if (depth > 32 || !supportedGroupTransform(transform)) return
+    if (depth > 32 || finite(attribute(transform, 'rot'))) return
+    const flipH = parentFlipH !== trueAttribute(transform, 'flipH')
+    const flipV = parentFlipV !== trueAttribute(transform, 'flipV')
     const originX = transformValue(transform, 'chOff', 'x') ?? 0
     const originY = transformValue(transform, 'chOff', 'y') ?? 0
     const extentX = transformValue(transform, 'chExt', 'cx') ?? 0
@@ -769,14 +768,16 @@ async function readGroupVisuals(
       const width = transformValue(transform, 'ext', 'cx')
       const height = transformValue(transform, 'ext', 'cy')
       if (x === undefined || y === undefined || width === undefined || height === undefined || width < 0 || height < 0) continue
+      const offsetX = (x - originX) * scaleX
+      const offsetY = (y - originY) * scaleY
       const childBox = {
-        x: box.x + (x - originX) * scaleX,
-        y: box.y + (y - originY) * scaleY,
+        x: box.x + (flipH ? box.width - offsetX - width * scaleX : offsetX),
+        y: box.y + (flipV ? box.height - offsetY - height * scaleY : offsetY),
         width: width * scaleX,
         height: height * scaleY,
       }
       if (nested) {
-        if (childBox.width > 0 && childBox.height > 0) await expand(entry, childBox, depth + 1)
+        if (childBox.width > 0 && childBox.height > 0) await expand(entry, childBox, depth + 1, flipH, flipV)
         continue
       }
       const id = `${base.id}-${++ordinal}`
@@ -798,12 +799,23 @@ async function readGroupVisuals(
       }
       const visual = entry.tag === 'graphicFrame'
         ? await loadChart(groupedChartRelationshipId(entry), childBase)
-        : entry.tag === 'pic' ? readPicture(entry, childBase, references, childBox)
+        : entry.tag === 'pic' ? readPicture(entry, childBase, references)
           : readShape(entry, childBase, theme, references)
-      if (visual) groupVisuals.push(visual)
+      if (!visual) continue
+      const localFlipH = visual.kind === 'chart' ? trueAttribute(transform, 'flipH') : visual.flipH === true
+      const localFlipV = visual.kind === 'chart' ? trueAttribute(transform, 'flipV') : visual.flipV === true
+      // A single reflection reverses the handedness of a child's rotation.
+      groupVisuals.push({
+        ...visual, flipH: flipH !== localFlipH, flipV: flipV !== localFlipV,
+        ...(visual.rotation ? {
+          rotation: flipH !== flipV ? -visual.rotation : visual.rotation,
+          frameWidth: childBox.width || undefined,
+          frameHeight: childBox.height || undefined,
+        } : {}),
+      })
     }
   }
-  await expand(group, { x: 0, y: 0, width, height }, 0)
+  await expand(group, { x: 0, y: 0, width, height }, 0, false, false)
   return groupVisuals
 }
 

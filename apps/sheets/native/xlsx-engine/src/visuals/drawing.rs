@@ -231,6 +231,7 @@ pub(crate) fn read_drawing(
                     &relationships,
                     &mut visuals,
                     0,
+                    (false, false),
                 )?;
             }
             continue;
@@ -863,6 +864,30 @@ pub(crate) fn xfrm_value(xfrm: Option<Node<'_, '_>>, tag: &str, attribute: &str)
         .ok()
 }
 
+fn xfrm_flipped(xfrm: Option<Node<'_, '_>>, attribute: &str) -> bool {
+    xfrm.and_then(|node| node.attribute(attribute))
+        .is_some_and(|value| value == "1" || value == "true")
+}
+
+fn apply_group_reflection(
+    visual: &mut VisualObject,
+    flip_h: bool,
+    flip_v: bool,
+    width: f64,
+    height: f64,
+) {
+    visual.flip_h ^= flip_h;
+    visual.flip_v ^= flip_v;
+    if let Some(rotation) = &mut visual.rotation {
+        // A single reflection reverses the handedness of a child's rotation.
+        if flip_h != flip_v {
+            *rotation = -*rotation;
+        }
+        visual.frame_width = (width > 0.0).then_some(width);
+        visual.frame_height = (height > 0.0).then_some(height);
+    }
+}
+
 /// Flatten a grpSp into per-child visuals. `group_box` is the group's frame
 /// as (x, y, width, height) in EMU relative to the anchor's `from` marker;
 /// children map from the group's chOff/chExt space onto that box. Child
@@ -881,6 +906,7 @@ pub(crate) fn expand_group(
     relationships: &HashMap<String, Relationship>,
     visuals: &mut Vec<VisualObject>,
     depth: usize,
+    inherited_flip: (bool, bool),
 ) -> Result<(), SidecarError> {
     // A stack overflow is not a panic — catch_unwind cannot stop the process
     // abort, and the file itself decides how deep this recursion goes. Excel
@@ -892,6 +918,8 @@ pub(crate) fn expand_group(
     }
     let (box_x, box_y, box_width, box_height) = group_box;
     let xfrm = group_xfrm(group);
+    let flip_h = inherited_flip.0 ^ xfrm_flipped(xfrm, "flipH");
+    let flip_v = inherited_flip.1 ^ xfrm_flipped(xfrm, "flipV");
     let ch_off_x = xfrm_value(xfrm, "chOff", "x").unwrap_or(0.0);
     let ch_off_y = xfrm_value(xfrm, "chOff", "y").unwrap_or(0.0);
     let ch_ext_x = xfrm_value(xfrm, "chExt", "cx").filter(|value| *value > 0.0);
@@ -923,11 +951,15 @@ pub(crate) fn expand_group(
         ) else {
             continue;
         };
+        let x = (off_x - ch_off_x) * scale_x;
+        let y = (off_y - ch_off_y) * scale_y;
+        let width = ext_x * scale_x;
+        let height = ext_y * scale_y;
         let child_box = (
-            box_x + (off_x - ch_off_x) * scale_x,
-            box_y + (off_y - ch_off_y) * scale_y,
-            ext_x * scale_x,
-            ext_y * scale_y,
+            box_x + if flip_h { box_width - x - width } else { x },
+            box_y + if flip_v { box_height - y - height } else { y },
+            width,
+            height,
         );
         if is_group {
             expand_group(
@@ -942,6 +974,7 @@ pub(crate) fn expand_group(
                 relationships,
                 visuals,
                 depth + 1,
+                (flip_h, flip_v),
             )?;
             continue;
         }
@@ -978,6 +1011,7 @@ pub(crate) fn expand_group(
                 None,
             );
             apply_anchor_properties(&mut shape, child, relationships);
+            apply_group_reflection(&mut shape, flip_h, flip_v, width, height);
             visuals.push(shape);
             continue;
         }
@@ -1016,8 +1050,8 @@ pub(crate) fn expand_group(
                 line_width: None,
                 line_dash: None,
                 line_cap: None,
-                flip_h: false,
-                flip_v: false,
+                flip_h: flip_h ^ xfrm_flipped(child_xfrm, "flipH"),
+                flip_v: flip_v ^ xfrm_flipped(child_xfrm, "flipV"),
                 text_color: None,
                 text_anchor: None,
                 text_vert_overflow: None,
@@ -1090,10 +1124,7 @@ pub(crate) fn expand_group(
         // Group children have no anchor of their own: the pic element is the
         // scope, and its xfrm ext is in child space, so the frame rescales.
         apply_anchor_properties(&mut picture, child, relationships);
-        if picture.rotation.is_some() {
-            picture.frame_width = Some(ext_x * scale_x);
-            picture.frame_height = Some(ext_y * scale_y);
-        }
+        apply_group_reflection(&mut picture, flip_h, flip_v, width, height);
         visuals.push(picture);
     }
     Ok(())

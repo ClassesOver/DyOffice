@@ -726,6 +726,7 @@ fn expands_group_children_through_child_space() {
         &HashMap::new(),
         &mut visuals,
         0,
+        (false, false),
     )
     .unwrap();
     assert_eq!(visuals.len(), 1, "hidden child must be skipped");
@@ -750,13 +751,13 @@ fn expands_group_chart_children_with_their_part_path() {
     let xml = format!(
         r#"<xdr:wsDr {XDR} xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:grpSp>
               <xdr:nvGrpSpPr><xdr:cNvPr id="1" name="g"/></xdr:nvGrpSpPr>
-              <xdr:grpSpPr><a:xfrm>
+              <xdr:grpSpPr><a:xfrm flipV="1">
                 <a:off x="0" y="0"/><a:ext cx="200" cy="100"/>
                 <a:chOff x="0" y="0"/><a:chExt cx="200" cy="100"/>
               </a:xfrm></xdr:grpSpPr>
               <xdr:graphicFrame>
                 <xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="chart child"/></xdr:nvGraphicFramePr>
-                <xdr:xfrm><a:off x="20" y="30"/><a:ext cx="40" cy="10"/></xdr:xfrm>
+                <xdr:xfrm flipH="true"><a:off x="20" y="30"/><a:ext cx="40" cy="10"/></xdr:xfrm>
                 <a:graphic><a:graphicData><c:chart r:id="rId7"/></a:graphicData></a:graphic>
               </xdr:graphicFrame>
             </xdr:grpSp></xdr:wsDr>"#
@@ -800,6 +801,7 @@ fn expands_group_chart_children_with_their_part_path() {
         &relationships,
         &mut visuals,
         0,
+        (false, false),
     )
     .unwrap();
     assert_eq!(visuals.len(), 1);
@@ -809,9 +811,10 @@ fn expands_group_chart_children_with_their_part_path() {
     assert!(child.chart.is_none(), "data is backfilled by read_drawing");
     assert_eq!(child.name.as_deref(), Some("chart child"));
     assert_eq!(child.anchor.from_column_offset, 20);
-    assert_eq!(child.anchor.from_row_offset, 30);
+    assert_eq!(child.anchor.from_row_offset, 60);
     assert_eq!(child.anchor.to_column_offset, 60);
-    assert_eq!(child.anchor.to_row_offset, 40);
+    assert_eq!(child.anchor.to_row_offset, 70);
+    assert!(child.flip_h && child.flip_v);
     assert!(
         child.drawing_index.is_none(),
         "group children are read-only"
@@ -2158,7 +2161,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
     let xml = format!(
         r#"<xdr:wsDr {XDR} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:grpSp>
               <xdr:nvGrpSpPr><xdr:cNvPr id="1" name="g"/></xdr:nvGrpSpPr>
-              <xdr:grpSpPr><a:xfrm>
+              <xdr:grpSpPr><a:xfrm flipH="true">
                 <a:off x="0" y="0"/><a:ext cx="200" cy="100"/>
                 <a:chOff x="0" y="0"/><a:chExt cx="100" cy="50"/>
               </a:xfrm></xdr:grpSpPr>
@@ -2167,9 +2170,14 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
                 <xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill>
                 <xdr:spPr><a:xfrm rot="5400000" flipV="1"><a:off x="10" y="10"/><a:ext cx="40" cy="20"/></a:xfrm></xdr:spPr>
               </xdr:pic>
-              <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="S" descr="Grouped box"/></xdr:nvSpPr>
-                <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm>
-                <a:prstGeom prst="rect"/></xdr:spPr></xdr:sp>
+              <xdr:grpSp><xdr:grpSpPr><a:xfrm flipH="1" flipV="true">
+                <a:off x="50" y="5"/><a:ext cx="40" cy="30"/>
+                <a:chOff x="0" y="0"/><a:chExt cx="40" cy="30"/>
+              </a:xfrm></xdr:grpSpPr>
+                <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="S" descr="Grouped box"/></xdr:nvSpPr>
+                  <xdr:spPr><a:xfrm rot="2700000"><a:off x="5" y="2"/><a:ext cx="10" cy="10"/></a:xfrm>
+                  <a:prstGeom prst="rect"/></xdr:spPr></xdr:sp>
+              </xdr:grpSp>
             </xdr:grpSp></xdr:wsDr>"#
     );
     let document = Document::parse(&xml).unwrap();
@@ -2220,6 +2228,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         &relationships,
         &mut visuals,
         0,
+        (false, false),
     )
     .unwrap();
     assert_eq!(visuals.len(), 2);
@@ -2227,13 +2236,22 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
     assert_eq!(picture.kind, "image");
     assert_eq!(picture.alt_text.as_deref(), Some("Grouped logo"));
     assert_eq!(picture.hyperlink.as_deref(), Some("https://example.com"));
-    assert_eq!(picture.rotation, Some(90.0));
-    assert!(picture.flip_v && !picture.flip_h);
+    assert_eq!(picture.anchor.from_column_offset, 100);
+    assert_eq!(picture.anchor.to_column_offset, 180);
+    assert_eq!(picture.rotation, Some(-90.0));
+    assert!(picture.flip_v && picture.flip_h);
     // Child ext 40x20 in a 2x child space scales to the group's EMU.
     assert_eq!(picture.frame_width, Some(80.0));
     assert_eq!(picture.frame_height, Some(40.0));
     assert!(picture.edit_as.is_none());
-    assert_eq!(visuals[1].alt_text.as_deref(), Some("Grouped box"));
+    let shape = &visuals[1];
+    assert_eq!(shape.alt_text.as_deref(), Some("Grouped box"));
+    assert_eq!(shape.anchor.from_column_offset, 30);
+    assert_eq!(shape.anchor.from_row_offset, 46);
+    assert!(shape.flip_v && !shape.flip_h);
+    assert_eq!(shape.rotation, Some(-45.0));
+    assert_eq!(shape.frame_width, Some(20.0));
+    assert_eq!(shape.frame_height, Some(20.0));
 }
 
 #[test]

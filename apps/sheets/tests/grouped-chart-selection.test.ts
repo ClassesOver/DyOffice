@@ -46,6 +46,8 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
     kind: 'chart',
     chartPath: 'xl/charts/chart1.xml',
     drawingPath: 'xl/drawings/drawing1.xml',
+    flipH: true,
+    flipV: true,
     anchor: {
       fromRow: 0,
       fromColumn: 0,
@@ -62,7 +64,14 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
       series: [{ name: 'Revenue', categories: ['Jan', 'Feb'], values: [1, 2] }],
     },
   }
-  const regular = { ...grouped, id: 'regular', chartPath: 'xl/charts/chart2.xml', drawingIndex: 1 }
+  const regular = {
+    ...grouped,
+    id: 'regular',
+    chartPath: 'xl/charts/chart2.xml',
+    drawingIndex: 1,
+    flipH: false,
+    flipV: false,
+  }
   const editAnchor = vi.fn()
   const editChart = vi.fn()
   const scope = installWorkbookVisuals(
@@ -84,6 +93,10 @@ it('selects and edits a grouped chart while keeping its anchor with the group', 
     })
     const figure = container.querySelector<HTMLElement>('[data-print-visual="grouped"] figure')!
     const title = figure.querySelector('figcaption')!
+    expect(figure.style.flexDirection).toBe('column-reverse')
+    expect(title.style.transform).toBe('scale(-1, -1)')
+    expect(figure.querySelector<HTMLElement>('.chart-body')!.style.transform).toBe('scale(-1, -1)')
+    expect(figure.querySelector<HTMLElement>('.chart-edit-button')!.style.transform).toBe('')
     act(() => {
       title.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }))
       title.click()

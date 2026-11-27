@@ -975,6 +975,30 @@ test('places nested group shapes and straight connectors with read-only child lo
     toRow: 2, toColumn: 1, toRowOffset: 117000, toColumnOffset: 261000,
   })
 
+  const originalDrawing = await textOf(zip)(drawingPath)
+  zip.file(drawingPath, originalDrawing
+    .replace('<a:xfrm><a:off x="0" y="0"/><a:ext cx="400000"', '<a:xfrm flipH="1"><a:off x="0" y="0"/><a:ext cx="400000"')
+    .replace('<a:xfrm><a:off x="200000" y="240000"/>', '<a:xfrm flipH="true" flipV="1"><a:off x="200000" y="240000"/>')
+    .replace('<a:xfrm><a:off x="125000" y="210000"/>', '<a:xfrm rot="2700000"><a:off x="125000" y="210000"/>'))
+  const reflected = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet, theme))
+  assert.deepEqual(reflected.map(({ id }) => id), visuals.map(({ id }) => id))
+  const [, reflectedEllipse, reflectedLine, reflectedPicture, reflectedChart] = reflected
+  assert.deepEqual(reflectedEllipse.anchor, { ...ellipse.anchor, fromColumnOffset: 251000, toColumnOffset: 351000 })
+  assert.deepEqual([reflectedEllipse.flipH, reflectedEllipse.flipV], [true, false])
+  assert.deepEqual([reflectedEllipse.rotation, reflectedEllipse.frameWidth, reflectedEllipse.frameHeight], [-45, 100000, 50000])
+  assert.deepEqual(reflectedLine.anchor, {
+    ...line.anchor, fromColumnOffset: 141000, toColumnOffset: 181000, fromRowOffset: 172000, toRowOffset: 172000,
+  })
+  assert.deepEqual([reflectedLine.flipH, reflectedLine.flipV], [true, true])
+  assert.deepEqual(reflectedPicture.anchor, {
+    ...picture.anchor, fromColumnOffset: 131000, toColumnOffset: 171000, fromRowOffset: 167000, toRowOffset: 177000,
+  })
+  assert.deepEqual([reflectedPicture.rotation, reflectedPicture.flipH, reflectedPicture.flipV], [-90, false, false])
+  assert.deepEqual(reflectedChart.anchor, {
+    ...chart.anchor, fromColumnOffset: 121000, toColumnOffset: 161000, fromRowOffset: 147000, toRowOffset: 162000,
+  })
+  assert.deepEqual([reflectedChart.flipH, reflectedChart.flipV], [false, true])
+
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-group-image-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   await buildSheetsGateway(join(directory, 'gateway.mjs'))
@@ -989,10 +1013,13 @@ test('places nested group shapes and straight connectors with read-only child lo
   request.chartEdits = [{ chartPath: chart.chartPath, title: 'Edited chart in group' }]
   const saved = (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   const savedVisuals = (await runtime.sheetsNative.inspect(saved)).visuals
-  assert.equal(savedVisuals.find(visual => visual.id === chart.id).chart.title, 'Edited chart in group')
+  const savedChart = savedVisuals.find(visual => visual.id === chart.id)
+  assert.equal(savedChart.chart.title, 'Edited chart in group')
+  assert.deepEqual(savedChart.anchor, reflectedChart.anchor)
+  assert.deepEqual([savedChart.flipH, savedChart.flipV], [false, true])
   assert.equal(savedVisuals.find(visual => visual.id === standalone.id).chart.title, standalone.chart.title)
   const savedPicture = savedVisuals.find(visual => visual.id === picture.id)
-  assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(picture)))
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(reflectedPicture)))
   assert.deepEqual(await runtime.sheetsNative.readMedia(saved, picture.id), {
     mediaType: 'image/svg+xml', base64: Buffer.from(svg).toString('base64'),
   })
