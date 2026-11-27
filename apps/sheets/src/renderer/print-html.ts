@@ -303,8 +303,8 @@ export interface SheetPrintOptions {
   readonly cellHyperlink?: ((row: number, column: number) => string | null | undefined) | undefined
   /// Manual page breaks (0-based index of the row/column that starts a page).
   readonly breaks?: { rowBreaks: readonly number[]; colBreaks: readonly number[] } | null
-  /// Print this A1 range instead of the sheet's print area (Excel's "Print Selection").
-  readonly selection?: string | null
+  /// Print these A1 ranges in selection order instead of the sheet's print areas.
+  readonly selectionAreas?: readonly string[] | null
   readonly now?: Date
   readonly headerFooterTheme?: HeaderFooterTheme
 }
@@ -402,10 +402,7 @@ export function layoutSheetPrint(
       }],
     }
   }
-  const explicitAreas =
-    options.selection !== undefined && options.selection !== null
-      ? [parseArea(options.selection)]
-      : setup.printAreas.map(parseArea)
+  const explicitAreas = (options.selectionAreas ?? setup.printAreas).map(parseArea)
   const dataArea = explicitAreas.length === 0
     ? {
         startRow: 0, startColumn: 0,

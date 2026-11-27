@@ -422,7 +422,7 @@ async function sheetPrintDocument(
   state: LazyWorkbookState | null,
   worksheet: FWorksheet,
   overrides: PageSetupJournalState,
-  selection: string | null,
+  selectionAreas: readonly string[] | null,
   now: Date,
   useLiveVisuals: boolean,
 ): Promise<SheetPrintDocument> {
@@ -490,7 +490,7 @@ async function sheetPrintDocument(
         : undefined,
       rightToLeft: journal.rightToLeft ?? fileSheet?.rightToLeft ?? sheetIsRightToLeft(worksheet),
       breaks: state ? effectivePageBreaks(state, sheetId) : null,
-      selection,
+      selectionAreas,
       now,
       headerFooterTheme: { colors: state?.file.themeColors, fonts: state?.file.themeFonts },
     },
@@ -559,20 +559,13 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     },
     state?.editJournal.structuralOps.get(sheetId) ?? [],
   )
-  const activeRange = workbook.getActiveRange()
   const chartSheet = fileSheet?.chartSheet === true
-  const hasSelection =
-    !chartSheet && activeRange !== null && (activeRange.getWidth() > 1 || activeRange.getHeight() > 1)
-  const selectionA1 = (): string | null => {
-    const range = workbook.getActiveRange()
-    if (!range) return null
-    const startColumn = range.getColumn()
-    const startRow = range.getRow()
-    return (
-      `${columnLabel(startColumn)}${startRow + 1}` +
-      `:${columnLabel(startColumn + range.getWidth() - 1)}${startRow + range.getHeight()}`
-    )
-  }
+  const selectedRanges = chartSheet ? [] : worksheet.getSelection()?.getActiveRangeList() ?? []
+  const selectionAreas = selectedRanges.map((range) => {
+    const row = range.getRow()
+    const column = range.getColumn()
+    return `${columnLabel(column)}${row + 1}:${columnLabel(column + range.getWidth() - 1)}${row + range.getHeight()}`
+  })
   const printableSheets = () =>
     workbook
       .getSheets()
@@ -588,10 +581,13 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     setup,
     browserPrintDialog,
     marginsPreset: journal.margins ?? (fileSetup?.margins === undefined ? 'normal' : 'custom'),
-    hasSelection,
+    hasSelection: selectionAreas.length > 0,
     chartSheet,
     sheetCount: printableSheets().length,
     async buildJob(range, overrides) {
+      if (range === 'selection' && selectionAreas.length === 0) {
+        throw new PrintError(t('appSelectPrintRange'))
+      }
       const now = new Date()
       const sheets = range === 'workbook' ? printableSheets() : [worksheet]
       const documents: SheetPrintDocument[] = []
@@ -603,7 +599,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
             state,
             sheet,
             isActive ? overrides : {},
-            range === 'selection' ? selectionA1() : null,
+            range === 'selection' ? selectionAreas : null,
             now,
             isActive,
           ),

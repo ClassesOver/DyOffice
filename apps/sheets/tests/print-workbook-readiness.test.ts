@@ -107,8 +107,17 @@ describe('print and PDF workbook readiness coordination', () => {
     } as unknown as LazyWorkbookState
   }
 
-  function createMockContext(state: LazyWorkbookState | null): PageLayoutContext {
+  function createMockContext(
+    state: LazyWorkbookState | null,
+    selection: readonly (readonly [row: number, column: number])[] = [],
+  ): PageLayoutContext {
     const grid = [['A1', 'B1'], ['A2', 'B2']]
+    const selectedRanges = selection.map(([row, column]) => ({
+      getRow: () => row,
+      getColumn: () => column,
+      getWidth: () => 1,
+      getHeight: () => 1,
+    }))
     const valuesAt = (row: number, column: number, rowCount: number, columnCount: number) =>
       grid.slice(row, row + rowCount).map((cells) => cells.slice(column, column + columnCount))
     const worksheet = {
@@ -119,6 +128,7 @@ describe('print and PDF workbook readiness coordination', () => {
       getRowHeight: () => 20,
       getColumnWidth: () => 100,
       getMergedRanges: () => [],
+      getSelection: () => ({ getActiveRangeList: () => selectedRanges }),
       getRange: (row: number, column: number, rowCount = 1, columnCount = 1) => ({
         getValues: () => valuesAt(row, column, rowCount, columnCount),
         getDisplayValues: () => valuesAt(row, column, rowCount, columnCount),
@@ -234,6 +244,25 @@ describe('print and PDF workbook readiness coordination', () => {
     expect(html).toContain('>B1</span>')
     expect(html).not.toContain('https://example.test/replaced')
     expect(html).not.toContain('https://example.test/removed')
+  })
+
+  it.each([
+    { selection: [[0, 0]] as const, labels: ['A1'] },
+    { selection: [[0, 0], [1, 1]] as const, labels: ['A1', 'B2'] },
+  ])('prints every selected region in its own page ($labels)', async ({ selection, labels }) => {
+    const state = createMockState([sheet({ printArea: 'Sheet1!$B$1:$B$1' })])
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    const host = await openPrintPreviewHost(createMockContext(state, selection))
+    if (host === null) throw new Error('Print preview failed to open')
+
+    expect(host.hasSelection).toBe(true)
+    const job = await host.buildJob('selection', {})
+    expect(job.pageCount).toBe(labels.length)
+    expect(job.documents[0]?.pages.map((page) => page.body.match(/>([AB][12])<\/span>/g)))
+      .toEqual(labels.map((label) => [`>${label}</span>`]))
+    await host.print(job, { deviceName: null, pages: null, copies: 1, collate: true })
+    expect(printWorkbookMock.mock.calls[0]?.[0].html).toBe(assemblePrintHtml(job.documents).html)
   })
 
   it('PDF export of a streamed workbook preloads it first and exports', async () => {
@@ -452,6 +481,7 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
     return {
       getSheetId: () => id,
       getSheetName: () => name,
+      getSelection: () => null,
       getLastRow: () => 1,
       getLastColumn: () => 1,
       getRowHeight: () => 20,

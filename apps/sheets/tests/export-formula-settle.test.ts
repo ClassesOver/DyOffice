@@ -42,6 +42,7 @@ function harness(pendingFormula = true, appliedBarrier = true) {
     getMaxRows: () => 10,
     getMaxColumns: () => 10,
     isSheetHidden: () => false,
+    getSelection: () => null,
     getSheet: () => ({
       getRowVisible: () => true,
       getColVisible: () => true,

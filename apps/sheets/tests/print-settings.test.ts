@@ -872,7 +872,7 @@ describe('layoutSheetPrint', () => {
   it('prints a selection instead of the print area', () => {
     const html = assemblePrintHtml([
       layout(fakeWorksheet(), payloadSetup({ printAreas: ['A1:A2'] }), new Map(), undefined, {
-        selection: 'B2:B3',
+        selectionAreas: ['B2:B3'],
       }),
     ]).html
     expect(html).toContain('B2')
@@ -1387,7 +1387,7 @@ describe('layoutSheetPrint', () => {
 
     const printAreaSetup = { ...gridSetup, printAreas: ['A1:D5'] }
     const printArea = layout(worksheet, printAreaSetup, new Map(), visuals)
-    const selection = layout(worksheet, gridSetup, new Map(), visuals, { selection: 'A1:D5' })
+    const selection = layout(worksheet, gridSetup, new Map(), visuals, { selectionAreas: ['A1:D5'] })
     for (const document of [printArea, selection]) {
       expect(document.pages[0]?.body.match(/box-shadow:/g)).toHaveLength(20)
     }
