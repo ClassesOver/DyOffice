@@ -21,10 +21,10 @@
 | App | `browser-native` | `server-api` | `isolated-worker` | `unsupported` | `desktop-only` | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | docs | 23 | 49 | 8 | 15 | 23 | 118 |
-| sheets | 18 | 42 | 24 | 20 | 11 | 115 |
+| sheets | 19 | 42 | 24 | 20 | 11 | 116 |
 | slides | 160 | 46 | 1 | 7 | 12 | 226 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 211 | 169 | 59 | 52 | 54 | 545 |
+| **all** | 212 | 169 | 59 | 52 | 54 | 546 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -57,6 +57,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `local-integrations` | `unsupported` | 4 | T19 | None; HTTP MCP is the external integration path | Zotero and the CLI talk to local processes on the user's machine; a server must not run them. |
 | `spellcheck` | `unsupported` | 9 | T07 | Browser built-in spellcheck attribute only | Browsers expose no programmatic dictionary API; Electron webFrame/session spellchecker has no Web equivalent. |
 | `printer-enumeration` | `unsupported` | 6 | T07 | Browser print dialog | Web pages cannot enumerate printers or driver options. |
+| `xlsx-browser-print-dialog` | `browser-native` | 1 | T07 | Local capability for the browser print/save dialog | Only the Web bridge enables this flag. Native preload disables it so the renderer retains its desktop print and file options; the flag itself performs no IPC. |
 | `print` | `browser-native` | 6 | T07 | window.print() of a print-only document/PDF iframe | Printing goes through the browser dialog; CUPS/driver options are not available (see printer-enumeration). |
 | `pdf-export-chromium` | `isolated-worker` | 5 | T08 | Export job (headless Chromium/engine in worker) -> download | Desktop uses Electron printToPDF / main-process engines; Web runs the same render in a sandboxed worker for identical output. |
 | `save-dialog-targets` | `desktop-only` | 6 | T07 | Browser download / in-app confirmation | Native save dialogs choose host paths; browsers download. |
@@ -209,6 +210,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 
 | Member | Lifecycle | IPC | Calls | Class | Rule |
 | --- | --- | --- | ---: | --- | --- |
+| `desktopApi.browserPrintDialog` | local | — | 2 | `browser-native` | `xlsx-browser-print-dialog` |
 | `desktopApi.saveEditsInlineMaxBytes` | local | — | 2 | `browser-native` | `xlsx-inline-save-hint` |
 | `desktopApi.getLanguage` | request | invoke `app:get-language` | 1 | `browser-native` | `ui-locale-theme` |
 | `desktopApi.openSourcePath` | request | invoke `home:open-path` | 1 | `desktop-only` | `os-paths` |
@@ -267,7 +269,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.writeWorkbookRecovery` | request | invoke `$IPC_CHANNELS.writeWorkbookRecovery` | 1 | `browser-native` | `dirty-and-drafts` |
 | `desktopApi.autoRenameWorkbook` | request | invoke `$IPC_CHANNELS.autoRenameWorkbook` | 1 | `server-api` | `file-lifecycle` |
 | `desktopApi.exportPdf` | request | invoke `$IPC_CHANNELS.exportPdf` | 2 | `isolated-worker` | `pdf-export-chromium` |
-| `desktopApi.printWorkbook` | request | invoke `$IPC_CHANNELS.printWorkbook` | 1 | `browser-native` | `print` |
+| `desktopApi.printWorkbook` | request | invoke `$IPC_CHANNELS.printWorkbook` | 2 | `browser-native` | `print` |
 | `desktopApi.listPrinters` | request | invoke `$IPC_CHANNELS.listPrinters` | 1 | `unsupported` | `printer-enumeration` |
 | `desktopApi.exportCsv` | request | invoke `$IPC_CHANNELS.exportCsv` | 1 | `browser-native` | `download-outputs` |
 | `desktopApi.confirmCsvSave` | request | invoke `$IPC_CHANNELS.csvSaveConfirm` | 1 | `desktop-only` | `save-dialog-targets` |

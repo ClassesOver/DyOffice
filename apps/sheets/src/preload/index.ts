@@ -85,6 +85,8 @@ import {
 import { installDropOpenBridge } from '@genoffice/electron-utils/drop-open'
 
 const desktopApi: DesktopApi = {
+  // Only the Web bridge uses the browser's print/save dialog.
+  browserPrintDialog: false,
   // Native saves retain IPC chunking; only the same-process Web bridge opts in.
   saveEditsInlineMaxBytes: undefined,
   getLanguage: () => ipcRenderer.invoke('app:get-language'),
