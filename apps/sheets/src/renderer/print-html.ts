@@ -423,8 +423,6 @@ export function layoutSheetPrint(
         startColumn: Math.min(area.startColumn, titleColumns?.start ?? area.startColumn),
         endColumn: Math.max(area.endColumn, titleColumns?.end ?? area.endColumn),
       }),
-      rowOffset: offsets(bodyRows(area, plan), rowHeightPt),
-      columnOffset: offsets(bodyColumns(area, plan), columnWidthPt),
     }
   })
 
@@ -590,29 +588,14 @@ export function layoutSheetPrint(
     const originTop = headingHeightPt + titleRowsHeightPt
     const bodyWidthPt = pageColumns.reduce((sum, c) => sum + columnWidthPt(c), 0)
     const bodyHeightPt = pageRows.reduce((sum, r) => sum + rowHeightPt(r), 0)
-    const pageLeft = data.columnOffset.get(page.colStart) ?? 0
-    const pageTop = data.rowOffset.get(page.rowStart) ?? 0
-    const overlays = drawings
-      .map((visual) => {
-        const left = data.columnOffset.get(visual.fromColumn)
-        const top = data.rowOffset.get(visual.fromRow)
-        if (left === undefined || top === undefined) return ''
-        const x = left - pageLeft + visualOffsetPt(visual.offsetXPx)
-        const y = top - pageTop + visualOffsetPt(visual.offsetYPx)
-        const widthPx = finitePt(visual.widthPx, 1)
-        const heightPx = finitePt(visual.heightPx, 1)
-        if (
-          x >= bodyWidthPt ||
-          y >= bodyHeightPt ||
-          x + widthPx * 0.75 <= 0 ||
-          y + heightPx * 0.75 <= 0
+    const overlayLayer = drawings.length > 0
+      ? printDrawingOverlays(
+          drawings,
+          printBands(allColumns, columnWidthPt, headingWidthPt),
+          printBands(printedRows, rowHeightPt, headingHeightPt),
+          columnWidthPt,
+          rowHeightPt,
         )
-          return ''
-        return visualOverlayHtml(visual, x, y, widthPx, heightPx)
-      })
-      .join('')
-    const overlayLayer = overlays
-      ? `<div class="ov" style="left:${round(originLeft)}pt;top:${round(originTop)}pt;width:${round(bodyWidthPt)}pt;height:${round(bodyHeightPt)}pt">${overlays}</div>`
       : ''
     // table-layout:fixed is ignored while the table's width is auto (CSS 2.1
     // §17.5.2): without an explicit width Chromium falls back to content-based
@@ -1065,18 +1048,85 @@ function spanTotal(span: IndexSpan | null, sizeOf: (index: number) => number): n
   return span ? spanIndices(span).reduce((sum, index) => sum + sizeOf(index), 0) : 0
 }
 
-/// Running offset of each body row/column from the area's first one.
-function offsets(
+interface PrintBand {
+  readonly start: number
+  end: number
+  readonly positionPt: number
+  sizePt: number
+}
+
+/// Contiguous source coordinates map to one layer. Repeated titles can
+/// reorder the page's rows or columns, so start a new layer at each gap
+/// with omitted visible cells.
+function printBands(
   indices: readonly number[],
   sizeOf: (index: number) => number,
-): Map<number, number> {
-  const result = new Map<number, number>()
-  let position = 0
+  originPt: number,
+): PrintBand[] {
+  const bands: PrintBand[] = []
+  let positionPt = originPt
   for (const index of indices) {
-    result.set(index, position)
-    position += sizeOf(index)
+    const sizePt = sizeOf(index)
+    const previous = bands.at(-1)
+    let next = previous ? previous.end + 1 : index
+    while (next < index && sizeOf(next) === 0) next += 1
+    if (previous && next === index) {
+      previous.end = index
+      previous.sizePt += sizePt
+    } else {
+      bands.push({ start: index, end: index, positionPt, sizePt })
+    }
+    positionPt += sizePt
   }
-  return result
+  return bands
+}
+
+/// Resolve an anchor relative to a band, stopping once the drawing cannot
+/// intersect it. Hidden cells consume no space.
+function drawingOffsetInBand(
+  band: PrintBand,
+  anchor: number,
+  offsetPt: number,
+  extentPt: number,
+  sizeOf: (index: number) => number,
+): number | undefined {
+  if (anchor > band.end && offsetPt >= 0) return undefined
+  for (let index = anchor; index < band.start && offsetPt + extentPt > 0; index += 1)
+    offsetPt -= sizeOf(index)
+  for (let index = band.start; index < anchor && offsetPt < band.sizePt; index += 1)
+    offsetPt += sizeOf(index)
+  return offsetPt < band.sizePt && offsetPt + extentPt > 0 ? offsetPt : undefined
+}
+
+function printDrawingOverlays(
+  drawings: readonly PrintVisual[],
+  columns: readonly PrintBand[],
+  rows: readonly PrintBand[],
+  columnWidthPt: (column: number) => number,
+  rowHeightPt: (row: number) => number,
+): string {
+  const layers: string[] = []
+  for (const row of rows) {
+    for (const column of columns) {
+      const overlays: string[] = []
+      for (const visual of drawings) {
+        const widthPx = finitePt(visual.widthPx, 1)
+        const heightPx = finitePt(visual.heightPx, 1)
+        const x = drawingOffsetInBand(
+          column, visual.fromColumn, visualOffsetPt(visual.offsetXPx), widthPx * 0.75, columnWidthPt,
+        )
+        const y = drawingOffsetInBand(
+          row, visual.fromRow, visualOffsetPt(visual.offsetYPx), heightPx * 0.75, rowHeightPt,
+        )
+        if (x !== undefined && y !== undefined)
+          overlays.push(visualOverlayHtml(visual, x, y, widthPx, heightPx))
+      }
+      if (overlays.length === 0) continue
+      const style = `left:${round(column.positionPt)}pt;top:${round(row.positionPt)}pt;width:${round(column.sizePt)}pt;height:${round(row.sizePt)}pt`
+      layers.push(`<div class="ov" style="${style}">${overlays.join('')}</div>`)
+    }
+  }
+  return layers.join('')
 }
 
 function mergeMaps(worksheet: PrintWorksheet, area: PrintArea) {

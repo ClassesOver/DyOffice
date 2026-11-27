@@ -919,6 +919,54 @@ describe('layoutSheetPrint', () => {
     expect(widened).not.toContain('<style></style>')
   })
 
+  it('repeats a drawing in the intersection of title rows and columns on each page', () => {
+    const document = layout(
+      fakeWorksheet(),
+      payloadSetup({
+        printAreas: ['B2:B3'],
+        printTitles: '1:1',
+        printTitleColumns: 'A:A',
+        printHeadings: true,
+      }),
+      new Map(),
+      {
+        visuals: [{
+          id: 'logo', fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+          offsetXPx: 4, offsetYPx: 4, widthPx: 24, heightPx: 12,
+          html: '<img alt="Title logo">',
+        }],
+        css: '',
+      },
+      { breaks: { rowBreaks: [2], colBreaks: [] } },
+    )
+    expect(document.pages).toHaveLength(2)
+    for (const { body } of document.pages) {
+      expect(body.match(/alt="Title logo"/g)).toHaveLength(1)
+      expect(body).toContain('class="ov" style="left:24pt;top:14pt;')
+      expect(body).toContain('class="pv" style="left:3pt;top:3pt;')
+    }
+  })
+
+  it('clips drawing fragments where repeated titles and the body skip source rows', () => {
+    const document = layout(
+      fakeWorksheet(),
+      payloadSetup({ printAreas: ['A3:A3'], printTitles: '1:1' }),
+      new Map(),
+      {
+        visuals: [{
+          id: 'tall-logo', fromRow: 0, fromColumn: 0, toRow: 2, toColumn: 0,
+          offsetXPx: 0, offsetYPx: 0, widthPx: 25, heightPx: 60,
+          html: '<img alt="Tall logo">',
+        }],
+        css: '',
+      },
+    )
+    const body = document.pages[0]?.body ?? ''
+    expect(body).toContain('class="ov" style="left:0pt;top:0pt;width:75pt;height:15pt"')
+    expect(body).toContain('class="ov" style="left:0pt;top:15pt;width:75pt;height:15pt"')
+    expect(body).toContain('class="pv" style="left:0pt;top:-30pt;width:18.75pt;height:45pt"')
+  })
+
   it('reserves room for the full size of a one-cell drawing beyond the loaded grid', () => {
     const base = fakeWorksheet()
     const worksheet = {
