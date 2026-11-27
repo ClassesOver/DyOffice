@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
+import { createEditJournal, recordStructuralOp } from '../src/renderer/edit-journal'
 import {
   applyRowProperties,
   coverWrapRows,
@@ -60,6 +61,7 @@ function makeWorksheet() {
 function makeState(defaultRowHeight: number | null = null) {
   return {
     file: { styles: [], sheets: [{ id: 'sheet-1', defaultRowHeight }] },
+    editJournal: createEditJournal(),
     appliedRowKeys: new Map<string, Set<string>>(),
     hiddenFileRows: new Map<string, Set<number>>(),
     restoredFilterSpans: new Map<string, { startRow: number; endRow: number }>(),
@@ -164,6 +166,18 @@ describe('applyRowProperties', () => {
       { method: 'auto', row: 0, suppressed: true },
       { method: 'forced', row: 0, px: 75 },
     ])
+  })
+
+  it('keeps a local height change when a streamed range carries an older saved height', () => {
+    const { worksheet, calls, runtime } = makeWorksheet()
+    const state = makeState()
+    recordStructuralOp(state.editJournal, 'sheet-1', { kind: 'set-row-size', start: 0, end: 0, size: null })
+    recordStructuralOp(state.editJournal, 'sheet-1', { kind: 'insert-rows', index: 0, count: 1 })
+    applyRowProperties(runtime as never, worksheet as never, state as never, 'sheet-1', [
+      { row: 1, height: 56, customHeight: true, hidden: false },
+      { row: 2, height: 30, customHeight: true, hidden: false },
+    ] as never)
+    expect(calls).toEqual([{ method: 'forced', row: 2, px: 40 }])
   })
 })
 

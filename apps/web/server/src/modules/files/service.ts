@@ -8,7 +8,7 @@ import type { BusinessPrincipal, McpPrincipalTransactions, PrincipalTransactions
 import type { ObjectStore } from '../../storage/object-store.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import { createFileValidator, validateFileName, validateUpload } from './validation.ts'
-import { uuid, scope, objectKey, openResult as unsupportedOpenResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow, type Upload } from './queries.ts'
+import { assertDshUpload, uuid, scope, objectKey, openResult as unsupportedOpenResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow, type Upload } from './queries.ts'
 import { assertLiveLease } from '../leases/queries.ts'
 import { authError } from '../auth/sessions.ts'
 import { reclaimAbandonedUploads } from './reclamation.ts'
@@ -19,7 +19,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
   if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
   const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', fn: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,fn)
   const personal: typeof run = (token,action,fn) => run(token,action,(connection,principal) => {
-    if (principal.job) throw authError(404)
+    if (principal.job || principal.dshEdit) throw authError(404)
     return fn(connection,principal)
   })
   const catalog = Object.freeze({ ...capabilities })
@@ -160,6 +160,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
           const row = (await connection.query<Upload & { completed_file_id: string | null }>(
             'SELECT * FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 FOR UPDATE', [...scope(principal),id])).rows[0]
           if (!row || (principal.job ? row.job_id !== principal.job.id || Number(row.job_epoch) !== principal.job.epoch : row.job_id !== null)) throw authError(404)
+          assertDshUpload(principal,row)
           if (row.auth_version !== principal.authVersion || (row.kind === 'revision' && row.session_id !== principal.sessionId)) throw authError(409)
           if (row.attempt_id !== attempt || row.sha256 !== null || row.completed_file_id !== null) return
           if (row.state === 'receiving') {
@@ -176,6 +177,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
           const row = (await connection.query<Upload & { completed_file_id: string | null }>(
             'SELECT * FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 FOR UPDATE', [...scope(principal),id])).rows[0]
           if (!row || (principal.job ? row.job_id !== principal.job.id || Number(row.job_epoch) !== principal.job.epoch : row.job_id !== null)) throw authError(404)
+          assertDshUpload(principal,row)
           if (row.auth_version !== principal.authVersion || (row.kind === 'revision' && row.session_id !== principal.sessionId)) throw authError(409)
           if (row.attempt_id !== attempt || row.sha256 !== null || row.completed_file_id !== null) return
           if (row.state === 'receiving') await releaseReservation(connection, principal, row, 'cancelled')

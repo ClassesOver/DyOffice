@@ -52,7 +52,7 @@ installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>fal
 reportDocumentLoading('reading')
 async function mount(){
  const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
- const grant=await openNativePdfBrowserFile({fileId,expectedRevision:params.get('sourceRevision')??undefined})
+ const grant=await openNativePdfBrowserFile({fileId,editorId:params.get('guest')==='1'?params.get('editorId')??undefined:undefined,expectedRevision:params.get('sourceRevision')??undefined})
  const prefs=await grant.getPreferences().catch(()=>undefined)
  const editRestriction=async(bytes:Uint8Array,encrypted:boolean)=>{
   grant.inspectSignatureMarker(bytes,encrypted)
@@ -873,7 +873,7 @@ async function mount(){
    return [createPdfCreateDocumentSkill({...options,createDocument:createPdfDocumentCreator(options)})]
   }catch{return []}
  }
- void creationSkill().then(async creation=>{
+ if(params.get('guest')!=='1')void creationSkill().then(async creation=>{
   if(disposed)return
   const skills=[skill,...creation]
   if(copies){

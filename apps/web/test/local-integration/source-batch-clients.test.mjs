@@ -17,6 +17,7 @@ import { sourceResultBase } from '../../../../packages/web-contracts/src/source-
 test('Codex can read the authorized SQL catalog and continue a batch of columns over its mailbox', async t => {
   const f = await restrictedFixture(t), target = await postgresTargets(t, f)
   const sources = createSourceService({ transactions: f.transactions, credentialKeys: 'k:' + randomBytes(32).toString('base64'), egressTargets: target.approvals })
+  f.cleanup.unshift(() => sources.close())
   const results = createWorkspaceSourceResults({ transactions: f.transactions })
   const tools = createWorkspaceSourceTools({ sources, results })
   const reader = new URL(target.readerDsn).username

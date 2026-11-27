@@ -12,9 +12,10 @@ import { DbhubPool } from './dbhub-pool.ts'
 import type { SqlRows } from './sql-types.ts'
 
 const DEFAULT_PACKAGE = '@bytebase/dbhub@2.1.0'
+export const DBHUB_STARTUP_TIMEOUT_MS = 30_000
 
 export function dbhubDsn(kind: SqlSourceKind, target: Awaited<ReturnType<SourceEgressPolicy['sql']>>): string {
-  // DBHub supports MySQL, and StarRocks exposes the MySQL wire protocol.
+  // StarRocks exposes the MySQL wire protocol.
   const scheme = kind === 'postgres' ? 'postgresql' : 'mysql'
   const tls = target.tls ? '' : '?ssl-mode=DISABLED'
   return `${scheme}://${encodeURIComponent(target.username)}:${encodeURIComponent(target.password)}@${target.address.includes(':') ? `[${target.address}]` : target.address}:${target.port}/${encodeURIComponent(target.database)}${tls}`
@@ -83,7 +84,7 @@ export function createDbhubRuntime() {
   }
 }
 
-async function openSession(dsn: string, config: string, kind: SqlSourceKind, timeoutMs: number): Promise<Session> {
+async function openSession(dsn: string, config: string, kind: SqlSourceKind): Promise<Session> {
   const configPath = join(tmpdir(), `dyoffice-dbhub-${randomUUID()}.toml`)
   const client = new Client({ name: 'dyoffice-dbhub-client', version: '1.0.0' })
   const close = async () => { try { await client.close() } finally { await rm(configPath, { force: true }) } }
@@ -95,7 +96,7 @@ async function openSession(dsn: string, config: string, kind: SqlSourceKind, tim
       : ['-y', ...(kind === 'starrocks' ? ['--node-options=' + preload] : []), process.env.DYOFFICE_DBHUB_PACKAGE || DEFAULT_PACKAGE]
     const transport = new StdioClientTransport({ command: entry ? process.execPath : process.env.DYOFFICE_DBHUB_COMMAND || 'npx',
       args: [...args, '--transport', 'stdio', '--config', configPath], env: { DYOFFICE_DBHUB_DSN: dsn, DYOFFICE_DBHUB_DIALECT: kind } })
-    await client.connect(transport, { timeout: timeoutMs + 5000 })
+    await client.connect(transport, { timeout: DBHUB_STARTUP_TIMEOUT_MS })
     return { client, close }
   } catch (error) { await close(); throw error }
 }
@@ -104,7 +105,7 @@ async function callDbhub(policy: SourceEgressPolicy, kind: SqlSourceKind, secret
   const target = await policy.sql(kind, secret)
   const timeoutMs = execution.statementTimeoutMs ?? 5000
   const config = dbhubConfig(execution.maxRows, timeoutMs), dsn = dbhubDsn(kind, target)
-  const start = () => openSession(dsn, config, kind, timeoutMs)
+  const start = () => openSession(dsn, config, kind)
   const run = async ({ client }: Session) => {
     if (!client.transport) throw new Error('DBHub disconnected')
     const result = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: timeoutMs + 4000 })

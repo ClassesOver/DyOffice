@@ -19,6 +19,7 @@ test('Workspace and Codex SQL batches keep each captured result in the authorize
  const a=(await importFile(f,token,bytes,'A.docx')).file.fileId
  const b=(await importFile(f,token,bytes,'B.docx')).file.fileId
  const sources=createSourceService({transactions:f.transactions,credentialKeys:'test:'+randomBytes(32).toString('base64'),egressTargets:target.approvals})
+ f.cleanup.unshift(()=>sources.close())
  const results=createWorkspaceSourceResults({transactions:f.transactions})
  let inactiveOnError,inactiveAfterCapture,executed=0
  const tools=createWorkspaceSourceTools({sources:{...sources,async querySource(...args){
@@ -92,6 +93,7 @@ test('two documents owned by the same user and Home partition frozen results thr
  const a=(await importFile(f,token,bytes,'A.docx')).file.fileId
  const b=(await importFile(f,token,bytes,'B.docx')).file.fileId
  const sources=createSourceService({transactions:f.transactions,credentialKeys,egressTargets:targets})
+ f.cleanup.unshift(()=>sources.close())
  const results=createWorkspaceSourceResults({transactions:f.transactions})
  await sources.create(token,{sourceId:'reporting',name:'Reporting',kind:'http',config:{rowPath:'rows',timezone:'UTC'},secret:endpoint})
  const snapshot=createQuerySnapshot({sourceId:'reporting',sourceVersion:1,timezone:'UTC',schema:[{name:'amount',type:'number'}],rows:[{amount:42}],sourceTruncated:false})

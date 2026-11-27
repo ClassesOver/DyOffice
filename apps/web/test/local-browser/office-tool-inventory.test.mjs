@@ -359,19 +359,49 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  }
  if(creationOnly){
   const word=await probe('docx','chat-only')
+  const sourceWord=page.frameLocator(`iframe[data-document-id="${files.docx.fileId}"]`)
+  await sourceWord.locator('.zoom-value').click()
+  const zoomDialog=sourceWord.locator('.zoom-dialog')
+  await zoomDialog.getByRole('radio',{name:'100%'}).check()
+  await zoomDialog.locator('button.primary').click()
+  for(const width of [960,1280]){
+   await page.setViewportSize({width,height:900})
+   await sourceWord.locator('.editor-scroll').evaluate(element=>new Promise(resolve=>{
+    const observer=new ResizeObserver(()=>{observer.disconnect();requestAnimationFrame(resolve)})
+    observer.observe(element)
+   }))
+   await expect(sourceWord.locator('.zoom-value')).toHaveText('100%')
+  }
+  const releaseOpen=Promise.withResolvers()
+  const openRoute=url=>/^\/api\/v1\/workspace\/files\/[^/]+\/open$/.test(url.pathname)
+  await page.route(openRoute,async route=>{
+   await releaseOpen.promise
+   await route.continue()
+  },{times:1})
   await word.locator('textarea').fill('Word workspace creation probe')
-  await word.getByRole('button',{name:'发送',exact:true}).click()
+  try{
+   await Promise.all([
+    page.waitForRequest(request=>openRoute(new URL(request.url())),{timeout:30000}),
+    word.getByRole('button',{name:'发送',exact:true}).click(),
+   ])
+   await page.getByRole('tab',{name:'首页',exact:true}).click()
+  }finally{releaseOpen.resolve()}
   const createdWord=async()=>(await f.files.listFiles(f.alice.token)).files.find(entry=>entry.name==='Word creation 719.docx')?.id
   await expect.poll(createdWord,{timeout:30000}).toBeTruthy()
   const createdWordId=await createdWord()
-  await expect(page).toHaveURL(url=>url.origin===origin&&url.hash==='#/file/'+createdWordId)
   const wordCopy=page.frameLocator(`iframe[data-document-id="${createdWordId}"]`)
-  await expect(wordCopy.locator('.tiptap.doc-page').first()).toContainText('New Word draft marker 719')
   await expect.poll(async()=>{
    const {file:wordCopyFile}=await f.files.openFile(f.alice.token,createdWordId)
    const wordCopyZip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,createdWordId,wordCopyFile.revision))
    return wordCopyZip.file('word/document.xml').async('string')
   },{timeout:30000}).toMatch(/New Word draft marker 719/)
+  await expect(page.getByRole('tab',{name:'首页',exact:true})).toHaveAttribute('aria-selected','true')
+  const generatedWordTab=page.getByRole('tab',{name:'Word creation 719.docx',exact:true})
+  await expect(generatedWordTab).toHaveCount(1)
+  await generatedWordTab.click()
+  await expect(page).toHaveURL(url=>url.origin===origin&&url.hash==='#/file/'+createdWordId)
+  await expect(wordCopy.locator('.tiptap.doc-page').first()).toContainText('New Word draft marker 719')
+  await expect(wordCopy.locator('.zoom-value')).toHaveText('100%')
   await expect(word.getByText('Word created a native document',{exact:true})).toBeAttached({timeout:30000})
   recordVerifiedOfficeEffect('docx','create_document')
   const workbook=await probe('xlsx','chat-only')

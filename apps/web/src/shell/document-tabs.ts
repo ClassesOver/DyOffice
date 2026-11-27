@@ -39,7 +39,7 @@ export function createDocumentTabs({displayedRevision=()=>undefined,isCitationEx
     selectionSequence = ++openSequence
     return {renameVersion: names.get(id)?.renameVersion ?? 0, sequence: openSequence}
   }
-  function open(document: DocumentTab, token?: DocumentOpenToken) {
+  function open(document: DocumentTab, token?: DocumentOpenToken, {mountInBackground=false}={}) {
     assertEntriesAllowed()
     if (document.id === 'home') throw new Error('文档标识不能使用 home。')
     if (token && token.sequence <= (closedAt.get(document.id) ?? 0)) return
@@ -55,17 +55,20 @@ export function createDocumentTabs({displayedRevision=()=>undefined,isCitationEx
     if (current) {
       const pinDormant = select && document.sourceRevision && !mounted.has(document.id)
       const reopen = select && !document.sourceRevision && current.sourceRevision && (current.format==='docx'||isCitationExpired(document.id))
+      const mountDormant = mountInBackground && !mounted.has(document.id)
       if (pinDormant || reopen) {
         current.src=document.src
         if(document.sourceRevision)current.sourceRevision=document.sourceRevision
         else delete current.sourceRevision
-      } else if (current.name === name && (!select || active === document.id)) return
+      } else if (current.name === name && (!select || active === document.id) && !mountDormant) return
       current.name = name
-      if (select) {active = document.id; mounted.add(document.id)}
+      if (select) active = document.id
+      if (select || mountDormant) mounted.add(document.id)
       emit(); return
     }
     documents.push({...document, name})
-    if (select) {active = document.id; mounted.add(document.id)}
+    if (select) active = document.id
+    if (select || mountInBackground) mounted.add(document.id)
     emit()
   }
   function rename(id: string, name: string) {

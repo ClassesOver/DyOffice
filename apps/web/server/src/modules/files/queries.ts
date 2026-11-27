@@ -15,10 +15,15 @@ export const fileDto = (row: FileRow) => ({ id: row.id, name: row.name, format: 
 
 
 export function runFileTransaction<T>(transactions: PrincipalTransactions, token: FileCredential, action: 'files:read' | 'files:write', fn: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) {
-  return transactions.withPrincipalTransaction(typeof token==='string' ? { kind: 'session',token } : token, async (connection, principal) => {
+  const operation = async (connection: PoolClient, principal: BusinessPrincipal) => {
     authorize(principal, action, { deploymentId: principal.deploymentId, ownerId: principal.userId })
     return fn(connection, principal)
-  })
+  }
+  if(typeof token==='string'&&token.startsWith('dsh-edit:')) {
+    if(!transactions.withDshEditTransaction) throw authError()
+    return transactions.withDshEditTransaction({kind:'dsh-edit',token:token.slice('dsh-edit:'.length)},operation)
+  }
+  return transactions.withPrincipalTransaction(typeof token==='string' ? {kind:'session',token} : token,operation)
 }
 export async function lockAccount(connection: PoolClient, principal: BusinessPrincipal) {
   const values = scope(principal)
@@ -34,9 +39,13 @@ export async function lockAccount(connection: PoolClient, principal: BusinessPri
   const row = (await connection.query('SELECT * FROM storage_accounts WHERE deployment_id=$1 AND owner_id=$2', values)).rows[0]
   return { workspaceId: workspace.id as string, reservedBytes: Number(row.reserved_bytes), storedBytes: Number(row.stored_bytes) }
 }
+export function assertDshUpload(p:BusinessPrincipal,row:Upload) {
+  if(p.dshEdit&&(row.kind!=='revision'||row.file_id!==p.dshEdit.fileId||row.editor_id!==p.dshEdit.editorId))throw authError(404)
+}
 export async function lockUpload(connection: PoolClient, principal: BusinessPrincipal, id: string, requireUnexpired = false) {
   const row = (await connection.query<Upload>('SELECT * FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 FOR UPDATE', [...scope(principal),id])).rows[0]
   if (!row) throw authError(404)
+  assertDshUpload(principal,row)
   if (principal.job ? row.job_id!==principal.job.id || Number(row.job_epoch)!==principal.job.epoch : row.job_id!==null) throw authError(404)
   // Read database time after the row lock; time evaluated before a wait is not authority.
   const now = (await connection.query('SELECT clock_timestamp() AS now')).rows[0].now as Date
@@ -46,6 +55,7 @@ export async function lockUpload(connection: PoolClient, principal: BusinessPrin
 }
 export async function loadFile(connection: PoolClient, principal: BusinessPrincipal, id: string, includeTrash = false, lock = 'SHARE') {
   if (principal.job && (id!==principal.job.fileId || includeTrash)) throw authError(404)
+  if (principal.dshEdit && (id!==principal.dshEdit.fileId || includeTrash)) throw authError(404)
   if (principal.mcpRead && (id !== principal.mcpRead.fileId || includeTrash)) throw authError(404)
   // Lock the owner-scoped file before joining its head revision. A single
   // locking join can follow a concurrently updated file via EvalPlanQual while

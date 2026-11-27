@@ -43,7 +43,7 @@ import '../../../docs/src/renderer/fonts/fonts.css'
 import './docs.css'
 import './ai-dock-theme.css'
 
-export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false},citationMode=false) {
+export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false},citationMode=false,guest=false) {
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
   let closing=false
@@ -82,7 +82,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   const registerDraftEditor=(handle:DocsEditorHandle|null)=>{draftEditor=handle?{serialize:()=>handle.serialize()}:null;registerEditor(handle)}
   const unsubscribe = host.subscribe(() => changed())
   let continuationRevision:()=>string|undefined=()=>undefined
-  const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision:()=>continuationRevision()},false,'docx',new Set([...DOCS_AGENT_TOOLS.map(tool=>tool.name),'read_attachment','read_knowledge_file','search_knowledge_base']))
+  const embeddedDocument=guest && window.parent!==window && new URLSearchParams(location.search).get('dshEmbed')==='1'
+  const assistantResult = guest?{assistant:undefined,failure:undefined}:await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision:()=>continuationRevision()},false,'docx',new Set([...DOCS_AGENT_TOOLS.map(tool=>tool.name),'read_attachment','read_knowledge_file','search_knowledge_base']))
   const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
@@ -129,7 +130,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         peerSaveTimer=setTimeout(()=>{if(!disposed&&!closing&&host.getState(fileId).lease&&editorHandle?.isDirty())void editorHandle.save()},1200)
       },checkWriter)
   }
-  const bridge = createDocsBridge(host,fileId,prefs,() => changed(),undefined,{
+  const bridge = createDocsBridge(host,fileId,prefs,() => changed(),guest ? async () => null : undefined,{
     knowledgeRequest:assistant?.request,
     wordCheckpoint:async()=>wordSync?.checkpoint(),
     onSourceOpenFailed:()=>{
@@ -152,7 +153,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     editor:()=>editorHandle?.analysis??null,receipt:()=>bridge.getReceipt(),
     save:check=>bridge.guardedSave(check,async()=>!!editorHandle&&await editorHandle.save()&&!editorHandle.isDirty()&&bridge.getState().nativeSaveOutcome==='accepted')})
   const unregisterAnalysis=assistant?.documents.register(analysisTarget)
-  const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
+  const assistantNotice = guest?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const copyLifetime = new AbortController()
   let naming = false, copyNotice: {message:string;failed:boolean} | undefined
@@ -467,7 +468,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:copyNotice.failed?'error' as const:'info' as const,title:locale==='zh'?'AI 命名':'AI file naming',message:copyNotice.message}] : []),
       ]} />
-      <App host={{ fileActions,saveStatus,setImageAttachments,desktopActionsAvailable:false,getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,resolveKnowledgeCitation:bridge.resolveKnowledgeCitation,namedCopy:loaded&&!failed&&assistant?.available&&state.lease&&state.status==='idle'&&!naming&&draftAuthority.current()?nameCopy:undefined,onCollabEditor,syncBody,bodyCollaboration:bodyFollower,readOnly: !loaded || failed || !state.lease || local.takingOver || !['active','unavailable'].includes(syncState),assistantAvailable:!citationMode&&(assistantAvailable||!!(job&&assistant?.available)),assistant,recoveryRevision:continuationRevision(),externalAssistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,onHandoffReady:registerOfficeHandoff,lifecycle: { ...bridge.lifecycle,wordSyncActive:()=>syncState==='active',documentOpened() { bridge.lifecycle.documentOpened(); documentLoaded=true; setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => {documentLoaded=false; setFailed(true); reportDocumentLoading('error')} }} />
+      <App host={{ embeddedDocument,fileActions,saveStatus,setImageAttachments,desktopActionsAvailable:false,getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,resolveKnowledgeCitation:bridge.resolveKnowledgeCitation,namedCopy:loaded&&!failed&&assistant?.available&&state.lease&&state.status==='idle'&&!naming&&draftAuthority.current()?nameCopy:undefined,onCollabEditor,syncBody,bodyCollaboration:bodyFollower,readOnly: !loaded || failed || !state.lease || local.takingOver || !['active','unavailable'].includes(syncState),assistantAvailable:!citationMode&&(assistantAvailable||!!(job&&assistant?.available)),assistant,recoveryRevision:continuationRevision(),externalAssistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,onHandoffReady:registerOfficeHandoff,lifecycle: { ...bridge.lifecycle,wordSyncActive:()=>syncState==='active',documentOpened() { bridge.lifecycle.documentOpened(); documentLoaded=true; setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => {documentLoaded=false; setFailed(true); reportDocumentLoading('error')} }} />
     </div>
   }
   reportDocumentLoading('rendering')

@@ -1,8 +1,8 @@
+import {editorFileToken as token,isDshEditorRequest} from '../dsh-edit/http.ts'
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import type { LeaseService } from '../leases/service.ts'
 import type { RevisionService } from './service.ts'
 import { uuidSchema as id, fileParamsSchema as params, emptyQuerySchema as querystring } from '../files/http-schema.ts'
-import { cookies } from '../auth/csrf.ts'
 import { authError } from '../auth/sessions.ts'
 import { uuid } from '../files/queries.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
@@ -12,14 +12,13 @@ export type TransferRunner = <T>(request: FastifyRequest, reply: FastifyReply, o
 const epoch = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } as const
 const editor = { editorId: id }, base = { baseRevision: id, leaseEpoch: epoch, ...editor }
 const object = (properties: object, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, required, properties })
-const token = (request: FastifyRequest) => cookies(request).session ?? ''
 const fileId = (request: FastifyRequest) => (request.params as { id: string }).id
 export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions, transfer, wordCollaboration }: { leases: LeaseService; revisions: RevisionService; transfer: TransferRunner; wordCollaboration?: boolean }) {
   const wordVersion={type:'integer',minimum:0,maximum:2147483647}
   api.post('/api/v1/files/:id/word-collab',{bodyLimit:256*1024,schema:{params,querystring,body:object({
     revision:id,clientId:id,version:wordVersion,steps:{type:'array',maxItems:64,items:{type:'object',required:['stepType'],properties:{stepType:{type:'string',maxLength:64}},additionalProperties:true}},
   },['revision','clientId'])}}, request=>{
-    if(!wordCollaboration)throw authError(404)
+    if(!wordCollaboration&&!isDshEditorRequest(request))throw authError(404)
     return revisions.syncWord(token(request),fileId(request),request.body as Parameters<typeof revisions.syncWord>[2])
   })
   api.get('/api/v1/files/:id/lease', { schema: { params, querystring } }, request => leases.getLease(token(request),fileId(request)))

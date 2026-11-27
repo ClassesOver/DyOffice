@@ -815,7 +815,7 @@ function shadowPlanDiff(
 
 export type DocsNamedCopy = (propose: (suggest: NonNullable<Parameters<typeof suggestedSaveAsName>[1]>) => Promise<string>) => Promise<void>
 
-export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; setImageAttachments?: SetDocsImageAttachments; desktopActionsAvailable?: boolean; namedCopy?: DocsNamedCopy; bodyCollaboration?: boolean; syncBody?:()=>Promise<boolean>; onCollabEditor?: (editor: import('@tiptap/core').Editor | null) => void; readOnly: boolean; assistantAvailable: boolean; getSupportedCreateDocumentTypes?: () => readonly import('../shared/ipc').CreateDocumentType[]; resolveKnowledgeCitation?: (path: string) => string | undefined; externalAssistant?: {id:string;activity:React.ReactNode}; onHandoffReady?: (runner: import('./file-actions').OfficeHandoffRunner | null) => void; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined} & DocsAssistantRecovery; recoveryRevision?: string | undefined; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions?: React.ReactNode; saveStatus?: React.ReactNode; setImageAttachments?: SetDocsImageAttachments; desktopActionsAvailable?: boolean; namedCopy?: DocsNamedCopy; bodyCollaboration?: boolean; syncBody?:()=>Promise<boolean>; onCollabEditor?: (editor: import('@tiptap/core').Editor | null) => void; readOnly: boolean; assistantAvailable: boolean; getSupportedCreateDocumentTypes?: () => readonly import('../shared/ipc').CreateDocumentType[]; resolveKnowledgeCitation?: (path: string) => string | undefined; externalAssistant?: {id:string;activity:React.ReactNode}; onHandoffReady?: (runner: import('./file-actions').OfficeHandoffRunner | null) => void; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined} & DocsAssistantRecovery; recoveryRevision?: string | undefined; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -864,7 +864,12 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     null,
   )
   const [status, setStatus] = useState('')
-  const [zoom, setZoom] = useState(100)
+  const [zoom, setZoomValue] = useState(100)
+  const zoomFitMode = useRef<ZoomFitMode | 'auto' | null>('auto')
+  const setZoom = useCallback((value: number | ((current: number) => number)) => {
+    zoomFitMode.current = null
+    setZoomValue(value)
+  }, [])
   const scrollContainerRef = useRef<HTMLElement>(null)
   /** bumps after every pagination pass: the canvas' page gaps are in place */
   const [layoutRev, setLayoutRev] = useState(0)
@@ -998,7 +1003,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   const closeNav = useCallback(() => setLeftPane(null), [])
   // Review → Reviewing Pane: the outermost right-edge panel (Word's vertical pane)
   const [showReviewPane, setShowReviewPane] = useState(false)
-  const [viewMode, setViewMode] = useState<ViewMode>('print')
+  const [viewMode, setViewMode] = useState<ViewMode>(host?.embeddedDocument ? 'web' : 'print')
   const [readMode, setReadMode] = useState(false)
   const [showGrid, setShowGrid] = useState(false)
   const [splitView, setSplitView] = useState(false)
@@ -3537,16 +3542,6 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comments])
 
-  /** Uncapped width-fit ratio (%) from the scroller's measured size */
-  const rawFitWidth = useCallback(() => {
-    if (!section) return null
-    const scroller = document.querySelector('.editor-scroll')
-    if (!scroller) return null
-    return ((scroller.clientWidth - 48) / (twipsToPx(section.pageWidth) + markupExtra)) * 100
-  }, [section, markupExtra])
-
-  /** Last auto-fit: if current zoom still equals its value → "fit mode", re-fit on size changes */
-  const lastFitRef = useRef<{ mode: ZoomFitMode; value: number } | null>(null)
   const zoomLiveRef = useRef(zoom)
   useEffect(() => {
     zoomLiveRef.current = zoom
@@ -3557,7 +3552,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     (mode: ZoomFitMode): number | null => {
       if (!section) return null
       const scroller = document.querySelector('.editor-scroll')
-      if (!scroller) return null
+      if (!scroller?.clientWidth || !scroller.clientHeight) return null
       const pad = 48
       const wFit =
         ((scroller.clientWidth - pad) / (twipsToPx(section.pageWidth) + markupExtra)) * 100
@@ -3582,87 +3577,60 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   // through later zooming (a manual zoom-out alone keeps the single column);
   // One Page / Page Width / Text Width turn it off
   const [multipageMode, setMultipageMode] = useState(false)
-  /** fit without touching the arrangement: the resize follow-up / overflow clamp below */
+  /** Apply the selected fit without changing the page arrangement. */
   const refitZoom = useCallback(
     (mode: ZoomFitMode) => {
       const applied = fitZoomFor(mode)
       if (applied == null) return
-      lastFitRef.current = { mode, value: applied }
-      setZoom(applied)
+      setZoomValue(applied)
     },
     [fitZoomFor],
   )
   const zoomFit = useCallback(
     (mode: ZoomFitMode) => {
+      zoomFitMode.current = mode
       setMultipageMode(mode === 'multi')
       refitZoom(mode)
     },
     [refitZoom],
   )
 
-  // On scroller size changes (window/AI-dock/nav-pane toggles): follow with a
-  // re-fit while in fit mode, and clamp any manual zoom back down to width-fit
-  // whenever the page no longer fits horizontally — the canvas must never
-  // overflow the pane on a resize (same contract as the slides stage). A manual
-  // zoom smaller than fit is left alone.
+  // Follow available width at the default zoom and in any explicit fit mode.
   useEffect(() => {
     const el = document.querySelector('.editor-scroll')
     if (!doc || !el) return
-    let lastWidth = -1
     const ro = new ResizeObserver(() => {
-      const raw = rawFitWidth()
-      if (raw == null) return
-      const widthChanged = el.clientWidth !== lastWidth
-      lastWidth = el.clientWidth
-      const lf = lastFitRef.current
-      if (lf != null && Math.abs(zoomLiveRef.current - lf.value) <= 0.5) {
-        refitZoom(lf.mode) // fit mode: follow the container in the user's chosen fit
-        return
-      }
-      // The overflow test uses the uncapped ratio: a manual zoom that still
-      // fits (or is smaller than fit) is the user's choice and must be kept.
-      // A height-only change (a classic horizontal scrollbar appearing for the
-      // zoomed-in page) must not clamp a zoom the user just chose.
-      if (!widthChanged || zoomLiveRef.current <= raw + 0.5) return
-      refitZoom('width')
+      const mode = zoomFitMode.current
+      if (mode === 'auto') {
+        const widthFit = fitZoomFor('width')
+        if (widthFit !== null) setZoomValue(Math.min(100, widthFit))
+      } else if (mode) refitZoom(mode)
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [doc, refitZoom, rawFitWidth])
-
-  // markup column appearing/disappearing changes the canvas width without a
-  // pane resize: apply the same follow/clamp rules as the ResizeObserver above
-  useEffect(() => {
-    if (!doc) return
-    const raw = rawFitWidth()
-    if (raw == null) return
-    const lf = lastFitRef.current
-    if (lf != null && Math.abs(zoomLiveRef.current - lf.value) <= 0.5) refitZoom(lf.mode)
-    else if (zoomLiveRef.current > raw + 0.5) refitZoom('width')
-  }, [doc, markupExtra, rawFitWidth, refitZoom])
+  }, [doc, fitZoomFor, refitZoom])
 
   // Read Mode opens at 1:1 — the same page size as the Page Preview — and the
   // user's zoom / fit mode is restored on exit (wheel zoom still works inside).
   // Layout effect: it must snapshot/restore before the ResizeObserver reacts to
   // the .read-mode chrome toggling (RO callbacks fire at layout time, after
-  // layout effects but before passive effects), or zoomFit would rewrite
-  // lastFitRef first; zoomLiveRef is synced here for the same reason.
+  // layout effects but before passive effects).
   const preReadZoomRef = useRef<{
     zoom: number
-    fit: { mode: ZoomFitMode; value: number } | null
+    fit: ZoomFitMode | 'auto' | null
   } | null>(null)
   useLayoutEffect(() => {
     if (readMode) {
-      preReadZoomRef.current = { zoom: zoomLiveRef.current, fit: lastFitRef.current }
-      lastFitRef.current = null
+      preReadZoomRef.current = { zoom: zoomLiveRef.current, fit: zoomFitMode.current }
+      zoomFitMode.current = null
       zoomLiveRef.current = 100
-      setZoom(100)
+      setZoomValue(100)
     } else if (preReadZoomRef.current) {
       const prev = preReadZoomRef.current
       preReadZoomRef.current = null
-      lastFitRef.current = prev.fit
+      zoomFitMode.current = prev.fit
       zoomLiveRef.current = prev.zoom
-      setZoom(prev.zoom)
+      setZoomValue(prev.zoom)
     }
   }, [readMode])
 
@@ -8453,6 +8421,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
 .editor-scroll .doc-page.measuring-columns { column-count: auto; width: ${colFlow.colWidthPx + twipsToPx(canvasSection?.marginLeft ?? section?.marginLeft ?? 0) + twipsToPx(canvasSection?.marginRight ?? section?.marginRight ?? 0)}px; }`}</style>
       )}
       <Ribbon
+        embeddedDocument={host?.embeddedDocument === true}
         desktopActionsAvailable={desktopActionsAvailable}
         aiNamingAvailable={desktopActionsAvailable !== false || !!namedCopy}
         fileActions={host?.fileActions}

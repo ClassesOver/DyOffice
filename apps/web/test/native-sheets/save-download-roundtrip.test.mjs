@@ -565,6 +565,47 @@ test('native XLSX explicitly writes literal analysis cells and independently sav
  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J11').getValue())).toBe('0012')
 })
 
+test('Node XLSX saves row and column sizes without replacing the live workbook', { timeout: 90000 }, async t => {
+  const { page, files, alice, opened } = await fixture(t, false, false, undefined, undefined, false, true)
+  const head = async () => (await files.openFile(alice.token, opened.file.fileId)).file.revision
+  const layout = () => page.evaluate(() => {
+    const sheet = window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    return sheet && { height: sheet.getRowHeight(1), width: Math.round(sheet.getColumnWidth(1)) }
+  })
+  const selectedCell = () => page.evaluate(() =>
+    window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveRange()?.getA1Notation(),
+  )
+  const resize = (heightPoints, widthPx) => page.evaluate(async ({ heightPoints, widthPx }) => {
+    const { univerAPI, applyOps } = window.__genofficeDebug
+    const sheet = univerAPI.getActiveWorkbook().getActiveSheet()
+    const sheetId = sheet.getSheetId()
+    const result = await applyOps([
+      { op: 'set_row_height', sheetId, row: 2, heightPoints, count: 1 },
+      { op: 'set_col_width', sheetId, column: 'B', widthPx, count: 1 },
+    ])
+    if (!result?.ok) throw new Error(JSON.stringify(result))
+    sheet.getRange('D4').activate()
+  }, { heightPoints, widthPx })
+  for (const [heightPoints, widthPx] of [[49.5, 224], [60, 192]]) {
+    await resize(heightPoints, widthPx)
+    const previous = await head()
+    await page.keyboard.press('Control+s')
+    try {
+      await expect.poll(head, { timeout: 15000 }).not.toBe(previous)
+    } catch (error) {
+      throw new Error(`Saving row height ${heightPoints}pt and column width ${widthPx}px: ${await page.locator('.status-bar .status-msg').innerText()}`, { cause: error })
+    }
+    await expect(page.locator('.status-bar .status-msg')).toHaveText('Saved.')
+    assert.equal(await page.evaluate(() =>
+      window.__savedWorkbookIdentity === window.__genofficeDebug.univerAPI.getActiveWorkbook().getWorkbook(),
+    ), true, 'saving dimensions must retain the live workbook')
+    assert.equal(await selectedCell(), 'D4')
+    assert.deepEqual(await layout(), { height: heightPoints / 0.75, width: widthPx })
+  }
+  await page.reload()
+  await expect.poll(layout, { timeout: 12000 }).toEqual({ height: 80, width: 192 })
+})
+
 test('Node XLSX restores worksheet layout and color scales after save and refresh', {timeout:90000}, async t => {
   const {page,files,alice,opened}=await fixture(t,false,false,undefined,undefined,false,true)
   const layout=()=>page.evaluate(()=>{

@@ -118,14 +118,15 @@ export interface RibbonCollapse {
 export function useRibbonCollapse(
   storageKey: string,
   labels: RibbonCollapseLabels,
+  sessionDensity?: RibbonDensity,
 ): RibbonCollapse {
   const compactEnabled = Boolean(labels.compact && labels.expandFull)
   const [density, setDensity] = useState<RibbonDensity>(() =>
-    compactEnabled
+    sessionDensity ?? (compactEnabled
       ? readRibbonDensity(storageKey)
       : readRibbonCollapsed(storageKey)
         ? 'collapsed'
-        : 'full',
+        : 'full'),
   )
   const rootRef = useRef<HTMLDivElement | null>(null)
   const collapsed = density === 'collapsed'
@@ -134,6 +135,7 @@ export function useRibbonCollapse(
 
   const persist = useCallback(
     (next: RibbonDensity) => {
+      if (sessionDensity !== undefined) return
       // the legacy key only ever stored '1'/'0', so keep writing that shape for
       // the two states and use the name for the middle one
       if (!compactEnabled) {
@@ -142,7 +144,7 @@ export function useRibbonCollapse(
       }
       writeRibbonDensity(storageKey, next)
     },
-    [compactEnabled, storageKey],
+    [compactEnabled, storageKey, sessionDensity],
   )
 
   const toggle = useCallback(() => {

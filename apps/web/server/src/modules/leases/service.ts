@@ -14,7 +14,7 @@ export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeW
     if(edit)await assertOfficeWritable?.(file)
     return operation(connection,principal)
   })
-  const editorAuthority = (p: BusinessPrincipal,id: string) => { if (p.job && id!==p.job.id) throw authError(404) }
+  const editorAuthority = (p: BusinessPrincipal,id: string) => { if ((p.job && id!==p.job.id) || (p.dshEdit && id!==p.dshEdit.editorId)) throw authError(404) }
   async function install(connection: import('pg').PoolClient, principal: BusinessPrincipal, fileId: string, editorId: string, epoch: number) {
     const row = (await connection.query<LeaseRow>("INSERT INTO edit_leases(deployment_id,owner_id,file_id,session_id,auth_version,editor_id,lease_epoch,job_id,job_epoch,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$9,$10,LEAST(COALESCE((SELECT lease_until FROM native_jobs WHERE id=$9),'infinity'::timestamptz),clock_timestamp()+$8*interval '1 millisecond')) ON CONFLICT(deployment_id,owner_id,file_id) DO UPDATE SET session_id=EXCLUDED.session_id,auth_version=EXCLUDED.auth_version,editor_id=EXCLUDED.editor_id,lease_epoch=EXCLUDED.lease_epoch,expires_at=EXCLUDED.expires_at,job_id=EXCLUDED.job_id,job_epoch=EXCLUDED.job_epoch RETURNING *", [...scope(principal),fileId,principal.sessionId,principal.authVersion,editorId,epoch,ttlMs,principal.job?.id ?? null,principal.job?.epoch ?? null])).rows[0]
     return dto(row)
@@ -25,7 +25,7 @@ export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeW
       return run(token,id,async (connection, principal) => {
         const row = await lockLease(connection,principal,id), now = await databaseTime(connection)
         if (!row) return { leaseEpoch: 0, editorId: null, expiresAt: null, active: false, heldByCurrentSession: false }
-        return { ...dto(row), active: row.auth_version === principal.authVersion && row.expires_at > now, heldByCurrentSession: row.session_id === principal.sessionId && (principal.job ? row.job_id===principal.job.id && Number(row.job_epoch)===principal.job.epoch : row.job_id===null) }
+        return { ...dto(row), active: row.auth_version === principal.authVersion && row.expires_at > now, heldByCurrentSession: row.session_id === principal.sessionId && (!principal.dshEdit || row.editor_id===principal.dshEdit.editorId) && (principal.job ? row.job_id===principal.job.id && Number(row.job_epoch)===principal.job.epoch : row.job_id===null) }
       })
     },
     async acquireLease(token: FileCredential, fileId: string, input: { editorId: string }) {
@@ -58,7 +58,7 @@ export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeW
       shape(input,['editorId','expectedEpoch'])
       const id = uuid(fileId), editor = uuid(input.editorId), expected = leaseEpoch(input.expectedEpoch)
       return run(token,id,async (connection, principal) => {
-        if (principal.job) throw authError(404)
+        if (principal.job || principal.dshEdit) throw authError(404)
         const row = await lockLease(connection,principal,id)
         if (!row || Number(row.lease_epoch) !== expected) throw authError(409)
         return install(connection,principal,id,editor,nextEpoch(expected))

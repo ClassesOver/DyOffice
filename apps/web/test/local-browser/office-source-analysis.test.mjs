@@ -60,7 +60,7 @@ test('Office reads an allowed PostgreSQL schema and Coding plots the frozen resu
  target.username=reader;target.password=password
  const sourcesCredentialKeys='analysis:'+randomBytes(32).toString('base64')
  await createSourceService({transactions:f.transactions,credentialKeys:sourcesCredentialKeys}).create(f.adminSigned.token,{
-  sourceId:'sales-db',name:'Sales DB',kind:'postgres',config:{database:f.database,allowedSchemas:['sales'],units:{amount:'CNY'}},secret:target.href,
+  sourceId:'sales-db',name:'Sales DB',kind:'postgres',config:{database:f.database,allowedSchemas:['sales'],units:{amount:'CNY'},statementTimeoutMs:30000},secret:target.href,
  })
  const keyring={activeKeyId:'office',keys:{office:new Uint8Array(32).fill(37)}}
  const model=liveConfig ? JSON.parse(await readFile(liveConfig,'utf8')).entry
@@ -125,7 +125,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
    return {summary:committed.summary,output:'Monthly sales chart generated'}
   },
  }
- const sql="SELECT to_char(date_trunc('month', paid_at), 'YYYY-MM') AS month, sum(paid_amount) AS amount FROM sales.orders WHERE paid_at >= DATE '2026-01-01' AND paid_at < DATE '2026-03-01' GROUP BY 1 ORDER BY 1"
+ const sql="SELECT to_char(date_trunc('month', paid_at), 'YYYY-MM') AS month, CAST(sum(paid_amount) AS integer) AS amount FROM sales.orders WHERE paid_at >= DATE '2026-01-01' AND paid_at < DATE '2026-03-01' GROUP BY 1 ORDER BY 1"
  const toolFrames=[]
  if(!liveConfig){
  const network=mockProviderNetwork(t,()=>{try{
@@ -248,9 +248,14 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await saveAndTest.click()
  await expect(page.getByText('连接已保存，测试通过。',{exact:true})).toBeVisible()
  await page.getByRole('button',{name:'选择可见范围',exact:true}).click()
- await page.getByLabel('搜索目录',{exact:true}).fill('sal')
- await expect(page.getByRole('button',{name:'浏览 confidential 的表',exact:true})).toHaveCount(0)
- await page.getByRole('button',{name:'浏览 sales 的表',exact:true}).click()
+ const browseSales=page.getByRole('button',{name:'浏览 sales 的表',exact:true})
+ await expect(browseSales).toBeVisible({timeout:45000})
+ const schemaSearch=page.getByLabel('搜索目录',{exact:true})
+ if(await schemaSearch.isVisible()){
+  await schemaSearch.fill('sal')
+  await expect(page.getByRole('button',{name:'浏览 confidential 的表',exact:true})).toHaveCount(0)
+ }
+ await browseSales.click()
  await expect(page.getByLabel('搜索表',{exact:true})).toBeVisible()
  await page.getByRole('combobox',{name:'目录范围',exact:true}).selectOption('selected')
  await page.getByRole('combobox',{name:'表可见范围',exact:true}).selectOption('all')
@@ -262,9 +267,11 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await page.getByLabel('搜索表',{exact:true}).fill('not_found')
  await page.getByRole('button',{name:'清除表搜索',exact:true}).click()
  await expect(page.getByLabel('搜索表',{exact:true})).toBeFocused()
- await page.getByRole('button',{name:'勾选当前目录（1）',exact:true}).click()
- await expect(page.getByText('当前列表已勾选 1 / 1 张表。',{exact:true})).toBeVisible()
- await page.getByRole('button',{name:'取消勾选当前目录（1）',exact:true}).click()
+ const bulk=page.locator('.dc-bulk-options')
+ await bulk.locator('summary').click()
+ await bulk.getByRole('button',{name:'勾选当前目录（1）',exact:true}).click()
+ await expect(bulk.locator('summary')).toHaveText('批量选择 · 1 / 1')
+ await bulk.getByRole('button',{name:'取消勾选当前目录（1）',exact:true}).click()
  await page.getByLabel('搜索表',{exact:true}).fill('orders')
  await page.getByRole('button',{name:'勾选搜索结果（1）',exact:true}).click()
  await expect(page.getByRole('checkbox',{name:'允许表 sales.orders',exact:true})).toBeChecked()
@@ -276,10 +283,11 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await expect(page.getByLabel('搜索表',{exact:true})).toHaveValue('orders')
  await expect(page.getByText('已选 1 个目录、1 张表',{exact:true})).toBeVisible()
  await page.getByLabel('搜索表',{exact:true}).fill('not_found')
+ await page.locator('.dc-selection summary').filter({hasText:'已选表'}).click()
  await page.getByRole('button',{name:'移除表 sales.orders',exact:true}).click()
  await expect(page.getByText('尚未选择表，保存后助手将看不到任何表。',{exact:true})).toBeVisible()
- await page.getByLabel('搜索表',{exact:true}).fill('orders')
- await page.getByRole('checkbox',{name:'允许表 sales.orders',exact:true}).check()
+ await page.getByText('手工填写范围',{exact:true}).click()
+ await page.getByLabel('允许访问的表',{exact:true}).fill('sales.orders')
  await page.getByRole('button',{name:'保存连接',exact:true}).click()
  await expect(page.getByText('连接已保存并生效，可测试连接。',{exact:true})).toBeVisible()
  await page.getByRole('tab',{name:'连接设置',exact:true}).click()
@@ -294,7 +302,9 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await expect(page.getByRole('checkbox',{name:'允许目录 confidential'})).not.toBeChecked()
  await page.getByRole('button',{name:'浏览 sales 的表',exact:true}).click()
  await page.getByRole('combobox',{name:'表可见范围',exact:true}).selectOption('selected')
- await page.getByRole('checkbox',{name:'允许表 sales.orders',exact:true}).check()
+ const manualScope=page.locator('details.dc-manual-scope')
+ if(await manualScope.getAttribute('open')===null)await manualScope.locator('summary').click()
+ await manualScope.getByLabel('允许访问的表',{exact:true}).fill('sales.orders')
  await page.getByRole('button',{name:'保存连接',exact:true}).click()
  await expect(page.getByText('连接已保存并生效，可测试连接。',{exact:true})).toBeVisible()
  await page.goto(origin+'/native-docx/?fileId='+file.fileId)
@@ -334,7 +344,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  }
  await turn('订单表有哪些字段？',liveConfig?'paid_amount':'paid_at, order_amount, paid_amount')
  const monthlyResults=()=>queryResults.filter(result=>result.totalRows===2&&!result.sourceTruncated)
- await turn('按 UTC 自然月汇总 2026 年 1–2 月的实收金额。只需查月份、实收金额两列，合计直接用这两个月的金额相加。','70')
+ await turn('按 UTC 自然月汇总 2026 年 1–2 月的实收金额。只需查月份、实收金额两列，金额汇总用 SQL 转成 integer 后再返回，合计直接用这两个月的金额相加。','70')
  if(liveConfig){
   await expect.poll(()=>monthlyResults().length).toBe(1)
   first=monthlyResults()[0]

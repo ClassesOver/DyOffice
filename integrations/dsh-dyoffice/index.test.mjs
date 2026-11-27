@@ -12,14 +12,15 @@ test('registers /dyoffice as an input command for the supported Office formats',
     inject(){},
     commands:{register(definition){commands.push(definition)}},
   },{})
-  assert.deepEqual(inject,['commands','llm','skills','workingDirectory'])
+  assert.deepEqual(inject,['commands','llm','skills','workingDirectory','tools'])
   const command=commands.find(value=>value.name==='dyoffice')
   assert.ok(command)
   assert.equal(command.input.hint,'<word|xlsx|pptx|pdf> <instruction>')
   assert.match(command.description,/Word.*XLSX.*PPTX.*PDF/)
-  assert.deepEqual(await command.handler({rawInput:'  ',signal:new AbortController().signal,agent:{}}),{
-    kind:'success',text:'用法：/dyoffice <word|xlsx|pptx|pdf> <任务>\n生成 Word：/dyoffice word 创建一个活动策划\n使用 DSH Skill：/dyoffice word --skill=名称 创建活动策划\n创建空白文件：/dyoffice word 创建空白文件 demo\n分析当前频道文档：/dyoffice word 总结当前文档',
-  })
+  const help=await command.handler({rawInput:'  ',signal:new AbortController().signal,agent:{}})
+  assert.equal(help.kind,'success')
+  assert.match(help.text,/帮我写一份.*Word/)
+  assert.doesNotMatch(help.text,/\/dyoffice/)
 })
 
 test('parses the four /dyoffice format subcommands',()=>{
@@ -52,7 +53,7 @@ test('the Word create command returns the link to the new document',async t=>{
         if(request.headers['x-dyoffice-document-preview']!==proof)return response.writeHead(403).end()
         return response.end(JSON.stringify({fileId:id,revision:id,text:'Test'}))
       }
-      response.end(JSON.stringify({conversationId:id,member:{membershipId:id},canCreate:true,fileId:null}))
+      response.end(JSON.stringify({conversationId:id,member:{membershipId:id},canCreate:true,fileId:id}))
       return
     }
     const chunks=[]
@@ -69,8 +70,13 @@ test('the Word create command returns the link to the new document',async t=>{
   const origin='http://127.0.0.1:'+server.address().port
   const memberFile=join(directory,'token.json')
   await writeFile(memberFile,JSON.stringify({origin,token:'example-token'}))
-  let command
-  apply({inject(){},tools:{register(){}},commands:{register(value){command=value}}},{memberFile})
+  let command, tool
+  apply({inject(){},tools:{register(value){tool=value}},commands:{register(value){command=value}}},{memberFile})
+  assert.equal(tool?.name,'dyoffice_document')
+  const current=await tool.execute({action:'open'},{signal:t.signal})
+  assert.equal(current.url,origin+'/#/file/'+id)
+  const opened=await tool.execute({action:'create',format:'docx',title:'demo'},{signal:t.signal})
+  assert.deepEqual(opened,{fileId:id,name:'demo.docx',url:origin+'/#/file/'+id})
   const result=await command.handler({rawInput:'word 创建空白文件 demo',signal:new AbortController().signal})
   assert.deepEqual(result,{kind:'success',text:'已创建 demo.docx\n'+origin+'/#/file/'+id})
   let handler
@@ -151,4 +157,81 @@ test('Word review uses the selected DSH model only for the confirmed saved revis
     assert.equal((await request('POST',reviewUrl)).status,200)
   } finally {finish()}
   assert.deepEqual((await preview()).review,{state:'ready',text:'补充活动负责人'})
+})
+
+test('natural language saves a filled Word document and only an owner navigation requests an edit ticket',async t=>{
+ const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+ const createdId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+ const ticket='x'.repeat(43),proof='d'.repeat(64),requests=[],documents=[]
+ let linkedFile=fileId,embedOrigins=[]
+ const directory=await mkdtemp(join(tmpdir(),'dsh-guest-'))
+ t.after(()=>rm(directory,{recursive:true,force:true}))
+ const server=createServer(async(request,response)=>{
+  assert.equal(request.headers.authorization,'Bearer sample-token')
+  if(request.method==='GET')return response.end(JSON.stringify({conversationId:fileId,member:{membershipId:fileId},fileId:linkedFile,fileName:linkedFile && '读书会.docx',dshEditorOrigins:embedOrigins,canEdit:true}))
+  if(request.url.endsWith('/member/documents')){
+   const chunks=[]
+   for await(const chunk of request)chunks.push(chunk)
+   documents.push(JSON.parse(Buffer.concat(chunks)))
+   return response.end(JSON.stringify({fileId:createdId,name:'demo.docx',previewProof:proof}))
+  }
+  requests.push([request.url,request.headers['x-dyoffice-document-preview']])
+  response.end(JSON.stringify({ticket}))
+ })
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(()=>new Promise(resolve=>server.close(resolve)))
+ const origin='http://127.0.0.1:'+server.address().port,memberFile=join(directory,'token.json')
+ await writeFile(memberFile,JSON.stringify({origin,token:'sample-token'}))
+ let tool,handler
+ const ctx={get:()=>({getAdvertisedUrl:()=>origin+'/web/'}),commands:{register(){}},tools:{register:value=>{tool=value}},
+  inject:(_keys,callback)=>callback({effect:run=>run(),webServer:{register:value=>{handler=value.handler}}})}
+ apply(ctx,{memberFile})
+ const opened=await tool.execute({action:'open'},{signal:t.signal})
+ const created=await tool.execute({action:'create',format:'docx',title:'demo'},{signal:t.signal})
+ assert.equal(opened.name,'读书会.docx')
+ assert.equal(opened.url,origin+'/web/dyoffice-preview?edit='+fileId)
+ assert.equal(created.url,origin+'/web/dyoffice-preview?edit='+createdId)
+ const text='活动安排\n周五下午举行活动。'
+ const written=await tool.execute({action:'create',format:'docx',title:'demo',body:text},{signal:t.signal})
+ assert.equal(written.url,created.url)
+ assert.deepEqual(documents,[{format:'docx',title:'demo'},{format:'docx',title:'demo',body:text}])
+ await assert.rejects(tool.execute({action:'create',format:'pdf',title:'demo',body:text},{signal:t.signal}),/正文/)
+ linkedFile=null
+ apply(ctx,{memberFile})
+ assert.deepEqual(await tool.execute({action:'open_recent'},{signal:t.signal}),created)
+ assert.deepEqual(requests,[])
+ const navigate=async(url,kind,site,destination='document')=>new Promise((resolve,reject)=>{
+  const response={writeHead(status,headers){this.result={status,headers}},end(body){resolve({...this.result,body})}}
+  handler({method:'GET',url,headers:{'sec-fetch-site':site,'sec-fetch-mode':'navigate','sec-fetch-dest':destination}},response,kind ? {principal:{kind}} : undefined).catch(reject)
+ })
+ assert.equal((await navigate(created.url,'guest','same-origin')).status,403)
+ assert.equal((await navigate(created.url,'owner','cross-site')).status,403)
+ assert.equal((await navigate(opened.url,'owner','same-origin')).status,403)
+ for(const [site,destination] of [['same-origin','iframe'],['none','document']]){
+  const landing=await navigate(created.url,'owner',site,destination)
+  assert.equal(landing.status,200)
+  assert.match(landing.headers['Content-Type'],/^text\/html/)
+  assert.ok(landing.body.includes('href="?edit='+createdId+'" target="_blank"'))
+ }
+ assert.deepEqual(requests,[])
+ const originalGet=ctx.get
+ ctx.get=name=>name==='connection'?{admit:()=>({rejection:401})}:originalGet(name)
+ assert.equal((await navigate(created.url,null,'same-origin')).status,403)
+ ctx.get=name=>name==='connection'?{admit:()=>({peer:{principal:{kind:'owner'}}})}:originalGet(name)
+ const redirect=await navigate(created.url,null,'same-origin')
+ assert.equal(redirect.status,303)
+ assert.equal(redirect.headers.Location,origin+'/dsh-edit#'+ticket)
+ assert.deepEqual(requests,[[`/api/v1/assistant-channels/member/documents/${createdId}/edit-ticket`,proof]])
+
+ embedOrigins=[origin]
+ const embedded=await navigate(created.url,'owner','same-origin','iframe')
+ assert.equal(embedded.status,303)
+ assert.equal(embedded.headers.Location,origin+'/dsh-edit?dshEmbed=1#'+ticket)
+
+ // A client without a published DSH web URL must still receive its saved document.
+ apply({...ctx,get:()=>undefined},{memberFile})
+ const count=documents.length
+ const standalone=await tool.execute({action:'create',format:'docx',title:'standalone',body:text},{signal:t.signal})
+ assert.deepEqual(standalone,{fileId:createdId,name:'demo.docx',url:origin+'/#/file/'+createdId})
+ assert.deepEqual(documents.slice(count),[{format:'docx',title:'standalone',body:text}])
 })

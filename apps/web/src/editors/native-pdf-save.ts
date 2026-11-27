@@ -7,11 +7,11 @@ import {validatePdfStampOperation,type PdfStampOperation} from '../../../../pack
 import type {StampConfig} from '../../../pdf/src/renderer/edit-state'
 import {MAX_PDF_DRAFT_BLANK_PAGES,MAX_PDF_EDIT_PAGES} from '../../shared/pdf-edit-structure.mjs'
 
-export function createNativePdfSave({fileId,path,request,getRevision,getPageCount,onSaved}:{
+export function createNativePdfSave({fileId,path,request,getRevision,getPageCount,onSaved,editGrantId}:{
  fileId:string;path:string;request:SettingsRequest;getRevision:()=>string;getPageCount:()=>number
- onSaved:(receipt:RevisionRef)=>Promise<void>
+ onSaved:(receipt:RevisionRef)=>Promise<void>;editGrantId?:string|undefined
 }){
- const mutations=createPdfMutations({fileId,request,getRevision,onSaved})
+ const mutations=createPdfMutations({fileId,request,getRevision,onSaved,editGrantId})
  const refused:SavePdfResult={ok:false,error:'此批 PDF 修改无法在 Web 保存，草稿已保留。'}
  const unknown:SavePdfResult={ok:false,unconfirmed:true,error:'PDF 保存结果未确认，请再次点击保存以核对回执。'}
  async function confirm():Promise<SavePdfResult>{

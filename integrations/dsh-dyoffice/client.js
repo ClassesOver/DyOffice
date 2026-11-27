@@ -4,14 +4,14 @@ window.__ModuleLoader__.load({
     const {createElement: h, useEffect, useRef, useState, useSyncExternalStore} = require('react')
     const id = '@local/dsh-dyoffice'
     const copy = {
-      zh: {messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
+      zh: {showDocument:'在聊天中打开',hideDocument:'收起文档',messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
-        url: 'DyOffice 服务 URL', code: '授权 Token', codeHint: '粘贴频道分享生成的 Token',
+        url: 'DyOffice 服务地址', code: '授权码', codeHint: '粘贴从「频道分享」复制的 DSH 插件授权码',
         getCode: '前往频道分享获取 Token', getCodeHint: '在 DyOffice 的「频道分享」中生成 Token。',
         updateToken: '更新授权 Token', noDocument: '当前频道没有可预览的文档。',
         canCreate: '此 Token 可创建文档。', cannotCreate: '此 Token 无创建权限。请在频道分享中勾选创建权限，再更新 Token。',
-        usage: '例如：/dyoffice word 创建一个活动策划。只需要空白文件时，使用 /dyoffice word 创建空白文件 demo。',
+        usage: '在聊天里说「帮我写一份活动策划，保存为 Word」，或「建一个叫活动预算的空白 Excel 表」。',
         planning: 'DyOffice 助手已接收交接，正在规划正文…', generating: 'DyOffice 正在撰写…', awaitingSave: 'DyOffice 正在保存正文…', writingFailed: '模型连接中断，请检查 DyOffice 的模型设置后重试。',
         noTool: '模型没有写入文档内容，请重试或切换模型。',
         outputLimit: '正文达到输出上限，请缩短要求或分段撰写。', timedOut: '模型响应超时，请重试。', emptyOutput: '模型没有返回正文，请重试或切换模型。',
@@ -35,14 +35,14 @@ window.__ModuleLoader__.load({
         truncated: '正文仅显示前 24,000 字符。', tasks: '任务进度', noTasks: '暂无任务。',
         queued: '排队中', running: '运行中', waiting_peer: '等待协作', cancel_requested: '正在取消',
         succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown_outcome: '结果待核对'},
-      en: {messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
+      en: {showDocument:'Open in chat',hideDocument:'Collapse document',messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
-        url: 'DyOffice service URL', code: 'Authorization token', codeHint: 'Paste the token from channel sharing',
+        url: 'DyOffice service URL', code: 'Authorization code', codeHint: 'Paste the DSH plugin authorization code from channel sharing',
         getCode: 'Get a token from channel sharing', getCodeHint: 'Generate a token in DyOffice channel sharing.',
         updateToken: 'Update authorization token', noDocument: 'This channel has no document to preview.',
         canCreate: 'This token can create documents.', cannotCreate: 'This token cannot create documents. Enable creation in channel sharing and update the token.',
-        usage: 'For example, /dyoffice word create an event plan. Use /dyoffice word create blank demo for an empty file.',
+        usage: 'In chat, ask “Write an event plan and save it as a Word document” or “Create a blank Excel file named Event budget”.',
         planning: 'DyOffice Assistant accepted the handoff and is preparing a plan…', generating: 'DyOffice is writing…', awaitingSave: 'DyOffice is saving the draft…', writingFailed: 'The model connection failed. Check the model in DyOffice and try again.',
         noTool: 'The model did not write any document content. Try again or switch models.',
         outputLimit: 'The draft reached the output limit. Try a shorter request.', timedOut: 'The model took too long to respond. Try again.', emptyOutput: 'The model returned no document text. Try again or switch models.',
@@ -108,8 +108,31 @@ window.__ModuleLoader__.load({
         h('progress',{'aria-label':label,style:{width:'100%',maxWidth:240,height:6,accentColor:'var(--dsw-alias-brand-primary, Highlight)'}}))
     }
     const previewUrl = () => new URL('../dyoffice-preview', window.location.href)
+    const guestEditorUrl = fileId => {
+      const url = previewUrl()
+      url.searchParams.set('edit', fileId)
+      return url.href
+    }
     const allowsEmbed = (connection, origin) => connection?.origin === origin &&
       (connection?.dshEditorOrigins ?? [connection?.dshEditorOrigin]).includes(window.location.origin)
+    const chatFrameHeight='min(32dvh,280px)'
+    // Keep iframe interaction coordinates and the editor's layout in the same scaled viewport.
+    const embeddedEditorStyle={display:'block',width:'125%',height:'125%',maxWidth:'none',border:0,transform:'scale(.8)',transformOrigin:'top left'}
+    const chatDocumentStyles=`
+      .dsh-chat-document{--paper:var(--dsw-alias-bg-layer-1,Canvas);--ink:var(--dsw-alias-label-primary,CanvasText);--edge:var(--dsw-alias-border-l2,#ccd2da);--file-accent:color-mix(in srgb,#138178 74%,var(--ink));min-width:0;margin-block:8px;overflow:hidden;border:1px solid var(--edge);border-radius:12px;background:var(--paper);color:var(--ink)}
+      .dsh-chat-document>summary{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;list-style:none;background:linear-gradient(110deg,color-mix(in srgb,var(--file-accent) 9%,var(--paper)),var(--paper) 80%);font:inherit}
+      .dsh-chat-document>summary::-webkit-details-marker{display:none}
+      .dsh-chat-document>summary:hover{background:color-mix(in srgb,var(--file-accent) 9%,var(--paper))}
+      .dsh-chat-document>summary:focus-visible{outline:2px solid var(--file-accent);outline-offset:-3px}
+      .dsh-chat-document>summary::before{content:'';width:15px;height:19px;border:1.5px solid var(--file-accent);border-radius:3px;flex:none;background:linear-gradient(var(--file-accent),var(--file-accent)) 3px 6px/8px 1px no-repeat,linear-gradient(var(--file-accent),var(--file-accent)) 3px 10px/6px 1px no-repeat}
+      .dsh-chat-document .doc-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600}
+      .dsh-chat-document .doc-action{flex:none;color:var(--file-accent);font-size:12px}
+      .dsh-chat-document>summary::after{content:'';width:6px;height:6px;flex:none;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg);margin:-3px 2px 0 0}
+      .dsh-chat-document[open]>summary::after{transform:rotate(225deg);margin-top:3px}
+      .dsh-chat-document .when-open,.dsh-chat-document[open] .when-closed{display:none}
+      .dsh-chat-document[open] .when-open{display:inline}
+      .dsh-chat-document .editor-viewport{box-sizing:border-box;overflow:hidden;height:min(32vh,280px);height:${chatFrameHeight};border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}
+    `
     const studioStyles = `
       .dsh-office-studio{--dsh-office-party-dsh:#8265d0;--dsh-office-party-office:#32827c;container-type:inline-size;box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:inherit}
       .dsh-office-studio *{box-sizing:border-box}
@@ -126,7 +149,7 @@ window.__ModuleLoader__.load({
       .dsh-office-tools{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:9px}
       .dsh-office-paper,.dsh-office-frame{min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:5px;background:var(--dsw-alias-bg-layer-1,Canvas)}
       .dsh-office-paper{min-height:145px;max-height:340px;overflow:auto;padding:16px 18px;line-height:1.7;font-size:14px;overflow-wrap:anywhere}.dsh-office-paper p,.dsh-office-paper h3{margin:0 0 .6em}
-      .dsh-office-frame{position:relative;height:65vh;min-height:480px;max-height:800px;overflow:hidden}
+      .dsh-office-frame{position:relative;height:min(32vh,280px);height:${chatFrameHeight};overflow:hidden}
       .dsh-office-log{min-width:0;padding:12px 16px;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}
       .dsh-office-message{position:relative;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da);margin-inline-start:4px;padding:0 0 12px 13px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
       .dsh-office-message:last-child{padding-bottom:0;border-color:transparent}
@@ -178,11 +201,12 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null)
       const [busy, setBusy] = useState(false)
       const pending = useRef(null)
+      const needsAddress = !defaultOrigin && /^[A-Za-z0-9_-]+$/u.test(code.trim())
       useEffect(() => () => pending.current?.abort(), [])
       async function connect(event) {
         event.preventDefault()
         if (pending.current || !code.trim()) return
-        if (!address) {
+        if (needsAddress && !address) {
           setError('invalidUrl')
           return
         }
@@ -193,7 +217,7 @@ window.__ModuleLoader__.load({
         try {
           const result = await fetch(previewUrl(), {
             method: 'POST', headers: {'X-DyOffice-Pair': '1', 'Content-Type': 'application/json'},
-            body: JSON.stringify({origin: address, token: code.trim()}), signal: controller.signal,
+            body: JSON.stringify({origin: address ?? '', token: code.trim()}), signal: controller.signal,
           })
           if (result.ok) {
             setCode('')
@@ -208,7 +232,7 @@ window.__ModuleLoader__.load({
           if (!controller.signal.aborted) setBusy(false)
         }
       }
-      const disabled = busy || !code.trim() || !origin.trim()
+      const disabled = busy || !code.trim()
       return h('form', {onSubmit: connect, style: pairStyles.form},
         h('header', null,
           h('h2', {style: pairStyles.heading},
@@ -217,14 +241,14 @@ window.__ModuleLoader__.load({
                 h('path', {d: 'M6 3h8l4 4v14H6z M14 3v4h4 M9 12h6 M9 16h6'}))),
             t('authorization')),
           h('p', {style: pairStyles.hint}, t('pairIntro'))),
-        h('label', {style: pairStyles.field}, t('url'), h('input', {
+        needsAddress && h('label', {style: pairStyles.field}, t('url'), h('input', {
           type: 'url', autoComplete: 'url', spellCheck: false, value: origin,
           onChange: event => setOrigin(event.target.value), disabled: busy,
           placeholder: 'https://office.example.com', 'aria-invalid': error === 'invalidUrl' || undefined, style: pairStyles.input,
         })),
         h('div', {style: pairStyles.field},
           h('label', {style: pairStyles.field}, t('code'), h('input', {
-            type: 'password', autoComplete: 'off', spellCheck: false, maxLength: 2048,
+            type: 'password', autoComplete: 'off', spellCheck: false, maxLength: 4096,
             value: code, onChange: event => setCode(event.target.value), disabled: busy,
             placeholder: t('codeHint'), 'aria-invalid': error === 'invalidCode' || undefined, style: pairStyles.input,
           })),
@@ -336,7 +360,7 @@ window.__ModuleLoader__.load({
       const latestWriting = useRef(null)
       latestWriting.current = writing
       const editing = linkedEditor && !updating && value?.selectedFile === selectedFile &&
-        selectedFile === linkedEditor.fileId && value.preview?.fileId === linkedEditor.fileId && value.origin === linkedEditor.origin ? linkedEditor : null
+        value.preview?.fileId === linkedEditor.fileId && value.origin === linkedEditor.origin ? linkedEditor : null
 
       useEffect(()=>{
         const popup=embedded&&frame.current?.contentWindow
@@ -516,7 +540,7 @@ window.__ModuleLoader__.load({
         const url=new URL(created.href)
         url.searchParams.set('dshEmbed','1')
         return h(RemoteViewport,{anchor},h('iframe',{ref:frame,title:created.name,src:url.href,
-          style:{width:'100%',height:'100%',border:0}}))
+          style:embeddedEditorStyle}))
       }
       if(syncOnly)return null
       const progress = creation && h('p', {role: creation.error ? 'alert' : 'status',
@@ -533,8 +557,9 @@ window.__ModuleLoader__.load({
         return h('section',{style:{height:'100%',minHeight:0,display:'flex',flexDirection:'column'}},
           h('header',{style:{minWidth:0,display:'flex',justifyContent:'space-between',gap:8,padding:'6px 10px',fontSize:12}},
             h('strong',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},created.name),
-            h('a',{href:created.href,target:'_blank',rel:'noopener noreferrer',style:{...pairStyles.link,whiteSpace:'nowrap'}},t('open'))),
-          h('iframe',{ref:frame,src:url.href,title:created.name,style:{width:'100%',flex:1,border:0,minHeight:0,background:'Canvas'}}))
+            h('a',{href:value?.canEdit && !value.paused ? guestEditorUrl(created.fileId) : created.href,
+              target:'_blank',rel:'noopener noreferrer',style:{...pairStyles.link,whiteSpace:'nowrap'}},t('open'))),
+          h('div',{style:{flex:1,minHeight:0,overflow:'hidden'}},h('iframe',{ref:frame,src:url.href,title:created.name,style:embeddedEditorStyle})))
       }
       if (!value || value.selectedFile !== selectedFile) return h('div', null, progress,
         h('p', {role: 'status', style: {padding: 16}}, t(error ?? 'loading')))
@@ -552,7 +577,8 @@ window.__ModuleLoader__.load({
         if (popup) editorWindows.set({origin, popup, fileId: preview.fileId, automatic: selectedFile === preview.fileId})
       }
       const receipt = created?.origin === value.origin && h('p', {role: 'status', style: textStyle},
-        t('created'), '：', h('a', {href: created.href, target: '_blank', rel: 'noopener noreferrer'}, created.name), ' ',
+        t('created'), '：', h('a', {href: value.canEdit && !paused ? guestEditorUrl(created.fileId) : created.href,
+          target: '_blank', rel: 'noopener noreferrer'}, created.name), ' ',
         h('button', {onClick: () => createdDocuments.set(null)}, t('dismiss')))
       const updateToken = h('button', {onClick: () => setUpdating(true)}, t('updateToken'))
       const createPermission = typeof canCreate === 'boolean' && !paused && h('p', null, t(canCreate ? 'canCreate' : 'cannotCreate'))
@@ -563,7 +589,8 @@ window.__ModuleLoader__.load({
         reviewState && h('p', {role:'status'}, t(reviewState)),
         h('header', {style: textStyle},
           h('strong', null, preview.name), ' · ',
-          h('a', {href, target: '_blank', rel: 'noopener noreferrer'}, t('open')),
+          h('a', {href: value.canEdit && !paused ? guestEditorUrl(preview.fileId) : href,
+            target: '_blank', rel: 'noopener noreferrer'}, t('open')),
           (preview.format === 'docx' || writing) && !editing && h('div',null,
             h('button',{onClick:openLinkedEditor},t('syncEdit')),
             (popupBlocked || created?.popupBlocked) && h('p',{role:'status',style:pairStyles.hint},t('syncBlocked')))),
@@ -713,19 +740,38 @@ window.__ModuleLoader__.load({
             !failed&&h('img',{src:url.href,alt:t('snapshot'),loading:'lazy',onError:()=>setFailed(true),style:{maxWidth:'100%',maxHeight:180,objectFit:'contain'}}),
             h('strong',null,path.split('/').at(-1)),h('small',null,t(failed?'snapshotUnavailable':'previewRight')))
         }
+        function ChatDocument({url,name,t}){
+          const [mounted,setMounted]=useState(false)
+          return h('details',{className:'dsh-chat-document',onToggle:event=>{if(event.currentTarget.open)setMounted(true)}},
+            h('summary',null,h('strong',{className:'doc-name',title:name},name||t('livePreview')),h('span',{className:'doc-action when-closed'},t('showDocument')),h('span',{className:'doc-action when-open'},t('hideDocument'))),
+            h('style',null,chatDocumentStyles),
+            mounted&&h('div',{className:'editor-viewport'},h('iframe',{title:t('livePreview'),src:url,style:embeddedEditorStyle})))
+        }
         ctx.effect(()=>ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({
           name:'conversation.chat.turnTail',id:'dyoffice-snapshot',locale:namespace,
         },function SnapshotTail({turn,sessionId,openFile,t}){
           const data=turn.data.get('deliverables')
           const paths=[...(data?.presented??[]),...(data?.produced??[])].map(file=>file.path)
+          const blocks=(turn.steps??[]).map(step=>step.data.get('assistant-step')).filter(step=>step?.finalNode).at(-1)?.blocks??[]
+          const documents=new Map()
+          for(const block of blocks)if(block.kind==='text'){
+            for(const match of block.text.matchAll(/\[([^\]\n]*)\]\(<?([^<>\s)]+)>?\)/gu)){
+              try{
+                const url=new URL(match[2])
+                if(url.origin===previewUrl().origin&&url.pathname===previewUrl().pathname&&uuid.test(url.searchParams.get('edit')??'')){
+                  const filename=match[1].match(/《([^》]+)》/u)?.[1]??(/\.(docx|xlsx|pptx|pdf)$/iu.test(match[1])?match[1]:undefined)
+                  documents.set(guestEditorUrl(url.searchParams.get('edit')),filename)
+                }
+              }catch{/* Relative paths are handled by the file preview. */}
+            }
+          }
           if(!paths.some(path=>typeof path==='string'&&/\.(docx|xlsx|pptx|pdf)$/iu.test(path))){
-            const blocks=turn.steps.map(step=>step.data.get('assistant-step')).filter(step=>step?.finalNode).at(-1)?.blocks??[]
             for(const block of blocks)if(block.kind==='text')for(const match of block.text.matchAll(/\[[^\]\n]*\]\(<?([^<>\n)]+?\.(?:docx|xlsx|pptx|pdf))>?\)/giu)){
               try{const path=decodeURIComponent(match[1].replace(/^sandbox:(?=\/[^/])/iu,''));if(!/^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(path))paths.push(path)}catch{}
             }
           }
           const files=[...new Set(paths.filter(path=>typeof path==='string'&&/\.(docx|xlsx|pptx|pdf)$/iu.test(path)))].slice(0,4)
-          return files.length?h('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},...files.map(path=>h(FileThumbnail,{key:path,path,sessionId,openFile,t}))):null
+          return documents.size||files.length?h('div',null,...Array.from(documents,([url,name])=>h(ChatDocument,{key:url,url,name,t})),...files.map(path=>h(FileThumbnail,{key:path,path,sessionId,openFile,t}))):null
         })))
         ctx.effect(() => ctx.slots.inject('conversation.chat.commandview', () => ctx.slots.register({
           name:'conversation.chat.commandview', key:'dyoffice', locale:namespace,
@@ -755,11 +801,27 @@ window.__ModuleLoader__.load({
               const entries=collaboration.read()??new Map()
               const current=entries.get(fileId)??initialCollaboration(receipt,sessionId)
               const snapshot=preview?.fileId===fileId&&uuid.test(preview?.revision??'')?{revision:preview.revision,text:preview.text}:undefined
-              collaboration.set(new Map(entries).set(fileId,{...current,snapshot:current.snapshot??snapshot,topic:current.topic??writing?.topic,inlineChecked:true}))
+              collaboration.set(new Map(entries).set(fileId,{...current,snapshot:current.snapshot??snapshot,
+                topic:current.topic??writing?.topic,canEdit:payload?.canEdit===true,inlineChecked:true}))
             }
-            void fetch(url,{signal:controller.signal,cache:'no-store'})
-              .then(async response=>update(response.ok?await response.json():null)).catch(()=>update(null))
-            return ()=>controller.abort()
+            let timer,retries=0
+            async function loadPreview(){
+              let response,payload
+              try {
+                response=await fetch(url,{signal:controller.signal,cache:'no-store'})
+                if(response.ok)payload=await response.json()
+              } catch { /* A network interruption can be retried while the card is mounted. */ }
+              if(controller.signal.aborted)return
+              const transient=!response||response.status===409||response.status===429||response.status>=500
+              if(transient&&retries<3){
+                timer=setTimeout(loadPreview,1000*2**retries)
+                retries++
+                return
+              }
+              update(payload)
+            }
+            void loadPreview()
+            return ()=>{controller.abort();clearTimeout(timer)}
           },[fileId,sessionId])
           const row=(author,body,key)=>h('article',{key,className:'dsh-office-message','data-party':author},
             h('strong',null,author),h('div',{className:'dsh-office-message-body',dir:'auto'},body))
@@ -784,6 +846,7 @@ window.__ModuleLoader__.load({
             }
           },[fileId,remote,liveFrame])
           const external=useRef(null)
+          const canOpenGuest = entry?.canEdit && (entry.ended || (entry.inlineChecked && !entry.topic))
           const openWindow=()=>{
             const current=collaboration.read()?.get(fileId)??initialCollaboration(receipt,sessionId)
             if(current.ended || remote&&editor?.embedded&&opening){
@@ -839,7 +902,9 @@ window.__ModuleLoader__.load({
             h('header',null,h('span',{className:'dsh-office-filetype'},receipt.name.split('.').at(-1)?.toUpperCase()),
               h('div',{className:'dsh-office-name'},h('strong',{title:receipt.name},receipt.name),
                 revision&&h('small',{title:revision},t('revision'),' · ',revision.slice(0,8))),
-              h('button',{type:'button',onClick:openWindow},t('openWindow'),' ↗')),
+              canOpenGuest
+                ? h('a',{href:guestEditorUrl(fileId),target:'_blank',rel:'noopener noreferrer'},t('openWindow'),' ↗')
+                : h('button',{type:'button',onClick:openWindow},t('openWindow'),' ↗')),
             entry?.popupBlocked&&h('p',{role:'status',style:pairStyles.hint},t('syncBlocked')),
             h('div',{className:'dsh-office-grid'},
               h('div',{className:'dsh-office-canvas'},
@@ -881,9 +946,13 @@ window.__ModuleLoader__.load({
                   creationStatus.set(null)
                 }
                 if (requestId && requestId !== shown.current) {
-                  shown.current = requestId
                   const connection=await fetch(previewUrl(),{signal:controller.signal,cache:'no-store'})
-                  if(connection.status===428&&!controller.signal.aborted)setOrigin((await connection.json()).origin??'')
+                  if(connection.status===428){
+                    const {origin}=await connection.json()
+                    if(controller.signal.aborted)return
+                    setOrigin(origin??'')
+                    shown.current=requestId
+                  }
                 } else if(!requestId&&shown.current) {
                   shown.current=null
                   setOrigin(null)

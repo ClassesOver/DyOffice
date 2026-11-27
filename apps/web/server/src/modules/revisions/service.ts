@@ -34,7 +34,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
     if (size > MAX_OBJECT_BYTES) throw authError(413)
     // Browser owners may reclaim their abandoned drafts; job capabilities must
     // never gain account-wide reclamation authority.
-    if (typeof token === 'string') await files.reclaimAbandonedUploads(token)
+    if (typeof token === 'string' && !token.startsWith('dsh-edit:')) await files.reclaimAbandonedUploads(token)
     return run(token,'files:write',async (connection, principal) => {
       if (principal.job && (id!==principal.job.fileId || base!==principal.job.baseRevision || editor!==principal.job.id || restoredFrom)) throw authError(404)
       const account = await lockAccount(connection,principal)
@@ -77,6 +77,11 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
       const requestedSource = input.sourceCommandId === undefined ? null : uuid(input.sourceCommandId)
       const requestHash = createHash('sha256').update(JSON.stringify({ fileId, uploadId, baseRevision: base, leaseEpoch: epoch, sourceCommandId: requestedSource, wordVersion: input.wordVersion })).digest('hex')
       return run(token,'files:write',async (connection, principal) => {
+        if (principal.dshEdit) {
+          if (fileId!==principal.dshEdit.fileId || requestedSource) throw authError(404)
+          const ownUpload=(await connection.query('SELECT 1 FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND file_id=$4 AND editor_id=$5 AND kind=$6', [...scope(principal),uploadId,fileId,principal.dshEdit.editorId,'revision'])).rowCount
+          if(!ownUpload) throw authError(404)
+        }
         if (principal.job && (fileId!==principal.job.fileId || base!==principal.job.baseRevision || idempotencyKey!=='job_' + principal.job.id || requestedSource!==null)) throw authError(404)
         // Authority locks from run() remain held. Verify before the account,
         // upload and file write locks, but never return an optimistic receipt:

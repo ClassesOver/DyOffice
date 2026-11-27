@@ -1,3 +1,4 @@
+import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type {FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
@@ -15,10 +16,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     api.addContentTypeParser('application/octet-stream',{parseAs:'buffer',bodyLimit:50*1024*1024},(_request,body,done)=>done(null,body))
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
-      const token = cookies(request).session ?? ''
-      csrf.originCheck(request, true)
-      csrf.requireSession(request, token)
-      await sessions.authenticate(token)
+      await authenticateEditorFile(request,sessions,csrf,true)
       // The save endpoint queues for a bounded wait when the shared object-I/O
       // budget is busy with concurrent reads: a user save must not starve
       // behind its own edit-triggered reads (503 starved chart edits, see
@@ -29,7 +27,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     api.addHook('onError', async request => admission.error(request))
     function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T, signal: AbortSignal) => Promise<unknown>, bodyLimit = 4096, optional:readonly string[] = []) {
       api.post(path, { bodyLimit, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: Object.keys(properties).filter(key=>!optional.includes(key)), properties } } }, async (request, reply) => {
-        return withDisconnect(request, reply, signal => admission.transfer(request, reply, () => operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T, signal)))
+        return withDisconnect(request, reply, signal => admission.transfer(request, reply, () => operation(editorFileToken(request), (request.params as {id: string}).id, request.body as T, signal)))
       })
     }
     if (saves) route<SheetsSaveInput>('/api/v1/files/:id/sheets/uploads', {
@@ -76,7 +74,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     api.post('/api/v1/files/:id/sheets/merge-sources/open',{bodyLimit:50*1024*1024,schema:{params:fileParamsSchema,querystring:{type:'object',additionalProperties:false,required:['revision','name'],properties:{revision:uuidSchema,name:{type:'string',minLength:1,maxLength:255}}}}},async(request,reply)=>{
       return withDisconnect(request,reply,signal=>{
         if(request.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/octet-stream')throw Object.assign(new Error('Unsupported media type'),{statusCode:415})
-        return admission.transfer(request,reply,()=>sheets.openMergeWorkbook(cookies(request).session??'',(request.params as {id:string}).id,(request.query as {revision:string}).revision,request.body as Buffer,(request.query as {name:string}).name,signal))
+        return admission.transfer(request,reply,()=>sheets.openMergeWorkbook(editorFileToken(request),(request.params as {id:string}).id,(request.query as {revision:string}).revision,request.body as Buffer,(request.query as {name:string}).name,signal))
       })
     })
     route<{revision:string;sessionId:string;sheetName:string;range:SheetRange}>('/api/v1/files/:id/sheets/merge-sources/range',{

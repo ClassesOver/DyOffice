@@ -11,6 +11,7 @@ import {
 } from './doc-properties'
 import { PPR_CHILD_ORDER } from './generate'
 import type { NumberingLevel } from './types'
+import { escapeXmlText } from './xml-utils'
 
 /**
  * Blank document template for "new document" and AI from-scratch generation.
@@ -532,6 +533,8 @@ const PAPER_TWIPS: Record<BlankPaperSize, { w: number; h: number }> = {
 }
 
 export interface BlankDocxOptions {
+  /** Initial body paragraphs. An empty list produces one empty paragraph. */
+  paragraphs?: readonly string[]
   /**
    * docDefaults East Asian font (w:eastAsia); pick per UI language so e.g.
    * Japanese/Korean users don't start with a Simplified-Chinese face.
@@ -554,7 +557,7 @@ export interface BlankDocxOptions {
   omitGeneratorFields?: boolean
 }
 
-/** Build a minimal valid .docx: one empty paragraph, portrait page, standard styles. */
+/** Build a minimal valid .docx with a portrait page and standard styles. */
 export async function buildBlankDocx(options?: BlankDocxOptions): Promise<Uint8Array> {
   const zip = new JSZip()
 
@@ -606,13 +609,16 @@ export async function buildBlankDocx(options?: BlankDocxOptions): Promise<Uint8A
   )
 
   const paper = PAPER_TWIPS[options?.paperSize ?? 'A4']
+  const body = options?.paragraphs?.map(text => text
+    ? `<w:p><w:r><w:t xml:space="preserve">${escapeXmlText(text)}</w:t></w:r></w:p>`
+    : '<w:p/>').join('') || '<w:p/>'
   const sectPr =
     `<w:sectPr><w:pgSz w:w="${paper.w}" w:h="${paper.h}"/>` +
     '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>' +
     '</w:sectPr>'
   zip.file(
     'word/document.xml',
-    `${XML_DECL}<w:document ${DOC_NS}><w:body><w:p/>${sectPr}</w:body></w:document>`,
+    `${XML_DECL}<w:document ${DOC_NS}><w:body>${body}${sectPr}</w:body></w:document>`,
   )
 
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })

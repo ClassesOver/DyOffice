@@ -42,6 +42,56 @@ test('a DyOffice command activates a fresh conversation without activating it fo
   assert.equal(view.isActive(projection.replace({nodes:[]})),false)
 })
 
+test('a pending conversation retries the authorization prompt after a temporary service error',async()=>{
+  let start,poll,lookups=0,requestId='pending'
+  const origins=[]
+  const react={useRef:()=>({current:null}),useState:value=>[value,origin=>origins.push(origin)],useEffect:effect=>{start=effect}}
+  runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{
+    URL,AbortController,setTimeout:fn=>{poll=fn;return 1},clearTimeout(){},
+    fetch:async url=>{
+      if(url.searchParams.has('authorizationSession'))return {ok:true,json:async()=>({requestId})}
+      return ++lookups===1?{status:503}:{status:428,json:async()=>({origin:'https://office.example'})}
+    },
+    window:{location:{href:'http://localhost/'},__ModuleLoader__:{load({factory}){
+      factory(()=>react).apply({effect:f=>f(),on(){},locale:{bind(){},register(){}},sidebarRightTabs:{register(){}},
+        uiConversation:{events:{register(){}},views:{register(){}},binding:()=>({activate(){}})},
+        slots:{inject:(_,f)=>f(),register:(spec,render)=>{if(spec.name==='conversation.input.overlay')render({sessionId:'session'})}},
+      })
+    }}},
+  })
+  const stop=start()
+  try {
+    await new Promise(resolve=>setImmediate(resolve))
+    assert.deepEqual(origins,[])
+    await poll()
+    await poll()
+    assert.deepEqual(origins,['https://office.example'])
+    assert.equal(lookups,2)
+    requestId=null
+    await poll()
+    assert.deepEqual(origins,['https://office.example',null])
+  } finally {stop()}
+})
+
+test('pairing asks for the server address only when a standalone token needs it',async()=>{
+  let prompt,states=[]
+  const react={createElement:(component,props,...children)=>({component,props,children}),
+    useState:initial=>[states.length?states.shift():initial,()=>{}],useRef:()=>({current:null}),useEffect(){}}
+  runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{URL,window:{__ModuleLoader__:{load({factory}){
+    factory(()=>react).apply({effect:f=>f(),on(){},locale:{bind(){},register(){}},sidebarRightTabs:{register(){}},
+      uiConversation:{events:{register(){}},views:{register(){}}},
+      slots:{inject:(_,f)=>f(),register:(spec,render)=>{if(spec.name==='conversation.input.overlay')prompt=render}},
+    })
+  }}}})
+  states=['']
+  const form=prompt({sessionId:'session'})
+  const hasAddress=node=>node?.props?.type==='url'||Boolean(node?.children?.some(hasAddress))
+  for(const [code,expected] of [['',false],['https://office.example/#dsh=test-code',false],['httpLegacyToken',true]]){
+    states=['',code]
+    assert.equal(hasAddress(form.component({...form.props,t:key=>key})),expected)
+  }
+})
+
 test('a delivered thumbnail opens in the right preview only on click',async()=>{
   const slots=new Map(),opened=[]
   const react={createElement:(component,props,...children)=>({component,props,children}),useEffect:f=>f(),useState:x=>[x,()=>{}]}
@@ -63,15 +113,66 @@ test('a delivered thumbnail opens in the right preview only on click',async()=>{
   assert.equal(new URL(button.children[0].props.src).searchParams.get('snapshot'),'two.pdf')
   button.props.onClick()
   assert.deepEqual(opened,['two.pdf'])
+  const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const url='http://localhost/dyoffice-preview?edit='+id
+  const step={finalNode:{},blocks:[{kind:'text',text:'[其他站点](https://other.example/dyoffice-preview?edit='+id+') [读书会.docx]('+url+')'}]}
+  const message={...turn,data:new Map(),steps:[{data:new Map([['assistant-step',step]])}]}
+  const inline=render({...props,turn:message})
+  assert.equal(inline.children.length,1)
+  assert.equal(inline.children[0].props.url,url)
+  assert.equal(inline.children[0].props.name,'读书会.docx')
+
 })
 
-for(const text of ['', 'Existing saved document'])test(`restored writing ${text?'preserves saved content':'starts automatically without a window'}`,async()=>{
+test('the DSH sidebar can sync the bound Word document from its editor window',async()=>{
+  const slots=new Map(),effects=[],messages=[]
+  const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',origin='https://office.example'
+  const value={origin,selectedFile:null,canEdit:true,tasks:[],href:origin+'/#/file/'+fileId,
+    preview:{fileId,name:'demo.docx',format:'docx',text:'内容'}}
+  const popup={closed:false,postMessage:(...args)=>messages.push(args)}
+  let stateIndex=0
+  const react={createElement:(component,props,...children)=>({component,props,children}),useRef:()=>({current:null}),
+    useState:initial=>[stateIndex++===0?value:initial,()=>{}],useEffect:effect=>effects.push(effect),
+    useSyncExternalStore:(_subscribe,read)=>read()}
+  runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{
+    URL,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,
+    window:{location:{href:'http://localhost:3080/',origin:'http://localhost:3080'},
+      addEventListener(){},removeEventListener(){},open:url=>{assert.equal(url,value.href);return popup},
+      __ModuleLoader__:{load({factory}){factory(()=>react).apply({
+        locale:{bind(){},register(){}},effect:effect=>effect(),on(){},sidebarRightTabs:{register(){}},
+        uiConversation:{views:{register(){}},events:{register(){}}},
+        slots:{inject:(_,effect)=>effect(),register:(spec,component)=>slots.set(spec.name,component)},
+      })}},
+    },
+  })
+  const {component,props}=slots.get('sidebar.right.pane.tab')({useTabInfo:()=>({tab:{visible:true}}),t:key=>key})
+  const findButton=node=>node?.component==='button'&&node.children.includes('syncEdit')?node:
+    node?.children?.flat().map(findButton).find(Boolean)
+  findButton(component(props)).props.onClick()
+  stateIndex=0
+  effects.length=0
+  assert.equal(findButton(component(props)),undefined)
+  const stop=effects[2]()
+  try {
+    assert.equal(messages.length,1)
+    assert.equal(messages[0][0].type,'dsh-dyoffice:draft-request')
+    assert.equal(messages[0][0].fileId,fileId)
+    assert.equal(messages[0][1],origin)
+  } finally {stop?.()}
+})
+
+for(const [name,text,transient] of [
+  ['starts automatically without a window','',false],
+  ['preserves saved content','Existing saved document',false],
+  ['recovers when the saved revision changes during preview','Existing saved document',true],
+])test(`restored writing ${name}`,async()=>{
   const slots=new Map(),effects=[]
-  let overlay
+  let overlay,retry,requests=0
   const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
   const react={createElement:(component,props,...children)=>({component,props,children}),useRef:()=>({current:null}),useState:x=>[x,()=>{}],useEffect:f=>effects.push(f),useSyncExternalStore:(_subscribe,read)=>read()}
   runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{URL,AbortController,crypto:globalThis.crypto,
-    fetch:async()=>({ok:true,json:async()=>({preview:{fileId,revision:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',text},writing:{topic:'Write a report'}})}),
+    setTimeout:fn=>{retry=fn;return 1},clearTimeout:()=>{retry=undefined},
+    fetch:async()=>++requests===1&&transient?{ok:false,status:409}:{ok:true,json:async()=>({preview:{fileId,revision:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',text},writing:{topic:'Write a report'}})},
     window:{location:{href:'http://localhost:3080/',origin:'http://localhost:3080'},open(){assert.fail('must not open a popup')},__ModuleLoader__:{load({factory}){
       factory(()=>react).apply({locale:{bind(){},register(){}},effect:f=>f(),on(){},sidebarRightTabs:{register(){}},
         uiConversation:{views:{register(){}},events:{register(){}}},
@@ -82,7 +183,14 @@ for(const text of ['', 'Existing saved document'])test(`restored writing ${text?
   render(props)
   for(const effect of effects.splice(0))effect()
   await new Promise(resolve=>setImmediate(resolve))
-  render(props)
+  if(transient){
+    assert.equal(typeof retry,'function')
+    await retry()
+    assert.equal(requests,2)
+  }
+  const card=render(props)
+  const findExcerpt=node=>node?.component?.name==='DocumentExcerpt'?node:node?.children?.flat().map(findExcerpt).find(Boolean)
+  assert.equal(findExcerpt(card).props.entry.snapshot.text,text)
   for(const effect of effects.splice(0))effect()
   overlay=slots.get('shell.overlay')({t:k=>k})
   assert.equal(overlay.length,text?0:1)

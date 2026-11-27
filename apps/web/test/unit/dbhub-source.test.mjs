@@ -1,8 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { dbhubConfig, dbhubDsn, statementsToRows } from '../../server/src/modules/sources/dbhub.ts'
+import { DBHUB_STARTUP_TIMEOUT_MS, dbhubConfig, dbhubDsn, statementsToRows } from '../../server/src/modules/sources/dbhub.ts'
 
-test('DBHub is configured as the default read-only executor', () => {
+test('DBHub startup has an independent bounded handshake timeout', () => {
+  assert.equal(DBHUB_STARTUP_TIMEOUT_MS, 30_000)
+})
+
+test('DBHub is configured for bounded read-only queries', () => {
   const config = dbhubConfig(100, 5000)
   assert.match(config, /name = "execute_sql"/)
   assert.match(config, /readonly = true/)
@@ -14,6 +18,11 @@ test('DBHub is configured as the default read-only executor', () => {
 test('StarRocks uses DBHub MySQL protocol without exposing credentials in logs', () => {
   const dsn = dbhubDsn('starrocks', { address: '10.0.0.4', port: 9030, username: 'root', password: 's@cret', database: 'rj', tls: false })
   assert.equal(dsn, 'mysql://root:s%40cret@10.0.0.4:9030/rj?ssl-mode=DISABLED')
+})
+
+test('DBHub accepts PostgreSQL connection targets', () => {
+  const dsn = dbhubDsn('postgres', { address: '127.0.0.1', port: 5432, username: 'reader', password: 'test', database: 'metrics', tls: true })
+  assert.equal(dsn, 'postgresql://reader:test@127.0.0.1:5432/metrics')
 })
 
 test('DBHub statement payload preserves object row names and scalar types', () => {

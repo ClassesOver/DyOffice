@@ -2,7 +2,7 @@ import type {SettingsRequest} from '../../../../packages/browser-host/src/prefer
 import type {SaveInput,RevisionRef} from '../../../../packages/web-contracts/src/api'
 
 type Receipt=RevisionRef
-export function createPdfMutations({fileId,request,getRevision,onSaved}:{fileId:string;request:SettingsRequest;getRevision:()=>string;onSaved:(receipt:Receipt)=>Promise<void>}){
+export function createPdfMutations({fileId,request,getRevision,onSaved,editGrantId}:{fileId:string;editGrantId?:string|undefined;request:SettingsRequest;getRevision:()=>string;onSaved:(receipt:Receipt)=>Promise<void>}){
  let busy=false
  let pending:{input:SaveInput;editorId:string}|undefined
  const release=async(editorId:string,leaseEpoch:number)=>{await request(`/api/v1/files/${fileId}/lease`,'DELETE',{editorId,leaseEpoch}).catch(()=>{})}
@@ -44,7 +44,7 @@ export function createPdfMutations({fileId,request,getRevision,onSaved}:{fileId:
    const insertion=action==='insert-pages'?operations[0] as {afterPageIndex:number;source:Blob}|undefined:undefined
    if(action==='insert-pages'&&(operations.length!==1||!(insertion?.source instanceof Blob)||insertion.source.size<1||insertion.source.size>64*1024*1024||!Number.isSafeInteger(insertion.afterPageIndex)||insertion.afterPageIndex< -1||insertion.afterPageIndex>=100))return false
    busy=true
-   const editorId=crypto.randomUUID(),baseRevision=getRevision()
+   const editorId=editGrantId??crypto.randomUUID(),baseRevision=getRevision()
    let leaseEpoch:number|undefined,commitStarted=false
    try{
     const lease=await request<{leaseEpoch:number}>(`/api/v1/files/${fileId}/lease`,'POST',{editorId},signal)
