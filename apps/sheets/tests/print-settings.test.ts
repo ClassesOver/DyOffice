@@ -794,9 +794,44 @@ describe('layoutSheetPrint', () => {
     const widened = assemblePrintHtml([
       layout(fakeWorksheet(), payloadSetup({}), new Map(), { visuals: [visual], css: '' }),
     ]).html
-    // A:B of data, but the chart reaches column E (index 4)
-    expect(widened.match(/<col /g)).toHaveLength(5)
+    // A:B of data, but the chart's right edge reaches column F (index 5).
+    expect(widened.match(/<col /g)).toHaveLength(6)
     expect(widened).not.toContain('<style></style>')
+  })
+
+  it('reserves room for the full size of a one-cell drawing beyond the loaded grid', () => {
+    const base = fakeWorksheet()
+    const worksheet = {
+      ...base,
+      getMaxRows: () => 3,
+      getMaxColumns: () => 2,
+      getRange: ((row: number, column: number, rows = 1, columns = 1) => {
+        if (row + rows > 3 || column + columns > 2) throw new Error('Range is out of bounds')
+        return base.getRange(row, column, rows, columns)
+      }) as PrintWorksheet['getRange'],
+    }
+    const drawing = {
+      id: 'image',
+      fromRow: 1, fromColumn: 1, toRow: 1, toColumn: 1,
+      offsetXPx: 10, offsetYPx: 5, widthPx: 200, heightPx: 65,
+      html: '<img alt="Logo">',
+    }
+    const visuals = { visuals: [drawing], css: '' }
+    const whole = layout(worksheet, payloadSetup({}), new Map(), visuals)
+    expect(whole.pages[0]?.page).toMatchObject({ rowEnd: 4, colEnd: 3 })
+    expect(whole.pages[0]?.body).toContain('class="ov" style="left:0pt;top:0pt;width:300pt;height:75pt"')
+    expect(whole.pages[0]?.body).toContain('style="left:82.5pt;top:18.75pt;width:150pt;height:48.75pt"')
+    expect(whole.pages[0]?.body).toContain('B3')
+
+    const paged = layout(worksheet, payloadSetup({}), new Map(), visuals, {
+      breaks: { rowBreaks: [], colBreaks: [2] },
+    })
+    expect(paged.pages).toHaveLength(2)
+    expect(paged.pages[1]?.body).toContain('style="left:-67.5pt;top:18.75pt;width:150pt;height:48.75pt"')
+
+    const cropped = layout(worksheet, payloadSetup({ printAreas: ['A1:B3'] }), new Map(), visuals)
+    expect(cropped.pages[0]?.page).toMatchObject({ rowEnd: 2, colEnd: 1 })
+    expect(cropped.pages[0]?.body).toContain('class="ov" style="left:0pt;top:0pt;width:150pt;height:45pt"')
   })
 
   it('carries the page geometry and renders the header/footer inside the page', () => {

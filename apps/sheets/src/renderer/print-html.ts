@@ -9,6 +9,7 @@
 import { BorderStyleTypes } from '@univerjs/core'
 import { htmlLang, type Lang } from '@genoffice/i18n'
 import { columnIndex, columnLabel } from '@genoffice/xlsx-gateway/domain/cell-address'
+import { MAX_GRID_COLUMNS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 
 import type { WorkbookExportPdfRequest } from '../shared/desktop-api'
 import type { HeaderFooterParts } from './edit-journal'
@@ -93,6 +94,8 @@ function finitePt(value: number, fallback: number): number {
 export interface PrintWorksheet {
   getLastRow(): number
   getLastColumn(): number
+  getMaxRows?(): number
+  getMaxColumns?(): number
   getRowHeight(row: number): number
   getColumnWidth(column: number): number
   /// Hidden rows/columns do not print (Excel); absent in older fakes.
@@ -268,12 +271,19 @@ export function layoutSheetPrint(
   visuals: PrintVisualSnapshot = { visuals: [], css: '' },
   options: SheetPrintOptions = {},
 ): SheetPrintDocument {
+  const sheet = worksheet.getSheet?.()
+  const rowHeightPt = (row: number): number =>
+    sheet && !sheet.getRowVisible(row) ? 0 : finitePt(worksheet.getRowHeight(row), 20) * 0.75
+  const columnWidthPt = (column: number): number =>
+    sheet && !sheet.getColVisible(column)
+      ? 0
+      : finitePt(worksheet.getColumnWidth(column), 64) * 0.75
   const areas =
     options.selection !== undefined && options.selection !== null
       ? [parseArea(options.selection)]
       : setup.printAreas.length > 0
         ? setup.printAreas.map(parseArea)
-        : [usedArea(worksheet, visuals.visuals)]
+        : [usedArea(worksheet, visuals.visuals, rowHeightPt, columnWidthPt)]
   const titleRows = setup.printTitles ? parseTitleRows(setup.printTitles) : null
   const titleColumns = setup.printTitleColumns ? parseTitleColumns(setup.printTitleColumns) : null
   const headings = setup.printHeadings
@@ -288,13 +298,6 @@ export function layoutSheetPrint(
   }
   if (totalCells > MAX_PRINT_CELLS) throw new PrintError(t('appPrintTooLarge'))
 
-  const sheet = worksheet.getSheet?.()
-  const rowHeightPt = (row: number): number =>
-    sheet && !sheet.getRowVisible(row) ? 0 : finitePt(worksheet.getRowHeight(row), 20) * 0.75
-  const columnWidthPt = (column: number): number =>
-    sheet && !sheet.getColVisible(column)
-      ? 0
-      : finitePt(worksheet.getColumnWidth(column), 64) * 0.75
   const headingWidthPt = headings ? HEADING_COLUMN_WIDTH_PT : 0
   const headingHeightPt = headings ? HEADING_ROW_HEIGHT_PT : 0
   const titleRowsHeightPt = spanTotal(titleRows, rowHeightPt)
@@ -351,14 +354,21 @@ export function layoutSheetPrint(
   }
   const pages = planPrintPages(plan)
 
+  // A drawing can extend past the grid allocated by Univer. Its extra
+  // rows and columns use the sheet dimensions and have no cell content.
+  const modelRows = worksheet.getMaxRows?.() ?? Infinity
+  const modelColumns = worksheet.getMaxColumns?.() ?? Infinity
+  const hasCell = (row: number, column: number): boolean => row < modelRows && column < modelColumns
   const areaData = areas.map((area) => {
-    const rows = area.endRow - area.startRow + 1
-    const columns = area.endColumn - area.startColumn + 1
-    const grid = worksheet.getRange(area.startRow, area.startColumn, rows, columns)
+    const rows = Math.min(area.endRow + 1, modelRows) - area.startRow
+    const columns = Math.min(area.endColumn + 1, modelColumns) - area.startColumn
+    const grid = rows > 0 && columns > 0
+      ? worksheet.getRange(area.startRow, area.startColumn, rows, columns)
+      : null
     return {
       area,
-      display: grid.getDisplayValues(),
-      raw: grid.getValues(),
+      display: grid?.getDisplayValues() ?? [],
+      raw: grid?.getValues() ?? [],
       // Repeated titles print with their merges even when they sit outside
       // the print area.
       merges: mergeMaps(worksheet, {
@@ -382,7 +392,7 @@ export function layoutSheetPrint(
     ) {
       return data.display[row - area.startRow]?.[column - area.startColumn] ?? ''
     }
-    return cellDisplay(worksheet, row, column)
+    return hasCell(row, column) ? cellDisplay(worksheet, row, column) : ''
   }
   const rawAt = (data: (typeof areaData)[number], row: number, column: number): unknown => {
     const { area } = data
@@ -398,7 +408,7 @@ export function layoutSheetPrint(
   }
 
   const styleAt = (row: number, column: number): PrintCellStyle | null =>
-    worksheet.getRange(row, column).getCellStyleData()
+    hasCell(row, column) ? worksheet.getRange(row, column).getCellStyleData() : null
   /// Each shared edge has one owner: the upper/left cell paints it unless
   /// only the lower/right neighbour declares a border there. Page edges are
   /// painted by the cell at the edge; the heading strip supplies the outer
@@ -539,8 +549,8 @@ export function layoutSheetPrint(
         const left = data.columnOffset.get(visual.fromColumn)
         const top = data.rowOffset.get(visual.fromRow)
         if (left === undefined || top === undefined) return ''
-        const x = left - pageLeft + finitePt(visual.offsetXPx, 0) * 0.75
-        const y = top - pageTop + finitePt(visual.offsetYPx, 0) * 0.75
+        const x = left - pageLeft + visualOffsetPt(visual.offsetXPx)
+        const y = top - pageTop + visualOffsetPt(visual.offsetYPx)
         const widthPx = finitePt(visual.widthPx, 1)
         const heightPx = finitePt(visual.heightPx, 1)
         if (
@@ -885,13 +895,50 @@ export function buildSheetPrintPayload(
 }
 
 /// Excel's default print range covers the cells and the drawings over them.
-function usedArea(worksheet: PrintWorksheet, visuals: readonly PrintVisual[]): PrintArea {
-  return {
-    startRow: 0,
-    startColumn: 0,
-    endRow: Math.max(worksheet.getLastRow(), 0, ...visuals.map((visual) => visual.toRow)),
-    endColumn: Math.max(worksheet.getLastColumn(), 0, ...visuals.map((visual) => visual.toColumn)),
+function usedArea(
+  worksheet: PrintWorksheet,
+  visuals: readonly PrintVisual[],
+  rowHeightPt: (row: number) => number,
+  columnWidthPt: (column: number) => number,
+): PrintArea {
+  let endRow = Math.max(worksheet.getLastRow(), 0)
+  let endColumn = Math.max(worksheet.getLastColumn(), 0)
+  for (const visual of visuals) {
+    const bottom = visualOffsetPt(visual.offsetYPx) + finitePt(visual.heightPx, 1) * 0.75
+    const right = visualOffsetPt(visual.offsetXPx) + finitePt(visual.widthPx, 1) * 0.75
+    endRow = Math.max(
+      endRow,
+      visual.toRow,
+      visualEndCell(visual.fromRow, bottom, rowHeightPt, MAX_PRINT_CELLS),
+    )
+    endColumn = Math.max(
+      endColumn,
+      visual.toColumn,
+      visualEndCell(visual.fromColumn, right, columnWidthPt, MAX_GRID_COLUMNS - 1),
+    )
   }
+  return { startRow: 0, startColumn: 0, endRow, endColumn }
+}
+
+function visualOffsetPt(offsetPx: number): number {
+  return (offsetPx < 0 ? -1 : 1) * finitePt(Math.abs(offsetPx), 0) * 0.75
+}
+
+/// The last cell covered by the measured drawing edge. Reaching the row
+/// limit lets the existing print-cell budget reject an oversized layout.
+function visualEndCell(
+  start: number,
+  distancePt: number,
+  sizePt: (index: number) => number,
+  limit: number,
+): number {
+  let index = start
+  while (index < limit) {
+    distancePt -= sizePt(index)
+    if (distancePt <= 1e-7) break
+    index += 1
+  }
+  return index
 }
 
 /// The snapshot at its anchor. Columns are laid out at px × 0.75 pt, which
