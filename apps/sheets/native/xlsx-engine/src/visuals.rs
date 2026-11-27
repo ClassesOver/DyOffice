@@ -677,8 +677,8 @@ pub struct ColorContext {
     indexed: Vec<String>,
 }
 
-/// A theme gradient with phClr stops: the placeholder resolves to the
-/// fillRef color at use time, then each stop's transforms apply.
+/// A theme gradient whose placeholder stops resolve to the fillRef color
+/// at use time.
 #[derive(Clone, Debug)]
 pub struct ThemeGradient {
     pub stops: Vec<ThemeGradientStop>,
@@ -690,8 +690,15 @@ pub struct ThemeGradient {
 pub struct ThemeGradientStop {
     /// 0..1 along the gradient axis.
     pub position: f64,
+    pub color: ThemeGradientColor,
     /// (transform tag, val/100000) pairs in document order.
     pub modifiers: Vec<(String, f64)>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ThemeGradientColor {
+    Rgb((u8, u8, u8)),
+    Scheme(String),
 }
 
 /// A shape gradient with fully resolved stop colors, ready to render.

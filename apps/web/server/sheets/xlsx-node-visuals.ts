@@ -150,13 +150,7 @@ const flatPlot = (tag: string) => member(tag.replace(/^(bar|line|pie|area)3DChar
 const themeSlots = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink']
 const themeAliases: Record<string, string> = { tx1: 'dk1', tx2: 'dk2', bg1: 'lt1', bg2: 'lt2' }
 
-function schemeColor(scheme: XmlElement | undefined, theme: readonly string[]): string | undefined {
-  const slot = attribute(scheme, 'val') ?? ''
-  const base = theme[themeSlots.indexOf(themeAliases[slot] ?? slot)]
-  return base && /^#[\da-f]{6}$/i.test(base) ? base : undefined
-}
-
-function drawingColor(node: XmlElement | undefined, theme: readonly string[]): string | undefined {
+function drawingColor(node: XmlElement | undefined, theme: readonly string[], placeholder?: string): string | undefined {
   const scope = node && { ...node, drawingMainOnly: true }
   const srgb = child(scope, 'srgbClr')
   const direct = attribute(srgb, 'val', true)
@@ -168,8 +162,9 @@ function drawingColor(node: XmlElement | undefined, theme: readonly string[]): s
     : name === 'window' ? '#FFFFFF' : name === 'windowText' ? '#000000' : undefined
   if (systemBase) return applyDrawingColorModifiers(systemBase, system)
   const scheme = child(scope, 'schemeClr')
-  const base = schemeColor(scheme, theme)
-  return base ? applyDrawingColorModifiers(base, scheme) : undefined
+  const slot = attribute(scheme, 'val', true) ?? ''
+  const base = slot === 'phClr' ? placeholder : theme[themeSlots.indexOf(themeAliases[slot] ?? slot)]
+  return base && /^#[\da-f]{6}$/i.test(base) ? applyDrawingColorModifiers(base, scheme) : undefined
 }
 
 function readThemeFillStyles(xml: string): XmlElement[] {
@@ -223,16 +218,13 @@ function styleFillGradient(
   if (!index) return undefined
   const gradient = fillStyles[index - 1]
   if (gradient?.tag !== 'gradFill') return undefined
-  const scheme = child(reference, 'schemeClr')
-  const base = schemeColor(scheme, theme)
-  if (!base) return undefined
-  const placeholder = applyDrawingColorModifiers(base, scheme)
+  const placeholder = drawingColor(reference, theme)
   const stops = children(child(gradient, 'gsLst')).flatMap(stop => {
     if (stop.tag !== 'gs') return []
     const position = finite(attribute(stop, 'pos'))
-    const color = children(stop).find(node => node.tag === 'schemeClr' || node.tag === 'srgbClr')
+    const color = drawingColor(stop, theme, placeholder)
     if (position === undefined || position < 0 || position > 100_000 || !color) return []
-    return [{ position: position / 100_000, color: applyDrawingColorModifiers(placeholder, color) }]
+    return [{ position: position / 100_000, color }]
   })
   const angle = finite(attribute(child(gradient, 'lin'), 'ang'))
   return stops.length < 2 ? undefined : { angle: angle === undefined ? 90 : angle / 60_000, stops }

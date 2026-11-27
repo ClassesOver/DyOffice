@@ -85,17 +85,7 @@ pub(crate) fn drawing_color(fill: Node<'_, '_>, colors: &ColorContext) -> Option
         .descendants()
         .find(|child| child.has_tag_name("sysClr"))
     {
-        // lastClr is Excel's resolved cache; window/windowText carry fixed
-        // meanings when it is missing.
-        let base = sys
-            .attribute("lastClr")
-            .and_then(parse_hex_rgb)
-            .or_else(|| match sys.attribute("val") {
-                Some("window") => Some((0xFF, 0xFF, 0xFF)),
-                Some("windowText") => Some((0, 0, 0)),
-                _ => None,
-            })?;
-        return Some(apply_color_modifiers(sys, base));
+        return Some(apply_color_modifiers(sys, system_color_rgb(sys)?));
     }
     let scheme = fill
         .descendants()
@@ -104,11 +94,27 @@ pub(crate) fn drawing_color(fill: Node<'_, '_>, colors: &ColorContext) -> Option
     Some(apply_color_modifiers(scheme, base))
 }
 
+fn system_color_rgb(node: Node<'_, '_>) -> Option<(u8, u8, u8)> {
+    // lastClr is Excel's resolved cache; window/windowText carry fixed
+    // meanings when it is missing.
+    node.attribute("lastClr")
+        .and_then(parse_hex_rgb)
+        .or_else(|| match node.attribute("val") {
+            Some("window") => Some((0xFF, 0xFF, 0xFF)),
+            Some("windowText") => Some((0, 0, 0)),
+            _ => None,
+        })
+}
+
 /// DrawingML child color transforms (a:lumMod/a:lumOff/a:tint/a:shade), the
 /// usual RGB approximations — enough for Excel's accent "40% lighter" dPt
 /// and legend variants.
 pub(crate) fn apply_color_modifiers(color_node: Node<'_, '_>, base: (u8, u8, u8)) -> String {
-    let modifiers = color_node
+    apply_modifier_values(base, &color_modifiers(color_node))
+}
+
+fn color_modifiers(color_node: Node<'_, '_>) -> Vec<(String, f64)> {
+    color_node
         .children()
         .filter(|child| child.is_element())
         .filter_map(|child| {
@@ -117,12 +123,11 @@ pub(crate) fn apply_color_modifiers(color_node: Node<'_, '_>, base: (u8, u8, u8)
                 child.attribute("val")?.parse::<f64>().ok()? / 100_000.0,
             ))
         })
-        .collect::<Vec<_>>();
-    apply_modifier_values(base, &modifiers)
+        .collect()
 }
 
 /// xdr:style fillRef pointing at a fmtScheme gradient entry: each phClr
-/// stop resolves against the reference's scheme color.
+/// stop resolves against the reference color.
 pub(crate) fn style_fill_gradient(
     style_node: Option<Node<'_, '_>>,
     colors: &ColorContext,
@@ -132,20 +137,24 @@ pub(crate) fn style_fill_gradient(
         .find(|node| node.has_tag_name("fillRef"))?;
     let idx = reference.attribute("idx")?.parse::<usize>().ok()?;
     let gradient = colors.fill_styles.get(idx.checked_sub(1)?)?.as_ref()?;
-    let scheme = reference
-        .children()
-        .find(|node| node.has_tag_name("schemeClr"))?;
-    let base = scheme_color_rgb(scheme.attribute("val")?, colors)?;
-    let base = parse_hex_rgb(apply_color_modifiers(scheme, base).trim_start_matches('#'))?;
+    let placeholder = drawing_color(reference, colors)
+        .and_then(|color| parse_hex_rgb(color.trim_start_matches('#')));
     let stops = gradient
         .stops
         .iter()
-        .map(|stop| FillGradientStop {
-            position: stop.position,
-            color: apply_modifier_values(base, &stop.modifiers),
+        .filter_map(|stop| {
+            let base = match &stop.color {
+                ThemeGradientColor::Rgb(rgb) => Some(*rgb),
+                ThemeGradientColor::Scheme(name) if name == "phClr" => placeholder,
+                ThemeGradientColor::Scheme(name) => scheme_color_rgb(name, colors),
+            }?;
+            Some(FillGradientStop {
+                position: stop.position,
+                color: apply_modifier_values(base, &stop.modifiers),
+            })
         })
-        .collect();
-    Some(FillGradient {
+        .collect::<Vec<_>>();
+    (stops.len() >= 2).then_some(FillGradient {
         angle: gradient.angle,
         stops,
     })
@@ -208,6 +217,8 @@ pub(crate) fn scheme_color_rgb(name: &str, colors: &ColorContext) -> Option<(u8,
         "dk1" | "tx1" => 1,
         "lt2" | "bg2" => 2,
         "dk2" | "tx2" => 3,
+        "hlink" => 10,
+        "folHlink" => 11,
         _ => return None,
     };
     colors.theme.get(index).copied()
@@ -384,22 +395,22 @@ pub(crate) fn parse_theme_gradient(node: Node<'_, '_>) -> Option<ThemeGradient> 
         .filter(|child| child.has_tag_name("gs"))
         .filter_map(|gs| {
             let position = gs.attribute("pos")?.parse::<f64>().ok()? / 100_000.0;
-            let color = gs
-                .children()
-                .find(|child| child.has_tag_name("schemeClr") || child.has_tag_name("srgbClr"))?;
-            let modifiers = color
-                .children()
-                .filter(|child| child.is_element())
-                .filter_map(|child| {
-                    Some((
-                        child.tag_name().name().to_owned(),
-                        child.attribute("val")?.parse::<f64>().ok()? / 100_000.0,
-                    ))
-                })
-                .collect();
+            if !(0.0..=1.0).contains(&position) {
+                return None;
+            }
+            let (node, color) = gs.children().find_map(|node| {
+                let color = match node.tag_name().name() {
+                    "schemeClr" => ThemeGradientColor::Scheme(node.attribute("val")?.to_owned()),
+                    "srgbClr" => ThemeGradientColor::Rgb(parse_hex_rgb(node.attribute("val")?)?),
+                    "sysClr" => ThemeGradientColor::Rgb(system_color_rgb(node)?),
+                    _ => return None,
+                };
+                Some((node, color))
+            })?;
             Some(ThemeGradientStop {
                 position,
-                modifiers,
+                color,
+                modifiers: color_modifiers(node),
             })
         })
         .collect::<Vec<_>>();
@@ -411,6 +422,7 @@ pub(crate) fn parse_theme_gradient(node: Node<'_, '_>) -> Option<ThemeGradient> 
         .find(|child| child.has_tag_name("lin"))
         .and_then(|lin| lin.attribute("ang"))
         .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
         .map(|value| value / 60_000.0)
         .unwrap_or(90.0);
     Some(ThemeGradient { stops, angle })

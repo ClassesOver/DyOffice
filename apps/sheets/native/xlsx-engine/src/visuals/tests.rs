@@ -1914,8 +1914,15 @@ fn resolves_style_fill_ref_theme_gradient() {
             <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
             <a:gradFill rotWithShape="1"><a:gsLst>
                 <a:gs pos="0"><a:schemeClr val="phClr"/></a:gs>
+                <a:gs pos="25000"><a:srgbClr val="CB6633"><a:shade val="50000"/></a:srgbClr></a:gs>
+                <a:gs pos="50000"><a:schemeClr val="accent2"/></a:gs>
+                <a:gs pos="75000"><a:sysClr val="windowText"/></a:gs>
                 <a:gs pos="100000"><a:schemeClr val="phClr"><a:tint val="50000"/></a:schemeClr></a:gs>
             </a:gsLst><a:lin ang="16200000" scaled="0"/></a:gradFill>
+            <a:gradFill><a:gsLst>
+                <a:gs pos="0"><a:srgbClr val="0000AA"/></a:gs>
+                <a:gs pos="100000"><a:srgbClr val="AA0000"/></a:gs>
+            </a:gsLst></a:gradFill>
             </a:fillStyleLst>"#;
     let document = Document::parse(theme).unwrap();
     let fill_styles: Vec<Option<ThemeGradient>> = document
@@ -1936,11 +1943,33 @@ fn resolves_style_fill_ref_theme_gradient() {
     let document = Document::parse(style).unwrap();
     let gradient = style_fill_gradient(Some(document.root_element()), &colors).expect("gradient");
     assert_eq!(gradient.angle, 270.0);
-    // accent1 = theme slot 4 = (0x04, 0x22, 0x33); second stop is a 50% tint.
-    assert_eq!(gradient.stops[0].position, 0.0);
-    assert_eq!(gradient.stops[0].color, "#042233");
-    assert_eq!(gradient.stops[1].position, 1.0);
-    assert_eq!(gradient.stops[1].color, "#829199");
+    let stops = gradient
+        .stops
+        .iter()
+        .map(|stop| (stop.position, stop.color.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stops,
+        [
+            (0.0, "#042233"),
+            (0.25, "#66331A"),
+            (0.5, "#052233"),
+            (0.75, "#000000"),
+            (1.0, "#829199"),
+        ]
+    );
+
+    let fixed = style.replace(r#"idx="2"><a:schemeClr val="accent1"/>"#, r#"idx="3">"#);
+    let document = Document::parse(&fixed).unwrap();
+    let gradient = style_fill_gradient(Some(document.root_element()), &colors).expect("fixed colors");
+    assert_eq!(gradient.stops[0].color, "#0000AA");
+    assert_eq!(gradient.stops[1].color, "#AA0000");
+
+    let reference = style.replace(r#"<a:schemeClr val="accent1"/>"#, r#"<a:srgbClr val="FF0000"/>"#);
+    let document = Document::parse(&reference).unwrap();
+    let gradient = style_fill_gradient(Some(document.root_element()), &colors).expect("RGB reference");
+    assert_eq!(gradient.stops[0].color, "#FF0000");
+    assert_eq!(gradient.stops[1].color, "#66331A");
 
     // idx 1 is the solid entry; idx 1001+ (bgFillStyleLst) is out of range.
     for idx in ["1", "1001", "0"] {
