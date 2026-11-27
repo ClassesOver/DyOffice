@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { shiftDefinedNames } from '@genoffice/xlsx-gateway/gateway/xlsx-structure'
 import {
   createEditJournal,
   recordPageSetup,
@@ -359,6 +360,34 @@ describe('resolveEffectivePageSetup', () => {
       { kind: 'insert-rows', index: 0, count: 3 },
     ])
     expect(setup.printTitles).toBe('20:20')
+  })
+
+  it('keeps newly inserted title cells after deleting the original title rows and columns', () => {
+    const ops = [
+      { kind: 'insert-rows', index: 1, count: 1 },
+      { kind: 'remove-rows', index: 2, count: 1 },
+      { kind: 'remove-rows', index: 0, count: 1 },
+      { kind: 'insert-cols', index: 1, count: 1 },
+      { kind: 'remove-cols', index: 2, count: 1 },
+      { kind: 'remove-cols', index: 0, count: 1 },
+    ] as const
+    const printTitles = "'S'!$1:$2,'S'!$A:$B"
+    const setup = resolveEffectivePageSetup({}, null, { printTitles }, ops)
+    expect(setup.printTitles).toBe('1:1')
+    expect(setup.printTitleColumns).toBe('A:A')
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Titles" localSheetId="0">' +
+      printTitles + '</definedName></definedNames></workbook>'
+    expect(shiftDefinedNames(workbook, 'S', ops)).toContain("'S'!$1:$1,'S'!$A:$A")
+  })
+
+  it('restores saved titles once structural edits bring their span within the layout cap', () => {
+    const setup = resolveEffectivePageSetup({}, null, { printTitles: "'S'!$1:$22,'S'!$A:$V" }, [
+      { kind: 'remove-rows', index: 21, count: 1 },
+      { kind: 'remove-cols', index: 21, count: 1 },
+    ])
+    expect(setup.printTitles).toBe('1:21')
+    expect(setup.printTitleColumns).toBe('A:U')
   })
 
   it('keeps only saved print titles that survive an insertion at the grid edge', () => {

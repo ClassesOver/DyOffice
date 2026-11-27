@@ -575,7 +575,7 @@ function titleReference(
   return spans.length > 0 ? spans.join(',') : null
 }
 
-interface PrintTitleSpan {
+export interface PrintTitleSpan {
   readonly axis: 'row' | 'column'
   readonly start: number
   readonly end: number

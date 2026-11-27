@@ -6,13 +6,13 @@
  */
 import { columnLabel, parseRange } from '@genoffice/xlsx-gateway/domain/cell-address'
 import {
-  encodeHeaderFooterSections, formatPrintTitleSpan, parsePrintTitleSpan, readPrintTitleSpans,
+  encodeHeaderFooterSections, formatPrintTitleSpan, readPrintTitleSpans, type PrintTitleSpan,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import type { WorkbookPagePrintSettings } from '../shared/desktop-api'
-import type { HeaderFooterParts, PageSetupJournalState, StructuralJournalOp } from './edit-journal'
+import { shiftPrintTitleSpan, type HeaderFooterParts, type PageSetupJournalState, type StructuralJournalOp } from './edit-journal'
 import { matchHeaderFooterFormat } from './print-hf-codes'
-import { fileRangeToScreenRange, fileToScreen } from './view-transform'
+import { fileRangeToScreenRange } from './view-transform'
 
 export interface PrintMargins {
   readonly left: number
@@ -88,34 +88,6 @@ const MARGIN_PRESETS: Record<'normal' | 'wide' | 'narrow', PrintMargins> = {
 /// The export wire caps margins at 3in per side.
 const MAX_MARGIN_INCHES = 3
 
-/// Keep the envelope of the title rows or columns that survive structural edits.
-function mapTitleToScreen(
-  titles: string | null,
-  ops: readonly StructuralJournalOp[],
-): string | null {
-  if (titles === null || ops.length === 0) return titles
-  const span = parsePrintTitleSpan(titles)
-  if (!span) return null
-  const limit = span.axis === 'row' ? MAX_GRID_ROWS : MAX_GRID_COLUMNS
-  const surviving: number[] = []
-  for (let index = span.start; index <= span.end; index += 1) {
-    let screen: number | null = index
-    for (const op of ops) {
-      screen = fileToScreen([op], span.axis, screen)
-      if (screen === null || screen >= limit) {
-        screen = null
-        break
-      }
-    }
-    if (screen !== null) surviving.push(screen)
-  }
-  if (surviving.length === 0) return null
-  const start = Math.min(...surviving)
-  const end = Math.max(...surviving)
-  if (end - start > 20) return null
-  return formatPrintTitleSpan({ axis: span.axis, start, end })
-}
-
 export interface FilePrintNames {
   readonly printArea?: string | undefined
   readonly printTitles?: string | undefined
@@ -184,7 +156,7 @@ export function resolveEffectivePageSetup(
       ? printTitleRowsFromFormula(journal.printTitles ?? undefined)
       : journal.clearPrintTitleRows
         ? null
-        : mapTitleToScreen(printTitleRowsFromFormula(names?.printTitles), ops)
+        : printTitleRowsFromFormula(names?.printTitles, ops)
   // Use the same encoding for pending edits as on save.
   const decodeOptional = (encoded: string | undefined): HeaderFooterParts | null =>
     encoded === undefined ? null : decodeHeaderFooter(encoded, true)
@@ -226,7 +198,7 @@ export function resolveEffectivePageSetup(
     printTitleColumns:
       journal.printTitles === null || journal.clearPrintTitleColumns
         ? null
-        : mapTitleToScreen(printTitleColumnsFromFormula(names?.printTitles), ops),
+        : printTitleColumnsFromFormula(names?.printTitles, ops),
     header,
     footer,
     firstPage,
@@ -283,21 +255,33 @@ export function printAreasFromFormula(formula: string | undefined): string[] {
   return areas
 }
 
-/// `'S'!$1:$2` → '1:2', within the print layout's 21-row cap.
-export function printTitleRowsFromFormula(formula: string | undefined): string | null {
-  const span = readPrintTitleSpans(formula).find(({ axis, start, end }) =>
-    axis === 'row' && end - start <= 20,
-  )
-  return span ? formatPrintTitleSpan(span) : null
+function printTitleFromFormula(
+  formula: string | undefined,
+  axis: PrintTitleSpan['axis'],
+  ops: readonly StructuralJournalOp[],
+): string | null {
+  for (const span of readPrintTitleSpans(formula)) {
+    if (span.axis !== axis) continue
+    const shifted = shiftPrintTitleSpan(span, ops)
+    if (shifted && shifted.end - shifted.start <= 20) return formatPrintTitleSpan(shifted)
+  }
+  return null
 }
 
-/// `'S'!$A:$B,'S'!$1:$2` → 'A:B'; row parts are skipped, spans beyond the
-/// 21-column cap are dropped.
-export function printTitleColumnsFromFormula(formula: string | undefined): string | null {
-  const span = readPrintTitleSpans(formula).find(({ axis, start, end }) =>
-    axis === 'column' && end - start <= 20,
-  )
-  return span ? formatPrintTitleSpan(span) : null
+/// `'S'!$1:$2` → '1:2', within the print layout's 21-row cap.
+export function printTitleRowsFromFormula(
+  formula: string | undefined,
+  ops: readonly StructuralJournalOp[] = [],
+): string | null {
+  return printTitleFromFormula(formula, 'row', ops)
+}
+
+/// `'S'!$A:$B,'S'!$1:$2` → 'A:B', within the print layout's 21-column cap.
+export function printTitleColumnsFromFormula(
+  formula: string | undefined,
+  ops: readonly StructuralJournalOp[] = [],
+): string | null {
+  return printTitleFromFormula(formula, 'column', ops)
 }
 
 /// Print-title rows repeat atop every page: the layout caps the span at 21 rows.

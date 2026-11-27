@@ -27,6 +27,7 @@ import {
 } from '@genoffice/xlsx-gateway/domain/cell-address'
 import { fillDisplayColor, resolveStyleColor } from '@genoffice/xlsx-gateway/domain/style-color'
 import { renameRefSheet, splitSheetRef } from '@genoffice/xlsx-gateway/domain/chart-visual'
+import type { PrintTitleSpan } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import { CHART_CATEGORY_WIRE_MAX, CHART_TEXT_WIRE_MAX } from '../shared/desktop-api'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import { ADDABLE_SHAPE_TYPES } from '@genoffice/xlsx-gateway/shared/shape-types'
@@ -1641,6 +1642,24 @@ function shiftGridSpan(
   const size = shift.axis === 'row' ? MAX_GRID_ROWS : MAX_GRID_COLUMNS
   if (!moved || moved.start >= size) return null
   return { start: moved.start, end: Math.min(moved.end, size - 1) }
+}
+
+/// A title span includes lines inserted between its endpoints.
+export function shiftPrintTitleSpan(
+  span: PrintTitleSpan,
+  ops: readonly StructuralJournalOp[],
+): PrintTitleSpan | null {
+  let { start, end } = span
+  for (const op of ops) {
+    if (!('index' in op)) continue
+    const shift = toRowColumnShift(op)
+    if (shift.axis !== span.axis) continue
+    const moved = shiftGridSpan(start, end, shift)
+    if (!moved) return null
+    start = moved.start
+    end = moved.end
+  }
+  return { axis: span.axis, start, end }
 }
 
 function shiftPrintArea(ref: string, shift: RowColumnShift): string | null {
