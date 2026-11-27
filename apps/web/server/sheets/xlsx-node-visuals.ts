@@ -918,7 +918,10 @@ async function readGroupVisuals(
         if (width > 0 && height > 0) await expand(entry, { x, y, width, height }, depth + 1, world, rotated)
         continue
       }
-      const childMatrix = rotated ? multiplyDrawingMatrices(matrix, drawingOrientation(transform)) : matrix
+      const orientation = drawingOrientation(transform)
+      // An unequal parent scale must apply after a child's rotation.
+      const useMatrix = rotated || (orientation[1] !== 0 && Math.abs(matrix[0]) !== Math.abs(matrix[3]))
+      const childMatrix = useMatrix ? multiplyDrawingMatrices(matrix, orientation) : matrix
       const centerX = world.x + matrix[0] * (x + width / 2) + matrix[2] * (y + height / 2)
       const centerY = world.y + matrix[1] * (x + width / 2) + matrix[3] * (y + height / 2)
       const boundWidth = Math.abs(childMatrix[0]) * width + Math.abs(childMatrix[2]) * height
@@ -945,7 +948,7 @@ async function readGroupVisuals(
         : entry.tag === 'pic' ? readPicture(entry, childBase, references)
           : readShape(entry, childBase, theme, references)
       if (!visual) continue
-      if (rotated) {
+      if (useMatrix) {
         groupVisuals.push({
           ...visual, flipH: undefined, flipV: undefined, rotation: undefined,
           frameWidth: undefined, frameHeight: undefined,

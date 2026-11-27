@@ -1055,11 +1055,11 @@ pub(crate) fn expand_group(
             }
             continue;
         }
-        let child_matrix = if rotated {
-            multiply_drawing_matrices(
-                matrix,
-                drawing_orientation(child_xfrm, xfrm_radians(child_xfrm)),
-            )
+        let orientation = drawing_orientation(child_xfrm, xfrm_radians(child_xfrm));
+        // An unequal parent scale must apply after the child's rotation.
+        let use_matrix = rotated || (orientation[1] != 0.0 && matrix[0].abs() != matrix[3].abs());
+        let child_matrix = if use_matrix {
+            multiply_drawing_matrices(matrix, orientation)
         } else {
             matrix
         };
@@ -1072,7 +1072,7 @@ pub(crate) fn expand_group(
         {
             continue;
         }
-        let transform = rotated.then_some(GroupChildTransform {
+        let transform = use_matrix.then_some(GroupChildTransform {
             matrix: child_matrix,
             width: ext_x,
             height: ext_y,

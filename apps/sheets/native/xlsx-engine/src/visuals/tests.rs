@@ -758,6 +758,8 @@ fn rotates_a_nested_group_before_parent_scaling() {
             <xdr:sp><xdr:spPr><a:xfrm><a:off x="10" y="5"/><a:ext cx="20" cy="10"/></a:xfrm>
               <a:prstGeom prst="rightArrow"/></xdr:spPr></xdr:sp>
           </xdr:grpSp>
+          <xdr:sp><xdr:spPr><a:xfrm rot="5400000" flipV="true"><a:off x="10" y="5"/>
+            <a:ext cx="20" cy="10"/></a:xfrm><a:prstGeom prst="rightArrow"/></xdr:spPr></xdr:sp>
         </xdr:grpSp></xdr:wsDr>"#
     );
     let document = Document::parse(&xml).unwrap();
@@ -798,6 +800,13 @@ fn rotates_a_nested_group_before_parent_scaling() {
     let transform = child.group_transform.as_ref().unwrap();
     assert_eq!(transform.matrix, [0.0, 1.0, 2.0, 0.0]);
     assert_eq!((transform.width, transform.height), (20.0, 10.0));
+    let shape = &visuals[1];
+    assert_eq!(shape.anchor.from_column_offset, 30);
+    assert_eq!(shape.anchor.to_column_offset, 50);
+    assert_eq!(shape.anchor.from_row_offset, 0);
+    assert_eq!(shape.anchor.to_row_offset, 20);
+    assert_eq!(shape.group_transform.as_ref().unwrap().matrix, transform.matrix);
+    assert!(shape.rotation.is_none());
 }
 
 #[test]

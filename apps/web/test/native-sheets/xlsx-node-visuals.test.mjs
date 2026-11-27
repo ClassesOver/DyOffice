@@ -1158,7 +1158,7 @@ test('round-trips formatted plot labels while preserving series point overrides'
   assert.equal(clearedXml.match(/<c:dLbls[>\s]/g).length, 1)
 })
 
-test('rotates a nested group in the parent coordinate space', async () => {
+test('rotates nested groups and shapes in the parent coordinate space', async () => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   await appendDrawing(zip, `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:ext cx="400000" cy="200000"/><xdr:grpSp>
@@ -1169,6 +1169,9 @@ test('rotates a nested group in the parent coordinate space', async () => {
           <xdr:spPr><a:xfrm><a:off x="10000" y="5000"/><a:ext cx="20000" cy="10000"/></a:xfrm><a:prstGeom prst="rightArrow"/></xdr:spPr>
         </xdr:sp>
       </xdr:grpSp>
+      <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="92" name="Rotated shape child"/></xdr:nvSpPr>
+        <xdr:spPr><a:xfrm rot="5400000" flipV="true"><a:off x="10000" y="5000"/><a:ext cx="20000" cy="10000"/></a:xfrm><a:prstGeom prst="rightArrow"/></xdr:spPr>
+      </xdr:sp>
     </xdr:grpSp><xdr:clientData/></xdr:oneCellAnchor>`)
   const visuals = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet))
   const shape = visuals.find(visual => visual.name === 'Rotated group child')
@@ -1178,6 +1181,13 @@ test('rotates a nested group in the parent coordinate space', async () => {
     toRow: 2, toColumn: 1, toRowOffset: 60000, toColumnOffset: 270000,
   })
   assert.deepEqual(shape.groupTransform, { matrix: [0, 1, 2, 0], width: 20000, height: 10000 })
+  const rotatedShape = visuals.find(visual => visual.name === 'Rotated shape child')
+  assert.deepEqual(rotatedShape?.anchor, {
+    fromRow: 2, fromColumn: 1, fromRowOffset: 0, fromColumnOffset: 30000,
+    toRow: 2, toColumn: 1, toRowOffset: 20000, toColumnOffset: 50000,
+  })
+  assert.deepEqual(rotatedShape.groupTransform, shape.groupTransform)
+  assert.equal(rotatedShape.rotation, undefined)
 })
 
 test('places nested group shapes and straight connectors with read-only child locators', async t => {
@@ -1254,12 +1264,12 @@ test('places nested group shapes and straight connectors with read-only child lo
   assert.equal(picture.altText, 'Group artwork')
   assert.equal(picture.drawingIndex, undefined)
   assert.equal(picture.mediaPath, mediaPath)
-  assert.deepEqual([picture.rotation, picture.flipV, picture.frameWidth, picture.frameHeight], [90, true, 40000, 10000])
+  assert.deepEqual(picture.groupTransform, { matrix: [0, 1, 2, 0], width: 20000, height: 10000 })
   assert.equal(picture.opacity, 0.6)
   assert.deepEqual(picture.crop, { left: 0.1, top: 0, right: 0, bottom: 0 })
   assert.deepEqual(picture.anchor, {
-    fromRow: 2, fromColumn: 1, fromRowOffset: 87000, fromColumnOffset: 231000,
-    toRow: 2, toColumn: 1, toRowOffset: 97000, toColumnOffset: 271000,
+    fromRow: 2, fromColumn: 1, fromRowOffset: 82000, fromColumnOffset: 241000,
+    toRow: 2, toColumn: 1, toRowOffset: 102000, toColumnOffset: 261000,
   })
 
   assert.equal(chart.kind, 'chart')
@@ -1288,9 +1298,9 @@ test('places nested group shapes and straight connectors with read-only child lo
   })
   assert.deepEqual([reflectedLine.flipH, reflectedLine.flipV], [true, true])
   assert.deepEqual(reflectedPicture.anchor, {
-    ...picture.anchor, fromColumnOffset: 131000, toColumnOffset: 171000, fromRowOffset: 167000, toRowOffset: 177000,
+    ...picture.anchor, fromColumnOffset: 141000, toColumnOffset: 161000, fromRowOffset: 162000, toRowOffset: 182000,
   })
-  assert.deepEqual([reflectedPicture.rotation, reflectedPicture.flipH, reflectedPicture.flipV], [-90, false, false])
+  assert.deepEqual(reflectedPicture.groupTransform, { ...picture.groupTransform, matrix: [0, -1, 2, 0] })
   assert.deepEqual(reflectedChart.anchor, {
     ...chart.anchor, fromColumnOffset: 121000, toColumnOffset: 161000, fromRowOffset: 147000, toRowOffset: 162000,
   })
