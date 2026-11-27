@@ -13,6 +13,7 @@ import { parsePrintTitleSpan } from '@genoffice/xlsx-gateway/gateway/xlsx-page-s
 import { MAX_GRID_COLUMNS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 
 import type { WorkbookExportPdfRequest } from '../shared/desktop-api'
+import { CENTER_ACROSS_END_KEY } from './center-continuous'
 import type { HeaderFooterParts } from './edit-journal'
 import { expandHeaderFooterCodes, headerFooterRuns, type HeaderFooterTheme } from './print-hf-codes'
 import {
@@ -101,7 +102,13 @@ export interface PrintWorksheet {
   getRowHeight(row: number): number
   getColumnWidth(column: number): number
   /// Hidden rows/columns do not print (Excel); absent in older fakes.
-  getSheet?(): { getRowVisible(row: number): boolean; getColVisible(column: number): boolean }
+  getSheet?(): {
+    getRowVisible(row: number): boolean
+    getColVisible(column: number): boolean
+    getCellMatrix?(): {
+      getRow(row: number): Record<number, PrintCellData | null | undefined> | null | undefined
+    }
+  }
   getMergedRanges(): {
     getRow(): number
     getColumn(): number
@@ -118,6 +125,13 @@ export interface PrintWorksheet {
     getValues(): unknown[][]
   }
   getRange(row: number, column: number): { getCellStyleData(): PrintCellStyle | null }
+}
+
+interface PrintCellData {
+  readonly custom?: Record<string, unknown> | null
+  readonly v?: unknown
+  readonly p?: unknown
+  readonly f?: string | null
 }
 
 /// The IStyleData fields the layout reads (all optional in Univer).
@@ -495,6 +509,32 @@ export function layoutSheetPrint(
 
   const styleAt = (row: number, column: number): PrintCellStyle | null =>
     hasCell(row, column) ? worksheet.getRange(row, column).getCellStyleData() : null
+  const matrix = sheet?.getCellMatrix?.()
+  const centerAcrossRuns = new Map<number, readonly { column: number; widthPt: number }[]>()
+  const centerAcrossForRow = (row: number) => {
+    const cached = centerAcrossRuns.get(row)
+    if (cached) return cached
+    const runs: { column: number; widthPt: number }[] = []
+    const cells = matrix?.getRow(row)
+    if (cells) {
+      for (const [key, cell] of Object.entries(cells)) {
+        const end = cell?.custom?.[CENTER_ACROSS_END_KEY]
+        const column = Number(key)
+        if (typeof end !== 'number' || !Number.isInteger(end) || end <= column ||
+            !hasCell(row, column) || columnWidthPt(column) <= 0) continue
+        let widthPt = columnWidthPt(column)
+        const last = Math.min(end, modelColumns - 1, MAX_GRID_COLUMNS - 1)
+        for (let index = column + 1; index <= last; index += 1) {
+          const next = cells[index]
+          if (next?.p || next?.f || (next?.v != null && next.v !== '')) break
+          widthPt += columnWidthPt(index)
+        }
+        if (widthPt > columnWidthPt(column)) runs.push({ column, widthPt })
+      }
+    }
+    centerAcrossRuns.set(row, runs)
+    return runs
+  }
   /// Each shared edge has one owner: the upper/left cell paints it unless
   /// only the lower/right neighbour declares a border there. Page edges are
   /// painted by the cell at the edge; the heading strip supplies the outer
@@ -513,25 +553,14 @@ export function layoutSheetPrint(
     heightPt: number,
     near: Neighbours,
     mergedWidthPt?: number,
+    hideText = false,
   ): string => {
     const style = styleAt(row, column)
     const diagonals = style?.bd?.tl_br || style?.bd?.bl_tr
       ? cellDiagonalHtml(style, mergedWidthPt ?? columnWidthPt(column), heightPt, rightToLeft, blackAndWhite)
       : ''
     const { text, raw } = cellContentAt(data, row, column)
-    const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
     const horizontalAlign = cellHorizontalAlign(style, raw)
-    const leftPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.l ?? 0, 0) * 0.75
-    const rightPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.r ?? 0, 0) * 0.75
-    const padding =
-      (leftPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-left:${round(leftPaddingPt)}pt`) +
-      (rightPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-right:${round(rightPaddingPt)}pt`)
-    const orientation = text && style?.tr
-      ? orientedTextCss(
-          style, horizontalAlign, mergedWidthPt ?? columnWidthPt(column), heightPt,
-          leftPaddingPt, rightPaddingPt,
-        )
-      : undefined
     const gridlines = setup.printGridlines && !worksheetDraft &&
       (dataArea === null || (row <= dataArea.endRow && column <= dataArea.endColumn))
     const custom = (r: number | null, c: number | null, edge: 't' | 'b' | 'l' | 'r'): boolean =>
@@ -552,9 +581,9 @@ export function layoutSheetPrint(
     return (
       `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, horizontalAlign, gridlines, blackAndWhite, rightToLeft, edges)}">` +
       diagonals +
-      `<div class="c${orientation ? ' oriented' : ''}" style="height:${round(heightPt)}pt;align-items:${align}${padding}">` +
-      `<span${orientation ? ` class="oriented-text" style="${orientation}"` : ''}` +
-      `${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div></td>`
+      cellTextHtml(hideText ? '' : text, style, horizontalAlign, heightPt,
+        mergedWidthPt ?? columnWidthPt(column), rightToLeft) +
+      '</td>'
     )
   }
 
@@ -573,6 +602,12 @@ export function layoutSheetPrint(
     const allColumns = [...titleColumnList, ...pageColumns]
     const printedColumns = new Set(allColumns)
     const printedRows = [...titleRowList, ...pageRows]
+    const tableWidthPt = headingWidthPt + allColumns.reduce((sum, c) => sum + columnWidthPt(c), 0)
+    const columnBands = drawings.length > 0 || matrix
+      ? printBands(allColumns, columnWidthPt, headingWidthPt)
+      : []
+    const textOverlays: string[] = []
+    let rowTopPt = headingHeightPt
 
     const colgroup =
       `<colgroup>${headings ? `<col style="width:${HEADING_COLUMN_WIDTH_PT}pt">` : ''}` +
@@ -584,6 +619,35 @@ export function layoutSheetPrint(
     const rowHtml = (row: number, sectionRows: readonly number[], position: number): string => {
       const heightPt = rowHeightPt(row)
       const cells: string[] = []
+      const centered = new Set<number>()
+      if (matrix) {
+        for (const { column, widthPt } of centerAcrossForRow(row)) {
+          const key = `${row}:${column}`
+          if (data.merges.anchors.has(key) || data.merges.covered.has(key)) continue
+          for (const band of columnBands) {
+            const offset = drawingOffsetInBand(band, column, 0, widthPt, columnWidthPt)
+            if (offset === undefined) continue
+            const style = styleAt(row, column)
+            if (style?.ht !== 2) continue
+            const { text } = cellContentAt(data, row, column)
+            if (!text) continue
+            const start = Math.max(0, offset)
+            const end = Math.min(band.sizePt, offset + widthPt)
+            const left = rightToLeft ? tableWidthPt - band.positionPt - end : band.positionPt + start
+            const textLeft = rightToLeft ? end - offset - widthPt : offset - start
+            const fontCss = cellCss({ ...style, bg: null }, 'center', false, blackAndWhite, rightToLeft,
+              { top: false, bottom: false, left: false, right: false })
+            textOverlays.push(
+              `<div class="center-across-clip" style="left:${round(left)}pt;top:${round(rowTopPt)}pt;` +
+              `width:${round(end - start)}pt;height:${round(heightPt)}pt">` +
+              `<div class="center-across-text" style="left:${round(textLeft)}pt;width:${round(widthPt)}pt;${fontCss}">` +
+              cellTextHtml(text, style, 'center', heightPt, widthPt, rightToLeft) + '</div></div>',
+            )
+            centered.add(column)
+          }
+        }
+      }
+      rowTopPt += heightPt
       if (headings) cells.push(`<th class="hd hd-left">${row + 1}</th>`)
       const inSection = new Set(sectionRows)
       const above = printedRows[position - 1] ?? null
@@ -628,7 +692,7 @@ export function layoutSheetPrint(
           )
           return
         }
-        cells.push(cell(data, row, column, '', heightPt, near))
+        cells.push(cell(data, row, column, '', heightPt, near, undefined, centered.has(column)))
       })
       return `<tr style="height:${round(heightPt)}pt">${cells.join('')}</tr>`
     }
@@ -646,15 +710,12 @@ export function layoutSheetPrint(
     )
     const body = pageRows.map((row, index) => rowHtml(row, pageRows, titleRowList.length + index))
 
-    const originLeft = headingWidthPt + titleColumnsWidthPt
     const originTop = headingHeightPt + titleRowsHeightPt
-    const bodyWidthPt = pageColumns.reduce((sum, c) => sum + columnWidthPt(c), 0)
     const bodyHeightPt = pageRows.reduce((sum, r) => sum + rowHeightPt(r), 0)
-    const tableWidthPt = originLeft + bodyWidthPt
     const overlayLayer = drawings.length > 0
       ? printDrawingOverlays(
           drawings,
-          printBands(allColumns, columnWidthPt, headingWidthPt),
+          columnBands,
           printBands(printedRows, rowHeightPt, headingHeightPt),
           columnWidthPt,
           rowHeightPt,
@@ -668,7 +729,7 @@ export function layoutSheetPrint(
     const table = `<table${rightToLeft ? ' dir="rtl"' : ''} style="width:${round(tableWidthPt)}pt">${colgroup}<thead>${head.join('')}</thead><tbody>${body.join('')}</tbody></table>`
     const spareWidthIn = Math.max(0, printableWidthPt - tableWidthPt * scale) / 72
     return {
-      body: table + overlayLayer,
+      body: table + textOverlays.join('') + overlayLayer,
       page,
       offsetLeftIn: setup.horizontalCentered ? spareWidthIn / 2 : rightToLeft ? spareWidthIn : 0,
       offsetTopIn: setup.verticalCentered
@@ -780,10 +841,12 @@ body { font-family: Calibri, 'Helvetica Neue', Arial, ${printCjkFonts(lang)}, sa
 .hf img { vertical-align: bottom; }
 table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 td, th { padding: 0; border: 0; overflow: hidden; font-size: 11pt; vertical-align: bottom; }
-td .c { display: flex; overflow: hidden; padding: 0 ${CELL_TEXT_INSET_PT}pt; line-height: 1.2; }
-td .c > span { width: 100%; }
-td .c.oriented { position: relative; }
-td .c > .oriented-text { position: absolute; width: max-content; transform-origin: left top; }
+td .c, .center-across-text .c { display: flex; overflow: hidden; padding: 0 ${CELL_TEXT_INSET_PT}pt; line-height: 1.2; }
+td .c > span, .center-across-text .c > span { width: 100%; }
+td .c.oriented, .center-across-text .c.oriented { position: relative; }
+td .c > .oriented-text, .center-across-text .c > .oriented-text { position: absolute; width: max-content; transform-origin: left top; }
+.center-across-clip, .center-across-text { position: absolute; top: 0; overflow: hidden; }
+.center-across-text { font-size: 11pt; }
 td.has-diagonal, td.has-diagonal > .c { position: relative; }
 .cell-diagonal { display: block; position: absolute; left: 0; transform-origin: left center; print-color-adjust: exact; }
 th.hd { background: #f1f1f1; color: #444; font-size: 8.5pt; font-weight: 400;
@@ -1212,6 +1275,30 @@ function mergeMaps(worksheet: PrintWorksheet, area: PrintArea) {
 }
 
 type HorizontalAlignment = 'left' | 'center' | 'right'
+
+function cellTextHtml(
+  text: string,
+  style: PrintCellStyle | null,
+  horizontalAlign: HorizontalAlignment,
+  heightPt: number,
+  widthPt: number,
+  rightToLeft: boolean,
+): string {
+  const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
+  const leftPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.l ?? 0, 0) * 0.75
+  const rightPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.r ?? 0, 0) * 0.75
+  const padding =
+    (leftPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-left:${round(leftPaddingPt)}pt`) +
+    (rightPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-right:${round(rightPaddingPt)}pt`)
+  const orientation = text && style?.tr
+    ? orientedTextCss(style, horizontalAlign, widthPt, heightPt, leftPaddingPt, rightPaddingPt)
+    : undefined
+  return (
+    `<div class="c${orientation ? ' oriented' : ''}" style="height:${round(heightPt)}pt;align-items:${align}${padding}">` +
+    `<span${orientation ? ` class="oriented-text" style="${orientation}"` : ''}` +
+    `${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div>`
+  )
+}
 
 function cellHorizontalAlign(style: PrintCellStyle | null, rawValue: unknown): HorizontalAlignment {
   if (style?.ht === 1) return 'left'

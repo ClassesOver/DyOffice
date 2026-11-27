@@ -864,6 +864,43 @@ describe('layoutSheetPrint', () => {
     expect(html).not.toContain('A1')
   })
 
+  it('keeps the center-across text centered on its full span across column pages', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getLastColumn: () => 3,
+      getSheet: () => ({
+        getRowVisible: () => true,
+        getColVisible: () => true,
+        getCellMatrix: () => ({
+          getRow: () => ({ 0: { custom: { centerAcrossEnd: 2 } } }),
+        }),
+      }),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getDisplayValues: () => [['Centered heading', '', '', 'Adjacent'].slice(column, column + columns)],
+        getCellStyleData: () => column === 0 ? { ht: 2, fs: 8 } : null,
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:D1'] })
+    const document = layout(worksheet, setup, new Map(), undefined, {
+      breaks: { rowBreaks: [], colBreaks: [1] },
+    })
+    expect(document.pages).toHaveLength(2)
+    for (const { body } of document.pages) {
+      expect(body.match(/Centered heading/g)).toHaveLength(1)
+      expect(body).toContain('class="center-across-text"')
+      expect(body).toContain('width:225pt')
+      expect(body).not.toContain('colspan=')
+    }
+    expect(document.pages[1]?.body).toContain('left:-75pt;width:225pt')
+    expect(document.pages[1]?.body).toContain('<span>Adjacent</span>')
+
+    const cropped = layout(worksheet, { ...setup, printAreas: ['B1:C1'] })
+    expect(cropped.pages[0]?.body).toContain('left:-75pt;width:225pt')
+    expect(cropped.pages[0]?.body).toContain('Centered heading')
+  })
+
   it('mirrors the worksheet grid and drawing positions for right-to-left printing', () => {
     const setup = payloadSetup({
       printAreas: ['B1:B2'],
