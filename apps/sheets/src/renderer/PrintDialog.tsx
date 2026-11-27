@@ -116,7 +116,9 @@ export function PrintDialog({
   const [pagesMode, setPagesMode] = useState<'all' | 'range'>('all')
   const [from, setFrom] = useState(1)
   const [to, setTo] = useState(1)
-  const [job, setJob] = useState<PrintJob | null>(null)
+  const request = useMemo(() => ({ host, range, settings, revision }), [host, range, settings, revision])
+  const [preview, setPreview] = useState<{ request: typeof request; job: PrintJob } | null>(null)
+  const job = preview?.request === request ? preview.job : null
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [page, setPage] = useState(1)
@@ -143,19 +145,19 @@ export function PrintDialog({
   // lay the sheet out on every tick.
   useEffect(() => {
     let alive = true
+    setError(null)
     const timer = window.setTimeout(() => {
-      host
-        .buildJob(range, overridesFor(settings))
+      request.host
+        .buildJob(request.range, overridesFor(request.settings))
         .then((built) => {
           if (!alive) return
-          setJob(built)
-          setError(null)
+          setPreview({ request, job: built })
           setPage((current) => Math.min(Math.max(current, 1), built.pageCount))
           setTo((current) => (current > built.pageCount ? built.pageCount : current))
         })
         .catch((reason: unknown) => {
           if (!alive) return
-          setJob(null)
+          setPreview(null)
           setError(reason instanceof Error ? reason.message : String(reason))
         })
     }, 120)
@@ -163,7 +165,7 @@ export function PrintDialog({
       alive = false
       window.clearTimeout(timer)
     }
-  }, [host, range, settings, revision])
+  }, [request])
 
   useEffect(() => {
     const pane = paneRef.current
@@ -236,11 +238,12 @@ export function PrintDialog({
 
   const pages = pagesMode === 'all' ? null : { from, to }
   const rangeInvalid =
-    pagesMode === 'range' && (from < 1 || to < from || (pageCount > 0 && to > pageCount))
+    pagesMode === 'range' &&
+    (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from || to > pageCount)
   const canOutput = job !== null && !busy && !rangeInvalid
 
   const run = async (action: (built: PrintJob) => Promise<string>): Promise<void> => {
-    if (!job) return
+    if (!job || !canOutput) return
     setBusy(true)
     try {
       const message = await action(job)
