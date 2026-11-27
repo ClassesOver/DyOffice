@@ -3,7 +3,7 @@ import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/share
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import {
-  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, readDrawingGraphicFrame, readDrawingPicture,
+  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingMainName, readDrawingGraphicFrame, readDrawingPicture,
 } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
 import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
@@ -21,7 +21,10 @@ type Anchor = WorkbookVisualObject['anchor']
 type ShapeParagraph = NonNullable<WorkbookVisualObject['paragraphs']>[number]
 type XmlToken = Record<string, unknown> & { ':@'?: Record<string, string>; '#text'?: string }
 type XmlElement = {
+  name: string
   tag: string
+  namespace: string | undefined
+  drawingMainOnly?: boolean
   tokens: XmlToken[]
   namespaces: Attributes
   attrs?: Record<string, string> | undefined
@@ -41,11 +44,14 @@ function elements(tokens: XmlToken[], inherited: Attributes): XmlElement[] {
     const attrs = token[':@']
     let bindings: Map<string, string> | undefined
     for (const [key, value] of Object.entries(attrs ?? {})) {
-      if (!key.startsWith('@_xmlns:')) continue
+      if (key !== '@_xmlns' && !key.startsWith('@_xmlns:')) continue
       bindings ??= new Map(inherited)
       bindings.set(key.slice('@_xmlns:'.length), decodeAttribute(value))
     }
-    return [{ tag: name.slice(name.indexOf(':') + 1), tokens: token[name] as XmlToken[], attrs, namespaces: bindings ?? inherited }]
+    const namespaces = bindings ?? inherited
+    const colon = name.indexOf(':')
+    const namespace = colon < 0 ? namespaces.get('') ?? '' : namespaces.get(name.slice(0, colon))
+    return [{ name, tag: name.slice(colon + 1), namespace, tokens: token[name] as XmlToken[], attrs, namespaces }]
   })
 }
 
@@ -62,7 +68,21 @@ function worksheetVisualRoot(xml: string): XmlElement | undefined {
   return roots(withBody(root, visualNodes.map(node => node.xml).join('')), root.namespaces)[0]
 }
 
-const children = (node?: XmlElement) => node ? elements(node.tokens, node.namespaces) : []
+function children(node?: XmlElement): XmlElement[] {
+  if (!node) return []
+  const entries = elements(node.tokens, node.namespaces)
+  if (!node.drawingMainOnly) return entries
+  return entries.filter(entry => isDrawingMainName(entry.name, entry.namespace))
+    .map(entry => ({ ...entry, drawingMainOnly: true }))
+}
+function sheetDrawingChild(node: XmlElement, tag: string): XmlElement | undefined {
+  return children(node).find(entry => entry.tag === tag && entry.namespace === node.namespace &&
+    (entry.namespace !== undefined || entry.name.startsWith('xdr:')))
+}
+function drawingMainPart(node: XmlElement, tag: string): XmlElement | undefined {
+  const part = sheetDrawingChild(node, tag)
+  return part && { ...part, drawingMainOnly: true }
+}
 const child = (node: XmlElement | undefined, tag: string) => children(node).find(element => element.tag === tag)
 function* descendants(node?: XmlElement): Generator<XmlElement> {
   for (const element of children(node)) {
@@ -611,7 +631,7 @@ function readCustomPath(geometry: XmlElement | undefined): WorkbookVisualObject[
 function readShape(
   node: XmlElement, base: VisualBase, theme: readonly string[], references: DrawingReferences,
 ): WorkbookVisualObject | undefined {
-  const properties = child(node, 'spPr')
+  const properties = drawingMainPart(node, 'spPr')
   const body = child(node, 'txBody')
   const bodyProperties = child(body, 'bodyPr')
   const textBox = trueAttribute(child(child(node, 'nvSpPr'), 'cNvSpPr'), 'txBox')
@@ -622,7 +642,7 @@ function readShape(
   const plain = paragraphs.length ? paragraphs.map(paragraph => paragraph.runs.map(run => run.text).join('')).join('\n') : undefined
   if (!shapeType && !customPath && !plain) return undefined
 
-  const style = child(node, 'style')
+  const style = drawingMainPart(node, 'style')
   function styleColor(name: string): string | undefined {
     const reference = child(style, name)
     if (name !== 'fontRef' && ['0', '1000'].includes(attribute(reference, 'idx') ?? '')) return 'none'
@@ -950,7 +970,7 @@ export async function readWorkbookVisuals(
         if (!entry) continue
         const anchor = readDrawingAnchor(slot.element)
         const nonvisual = drawingNonVisualProperties(slot.element)?.node
-        const shapeNode = child(entry, 'sp') ?? child(entry, 'cxnSp')
+        const shapeNode = sheetDrawingChild(entry, 'sp') ?? sheetDrawingChild(entry, 'cxnSp')
         const shapeId = shapeNode && nonnegative(nonvisual?.attributes.get('id'))
         const ole = shapeId === undefined ? undefined : oleObjects.get(shapeId)
         if (ole && shapeId !== undefined) {

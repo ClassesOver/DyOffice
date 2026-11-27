@@ -315,6 +315,21 @@ describe('applyVisualEdits', () => {
       expect(xml).not.toContain('gradFill')
     })
 
+    it('repaints alternate DrawingML prefixes without changing extension paint', async () => {
+      const opaque = '<a:extLst><a:ext uri="vendor"><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ext></a:extLst>'
+      const drawing = shapeDrawing(
+        '<d:prstGeom prst="rect"/><d:solidFill><d:srgbClr val="FF0000"/></d:solidFill>' +
+        '<d:ln w="123"><d:solidFill><d:srgbClr val="00FF00"/></d:solidFill><d:prstDash val="dash"/></d:ln>' +
+        opaque,
+      ).replace('<xdr:wsDr ', '<xdr:wsDr xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" ')
+      const xml = await repaint(drawing, { fillColor: '#abcdef', lineColor: '#fedcba' })
+      expect(xml).toContain('<d:solidFill><d:srgbClr val="ABCDEF"/></d:solidFill>')
+      expect(xml).toContain('<d:ln w="123"><d:solidFill><d:srgbClr val="FEDCBA"/></d:solidFill><d:prstDash val="dash"/></d:ln>')
+      expect(xml).toContain(opaque)
+      expect(xml).not.toContain('FF0000')
+      expect(xml).not.toContain('00FF00')
+    })
+
     it('writes an explicit noFill over a style fillRef', async () => {
       const style =
         '<xdr:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef>' +

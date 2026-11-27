@@ -51,8 +51,16 @@ export function drawingChild(parent: ScopedElement | undefined, local: string): 
   )
 }
 
+export function isDrawingMainName(name: string, namespace: string | undefined): boolean {
+  return namespace === undefined ? name.startsWith('a:') : GRAPHIC_NAMESPACES.has(namespace)
+}
+
+export function drawingMainChildren(parent: ScopedElement): ScopedElement[] {
+  return scopedChildren(parent).filter(node => isDrawingMainName(node.name, node.namespace))
+}
+
 export function drawingMainChild(parent: ScopedElement | undefined, local: string): ScopedElement | undefined {
-  return parent && findNamespacedChild(parent, local, GRAPHIC_NAMESPACES, 'a')
+  return parent && drawingMainChildren(parent).find(node => node.local === local)
 }
 
 export function drawingRelationshipAttribute(

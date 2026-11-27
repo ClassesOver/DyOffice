@@ -492,14 +492,14 @@ function shapeXml(shapeId: number, shape: ShapeAdd, linkRelId: string | undefine
   )
 }
 
-export function solidFillXml(color: string): string {
+export function solidFillXml(color: string, prefix = 'a:', namespaceDeclaration = ''): string {
   return color === 'none'
-    ? '<a:noFill/>'
-    : `<a:solidFill><a:srgbClr val="${color.slice(1).toUpperCase()}"/></a:solidFill>`
+    ? `<${prefix}noFill${namespaceDeclaration}/>`
+    : `<${prefix}solidFill${namespaceDeclaration}><${prefix}srgbClr val="${color.slice(1).toUpperCase()}"/></${prefix}solidFill>`
 }
 
-export function outlineXml(color: string): string {
-  return `<a:ln w="9525">${solidFillXml(color)}</a:ln>`
+export function outlineXml(color: string, prefix = 'a:', namespaceDeclaration = ''): string {
+  return `<${prefix}ln${namespaceDeclaration} w="9525">${solidFillXml(color, prefix)}</${prefix}ln>`
 }
 
 function nextShapeId(drawingXml: string): number {

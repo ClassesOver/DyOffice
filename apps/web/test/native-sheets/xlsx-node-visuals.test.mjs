@@ -714,12 +714,13 @@ test('opens XLSX freeform shapes with scaled paths and preserves their original 
 
 test('opens a native XLSX text box and edits its paint at the original drawing index', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
+  const opaque = '<v:solidFill xmlns:v="urn:vendor"><a:srgbClr val="555555"/></v:solidFill>'
   await appendDrawing(zip, `<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="10000" cy="10000"/><xdr:sp/></xdr:absoluteAnchor>
     <xdr:oneCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
       <xdr:ext cx="952500" cy="476250"/>
-      <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="81" name="Audit text box" descr="Quarterly &amp; annual"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>
-        <xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>
-          <a:ln w="25400" cap="rnd"><a:solidFill><a:srgbClr val="223344"/></a:solidFill><a:prstDash val="dash"/></a:ln></xdr:spPr>
+      <xdr:sp xmlns:d="${mainNs}"><xdr:nvSpPr><xdr:cNvPr id="81" name="Audit text box" descr="Quarterly &amp; annual"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>
+        <xdr:spPr>${opaque}<d:prstGeom prst="rect"><d:avLst/></d:prstGeom><d:solidFill><d:srgbClr val="FF0000"/></d:solidFill>
+          <d:ln w="25400" cap="rnd"><d:solidFill><d:srgbClr val="223344"/></d:solidFill><d:prstDash val="dash"/></d:ln></xdr:spPr>
         <xdr:txBody><a:bodyPr anchor="b" vertOverflow="clip"/><a:lstStyle/>
           <a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1" sz="1800"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>Existing rectangle text</a:t></a:r><a:br/><a:r><a:t>Q1 &amp; Q2</a:t></a:r></a:p>
           <a:p><a:r><a:t>Total</a:t></a:r></a:p>
@@ -759,12 +760,13 @@ test('opens a native XLSX text box and edits its paint at the original drawing i
     text: 'Existing rectangle text', color: '#FFFFFF', size: 18, bold: true, italic: false, underline: false,
   })
   const request = sheetsSaveRequest('sheet-1', [{ row: 2, column: 0, writeValue: true, value: 99 }])
-  request.visualEdits = [{ drawingPath: shape.drawingPath, drawingIndex: shape.drawingIndex, fillColor: '#00FF00' }]
+  request.visualEdits = [{ drawingPath: shape.drawingPath, drawingIndex: shape.drawingIndex, fillColor: '#00FF00', lineColor: '#123456' }]
   const plan = await runtime.sheetsWorkbookPlanner(bytes, request)
   const output = (await runtime.sheetsNative.savePlan(bytes, plan)).bytes
   const reopened = (await runtime.sheetsNative.inspect(output, undefined, true)).visuals
-  assert.deepEqual(reopened, [visuals[0], { ...shape, fillColor: '#00FF00' }])
+  assert.deepEqual(reopened, [visuals[0], { ...shape, fillColor: '#00FF00', lineColor: '#123456' }])
   const savedDrawing = await textOf(await JSZip.loadAsync(output))(drawingPath)
+  assert.ok(savedDrawing.includes(opaque))
   assert.match(savedDrawing, /<xdr:cNvPr id="81" name="Audit text box"/)
 })
 

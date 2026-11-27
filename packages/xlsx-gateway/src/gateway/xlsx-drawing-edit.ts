@@ -17,6 +17,8 @@ import {
   drawingAnchorElements,
   drawingChild,
   drawingMainChild,
+  drawingMainChildren,
+  isDrawingMainName,
   drawingNonVisualProperties,
   drawingRelationshipAttribute,
   isDrawingChild,
@@ -399,7 +401,6 @@ async function cleanupEmptyDrawingHookup(
   }
 }
 
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const escapeXmlAttribute = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -428,7 +429,6 @@ function applyOneEdit(
   droppedHyperlinkRelIds: string[],
 ): string | null {
   const anchorXml = element.xml
-  const p = prefixOf(element.name)
   const kind = element.local
   if (edit.remove) {
     const frame = readDrawingGraphicFrame(element)
@@ -454,7 +454,7 @@ function applyOneEdit(
   let patched = edit.anchor ? moveVisualAnchor(element, edit.anchor, edit.anchorSize) : anchorXml
   // Re-applying the current paint rebuilds identical XML.
   if (edit.fillColor !== undefined || edit.lineColor !== undefined) {
-    patched = repaintShape(patched, p, edit.fillColor, edit.lineColor)
+    patched = repaintShape(patched, element, edit.fillColor, edit.lineColor)
   }
   if (edit.frameSize || edit.rotation !== undefined || edit.flipH !== undefined || edit.flipV !== undefined) {
     patched = updateFrameTransform(patched, element, edit)
@@ -619,48 +619,63 @@ function moveVisualAnchor(
   return withBody(element, applyPatches(element.inner, writes))
 }
 
-const SP_PR_FILL =
-  /<a:(noFill|solidFill|gradFill|blipFill|pattFill|grpFill)\b(?:[^>]*\/>|[^>]*>[\s\S]*?<\/a:\1>)/g
-const SP_PR_LINE = /<a:ln\b(?:[^>]*\/>|[^>]*>[\s\S]*?<\/a:ln>)/
-const GEOMETRY_END = /<a:prstGeom\b[^>]*\/>|<\/a:prstGeom>|<\/a:custGeom>/
-const XFRM_END = /<\/a:xfrm>/
+const paintElements = new Set(['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'])
 
-/// Rewrites the shape's own spPr paint. An explicit solidFill/noFill beats
-/// any xdr:style fillRef, so the style block is left alone. The outline keeps
-/// its width/dash/arrowheads and only swaps the fill inside `a:ln`.
+function paintMarkupNamespace(parent: ScopedElement, reference?: ScopedElement): [prefix: string, declaration: string] {
+  if (reference) {
+    const prefix = prefixOf(reference.name)
+    if (parent.namespaces.get(prefix.slice(0, -1)) === reference.namespace) return [prefix, '']
+  }
+  for (const [prefix, namespace] of parent.namespaces) {
+    if (isDrawingMainName('', namespace)) return [prefix ? prefix + ':' : '', '']
+  }
+  const namespace = reference?.namespace ?? (parent.namespace?.startsWith('http://purl.oclc.org/ooxml/')
+    ? 'http://purl.oclc.org/ooxml/drawingml/main' : 'http://schemas.openxmlformats.org/drawingml/2006/main')
+  return ['a:', ` xmlns:a="${namespace}"`]
+}
+
+function paintPatches(children: ScopedElement[], at: number, xml: string): XmlPatch[] {
+  const fills = children.filter(node => paintElements.has(node.local))
+  if (!fills.length) return [{ start: at, length: 0, xml }]
+  return fills.map((fill, index) => patchElement(fill, index === 0 ? xml : ''))
+}
+
+/// Replaces only the shape's own fill and outline paint.
 function repaintShape(
-  anchorXml: string,
-  p: string,
+  xml: string,
+  original: ScopedElement,
   fillColor: string | undefined,
   lineColor: string | undefined,
 ): string {
-  const pre = escapeRegExp(p)
-  // Group anchors flatten to several visuals sharing one index; the first
-  // spPr would be an arbitrary child's.
-  if (
-    !new RegExp(`<${pre}sp[\\s>]`).test(anchorXml) ||
-    new RegExp(`<${pre}grpSp[\\s>]`).test(anchorXml)
-  ) {
-    throw new VisualEditError('Only standalone shapes can be repainted.')
-  }
-  const spPr = new RegExp(`(<${pre}spPr\\b[^>]*>)([\\s\\S]*?)(</${pre}spPr>)`).exec(anchorXml)
-  if (!spPr)
-    throw new VisualEditError('Drawing shape has no spPr — repainting it is not supported.')
-  const [whole, open, inner, close] = spPr as unknown as [string, string, string, string]
-  const existingLine = SP_PR_LINE.exec(inner)?.[0] ?? ''
-  const existingFill = inner.replace(SP_PR_LINE, '').match(SP_PR_FILL)?.join('') ?? ''
-  const body = inner.replace(SP_PR_LINE, '').replace(SP_PR_FILL, '')
-  const fill = fillColor === undefined ? existingFill : solidFillXml(fillColor)
-  let line = existingLine
+  const anchor = updatedAnchor(xml, original)
+  const shape = drawingChild(anchor, 'sp')
+  if (!anchor || !shape) throw new VisualEditError('Only standalone shapes can be repainted.')
+  const properties = drawingChild(shape, 'spPr')
+  if (!properties) throw new VisualEditError('Drawing shape has no spPr — repainting it is not supported.')
+
+  const children = drawingMainChildren(properties)
+  const fill = children.find(node => paintElements.has(node.local))
+  const line = children.find(node => node.local === 'ln')
+  const geometry = children.find(node => node.local === 'prstGeom' || node.local === 'custGeom') ??
+    children.find(node => node.local === 'xfrm')
+  const afterGeometry = geometry ? geometry.start + geometry.xml.length : 0
+  const patches: XmlPatch[] = []
   if (lineColor !== undefined) {
-    const parts = /^<a:ln\b([^>]*?)\/?>([\s\S]*?)(?:<\/a:ln>)?$/.exec(existingLine)
-    line = parts
-      ? `<a:ln${parts[1]}>${solidFillXml(lineColor)}${(parts[2] ?? '').replace(SP_PR_FILL, '')}</a:ln>`
-      : outlineXml(lineColor)
+    if (line) {
+      const lineChildren = drawingMainChildren(line)
+      const lineFill = lineChildren.find(node => paintElements.has(node.local))
+      const newFill = solidFillXml(lineColor, ...paintMarkupNamespace(line, lineFill ?? line))
+      patches.push(patchElement(line, withBody(line, applyPatches(line.inner, paintPatches(lineChildren, 0, newFill)))))
+    } else {
+      const newLine = outlineXml(lineColor, ...paintMarkupNamespace(properties, fill ?? geometry))
+      patches.push({ start: fill ? fill.start + fill.xml.length : afterGeometry, length: 0, xml: newLine })
+    }
   }
-  // Paint follows the geometry in the spPr sequence (xfrm, geom, fill, ln).
-  const geometry = GEOMETRY_END.exec(body) ?? XFRM_END.exec(body)
-  const at = geometry ? geometry.index + geometry[0].length : 0
-  const rebuilt = `${open}${body.slice(0, at)}${fill}${line}${body.slice(at)}${close}`
-  return anchorXml.slice(0, spPr.index) + rebuilt + anchorXml.slice(spPr.index + whole.length)
+  if (fillColor !== undefined) {
+    const newFill = solidFillXml(fillColor, ...paintMarkupNamespace(properties, fill ?? geometry ?? line))
+    patches.push(...paintPatches(children, line?.start ?? afterGeometry, newFill))
+  }
+  const start = anchor.opening.length + shape.start + shape.opening.length + properties.start
+  const updated = withBody(properties, applyPatches(properties.inner, patches))
+  return xml.slice(0, start) + updated + xml.slice(start + properties.xml.length)
 }
