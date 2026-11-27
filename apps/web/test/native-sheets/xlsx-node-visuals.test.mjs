@@ -526,12 +526,14 @@ test('saves picture transforms and absolute drawing coordinates', { timeout: 120
   { drawingPath, drawingIndex: absolute.drawingIndex,
     anchor: { ...absolute.anchor, fromColumnOffset: 150000, fromRowOffset: 240000,
       toColumnOffset: 240000, toRowOffset: 440000 },
-    anchorSize: { width: 90000, height: 200000 } }]
+    anchorSize: { width: 90000, height: 200000 }, rotation: 90, frameSize: { width: 200000, height: 90000 } }]
   const plan = await runtime.sheetsWorkbookPlanner(source, edit)
   const { bytes } = await runtime.sheetsNative.savePlan(source, plan)
   const reopened = (await runtime.sheetsNative.inspect(bytes)).visuals
   const updated = reopened.find(visual => visual.kind === 'image')
-  assert.deepEqual(reopened.find(visual => visual.name === 'Absolute shape').anchor, edit.visualEdits[1].anchor)
+  const rotated = reopened.find(visual => visual.name === 'Absolute shape')
+  assert.deepEqual(rotated.anchor, edit.visualEdits[1].anchor)
+  assert.deepEqual([rotated.rotation, rotated.frameWidth, rotated.frameHeight], [90, 200000, 90000])
   assert.deepEqual([updated.rotation, updated.flipH, updated.frameWidth, updated.frameHeight], [90, true, 555, 333])
   assert.equal(updated.anchor.toColumnOffset - updated.anchor.fromColumnOffset, 333)
   assert.equal(updated.anchor.toRowOffset - updated.anchor.fromRowOffset, 555)

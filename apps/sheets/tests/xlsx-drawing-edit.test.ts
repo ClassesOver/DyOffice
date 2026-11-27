@@ -261,6 +261,28 @@ describe('applyVisualEdits', () => {
     expect(xml).toContain('<a:xfrm rot="2700000"><a:off x="10" y="20"/>')
   })
 
+  it('writes frame dimensions for shapes whose transform or extent was omitted', async () => {
+    for (const properties of [
+      '<d:prstGeom prst="rect"/>',
+      '<d:xfrm/><d:prstGeom prst="rect"/>',
+      '<d:xfrm><d:off x="12" y="34"/></d:xfrm><d:prstGeom prst="rect"/>',
+    ]) {
+      const drawing = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+        'xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+        `<xdr:twoCellAnchor>${marker('from', 0, 0)}${marker('to', 4, 8)}` +
+        `<xdr:sp><xdr:spPr>${properties}</xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>`
+      const entries = new Map([[PATH, drawing]])
+      await applyVisualEdits(fakePackage(entries), [{
+        drawingPath: PATH, drawingIndex: 0, anchor: ANCHOR, rotation: 90, frameSize: { width: 555, height: 333 },
+      }], new Set())
+      const offset = properties.includes('<d:off') ? '<d:off x="12" y="34"/>' :
+        properties.includes('<d:xfrm/>') ? '' : '<d:off x="0" y="0"/>'
+      expect(entries.get(PATH)).toContain(
+        `<d:xfrm rot="5400000">${offset}<d:ext cx="555" cy="333"/></d:xfrm><d:prstGeom prst="rect"/>`,
+      )
+    }
+  })
+
   it('fails closed when frameSize targets an anchor without a frame ext', async () => {
     await expect(
       applyVisualEdits(

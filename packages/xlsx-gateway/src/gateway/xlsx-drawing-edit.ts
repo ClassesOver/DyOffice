@@ -535,13 +535,16 @@ function updateFrameTransform(xml: string, original: ScopedElement, edit: Workbo
   )
   const properties = drawingChild(object, object?.local === 'grpSp' ? 'grpSpPr' : 'spPr')
   const transform = drawingMainChild(properties, 'xfrm')
-  if (!anchor || !object || !properties || !transform) {
+  if (!anchor || !object || !properties || (!transform && (!edit.frameSize || object.local === 'grpSp'))) {
     throw new VisualEditError(edit.frameSize
       ? 'Drawing anchor has no frame extent — resizing it is not supported.'
       : 'Drawing anchor has no frame transform — rotating it is not supported.')
   }
 
-  let opening = transform.opening
+  const [prefix, declaration] = transform
+    ? [prefixOf(transform.name), '']
+    : drawingMarkupNamespace(properties, drawingMainChildren(properties)[0])
+  let opening = transform?.opening ?? `<${prefix}xfrm${declaration}>`
   if (edit.rotation !== undefined)
     opening = updateWorksheetTagAttribute(opening, 'rot', rotationAttribute(edit.rotation))
   if (edit.flipH !== undefined)
@@ -549,20 +552,35 @@ function updateFrameTransform(xml: string, original: ScopedElement, edit: Workbo
   if (edit.flipV !== undefined)
     opening = updateWorksheetTagAttribute(opening, 'flipV', edit.flipV ? '1' : null)
 
-  let frame = transform.xml
+  const propertiesStart = anchor.opening.length + object.start + object.opening.length + properties.start
+  let inner = transform?.inner ?? `<${prefix}off x="0" y="0"/>`
   if (edit.frameSize) {
     // The anchor describes the rotated bounds. The extent records the
     // unrotated frame size used to reconstruct the visual on reload.
     const extent = drawingMainChild(transform, 'ext')
-    if (!extent) {
-      throw new VisualEditError('Drawing anchor has no frame extent — resizing it is not supported.')
+    if (extent) {
+      inner = applyPatches(inner, [resizeExtent(extent, edit.frameSize)])
+    } else {
+      if (object.local === 'grpSp') {
+        throw new VisualEditError('Drawing anchor has no frame extent — resizing it is not supported.')
+      }
+      const offset = drawingMainChild(transform, 'off')
+      const at = offset ? offset.start + offset.xml.length : transform ? 0 : inner.length
+      inner = inner.slice(0, at) + `<${prefix}ext cx="${edit.frameSize.width}" cy="${edit.frameSize.height}"/>` + inner.slice(at)
     }
-    frame = withBody(transform, applyPatches(transform.inner, [resizeExtent(extent, edit.frameSize)]))
   }
-  const start = anchor.opening.length + object.start + object.opening.length +
-    properties.start + properties.opening.length + transform.start
-  return xml.slice(0, start) + opening + frame.slice(transform.opening.length) +
-    xml.slice(start + transform.xml.length)
+  if (!transform) {
+    const body = opening + inner + `</${prefix}xfrm>` + properties.inner
+    return xml.slice(0, propertiesStart) + withBody(properties, body) + xml.slice(propertiesStart + properties.xml.length)
+  }
+  const start = propertiesStart + properties.opening.length + transform.start
+  let updated = opening
+  if (!transform.opening.endsWith('/>')) {
+    updated += inner + transform.xml.slice(transform.opening.length + transform.inner.length)
+  } else if (inner) {
+    updated = opening.slice(0, -2) + '>' + inner + `</${transform.name}>`
+  }
+  return xml.slice(0, start) + updated + xml.slice(start + transform.xml.length)
 }
 
 function resizeExtent(extent: ScopedElement, size: NonNullable<WorkbookVisualEdit['anchorSize']>): XmlPatch {
@@ -628,7 +646,7 @@ function moveVisualAnchor(
 
 const paintElements = new Set(['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'])
 
-function paintMarkupNamespace(parent: ScopedElement, reference?: ScopedElement): [prefix: string, declaration: string] {
+function drawingMarkupNamespace(parent: ScopedElement, reference?: ScopedElement): [prefix: string, declaration: string] {
   if (reference) {
     const prefix = prefixOf(reference.name)
     if (parent.namespaces.get(prefix.slice(0, -1)) === reference.namespace) return [prefix, '']
@@ -671,15 +689,15 @@ function repaintShape(
     if (line) {
       const lineChildren = drawingMainChildren(line)
       const lineFill = lineChildren.find(node => paintElements.has(node.local))
-      const newFill = solidFillXml(lineColor, ...paintMarkupNamespace(line, lineFill ?? line))
+      const newFill = solidFillXml(lineColor, ...drawingMarkupNamespace(line, lineFill ?? line))
       patches.push(patchElement(line, withBody(line, applyPatches(line.inner, paintPatches(lineChildren, 0, newFill)))))
     } else {
-      const newLine = outlineXml(lineColor, ...paintMarkupNamespace(properties, fill ?? geometry))
+      const newLine = outlineXml(lineColor, ...drawingMarkupNamespace(properties, fill ?? geometry))
       patches.push({ start: fill ? fill.start + fill.xml.length : afterGeometry, length: 0, xml: newLine })
     }
   }
   if (fillColor !== undefined) {
-    const newFill = solidFillXml(fillColor, ...paintMarkupNamespace(properties, fill ?? geometry ?? line))
+    const newFill = solidFillXml(fillColor, ...drawingMarkupNamespace(properties, fill ?? geometry ?? line))
     patches.push(...paintPatches(children, line?.start ?? afterGeometry, newFill))
   }
   const start = anchor.opening.length + shape.start + shape.opening.length + properties.start
