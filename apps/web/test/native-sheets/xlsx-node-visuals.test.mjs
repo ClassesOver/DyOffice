@@ -488,6 +488,41 @@ test('resolves an embedded picture without mislabeling unsupported or external d
   })
 })
 
+test('saves a picture transform with an alternate DrawingML prefix', { timeout: 120_000 }, async t => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const extension = '<v:cache><a:xfrm rot="123"><a:ext cx="7" cy="8"/></a:xfrm></v:cache>'
+  await appendDrawing(zip, `<xdr:oneCellAnchor xmlns:d="${mainNs}" xmlns:v="urn:example:cache" xmlns:r="${relationships.slice(0, -1)}">` +
+    '<xdr:from><xdr:col>1</xdr:col><xdr:row>3</xdr:row></xdr:from><xdr:ext cx="300" cy="400"/>' +
+    '<xdr:pic><xdr:blipFill><d:blip r:embed="photo"/></xdr:blipFill>' +
+    `<xdr:spPr>${extension}<d:xfrm rot='60000'><d:ext cx="100" cy="200"></d:ext></d:xfrm></xdr:spPr>` +
+    '</xdr:pic></xdr:oneCellAnchor>')
+  zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>',
+    `<Relationship Id="photo" Type="${relationships}image" Target="../media/photo.png"/></Relationships>`))
+  zip.file('xl/media/photo.png', 'fixture')
+  const source = await zip.generateAsync({ type: 'nodebuffer' })
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-picture-transform-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+
+  const { visuals } = await runtime.sheetsNative.inspect(source)
+  const photo = visuals.find(visual => visual.kind === 'image')
+  assert.equal(photo.rotation, 1)
+  const edit = sheetsSaveRequest(photo.sheetId, [])
+  edit.visualEdits = [{ drawingPath, drawingIndex: photo.drawingIndex, rotation: 90,
+    flipH: true, frameSize: { width: 555, height: 333 } }]
+  const plan = await runtime.sheetsWorkbookPlanner(source, edit)
+  const { bytes } = await runtime.sheetsNative.savePlan(source, plan)
+  const updated = (await runtime.sheetsNative.inspect(bytes)).visuals.find(visual => visual.kind === 'image')
+  assert.deepEqual([updated.rotation, updated.flipH, updated.frameWidth, updated.frameHeight], [90, true, 555, 333])
+  assert.ok((await textOf(await JSZip.loadAsync(bytes))(drawingPath)).includes(extension))
+})
+
 test('resolves drawing, chart, and picture relationships by their declared namespaces', async () => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const worksheet = 'xl/worksheets/sheet1.xml'

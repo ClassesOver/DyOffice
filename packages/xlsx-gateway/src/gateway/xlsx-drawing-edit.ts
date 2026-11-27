@@ -15,6 +15,8 @@ import {
 } from './xlsx-drawing-add.ts'
 import {
   drawingAnchorElements,
+  drawingChild,
+  drawingMainChild,
   drawingRelationshipAttribute,
   isDrawingChild,
   pictureExtensionBlips,
@@ -31,7 +33,9 @@ import {
   removeRelationshipById,
   type ParsedRelationship,
 } from './xlsx-sheets.ts'
-import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, worksheetRoot, type ScopedElement, type XmlPatch } from './xlsx-worksheet-xml.ts'
+import { updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, withNamespaces, worksheetRoot, type ScopedElement, type XmlPatch } from './xlsx-worksheet-xml.ts'
 
 export class VisualEditError extends Error {}
 
@@ -405,7 +409,6 @@ export function rotationAttribute(degrees: number): string | null {
   return normalized === 0 ? null : String(normalized)
 }
 
-const XFRM_OPEN = /<a:xfrm\b[^>]*>/
 const CNVPR_PATTERN = /<([A-Za-z_][\w.-]*:)?cNvPr\b[^>]*?(\/>|>[\s\S]*?<\/\1cNvPr>)/
 
 /// One anchor's edits applied to its XML text; null when the anchor is
@@ -446,35 +449,8 @@ function applyOneEdit(
   if (edit.fillColor !== undefined || edit.lineColor !== undefined) {
     patched = repaintShape(patched, p, edit.fillColor, edit.lineColor)
   }
-  if (edit.frameSize) {
-    // A rotated shape resized through its AABB: the anchor holds the rotated
-    // bounds, so the true frame (first a:ext of the shape's xfrm) must be
-    // rewritten alongside or the reload re-derives the old size.
-    const ext = `<a:ext cx="${edit.frameSize.width}" cy="${edit.frameSize.height}"/>`
-    const withExt = patched.replace(
-      /(<a:xfrm\b[^>]*>[\s\S]*?)<a:ext\b[^>]*\/>/,
-      (_, head: string) => `${head}${ext}`,
-    )
-    if (withExt === patched && !/<a:xfrm\b[^>]*>[\s\S]*?<a:ext\b/.test(patched)) {
-      throw new VisualEditError(
-        'Drawing anchor has no frame extent — resizing it is not supported.',
-      )
-    }
-    patched = withExt
-  }
-  if (edit.rotation !== undefined || edit.flipH !== undefined || edit.flipV !== undefined) {
-    const open = XFRM_OPEN.exec(patched)
-    if (!open) {
-      throw new VisualEditError(
-        'Drawing anchor has no frame transform — rotating it is not supported.',
-      )
-    }
-    let tag = open[0]
-    if (edit.rotation !== undefined)
-      tag = setTagAttribute(tag, 'rot', rotationAttribute(edit.rotation))
-    if (edit.flipH !== undefined) tag = setTagAttribute(tag, 'flipH', edit.flipH ? '1' : null)
-    if (edit.flipV !== undefined) tag = setTagAttribute(tag, 'flipV', edit.flipV ? '1' : null)
-    patched = patched.slice(0, open.index) + tag + patched.slice(open.index + open[0].length)
+  if (edit.frameSize || edit.rotation !== undefined || edit.flipH !== undefined || edit.flipV !== undefined) {
+    patched = updateFrameTransform(patched, element, edit)
   }
   if (edit.altText !== undefined || edit.hyperlink !== undefined) {
     const element = CNVPR_PATTERN.exec(patched)
@@ -515,6 +491,48 @@ function applyOneEdit(
     patched = tag + patched.slice(open[0].length)
   }
   return patched
+}
+
+function updateFrameTransform(xml: string, original: ScopedElement, edit: WorkbookVisualEdit): string {
+  // Moving or repainting can change the frame's offset in the anchor.
+  const node = xml === original.xml ? original : childElements(xml)[0]
+  const anchor = node && (node === original ? original : withNamespaces(node, original.namespaces))
+  const object = anchor && scopedChildren(anchor).find(
+    (child) => isDrawingChild(anchor, child) && ['pic', 'sp', 'cxnSp', 'grpSp'].includes(child.local),
+  )
+  const properties = drawingChild(object, object?.local === 'grpSp' ? 'grpSpPr' : 'spPr')
+  const transform = drawingMainChild(properties, 'xfrm')
+  if (!anchor || !object || !properties || !transform) {
+    throw new VisualEditError(edit.frameSize
+      ? 'Drawing anchor has no frame extent — resizing it is not supported.'
+      : 'Drawing anchor has no frame transform — rotating it is not supported.')
+  }
+
+  let opening = transform.opening
+  if (edit.rotation !== undefined)
+    opening = updateWorksheetTagAttribute(opening, 'rot', rotationAttribute(edit.rotation))
+  if (edit.flipH !== undefined)
+    opening = updateWorksheetTagAttribute(opening, 'flipH', edit.flipH ? '1' : null)
+  if (edit.flipV !== undefined)
+    opening = updateWorksheetTagAttribute(opening, 'flipV', edit.flipV ? '1' : null)
+
+  let frame = transform.xml
+  if (edit.frameSize) {
+    // The anchor describes the rotated bounds. The extent records the
+    // unrotated frame size used to reconstruct the visual on reload.
+    const extent = drawingMainChild(transform, 'ext')
+    if (!extent) {
+      throw new VisualEditError('Drawing anchor has no frame extent — resizing it is not supported.')
+    }
+    const width = updateWorksheetTagAttribute(extent.opening, 'cx', String(edit.frameSize.width))
+    const size = updateWorksheetTagAttribute(width, 'cy', String(edit.frameSize.height))
+    const updated = size + extent.xml.slice(extent.opening.length)
+    frame = withBody(transform, applyPatches(transform.inner, [patchElement(extent, updated)]))
+  }
+  const start = anchor.opening.length + object.start + object.opening.length +
+    properties.start + properties.opening.length + transform.start
+  return xml.slice(0, start) + opening + frame.slice(transform.opening.length) +
+    xml.slice(start + transform.xml.length)
 }
 
 function moveVisualAnchor(

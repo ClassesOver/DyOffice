@@ -1039,6 +1039,25 @@ describe('applyVisualEdits arrange properties', () => {
     expect(ln).toContain('<a:ext cx="1" cy="1"/>')
   })
 
+  it('updates an aliased frame and expanded extent without touching extensions', async () => {
+    const entries = entriesWith()
+    const foreign = '<vendor:extension><a:xfrm rot="123"><a:ext cx="7" cy="8"/></a:xfrm></vendor:extension>'
+    entries.set(PATH, drawing
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:vendor="urn:vendor" ')
+      .replace('<xdr:spPr><a:xfrm rot="600000" flipV="1"><a:off x="0" y="0"/><a:ext cx="100" cy="50"/></a:xfrm>',
+        `<xdr:spPr>${foreign}<d:xfrm rot = '600000' flipV='1'><d:off x="0" y="0"/>` +
+        `<d:ext cx='100' cy="50" vendor:keep="yes"></d:ext></d:xfrm>`))
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0, anchor: ANCHOR,
+      rotation: 90, flipH: true, flipV: false, frameSize: { width: 555, height: 333 },
+    }], new Set())
+    const [updated] = anchorsOf(entries.get(PATH)!)
+    expect(updated).toContain(foreign)
+    expect(updated).toContain('<d:xfrm flipH="1" rot="5400000"><d:off x="0" y="0"/>')
+    expect(updated).toContain('<d:ext cx="555" cy="333" vendor:keep="yes"></d:ext>')
+    expect(updated).toContain('<xdr:row>2</xdr:row>')
+  })
+
   it('writes and clears cNvPr descr and the anchor editAs', async () => {
     const entries = entriesWith()
     await applyVisualEdits(
