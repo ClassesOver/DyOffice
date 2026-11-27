@@ -283,6 +283,23 @@ describe('applyVisualEdits', () => {
     }
   })
 
+  it('flips a shape with no transform and leaves its anchor geometry intact', async () => {
+    const geometry = '<d:prstGeom prst="rect"/>'
+    const drawing = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+      'xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+      `<xdr:oneCellAnchor>${marker('from', 0, 0)}<xdr:ext cx="40000" cy="50000"/>` +
+      `<xdr:sp><xdr:spPr>${geometry}</xdr:spPr></xdr:sp></xdr:oneCellAnchor></xdr:wsDr>`
+    const entries = new Map([[PATH, drawing]])
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0, flipH: false, flipV: false,
+    }], new Set())
+    expect(entries.get(PATH)).toBe(drawing)
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0, flipH: true, flipV: true,
+    }], new Set())
+    expect(entries.get(PATH)).toBe(drawing.replace(geometry, '<d:xfrm flipV="1" flipH="1"/>' + geometry))
+  })
+
   it('fails closed when frameSize targets an anchor without a frame ext', async () => {
     await expect(
       applyVisualEdits(

@@ -535,25 +535,27 @@ function updateFrameTransform(xml: string, original: ScopedElement, edit: Workbo
   )
   const properties = drawingChild(object, object?.local === 'grpSp' ? 'grpSpPr' : 'spPr')
   const transform = drawingMainChild(properties, 'xfrm')
-  if (!anchor || !object || !properties || (!transform && (!edit.frameSize || object.local === 'grpSp'))) {
+  const rotation = edit.rotation === undefined ? undefined : rotationAttribute(edit.rotation)
+  if (!anchor || !object || !properties || (!transform && (object.local === 'grpSp' || (rotation != null && !edit.frameSize)))) {
     throw new VisualEditError(edit.frameSize
       ? 'Drawing anchor has no frame extent — resizing it is not supported.'
-      : 'Drawing anchor has no frame transform — rotating it is not supported.')
+      : 'Drawing anchor has no frame transform.')
   }
+  if (!transform && !edit.frameSize && !edit.flipH && !edit.flipV) return xml
 
   const [prefix, declaration] = transform
     ? [prefixOf(transform.name), '']
     : drawingMarkupNamespace(properties, drawingMainChildren(properties)[0])
-  let opening = transform?.opening ?? `<${prefix}xfrm${declaration}>`
-  if (edit.rotation !== undefined)
-    opening = updateWorksheetTagAttribute(opening, 'rot', rotationAttribute(edit.rotation))
+  let opening = transform?.opening ?? `<${prefix}xfrm${declaration}/>`
+  if (rotation !== undefined)
+    opening = updateWorksheetTagAttribute(opening, 'rot', rotation)
   if (edit.flipH !== undefined)
     opening = updateWorksheetTagAttribute(opening, 'flipH', edit.flipH ? '1' : null)
   if (edit.flipV !== undefined)
     opening = updateWorksheetTagAttribute(opening, 'flipV', edit.flipV ? '1' : null)
 
   const propertiesStart = anchor.opening.length + object.start + object.opening.length + properties.start
-  let inner = transform?.inner ?? `<${prefix}off x="0" y="0"/>`
+  let inner = transform?.inner ?? (edit.frameSize ? `<${prefix}off x="0" y="0"/>` : '')
   if (edit.frameSize) {
     // The anchor describes the rotated bounds. The extent records the
     // unrotated frame size used to reconstruct the visual on reload.
@@ -570,7 +572,8 @@ function updateFrameTransform(xml: string, original: ScopedElement, edit: Workbo
     }
   }
   if (!transform) {
-    const body = opening + inner + `</${prefix}xfrm>` + properties.inner
+    const frame = inner ? opening.slice(0, -2) + '>' + inner + `</${prefix}xfrm>` : opening
+    const body = frame + properties.inner
     return xml.slice(0, propertiesStart) + withBody(properties, body) + xml.slice(propertiesStart + properties.xml.length)
   }
   const start = propertiesStart + properties.opening.length + transform.start

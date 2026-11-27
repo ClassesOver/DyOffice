@@ -519,6 +519,13 @@ test('saves picture transforms and absolute drawing coordinates', { timeout: 120
   assert.equal(photo.rotation, 1)
   const absolute = visuals.find(visual => visual.name === 'Absolute shape')
   assert.equal(absolute.anchor.absolute, true)
+
+  const flip = sheetsSaveRequest(absolute.sheetId, [])
+  flip.visualEdits = [{ drawingPath, drawingIndex: absolute.drawingIndex, flipH: true, flipV: true }]
+  const flippedFile = (await runtime.sheetsNative.savePlan(source, await runtime.sheetsWorkbookPlanner(source, flip))).bytes
+  const flipped = (await runtime.sheetsNative.inspect(flippedFile)).visuals.find(visual => visual.name === 'Absolute shape')
+  assert.deepEqual([flipped.flipH, flipped.flipV], [true, true])
+  assert.deepEqual(flipped.anchor, absolute.anchor)
   const edit = sheetsSaveRequest(photo.sheetId, [])
   edit.visualEdits = [{ drawingPath, drawingIndex: photo.drawingIndex, rotation: 90,
     flipH: true, frameSize: { width: 555, height: 333 },
