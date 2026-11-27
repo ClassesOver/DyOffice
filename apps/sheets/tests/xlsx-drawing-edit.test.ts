@@ -391,6 +391,17 @@ describe('applyVisualEdits', () => {
     expect(xml).not.toContain(`${marker('from', 2, 20)}<xdr:ext`)
   })
 
+  it('saves the new extent of a resized one-cell anchor', async () => {
+    const entries = packageWithDrawing()
+    entries.set(PATH, DRAWING.replace('<xdr:ext cx="914400" cy="914400"/>',
+      '<xdr:ext cx="914400" cy="914400" xmlns:v="urn:vendor" v:keep="yes"/>'))
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 2, anchor: ANCHOR, anchorSize: { width: 222, height: 333 },
+    }], new Set())
+    expect(entries.get(PATH)).toContain(marker('from', 1, 2).replace('<xdr:colOff>0', '<xdr:colOff>9525') +
+      '<xdr:ext cx="222" cy="333" xmlns:v="urn:vendor" v:keep="yes"/>')
+  })
+
   it('processes several edits on one part high-index first', async () => {
     const entries = packageWithDrawing()
     await applyVisualEdits(

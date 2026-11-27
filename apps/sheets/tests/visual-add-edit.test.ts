@@ -214,6 +214,24 @@ describe('recordVisualEdit', () => {
     ])
   })
 
+  it('preserves a resized anchor extent when the visual is moved again before saving', () => {
+    const journal = createEditJournal()
+    const visual = fileImage()
+    const resized = { ...visual.anchor, toRow: 12 }
+    const anchorSize = { width: 333, height: 555 }
+    expect(recordVisualEdit(journal, visual, { anchor: resized, anchorSize })).toBe(true)
+    const moved = { ...resized, fromRow: 8, toRow: 14 }
+    expect(recordVisualEdit(journal, visual, { anchor: moved })).toBe(true)
+
+    const [edit] = toSaveVisualEdits(journal)
+    expect(workbookVisualEditSchema.parse(edit)).toMatchObject({ anchor: moved, anchorSize })
+
+    const twoCellJournal = createEditJournal()
+    const twoCellVisual = { ...visual, anchor: { ...visual.anchor, explicitTo: true } }
+    expect(recordVisualEdit(twoCellJournal, twoCellVisual, { anchor: resized, anchorSize })).toBe(true)
+    expect(toSaveVisualEdits(twoCellJournal)[0]).not.toHaveProperty('anchorSize')
+  })
+
   it('records paint edits alone and merges them with a later move', () => {
     const journal = createEditJournal()
     const shape = { ...fileImage(), kind: 'shape' as const, shapeType: 'rect' }

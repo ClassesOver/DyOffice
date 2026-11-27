@@ -506,6 +506,7 @@ function canSaveInPlace(ctx: SaveContext, state: LazyWorkbookState): boolean {
         edit.zIndex === undefined &&
         edit.fillColor === undefined &&
         edit.lineColor === undefined &&
+        edit.anchorSize === undefined &&
         edit.frameSize === undefined,
     ) &&
     sheetProtections.length === 0 &&

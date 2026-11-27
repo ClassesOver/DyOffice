@@ -444,7 +444,7 @@ function applyOneEdit(
     }
     return null
   }
-  let patched = edit.anchor ? moveVisualAnchor(element, edit.anchor) : anchorXml
+  let patched = edit.anchor ? moveVisualAnchor(element, edit.anchor, edit.anchorSize) : anchorXml
   // Re-applying the current paint rebuilds identical XML.
   if (edit.fillColor !== undefined || edit.lineColor !== undefined) {
     patched = repaintShape(patched, p, edit.fillColor, edit.lineColor)
@@ -524,10 +524,7 @@ function updateFrameTransform(xml: string, original: ScopedElement, edit: Workbo
     if (!extent) {
       throw new VisualEditError('Drawing anchor has no frame extent — resizing it is not supported.')
     }
-    const width = updateWorksheetTagAttribute(extent.opening, 'cx', String(edit.frameSize.width))
-    const size = updateWorksheetTagAttribute(width, 'cy', String(edit.frameSize.height))
-    const updated = size + extent.xml.slice(extent.opening.length)
-    frame = withBody(transform, applyPatches(transform.inner, [patchElement(extent, updated)]))
+    frame = withBody(transform, applyPatches(transform.inner, [resizeExtent(extent, edit.frameSize)]))
   }
   const start = anchor.opening.length + object.start + object.opening.length +
     properties.start + properties.opening.length + transform.start
@@ -535,9 +532,16 @@ function updateFrameTransform(xml: string, original: ScopedElement, edit: Workbo
     xml.slice(start + transform.xml.length)
 }
 
+function resizeExtent(extent: ScopedElement, size: NonNullable<WorkbookVisualEdit['anchorSize']>): XmlPatch {
+  const width = updateWorksheetTagAttribute(extent.opening, 'cx', String(size.width))
+  const opening = updateWorksheetTagAttribute(width, 'cy', String(size.height))
+  return patchElement(extent, opening + extent.xml.slice(extent.opening.length))
+}
+
 function moveVisualAnchor(
   element: ScopedElement,
   anchor: NonNullable<WorkbookVisualEdit['anchor']>,
+  size: WorkbookVisualEdit['anchorSize'],
 ): string {
   if (element.local === 'absoluteAnchor') {
     throw new VisualEditError('This visual uses an absolute anchor — moving it is not supported.')
@@ -573,6 +577,11 @@ function moveVisualAnchor(
     }
     for (const [start, xml] of missing) coordinates.push({ start, length: 0, xml })
     writes.push(patchElement(mark, withBody(mark, applyPatches(mark.inner, coordinates))))
+  }
+  if (element.local === 'oneCellAnchor' && size) {
+    const extent = markers.find((child) => child.local === 'ext')
+    if (!extent) throw new VisualEditError('Drawing anchor has no extent.')
+    writes.push(resizeExtent(extent, size))
   }
   return withBody(element, applyPatches(element.inner, writes))
 }

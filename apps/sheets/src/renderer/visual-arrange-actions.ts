@@ -40,6 +40,7 @@ import {
 } from './visual-arrange'
 import {
   anchorForBox,
+  anchorSizeInEmu,
   cellOrigin,
   frameBox,
   sheetMetrics,
@@ -440,6 +441,7 @@ export function frameChangeEdit(
   )
   return {
     anchor,
+    anchorSize: anchorSizeInEmu(anchor, metrics),
     rotation,
     frameSize: {
       width: Math.max(1, Math.round(next.width * EMU_PER_PIXEL)),

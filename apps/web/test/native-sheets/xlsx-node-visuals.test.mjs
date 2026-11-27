@@ -515,11 +515,14 @@ test('saves a picture transform with an alternate DrawingML prefix', { timeout: 
   assert.equal(photo.rotation, 1)
   const edit = sheetsSaveRequest(photo.sheetId, [])
   edit.visualEdits = [{ drawingPath, drawingIndex: photo.drawingIndex, rotation: 90,
-    flipH: true, frameSize: { width: 555, height: 333 } }]
+    flipH: true, frameSize: { width: 555, height: 333 },
+    anchor: photo.anchor, anchorSize: { width: 333, height: 555 } }]
   const plan = await runtime.sheetsWorkbookPlanner(source, edit)
   const { bytes } = await runtime.sheetsNative.savePlan(source, plan)
   const updated = (await runtime.sheetsNative.inspect(bytes)).visuals.find(visual => visual.kind === 'image')
   assert.deepEqual([updated.rotation, updated.flipH, updated.frameWidth, updated.frameHeight], [90, true, 555, 333])
+  assert.equal(updated.anchor.toColumnOffset - updated.anchor.fromColumnOffset, 333)
+  assert.equal(updated.anchor.toRowOffset - updated.anchor.fromRowOffset, 555)
   assert.ok((await textOf(await JSZip.loadAsync(bytes))(drawingPath)).includes(extension))
 })
 

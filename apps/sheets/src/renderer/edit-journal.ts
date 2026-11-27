@@ -1056,6 +1056,7 @@ export interface VisualEditEntry extends VisualArrangeChanges {
   readonly drawingIndex: number
   readonly remove?: true
   readonly anchor?: WorkbookVisualObject['anchor']
+  readonly anchorSize?: WorkbookVisualEdit['anchorSize']
   /// New xfrm ext in EMU (a rotated shape resized through its AABB).
   readonly frameSize?: { readonly width: number; readonly height: number }
   /// `#rrggbb` or "none" — the shape's spPr paint.
@@ -1068,6 +1069,7 @@ export interface VisualEditEntry extends VisualArrangeChanges {
 export interface VisualEditChanges extends VisualArrangeChanges {
   readonly remove?: true
   readonly anchor?: WorkbookVisualObject['anchor']
+  readonly anchorSize?: WorkbookVisualEdit['anchorSize']
   readonly frameSize?: { width: number; height: number }
   readonly fillColor?: string
   readonly lineColor?: string
@@ -1110,6 +1112,7 @@ export function recordVisualEdit(
   // A removal wins over any earlier move; a later move revives nothing.
   const remove = changes.remove ?? previous?.remove
   const anchor = changes.anchor ?? previous?.anchor
+  const anchorSize = visual.anchor.explicitTo ? undefined : (changes.anchorSize ?? previous?.anchorSize)
   const frameSize = changes.frameSize ?? previous?.frameSize
   const fillColor = changes.fillColor ?? previous?.fillColor
   const lineColor = changes.lineColor ?? previous?.lineColor
@@ -1120,6 +1123,7 @@ export function recordVisualEdit(
     drawingIndex: visual.drawingIndex,
     ...(remove ? { remove: true as const } : {}),
     ...(anchor ? { anchor } : {}),
+    ...(anchorSize ? { anchorSize } : {}),
     ...(frameSize ? { frameSize } : {}),
     ...(remove
       ? {}
@@ -1207,6 +1211,7 @@ export function toSaveVisualEdits(journal: EditJournal): WorkbookVisualEdit[] {
       drawingIndex: entry.drawingIndex,
       ...(entry.remove ? { remove: true as const } : {}),
       ...(entry.anchor ? { anchor: entry.anchor } : {}),
+      ...(entry.anchorSize ? { anchorSize: entry.anchorSize } : {}),
       ...(entry.frameSize ? { frameSize: entry.frameSize } : {}),
       ...(entry.fillColor ? { fillColor: entry.fillColor } : {}),
       ...(entry.lineColor ? { lineColor: entry.lineColor } : {}),

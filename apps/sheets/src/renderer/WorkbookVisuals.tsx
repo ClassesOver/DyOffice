@@ -79,6 +79,7 @@ export interface ChartEditing {
 
 export interface ShapeEditChanges {
   readonly anchor?: WorkbookVisualObject['anchor']
+  readonly anchorSize?: { readonly width: number; readonly height: number }
   /// New a:xfrm ext in EMU — rides along when resizing a rotated shape,
   /// whose anchor stores the rotated AABB rather than the true frame.
   readonly frameSize?: { readonly width: number; readonly height: number }
@@ -968,7 +969,7 @@ export function clampExplicitTo(
 }
 
 /// Pixel distance between two markers (negative when `to` sits before `from`).
-function markerSpan(
+export function markerSpan(
   from: AnchorMarker,
   to: AnchorMarker,
   sizeOf: (index: number) => number,
@@ -1194,7 +1195,11 @@ function EditableShapeVisual({
     )
       return false
     pendingFocusId = visual.id
-    onEdit(visual.id, { anchor: next, ...(frameSize ? { frameSize } : {}) })
+    const anchorSize = mode === 'resize' ? {
+      width: Math.max(1, Math.round(markerSpan(fromX, toX, columnWidth) * EMU_PER_PIXEL)),
+      height: Math.max(1, Math.round(markerSpan(fromY, toY, rowHeight) * EMU_PER_PIXEL)),
+    } : undefined
+    onEdit(visual.id, { anchor: next, ...(anchorSize ? { anchorSize } : {}), ...(frameSize ? { frameSize } : {}) })
     return true
   }
 
