@@ -443,6 +443,19 @@ const builtInDisplayUnits = new Map<string, readonly [number, string]>([
   ['trillions', [1e12, 'Trillions']],
 ])
 
+function axisTextProperties(node: XmlElement | undefined): XmlElement[] {
+  return [...descendants(node)].filter(
+    part => (part.tag === 'defRPr' || part.tag === 'rPr') && isDrawingMainName(part.name, part.namespace),
+  )
+}
+
+function axisFontSize(properties: readonly XmlElement[]): number | undefined {
+  for (const part of properties) {
+    const size = finite(attribute(part, 'sz'))
+    if (size !== undefined && size > 0) return size / 100
+  }
+}
+
 function axisInfo(node: XmlElement, linkedFormat: string | undefined, theme: readonly string[]): Axis {
   const scaling = child(node, 'scaling')
   const title = child(node, 'title')
@@ -452,8 +465,9 @@ function axisInfo(node: XmlElement, linkedFormat: string | undefined, theme: rea
   const custom = finite(val(units, 'custUnit'))
   const displayUnit = builtIn?.[0] ?? (custom !== undefined && custom > 0 ? custom : undefined)
   const unitLabel = child(units, 'dispUnitsLbl')
-  const labelStyle = textStyle(node, theme)
-  const titleStyle = textStyle(title, theme)
+  const labels = axisTextProperties(child(node, 'txPr'))
+  // Titles may format the rich-text runs under c:tx rather than a c:txPr.
+  const titleProperties = axisTextProperties(title)
   return {
     title: title ? richText(title) || 'Axis Title' : undefined,
     min: finite(val(scaling, 'min')), max: finite(val(scaling, 'max')), majorUnit: finite(val(node, 'majorUnit')),
@@ -461,10 +475,10 @@ function axisInfo(node: XmlElement, linkedFormat: string | undefined, theme: rea
     majorGridlines: child(node, 'majorGridlines') !== undefined,
     hidden: flag(child(node, 'delete')) ?? false, reversed: val(scaling, 'orientation') === 'maxMin',
     position: member(val(node, 'axPos'), ['l', 'r', 't', 'b'] as const),
-    labelSize: labelStyle?.size && labelStyle.size > 0 ? labelStyle.size : undefined,
-    labelColor: labelStyle?.color,
-    titleSize: titleStyle?.size && titleStyle.size > 0 ? titleStyle.size : undefined,
-    titleColor: titleStyle?.color,
+    labelSize: axisFontSize(labels),
+    labelColor: color(labels.find(part => part.tag === 'defRPr'), theme),
+    titleSize: axisFontSize(titleProperties),
+    titleColor: titleProperties.map(part => color(part, theme)).find(Boolean),
     displayUnit,
     displayUnitLabel: displayUnit !== undefined && unitLabel ? richText(unitLabel) || builtIn?.[1] : undefined,
   }
@@ -499,15 +513,22 @@ function readChart(xml: string, theme: readonly string[], lookup: SourceNumberFo
       if (id && !linkedFormatsByAxis.has(id)) linkedFormatsByAxis.set(id, plotLinkedFormats)
     }
   }
-  const axes = areaChildren.filter(node => ['catAx', 'dateAx', 'valAx'].includes(node.tag)).map(node => {
+  const axisNodes = areaChildren.filter(node => ['catAx', 'dateAx', 'valAx'].includes(node.tag))
+  const hasCategoryAxis = axisNodes.some(node => node.tag !== 'valAx')
+  const axes = axisNodes.map(node => {
     const position = val(node, 'axPos')
-    const isCategory = node.tag !== 'valAx' || (chartTypes.includes('scatterChart') && (position === 'b' || position === 't'))
+    const isValueAxis = node.tag === 'valAx'
+    const horizontal = position === 'b' || position === 't' || (position !== 'l' && position !== 'r' && !isValueAxis)
+    const isCategory = !isValueAxis || (chartTypes.includes('scatterChart') && horizontal)
     const linked = linkedFormatsByAxis.get(val(node, 'axId') ?? '') ?? firstLinkedFormats
-    return { isCategory, info: axisInfo(node, isCategory ? linked?.category : linked?.value, theme) }
+    const linkedFormat = !isValueAxis || (!hasCategoryAxis && horizontal) ? linked?.category : linked?.value
+    return { isCategory, horizontal, isValueAxis, info: axisInfo(node, linkedFormat, theme) }
   })
-  const xAxis = axes.find(({ info }) => info.position === 'b' || info.position === 't')?.info
-  const yAxis = (axes.find(({ info }) => info.position === 'l') ?? axes.find(({ info, isCategory }) => info.position === 'r' && !isCategory))?.info
-  const secondaryYAxis = axes.find(({ info, isCategory }) => info !== yAxis && info.position === 'r' && !isCategory)?.info
+  const xAxis = axes.find(axis => axis.horizontal)?.info
+  const leftAxis = axes.find(({ info }) => info.position === 'l')?.info
+  const rightValueAxes = axes.filter(axis => !axis.horizontal && axis.info.position !== 'l' && axis.isValueAxis)
+  const yAxis = leftAxis ?? rightValueAxes[0]?.info
+  const secondaryYAxis = rightValueAxes[leftAxis ? 0 : 1]?.info
   const category = axes.find(axis => axis.isCategory)?.info
   const value = (axes.find(axis => !axis.isCategory && axis.info.position === 'l') ?? axes.find(axis => !axis.isCategory))?.info
   const axisTitles = category?.title || value?.title ? { category: category?.title, value: value?.title } : undefined

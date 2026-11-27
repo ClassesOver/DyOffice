@@ -85,6 +85,16 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     .replace(/<xdr:twoCellAnchor><xdr:from>[\s\S]*?<\/xdr:to>/,
       '<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9304587" cy="6077107"/>')
     .replace('</xdr:twoCellAnchor>', '</xdr:absoluteAnchor>'))
+  zip.file(chartPath, (await text(chartPath))
+    .replace('<c:axPos val="b"/>', '<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="900"/></a:pPr></a:p></c:txPr>')
+    .replace('<c:axPos val="l"/>', `<c:title><c:tx><c:rich><a:bodyPr/><a:p>
+      <a:pPr><a:defRPr/></a:pPr>
+      <a:r><a:rPr sz="1250"><a:solidFill><a:srgbClr val="2468AC"/></a:solidFill></a:rPr><a:t>Revenue</a:t></a:r>
+      </a:p></c:rich></c:tx></c:title><c:numFmt formatCode="0.0" sourceLinked="0"/>`)
+    .replace('</c:valAx>', `<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1100">
+      <a:solidFill><a:srgbClr val="345678"/></a:solidFill>
+      </a:defRPr></a:pPr></a:p></c:txPr>
+      <c:dispUnits><c:builtInUnit val="thousands"/><c:dispUnitsLbl/></c:dispUnits></c:valAx>`))
   const bytes = await zip.generateAsync({ type: 'nodebuffer' })
 
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-chart-sheet-'))
@@ -108,6 +118,15 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     return visual.chart
   }
   const original = await inspect(bytes, '#112233')
+  assert.equal(original.xAxis?.labelSize, 9)
+  assert.equal(original.yAxis?.title, 'Revenue')
+  assert.equal(original.yAxis?.titleSize, 12.5)
+  assert.equal(original.yAxis?.titleColor, '#2468AC')
+  assert.equal(original.yAxis?.labelSize, 11)
+  assert.equal(original.yAxis?.labelColor, '#345678')
+  assert.equal(original.yAxis?.displayUnit, 1e3)
+  assert.equal(original.yAxis?.displayUnitLabel, 'Thousands')
+  assert.equal(original.yAxis?.numFmt, '0.0')
   const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 7, value: 42, writeValue: true }])
   request.chartEdits = [{ chartPath, title: 'Chart sheet revenue' }]
   request.sheetOps = [
@@ -121,6 +140,8 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal((await runtime.sheetsNative.inspect(saved)).sheets[0].tabColor, '#123456')
   assert.equal(chart.title, 'Chart sheet revenue')
   assert.deepEqual(chart.series, original.series)
+  assert.deepEqual(chart.xAxis, original.xAxis)
+  assert.deepEqual(chart.yAxis, original.yAxis)
   const range = await runtime.sheetsNative.readRange(saved, 'Acceptance',
     { startRow: 0, endRow: 0, startColumn: 7, endColumn: 7 })
   assert.equal(range.cells[0].value, 42)
