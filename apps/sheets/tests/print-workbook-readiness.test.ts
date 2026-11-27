@@ -12,6 +12,7 @@ import { createEditJournal, recordHyperlinkEdit, toSavePageSetupStates } from '.
 import { startFullLoad } from '../src/renderer/full-load'
 import { workbookCellCounts } from '../src/renderer/load-budget'
 import { setModuleLang } from '../src/renderer/i18n/locale'
+import { applyChangePlan, planFromOps, type OpExecutorContext } from '../src/renderer/op-executor'
 import { assemblePrintHtml } from '../src/renderer/print-html'
 import { resolveEffectivePageSetup } from '../src/renderer/print-settings'
 import { fullLoadGate } from '../src/renderer/reorder-gate'
@@ -140,6 +141,7 @@ describe('print and PDF workbook readiness coordination', () => {
       isSheetHidden: () => false,
     }
     const workbook = {
+      getId: () => undefined,
       getActiveSheet: () => worksheet,
       getActiveRange: () => selectedRanges.at(-1) ?? null,
       getSheets: () => [worksheet],
@@ -276,6 +278,34 @@ describe('print and PDF workbook readiness coordination', () => {
       sheetId: 'sheet-1',
       printArea: 'A1:A1,B2:B2',
     }], expect.any(String))
+  })
+
+  it.each([
+    { saved: { fitToPage: true, fitToHeight: 3 }, height: 3 },
+    { saved: { fitToPage: true, fitToHeight: 16_384 }, height: 16_384 },
+    { saved: { fitToPage: true }, height: 1 },
+    { saved: { fitToPage: false, fitToHeight: 4 }, height: 0 },
+  ])('keeps the effective fit height when changing only the width ($height)', async ({ saved, height }) => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    state.sheetFilePageSetups.set('sheet-1', saved)
+    const ctx = createMockContext(state)
+    const runtime = ctx.univerRef.current!
+    const workbook = runtime.univerAPI.getActiveWorkbook()!
+    const runOps = vi.fn<PageLayoutContext['runOps']>((ops) =>
+      applyChangePlan(planFromOps(ops, workbook, 'fit width'), {
+        ...ctx, state, runtime, workbook,
+      } as unknown as OpExecutorContext),
+    )
+
+    handlePageLayoutCommand({ ...ctx, runOps }, 'fit-width:2')
+    await expect(runOps.mock.results[0]?.value).resolves.toMatchObject({ ok: true })
+    expect(toSavePageSetupStates(state.editJournal)).toEqual([{
+      sheetId: 'sheet-1', fitToPage: true, fitToWidth: 2, fitToHeight: height,
+    }])
+    const host = await openPrintPreviewHost(ctx)
+    expect(host?.setup).toMatchObject({ fitToPage: true, fitToWidth: 2, fitToHeight: height })
   })
 
   it('PDF export of a streamed workbook preloads it first and exports', async () => {

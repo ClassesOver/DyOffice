@@ -860,9 +860,9 @@ const setPageSetupSchema = z.object({
   /** print scale percent */
   scale: z.number().int().min(10).max(400).optional(),
   /** pages wide (0 = automatic) */
-  fitToWidth: z.number().int().min(0).max(1000).optional(),
+  fitToWidth: z.number().int().min(0).max(32_767).optional(),
   /** pages tall (0 = automatic) */
-  fitToHeight: z.number().int().min(0).max(1000).optional(),
+  fitToHeight: z.number().int().min(0).max(32_767).optional(),
   margins: z.enum(['normal', 'wide', 'narrow']).optional(),
   printGridlines: z.boolean().optional(),
   printHeadings: z.boolean().optional(),

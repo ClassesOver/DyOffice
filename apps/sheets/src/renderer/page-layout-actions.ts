@@ -146,7 +146,6 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
   const separator = rest.indexOf(':')
   const key = separator === -1 ? rest : rest.slice(0, separator)
   const value = separator === -1 ? '' : rest.slice(separator + 1)
-  const prior = state.editJournal.pageSetup.get(sheetId) ?? {}
   switch (key) {
     case 'orientation':
       if (value !== 'portrait' && value !== 'landscape') return
@@ -183,14 +182,10 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
     case 'fit-width':
     case 'fit-height': {
       const pages = Number(value)
-      if (!Number.isInteger(pages) || pages < 0 || pages > 1_000) return
-      // Excel treats the untouched other axis as Automatic (0) once
-      // fit-to-page engages.
-      const fitToWidth = key === 'fit-width' ? pages : (prior.fitToWidth ?? 0)
-      const fitToHeight = key === 'fit-height' ? pages : (prior.fitToHeight ?? 0)
+      if (!Number.isInteger(pages) || pages < 0 || pages > 32_767) return
       const fitValue = pages === 0 ? t('appFitAutomatic') : t('appFitPages', { count: pages })
       record(
-        { fitToWidth, fitToHeight, fitToPage: fitToWidth > 0 || fitToHeight > 0 },
+        key === 'fit-width' ? { fitToWidth: pages } : { fitToHeight: pages },
         key === 'fit-width'
           ? t('appFitWidthNote', { value: fitValue })
           : t('appFitHeightNote', { value: fitValue }),
@@ -200,7 +195,8 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
     case 'fit': {
       const [width, height] = value.split(',').map(Number)
       if (!Number.isInteger(width) || !Number.isInteger(height)) return
-      if (width === undefined || height === undefined || width < 0 || height < 0) return
+      if (width === undefined || height === undefined ||
+          width < 0 || height < 0 || width > 32_767 || height > 32_767) return
       record(
         { fitToWidth: width, fitToHeight: height, fitToPage: width > 0 || height > 0 },
         t('appFitWidthNote', {

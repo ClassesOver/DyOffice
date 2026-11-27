@@ -3323,8 +3323,8 @@ function isPageSetupState(input: unknown): boolean {
     return false
   if (input.paperSize !== undefined && !isBoundedInt(input.paperSize, 1, 118)) return false
   if (input.scale !== undefined && !isBoundedInt(input.scale, 10, 400)) return false
-  if (input.fitToWidth !== undefined && !isBoundedInt(input.fitToWidth, 0, 1_000)) return false
-  if (input.fitToHeight !== undefined && !isBoundedInt(input.fitToHeight, 0, 1_000)) return false
+  if (input.fitToWidth !== undefined && !isBoundedInt(input.fitToWidth, 0, 32_767)) return false
+  if (input.fitToHeight !== undefined && !isBoundedInt(input.fitToHeight, 0, 32_767)) return false
   if (input.margins !== undefined && !['normal', 'wide', 'narrow'].includes(String(input.margins)))
     return false
   for (const key of [

@@ -146,6 +146,18 @@ test(
       },
     )
     await t.test(
+      'round-trips the full range of worksheet fit counts',
+      async () => {
+        const saved = await save(original, {
+          pageSetupStates: [{ sheetId: 'sheet-1', fitToPage: true, fitToWidth: 2, fitToHeight: 16_384 }],
+        })
+        const { pageSetup } = await native.readRange(saved, 'Acceptance', range)
+        assert.equal(pageSetup.fitToPage, true)
+        assert.equal(pageSetup.fitToWidth, 2)
+        assert.equal(pageSetup.fitToHeight, 16_384)
+      },
+    )
+    await t.test(
       'clears deleted pending title rows while keeping file-backed title columns',
       async () => {
         const input = await book({

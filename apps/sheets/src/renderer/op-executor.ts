@@ -47,6 +47,7 @@ import {
 import { indexedFormulaText } from './formula-view'
 import { buildLazyChangePlan } from './lazy-plan'
 import { t } from './i18n/locale'
+import { resolveEffectivePrintFit } from './print-settings'
 import type { PivotActionContext } from './pivot-actions'
 import { refreshPivotTables } from './pivot-actions'
 import {
@@ -771,8 +772,9 @@ async function executeOp(op: PlannedOp, run: OpRun): Promise<void> {
       patch.scale = op.scale
       patch.fitToPage = false
     } else if (op.fitToWidth !== undefined || op.fitToHeight !== undefined) {
-      patch.fitToWidth = op.fitToWidth ?? prior.fitToWidth ?? 0
-      patch.fitToHeight = op.fitToHeight ?? prior.fitToHeight ?? 0
+      const fit = resolveEffectivePrintFit(prior, state.sheetFilePageSetups.get(op.sheetId) ?? null)
+      patch.fitToWidth = op.fitToWidth ?? (fit.fitToPage ? fit.fitToWidth : 0)
+      patch.fitToHeight = op.fitToHeight ?? (fit.fitToPage ? fit.fitToHeight : 0)
       patch.fitToPage = patch.fitToWidth > 0 || patch.fitToHeight > 0
     }
     recordPageSetup(state.editJournal, op.sheetId, patch)

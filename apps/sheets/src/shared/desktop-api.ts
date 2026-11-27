@@ -1518,8 +1518,8 @@ export const workbookPageSetupStateSchema = z
     /// OOXML paper-size code (1 = Letter, 9 = A4, …).
     paperSize: z.number().int().min(1).max(118).optional(),
     scale: z.number().int().min(10).max(400).optional(),
-    fitToWidth: z.number().int().min(0).max(1_000).optional(),
-    fitToHeight: z.number().int().min(0).max(1_000).optional(),
+    fitToWidth: z.number().int().min(0).max(32_767).optional(),
+    fitToHeight: z.number().int().min(0).max(32_767).optional(),
     fitToPage: z.boolean().optional(),
     margins: z.enum(['normal', 'wide', 'narrow']).optional(),
     printGridlines: z.boolean().optional(),

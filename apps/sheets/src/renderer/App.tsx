@@ -490,6 +490,7 @@ import {
   type PrintPreviewHost,
   type PageLayoutContext,
 } from './page-layout-actions'
+import { resolveEffectivePrintFit } from './print-settings'
 import { handleExportCsv as handleExportCsvImpl, type CsvExportContext } from './csv-export'
 import { effectivePageBreaks, installPageBreakPreview } from './page-break-preview'
 import { mapProtectedRanges } from './protected-ranges'
@@ -6412,11 +6413,15 @@ export function App({
 
   const activePageLayout = (() => {
     const worksheet = univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()
-    const journalState = worksheet
-      ? (lazyWorkbookRef.current?.editJournal.pageSetup.get(worksheet.getSheetId()) ?? {})
-      : {}
+    const sheetId = worksheet?.getSheetId()
+    const state = lazyWorkbookRef.current
+    const journalState = sheetId ? state?.editJournal.pageSetup.get(sheetId) ?? {} : {}
+    const fileSetup = sheetId ? state?.sheetFilePageSetups.get(sheetId) ?? null : null
+    const fit = resolveEffectivePrintFit(journalState, fileSetup)
     return {
       ...journalState,
+      fitToWidth: fit.fitToPage ? fit.fitToWidth : 0,
+      fitToHeight: fit.fitToPage ? fit.fitToHeight : 0,
       showGridlines:
         journalState.showGridlines ?? (worksheet ? !worksheet.hasHiddenGridLines() : true),
       showHeadings:

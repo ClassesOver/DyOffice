@@ -95,6 +95,19 @@ export interface FilePrintNames {
   readonly printTitles?: string | undefined
 }
 
+export function resolveEffectivePrintFit(
+  journal: PageSetupJournalState,
+  file: WorkbookPagePrintSettings | null,
+): Pick<EffectivePageSetup, 'fitToPage' | 'fitToWidth' | 'fitToHeight'> {
+  // OOXML defaults an omitted fit count to one page when fit mode is active.
+  const fileDefault = file?.fitToPage === true ? 1 : 0
+  return {
+    fitToPage: journal.fitToPage ?? file?.fitToPage ?? false,
+    fitToWidth: journal.fitToWidth ?? file?.fitToWidth ?? fileDefault,
+    fitToHeight: journal.fitToHeight ?? file?.fitToHeight ?? fileDefault,
+  }
+}
+
 export function resolveEffectivePageSetup(
   journal: PageSetupJournalState,
   file: WorkbookPagePrintSettings | null,
@@ -119,11 +132,6 @@ export function resolveEffectivePageSetup(
             footer: clampMargin(fileMargins.footer),
           }
         : MARGIN_PRESETS.normal
-  const fitToPage = journal.fitToPage ?? file?.fitToPage ?? false
-  // OOXML default when fitToPage is on and fitToWidth/fitToHeight are
-  // absent is 1 page on that axis.
-  const fitToWidth = journal.fitToWidth ?? file?.fitToWidth ?? (file?.fitToPage === true ? 1 : 0)
-  const fitToHeight = journal.fitToHeight ?? file?.fitToHeight ?? (file?.fitToPage === true ? 1 : 0)
   const printArea =
     journal.printArea !== undefined
       ? printAreasFromFormula(journal.printArea ?? undefined)
@@ -161,9 +169,7 @@ export function resolveEffectivePageSetup(
     pageOrder: file?.pageOrder ?? 'downThenOver',
     paperSize: journal.paperSize ?? file?.paperSize ?? 9,
     scale: journal.scale ?? file?.scale ?? 100,
-    fitToWidth,
-    fitToHeight,
-    fitToPage,
+    ...resolveEffectivePrintFit(journal, file),
     margins,
     printGridlines: journal.printGridlines ?? file?.printGridlines ?? false,
     printHeadings: journal.printHeadings ?? file?.printHeadings ?? false,
