@@ -4,6 +4,7 @@
 /// name in workbook.xml. Untouched attributes and elements stay verbatim.
 
 import { columnIndex, columnLabel, parseRange } from '../domain/cell-address.ts'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { workbookDefinedNameElements, workbookNameParts } from './xlsx-defined-names.ts'
 import { parseSheetElements, parseWorkbookTabIndex } from './xlsx-sheets.ts'
 import {
@@ -574,35 +575,55 @@ function titleReference(
   return spans.length > 0 ? spans.join(',') : null
 }
 
+interface PrintTitleSpan {
+  readonly axis: 'row' | 'column'
+  readonly start: number
+  readonly end: number
+}
+
+export function parsePrintTitleSpan(reference: string): PrintTitleSpan | null {
+  const text = reference.trim()
+  const rows = /^\$?(\d{1,7}):\$?(\d{1,7})$/.exec(text)
+  if (rows) {
+    const start = Number(rows[1]) - 1
+    const end = Number(rows[2]) - 1
+    return start >= 0 && start <= end && end < MAX_GRID_ROWS ? { axis: 'row', start, end } : null
+  }
+  const columns = /^\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})$/.exec(text)
+  if (!columns?.[1] || !columns[2]) return null
+  const start = columnIndex(columns[1])
+  const end = columnIndex(columns[2])
+  return start <= end && end < MAX_GRID_COLUMNS ? { axis: 'column', start, end } : null
+}
+
+export function formatPrintTitleSpan({ axis, start, end }: PrintTitleSpan, absolute = false): string {
+  const anchor = absolute ? '$' : ''
+  const first = axis === 'row' ? String(start + 1) : columnLabel(start)
+  const last = axis === 'row' ? String(end + 1) : columnLabel(end)
+  return `${anchor}${first}:${anchor}${last}`
+}
+
+export function readPrintTitleSpans(formula: string | undefined): PrintTitleSpan[] {
+  if (!formula) return []
+  const spans: PrintTitleSpan[] = []
+  for (const part of splitPrintRangeUnion(formula)) {
+    if (/#REF!/i.test(part.replace(/'(?:[^']|'')*'/g, ''))) continue
+    const span = parsePrintTitleSpan(part.slice(part.lastIndexOf('!') + 1))
+    if (span) spans.push(span)
+  }
+  return spans
+}
+
 function parseTitleSpans(titles: string): { rows?: string; cols?: string } {
   const out: { rows?: string; cols?: string } = {}
   for (const raw of titles.split(',')) {
-    const span = raw.trim()
-    const rows = /^\$?(\d{1,7}):\$?(\d{1,7})$/.exec(span)
-    if (rows) {
-      if (Number(rows[1]) > Number(rows[2]) || out.rows !== undefined) {
-        throw new PageSetupError(`Invalid print titles "${titles}".`)
-      }
-      out.rows = `$${rows[1]}:$${rows[2]}`
-      continue
+    const span = parsePrintTitleSpan(raw)
+    if (!span) throw new PageSetupError(`Invalid print titles "${titles}".`)
+    const key = span.axis === 'row' ? 'rows' : 'cols'
+    if (out[key] !== undefined) {
+      throw new PageSetupError(`Invalid print titles "${titles}".`)
     }
-    const cols = /^\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})$/.exec(span)
-    if (cols) {
-      const first = cols[1]!.toUpperCase()
-      const second = cols[2]!.toUpperCase()
-      let ordered: boolean
-      try {
-        ordered = columnIndex(first) <= columnIndex(second)
-      } catch {
-        ordered = false
-      }
-      if (!ordered || out.cols !== undefined) {
-        throw new PageSetupError(`Invalid print titles "${titles}".`)
-      }
-      out.cols = `$${first}:$${second}`
-      continue
-    }
-    throw new PageSetupError(`Invalid print titles "${titles}".`)
+    out[key] = formatPrintTitleSpan(span, true)
   }
   return out
 }
@@ -613,28 +634,10 @@ function existingTitleSpans(
 ): { rows?: string; cols?: string } {
   const match = scopedNames(workbookDefinedNameElements(workbookXml), '_xlnm.Print_Titles', sheetIndex)[0]
   const formula = match && readDefinedNameText(match.inner)
-  if (!formula) return {}
   const out: { rows?: string; cols?: string } = {}
-  for (const part of splitPrintRangeUnion(formula)) {
-    const ref = part
-      .slice(part.lastIndexOf('!') + 1)
-      .replace(/\$/g, '')
-      .trim()
-    const rows = /^(\d{1,7}):(\d{1,7})$/.exec(ref)
-    if (rows && Number(rows[1]) <= Number(rows[2]) && out.rows === undefined) {
-      out.rows = `$${rows[1]}:$${rows[2]}`
-      continue
-    }
-    const cols = /^([A-Za-z]{1,3}):([A-Za-z]{1,3})$/.exec(ref)
-    if (cols && out.cols === undefined) {
-      try {
-        if (columnIndex(cols[1]!.toUpperCase()) <= columnIndex(cols[2]!.toUpperCase())) {
-          out.cols = `$${cols[1]!.toUpperCase()}:$${cols[2]!.toUpperCase()}`
-        }
-      } catch {
-        continue
-      }
-    }
+  for (const span of readPrintTitleSpans(formula)) {
+    const key = span.axis === 'row' ? 'rows' : 'cols'
+    out[key] ??= formatPrintTitleSpan(span, true)
   }
   return out
 }

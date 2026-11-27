@@ -835,7 +835,7 @@ export function shiftDefinedNames(
       const name = decodeXmlText(readWorksheetTagAttribute(opening, 'name') ?? '')
       const scope = decodeXmlText(readWorksheetTagAttribute(opening, 'localSheetId') ?? '')
       if ((name === '_xlnm.Print_Area' || name === '_xlnm.Print_Titles') && /^\d+$/.test(scope)) {
-        const ranges = shiftPrintRanges(formula, editedSheetName, shift, axis)
+        const ranges = shiftPrintRanges(formula, editedSheetName, shift, axis, name === '_xlnm.Print_Titles')
         if (ranges !== undefined) return ranges
       }
       return shiftFormulaText(formula, editedSheetName, shift, axis, true)
@@ -863,6 +863,7 @@ function shiftPrintRanges(
   sheetName: string,
   shift: Shift,
   axis: Axis,
+  clipPrintTitles: boolean,
 ): string | null | undefined {
   const references: { part: string; qualifier: string; token: string }[] = []
   for (const part of splitPrintRangeUnion(formula)) {
@@ -877,7 +878,7 @@ function shiftPrintRanges(
       shifted.push(part)
       continue
     }
-    const moved = shiftReferenceToken(token, shift, axis)
+    const moved = shiftReferenceToken(token, shift, axis, clipPrintTitles)
     if (moved === null) continue
     const tokenEnd = part.trimEnd().length
     shifted.push(part.slice(0, tokenEnd - token.length) + moved + part.slice(tokenEnd))
@@ -2487,24 +2488,27 @@ function shiftFormulaSegment(
   )
 }
 
-function shiftReferenceToken(token: string, shift: Shift, axis: Axis): string | null {
+function shiftReferenceToken(
+  token: string,
+  shift: Shift,
+  axis: Axis,
+  clipPrintTitles = false,
+): string | null {
   const wholeColumn = /^(\$?)([A-Z]{1,3}):(\$?)([A-Z]{1,3})$/.exec(token)
-  if (wholeColumn) {
-    if (axis === 'row') return token
-    const moved = moveRange(
-      lettersToColumn(wholeColumn[2] ?? 'A'),
-      lettersToColumn(wholeColumn[4] ?? 'A'),
-      shift,
-    )
-    if (moved === null) return null
-    return `${wholeColumn[1]}${columnToLetters(moved.start)}:${wholeColumn[3]}${columnToLetters(moved.end)}`
-  }
-  const wholeRow = /^(\$?)([0-9]+):(\$?)([0-9]+)$/.exec(token)
-  if (wholeRow) {
-    if (axis === 'column') return token
-    const moved = moveRange(Number(wholeRow[2]) - 1, Number(wholeRow[4]) - 1, shift)
-    if (moved === null) return null
-    return `${wholeRow[1]}${moved.start + 1}:${wholeRow[3]}${moved.end + 1}`
+  const whole = wholeColumn ?? /^(\$?)([0-9]+):(\$?)([0-9]+)$/.exec(token)
+  if (whole?.[2] && whole[4]) {
+    const rangeAxis = wholeColumn ? 'column' : 'row'
+    if (axis !== rangeAxis) return token
+    const parse = wholeColumn ? lettersToColumn : (label: string) => Number(label) - 1
+    const format = wholeColumn ? columnToLetters : (index: number) => String(index + 1)
+    const start = parse(whole[2])
+    const end = parse(whole[4])
+    const limit = axis === 'column' ? MAX_GRID_COLUMNS : MAX_GRID_ROWS
+    if (clipPrintTitles && (start < 0 || end >= limit || start > end)) return null
+    const moved = moveRange(start, end, shift)
+    if (moved === null || (clipPrintTitles && moved.start >= limit)) return null
+    const movedEnd = clipPrintTitles ? Math.min(moved.end, limit - 1) : moved.end
+    return `${whole[1]}${format(moved.start)}:${whole[3]}${format(movedEnd)}`
   }
   const parts = token.split(':')
   const cells = parts.map((part) => /^(\$?)([A-Z]{1,3})(\$?)([0-9]+)$/.exec(part))

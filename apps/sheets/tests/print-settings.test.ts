@@ -17,6 +17,7 @@ import {
 import {
   decodeHeaderFooter,
   printAreasFromFormula,
+  printTitleColumnsFromFormula,
   printTitleRowsFromFormula,
   resolveEffectivePageSetup,
   type EffectivePageSetup,
@@ -124,6 +125,12 @@ describe('printAreasFromFormula', () => {
 })
 
 describe('printTitleRowsFromFormula', () => {
+  it('skips invalid title references while retaining valid grid-edge titles', () => {
+    const formula = "'S'!$0:$1,'S'!$1048577:$1048577,#REF!$5:$6,'S'!$1048576:$1048576,'S'!$XFD:$XFE,'S'!$XFD:$XFD"
+    expect(printTitleRowsFromFormula(formula)).toBe('1048576:1048576')
+    expect(printTitleColumnsFromFormula(formula)).toBe('XFD:XFD')
+  })
+
   it('extracts the repeated row span', () => {
     expect(printTitleRowsFromFormula("'S'!$17:$17")).toBe('17:17')
   })
@@ -352,6 +359,18 @@ describe('resolveEffectivePageSetup', () => {
       { kind: 'insert-rows', index: 0, count: 3 },
     ])
     expect(setup.printTitles).toBe('20:20')
+  })
+
+  it('keeps only saved print titles that survive an insertion at the grid edge', () => {
+    const setup = resolveEffectivePageSetup(
+      {}, null, { printTitles: "'S'!$1048575:$1048576,'S'!$XFD:$XFD" },
+      [
+        { kind: 'insert-rows', index: 0, count: 1 },
+        { kind: 'insert-cols', index: 0, count: 1 },
+      ],
+    )
+    expect(setup.printTitles).toBe('1048576:1048576')
+    expect(setup.printTitleColumns).toBeNull()
   })
 
   it('keeps title rows through column edits and drops them when deleted', () => {

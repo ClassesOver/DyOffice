@@ -9,6 +9,7 @@
 import { BorderStyleTypes } from '@univerjs/core'
 import { htmlLang, type Lang } from '@genoffice/i18n'
 import { columnIndex, columnLabel } from '@genoffice/xlsx-gateway/domain/cell-address'
+import { parsePrintTitleSpan } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import { MAX_GRID_COLUMNS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 
 import type { WorkbookExportPdfRequest } from '../shared/desktop-api'
@@ -336,8 +337,8 @@ export function layoutSheetPrint(
   const areas = dataArea
     ? [areaWithDrawings(dataArea, drawings, rowHeightPt, columnWidthPt)]
     : explicitAreas
-  const titleRows = setup.printTitles ? parseTitleRows(setup.printTitles) : null
-  const titleColumns = setup.printTitleColumns ? parseTitleColumns(setup.printTitleColumns) : null
+  const titleRows = setup.printTitles ? parseTitleSpan(setup.printTitles, 'row') : null
+  const titleColumns = setup.printTitleColumns ? parseTitleSpan(setup.printTitleColumns, 'column') : null
   const headings = setup.printHeadings
 
   let totalCells = 0
@@ -1022,22 +1023,11 @@ function parseArea(area: string): PrintArea {
   }
 }
 
-function parseTitleRows(titles: string): IndexSpan {
-  const match = /^(\d{1,7}):(\d{1,7})$/.exec(titles)
-  if (!match) throw new PrintError(t('appPrintBadTitles', { titles }))
-  const start = Number(match[1]) - 1
-  const end = Number(match[2]) - 1
-  if (end - start > 20) throw new PrintError(t('appPrintTitlesLimit'))
-  return { start, end }
-}
-
-function parseTitleColumns(titles: string): IndexSpan {
-  const match = /^([A-Za-z]{1,3}):([A-Za-z]{1,3})$/.exec(titles)
-  if (!match) throw new PrintError(t('appPrintBadTitles', { titles }))
-  const start = columnIndex((match[1] ?? 'A').toUpperCase())
-  const end = columnIndex((match[2] ?? 'A').toUpperCase())
-  if (end - start > 20) throw new PrintError(t('appPrintTitlesLimit'))
-  return { start, end }
+function parseTitleSpan(titles: string, axis: 'row' | 'column'): IndexSpan {
+  const span = parsePrintTitleSpan(titles)
+  if (!span || span.axis !== axis) throw new PrintError(t('appPrintBadTitles', { titles }))
+  if (span.end - span.start > 20) throw new PrintError(t('appPrintTitlesLimit'))
+  return span
 }
 
 function spanIndices(span: IndexSpan): number[] {

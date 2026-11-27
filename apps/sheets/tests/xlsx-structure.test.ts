@@ -279,6 +279,17 @@ describe('cross-sheet reference rewriting', () => {
     expect(shifted).toContain('<definedName name="x">Data!$A$11</definedName>')
     expect(shifted).toContain('<definedName name="y">Other!$A$8</definedName>')
   })
+
+  it('clips shifted print titles to the worksheet grid', () => {
+    const workbook = '<workbook><definedNames>' +
+      '<definedName name="_xlnm.Print_Titles" localSheetId="0">' +
+      "Data!$1048575:$1048576,Data!$XFD:$XFD</definedName></definedNames></workbook>"
+    const shifted = shiftDefinedNames(workbook, SHEET, [
+      { kind: 'insert-rows', index: 0, count: 1 },
+      { kind: 'insert-cols', index: 0, count: 1 },
+    ])
+    expect(shifted).toContain('>Data!$1048576:$1048576</definedName>')
+  })
 })
 
 const DRAWING_XML =
