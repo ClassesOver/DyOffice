@@ -586,6 +586,7 @@ import { TimelineFieldPicker, TimelinePanels, type TimelineUiState } from './Tim
 import type { DefinedNameAction, DefinedNameRow } from './NameManagerDialog'
 import { workbookMediaDataUrl } from './workbook-media'
 import {
+  canEditChartAnchor,
   clearVisualSelection,
   convertibleType,
   getChartElementSelection,
@@ -6377,6 +6378,7 @@ export function App({
       convertible,
       currentType,
       canEdit: !state || live.chartPath !== undefined || live.id.startsWith('added-'),
+      canDelete: canEditChartAnchor(live),
       isPie,
       hasAxes: currentType !== null && !isPie,
       // A pending conversion always lands on a labelable family.

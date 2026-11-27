@@ -2674,6 +2674,11 @@ textarea:focus {
   outline: none;
 }
 
+.shape-editable.grouped-chart {
+  cursor: default;
+  touch-action: auto;
+}
+
 /* Children (chart body) paint over an outline, so the selection frame is an
    overlay pseudo-element stacked above them. */
 .shape-editable.selected::after {

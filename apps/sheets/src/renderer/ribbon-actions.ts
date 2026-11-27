@@ -163,6 +163,7 @@ export interface RibbonCommandContext {
   selectedChart: {
     readonly isPie: boolean
     readonly canLabel: boolean
+    readonly canDelete: boolean
     readonly seriesCount: number
     readonly categoryCount: number
     /// Current chart type echo ('combo' for a bar+line combo) — drives the
@@ -393,7 +394,9 @@ export function handleRibbonCommand(ctx: RibbonCommandContext, command: string):
     return
   }
   if (command === 'chart-delete' || command === 'shape-delete') {
-    if (ctx.selectedVisual) ctx.shapeEditRef.current(ctx.selectedVisual.id, { remove: true })
+    if (ctx.selectedVisual && (command === 'shape-delete' || ctx.selectedChart?.canDelete)) {
+      ctx.shapeEditRef.current(ctx.selectedVisual.id, { remove: true })
+    }
     return
   }
   // Shape Format tab paints: `shape-fill:#rrggbb` / `shape-outline:none`.

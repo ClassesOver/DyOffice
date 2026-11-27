@@ -172,6 +172,7 @@ export interface SelectedChartRibbon {
   readonly convertible: string | null
   readonly currentType: string | null
   readonly canEdit: boolean
+  readonly canDelete: boolean
   readonly isPie: boolean
   readonly hasAxes: boolean
   /// Whether the save pipeline can write plot-level data labels for this
@@ -2316,6 +2317,7 @@ function Ribbon({
             label={t('appDeleteChart')}
             detail={selectedChart?.title ?? t('appRemoveFromSheet')}
             symbol="🗑"
+            disabled={!selectedChart?.canDelete}
             onClick={() => onCommand('chart-delete')}
           />
         </RibbonGroup>

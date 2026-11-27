@@ -155,10 +155,19 @@ function shapeRunStyle(run: ShapeParagraph['runs'][number] | undefined, withDeco
   }
 }
 
-function isEditableChart(visual: WorkbookVisualObject): boolean {
+export function canEditChartAnchor(visual: WorkbookVisualObject): boolean {
   if (visual.kind !== 'chart') return false
   if (visual.id.startsWith('added-') || visual.id.startsWith('demo-')) return true
   return visual.drawingPath !== undefined && visual.drawingIndex !== undefined
+}
+
+function isGroupedChart(visual: WorkbookVisualObject): boolean {
+  return (
+    visual.kind === 'chart' &&
+    visual.chartPath !== undefined &&
+    visual.drawingPath !== undefined &&
+    visual.drawingIndex === undefined
+  )
 }
 
 const chartColors = [
@@ -262,7 +271,7 @@ export function installWorkbookVisuals(
       isEditableShape(visual) ||
       isEditableAddedImage(visual) ||
       isEditableFileVisual(visual) ||
-      isEditableChart(visual)
+      canEditChartAnchor(visual)
     // Lazy grids are sized to the data, but session-added visuals anchor
     // beyond it (default: two columns right of the data) — grow the grid so
     // the float keeps its frame instead of being clamped into a sliver.
@@ -668,6 +677,16 @@ function WorkbookVisual({
   readonly frame?: ShapeFrame | undefined
 }): React.JSX.Element {
   if (visual.kind === 'chart' && visual.chart) {
+    if (chartEditing && isGroupedChart(visual)) {
+      return (
+        <GroupedChartVisual
+          visual={visual}
+          chart={visual.chart}
+          chartEditing={chartEditing}
+          frame={frame}
+        />
+      )
+    }
     return (
       <ChartVisual
         chart={visual.chart}
@@ -688,6 +707,61 @@ function WorkbookVisual({
     return <SlicerVisual visual={visual} />
   }
   return <ShapeVisual file={file} visual={visual} frame={frame} />
+}
+
+function GroupedChartVisual({
+  visual,
+  chart,
+  chartEditing,
+  frame,
+}: {
+  readonly visual: WorkbookVisualObject
+  readonly chart: ChartMetadata
+  readonly chartEditing: ChartEditing
+  readonly frame?: ShapeFrame | undefined
+}): React.JSX.Element {
+  const isSelected = useIsSelected(visual.id)
+  const [editorRequest, setEditorRequest] = useState(0)
+  return (
+    <div
+      className={`shape-editable grouped-chart${isSelected ? ' selected' : ''}`}
+      tabIndex={0}
+      onFocus={() => {
+        if (selectedVisual?.id !== visual.id) selectVisual(visual)
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || (event.target as Element).closest('button, .chart-editor')) return
+        event.preventDefault()
+        event.stopPropagation()
+        event.currentTarget.focus({ preventScroll: true })
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return
+        if (event.key === 'Escape') {
+          event.currentTarget.blur()
+          clearVisualSelection(visual.id)
+        } else if (event.key !== 'Delete' && event.key !== 'Backspace') {
+          return
+        }
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+      onDoubleClick={(event) => {
+        if (!(event.target as Element).closest('button, .chart-editor')) {
+          setEditorRequest((count) => count + 1)
+        }
+      }}
+    >
+      <ChartVisual
+        chart={chart}
+        visualId={visual.id}
+        chartPath={visual.chartPath}
+        chartEditing={chartEditing}
+        frame={frame}
+        openEditorSignal={editorRequest}
+      />
+    </div>
+  )
 }
 
 /// A drag commit tears down and re-registers every float DOM, dropping the
@@ -765,26 +839,31 @@ export interface VisualSelectionListener {
 /// churn drop focus, but the id survives and the remounted wrapper re-renders
 /// selected. A module singleton avoids threading callbacks through every
 /// install call site; the app mirrors it for the contextual ribbon tab.
-let selectedVisualId: string | null = null
+let selectedVisual: WorkbookVisualObject | null = null
 /// Shift-click extends the selection; the primary (last clicked) stays in
-/// selectedVisualId, the others ride here for Align / Distribute.
+/// selectedVisual, the others ride here for Align / Distribute.
 let extraSelectedIds: string[] = []
 const selectionSubscribers = new Set<() => void>()
 let selectionListener: VisualSelectionListener | null = null
 
 function selectVisual(visual: WorkbookVisualObject | null, extend = false): void {
   const nextId = visual?.id ?? null
+  const previousId = selectedVisual?.id ?? null
   const previousExtras = extraSelectedIds
-  if (extend && nextId !== null && selectedVisualId !== null && selectedVisualId !== nextId) {
+  // A grouped chart's anchor belongs to its group, so it cannot join an
+  // Align / Distribute selection.
+  const extendSelection =
+    extend && selectedVisual !== null && !isGroupedChart(selectedVisual)
+  selectedVisual = visual
+  if (extendSelection && nextId !== null && previousId !== null && previousId !== nextId) {
     extraSelectedIds = [
-      ...extraSelectedIds.filter((id) => id !== nextId && id !== selectedVisualId),
-      selectedVisualId,
+      ...extraSelectedIds.filter((id) => id !== nextId && id !== previousId),
+      previousId,
     ]
-  } else if (!extend || nextId === null) {
+  } else if (!extendSelection || nextId === null) {
     extraSelectedIds = []
   }
-  if (nextId !== selectedVisualId || previousExtras !== extraSelectedIds) {
-    selectedVisualId = nextId
+  if (nextId !== previousId || previousExtras !== extraSelectedIds) {
     for (const notify of selectionSubscribers) notify()
     // Element selection never outlives its chart's selection.
     if (selectedChartElement && selectedChartElement.visualId !== nextId) {
@@ -798,7 +877,7 @@ function selectVisual(visual: WorkbookVisualObject | null, extend = false): void
 
 /// Every selected visual id, primary last.
 export function selectedVisualIds(): readonly string[] {
-  return selectedVisualId === null ? [] : [...extraSelectedIds, selectedVisualId]
+  return selectedVisual === null ? [] : [...extraSelectedIds, selectedVisual.id]
 }
 
 export function subscribeVisualSelection(notify: () => void): () => void {
@@ -809,7 +888,7 @@ export function subscribeVisualSelection(notify: () => void): () => void {
 /// Clears the selection; with `onlyId`, only when that visual is selected
 /// (deleting one visual must not deselect another).
 export function clearVisualSelection(onlyId?: string): void {
-  if (onlyId !== undefined && onlyId !== selectedVisualId) {
+  if (onlyId !== undefined && onlyId !== selectedVisual?.id) {
     if (extraSelectedIds.includes(onlyId)) {
       extraSelectedIds = extraSelectedIds.filter((id) => id !== onlyId)
       for (const notify of selectionSubscribers) notify()
@@ -865,7 +944,7 @@ function useIsSelected(visualId: string): boolean {
       selectionSubscribers.add(notify)
       return () => selectionSubscribers.delete(notify)
     },
-    () => selectedVisualId === visualId || extraSelectedIds.includes(visualId),
+    () => selectedVisual?.id === visualId || extraSelectedIds.includes(visualId),
   )
 }
 
