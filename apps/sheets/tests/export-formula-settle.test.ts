@@ -91,6 +91,7 @@ function harness(pendingFormula = true, appliedBarrier = true) {
     },
     flags: { preloadComplete: true, preloadRunning: false },
     editJournal: createEditJournal(),
+    hyperlinkTargets: new Map(),
     sheetFilePageSetups: new Map(),
     sheetPageBreaks: new Map(),
     sheetProtections: new Map(),

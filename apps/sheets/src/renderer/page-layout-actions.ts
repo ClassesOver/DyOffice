@@ -14,6 +14,7 @@ import type { ApplyOutcome } from '@genoffice/xlsx-gateway/domain/workbook.types
 
 import { columnLabel } from '@genoffice/xlsx-gateway/domain/cell-address'
 import {
+  hyperlinkEditAt,
   isSheetRemoved,
   journalSize,
   recordPageSetup,
@@ -470,6 +471,7 @@ async function sheetPrintDocument(
           },
         )
       : snapshotPrintVisuals(document, await settledVisualFrames(ctx, state, sheetId))
+  const savedLinks = state?.hyperlinkTargets.get(sheetId)
   return layoutSheetPrint(
     worksheet as unknown as PrintWorksheet,
     setup,
@@ -480,6 +482,12 @@ async function sheetPrintDocument(
     {
       chartSheet,
       conditionalIcons: iconMap,
+      cellHyperlink: state && (savedLinks?.size || state.editJournal.hyperlinks.get(sheetId)?.size)
+        ? (row, column) => {
+            const pending = hyperlinkEditAt(state.editJournal, sheetId, row, column)
+            return pending === undefined ? savedLinks?.get(`${row}:${column}`) : pending
+          }
+        : undefined,
       rightToLeft: journal.rightToLeft ?? fileSheet?.rightToLeft ?? sheetIsRightToLeft(worksheet),
       breaks: state ? effectivePageBreaks(state, sheetId) : null,
       selection,

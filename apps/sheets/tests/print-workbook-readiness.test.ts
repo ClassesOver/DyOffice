@@ -7,7 +7,7 @@ import {
   openPrintPreviewHost,
   type PageLayoutContext,
 } from '../src/renderer/page-layout-actions'
-import { createEditJournal, toSavePageSetupStates } from '../src/renderer/edit-journal'
+import { createEditJournal, recordHyperlinkEdit, toSavePageSetupStates } from '../src/renderer/edit-journal'
 import { startFullLoad } from '../src/renderer/full-load'
 import { workbookCellCounts } from '../src/renderer/load-budget'
 import { setModuleLang } from '../src/renderer/i18n/locale'
@@ -99,6 +99,7 @@ describe('print and PDF workbook readiness coordination', () => {
       file: { name: 'test.xlsx', sessionId: 'session-123', sheets, visuals: [] },
       flags: { preloadComplete: false, preloadRunning },
       editJournal: createEditJournal(),
+      hyperlinkTargets: new Map(),
       sheetFilePageSetups: new Map(),
       sheetPageBreaks: new Map(),
       sheetProtections: new Map(),
@@ -107,6 +108,9 @@ describe('print and PDF workbook readiness coordination', () => {
   }
 
   function createMockContext(state: LazyWorkbookState | null): PageLayoutContext {
+    const grid = [['A1', 'B1'], ['A2', 'B2']]
+    const valuesAt = (row: number, column: number, rowCount: number, columnCount: number) =>
+      grid.slice(row, row + rowCount).map((cells) => cells.slice(column, column + columnCount))
     const worksheet = {
       getSheetId: () => 'sheet-1',
       getSheetName: () => 'Sheet1',
@@ -115,9 +119,9 @@ describe('print and PDF workbook readiness coordination', () => {
       getRowHeight: () => 20,
       getColumnWidth: () => 100,
       getMergedRanges: () => [],
-      getRange: () => ({
-        getValues: () => [['A1']],
-        getDisplayValues: () => [['A1']],
+      getRange: (row: number, column: number, rowCount = 1, columnCount = 1) => ({
+        getValues: () => valuesAt(row, column, rowCount, columnCount),
+        getDisplayValues: () => valuesAt(row, column, rowCount, columnCount),
         getCellStyleData: () => null,
       }),
       getMaxRows: () => 10,
@@ -205,6 +209,31 @@ describe('print and PDF workbook readiness coordination', () => {
     const html = assemblePrintHtml(job.documents).html
     expect(html).toContain('<span style="font-family:&quot;Georgia&quot;;color:#234567">Report</span>')
     expect(html).toContain('<span style="font-family:&quot;Verdana&quot;">Page 1</span>')
+  })
+
+  it('prints saved cell links with pending edits applied', async () => {
+    const state = createMockState()
+    state.flags.preloadComplete = true
+    state.sheetProtections.set('sheet-1', null)
+    state.hyperlinkTargets.set('sheet-1', new Map([
+      ['0:0', 'https://example.test/replaced'],
+      ['0:1', 'https://example.test/removed'],
+      ['1:0', 'https://example.test/saved'],
+    ]))
+    recordHyperlinkEdit(state.editJournal, 'sheet-1', 0, 0, 'https://example.test/current')
+    recordHyperlinkEdit(state.editJournal, 'sheet-1', 0, 1, null)
+    recordHyperlinkEdit(state.editJournal, 'sheet-1', 1, 1, 'https://example.test/new')
+    const host = await openPrintPreviewHost(createMockContext(state))
+    if (host === null) throw new Error('Print preview failed to open')
+    const job = await host.buildJob('active', {})
+    const html = assemblePrintHtml(job.documents).html
+
+    expect(html).toMatch(/href="https:\/\/example\.test\/current"[^>]*>A1<\/a>/)
+    expect(html).toMatch(/href="https:\/\/example\.test\/saved"[^>]*>A2<\/a>/)
+    expect(html).toMatch(/href="https:\/\/example\.test\/new"[^>]*>B2<\/a>/)
+    expect(html).toContain('>B1</span>')
+    expect(html).not.toContain('https://example.test/replaced')
+    expect(html).not.toContain('https://example.test/removed')
   })
 
   it('PDF export of a streamed workbook preloads it first and exports', async () => {
@@ -485,6 +514,7 @@ describe('headless export (outPath): every sheet, formulas settled', () => {
       },
       flags: { preloadComplete: true, preloadRunning: false },
       editJournal: createEditJournal(),
+      hyperlinkTargets: new Map(),
       sheetFilePageSetups: new Map(),
       sheetPageBreaks: new Map(),
       sheetProtections: new Map(),

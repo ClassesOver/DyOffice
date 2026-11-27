@@ -670,6 +670,22 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it('renders supported external cell links and escapes their targets', () => {
+    const targets = [
+      ['https://example.test/report?x=1&y=2', 'file:///local.xlsx'],
+      ['mailto:team@example.test', '#Sheet1!A1'],
+    ]
+    const printed = layout(fakeWorksheet(), payloadSetup({ printAreas: ['A1:B2'] }),
+      undefined, undefined, { cellHyperlink: (row: number, column: number) => targets[row]?.[column] })
+    const html = assemblePrintHtml([printed]).html
+
+    expect(html).toMatch(/<a [^>]*href="https:\/\/example\.test\/report\?x=1&amp;y=2"[^>]*>A1<\/a>/)
+    expect(html).toMatch(/<a [^>]*href="mailto:team@example\.test"[^>]*>A2<\/a>/)
+    expect(html).toContain('>B1</span>')
+    expect(html).toContain('>B2</span>')
+    expect(html.match(/<a /g)).toHaveLength(2)
+  })
+
   it('keeps draft worksheet text and custom borders while skipping drawings and printed gridlines', () => {
     const worksheet = {
       ...fakeWorksheet(),

@@ -7,6 +7,7 @@
 /// several sheets with different paper or orientation.
 
 import { BorderStyleTypes } from '@univerjs/core'
+import { safeExternalUrl } from '@genoffice/electron-utils/safe-external-url'
 import { htmlLang, type Lang } from '@genoffice/i18n'
 import { columnIndex, columnLabel } from '@genoffice/xlsx-gateway/domain/cell-address'
 import { parsePrintTitleSpan } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
@@ -299,6 +300,7 @@ export interface SheetPrintOptions {
   readonly chartSheet?: boolean
   readonly rightToLeft?: boolean
   readonly conditionalIcons?: Readonly<Record<string, readonly string[]>>
+  readonly cellHyperlink?: ((row: number, column: number) => string | null | undefined) | undefined
   /// Manual page breaks (0-based index of the row/column that starts a page).
   readonly breaks?: { rowBreaks: readonly number[]; colBreaks: readonly number[] } | null
   /// Print this A1 range instead of the sheet's print area (Excel's "Print Selection").
@@ -617,7 +619,8 @@ export function layoutSheetPrint(
       dataBar + diagonals + icon +
       cellTextHtml(showText ? text : '', style, horizontalAlign, heightPt, widthPt, rightToLeft,
         showText && runs ? richCellHtml(runs, blackAndWhite) : undefined,
-        icon ? CONDITIONAL_ICON_PT + CONDITIONAL_INSET_PT : 0) +
+        icon ? CONDITIONAL_ICON_PT + CONDITIONAL_INSET_PT : 0,
+        showText && text ? options.cellHyperlink?.(row, column) : undefined) +
       '</td>'
     )
   }
@@ -677,7 +680,8 @@ export function layoutSheetPrint(
               `width:${round(end - start)}pt;height:${round(heightPt)}pt">` +
               `<div class="center-across-text" style="left:${round(textLeft)}pt;width:${round(widthPt)}pt;${fontCss}">` +
               cellTextHtml(text, style, 'center', heightPt, widthPt, rightToLeft,
-                runs ? richCellHtml(runs, blackAndWhite) : undefined) + '</div></div>',
+                runs ? richCellHtml(runs, blackAndWhite) : undefined,
+                0, options.cellHyperlink?.(row, column)) + '</div></div>',
             )
             centered.add(column)
           }
@@ -879,6 +883,7 @@ table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 td, th { padding: 0; border: 0; overflow: hidden; font-size: 11pt; vertical-align: bottom; }
 td .c, .center-across-text .c { display: flex; overflow: hidden; padding: 0 ${CELL_TEXT_INSET_PT}pt; line-height: 1.2; }
 td .c > span, .center-across-text .c > span { width: 100%; }
+.cell-link { color: inherit; text-decoration: none; }
 td .c.oriented, .center-across-text .c.oriented { position: relative; }
 td .c > .oriented-text, .center-across-text .c > .oriented-text { position: absolute; width: max-content; transform-origin: left top; }
 .center-across-clip, .center-across-text { position: absolute; top: 0; overflow: hidden; }
@@ -1325,6 +1330,7 @@ function cellTextHtml(
   rightToLeft: boolean,
   richHtml?: string,
   iconInsetPt = 0,
+  hyperlink?: string | null,
 ): string {
   const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
   const leftPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.l ?? 0, 0) * 0.75 +
@@ -1337,10 +1343,15 @@ function cellTextHtml(
   const orientation = text && style?.tr
     ? orientedTextCss(style, horizontalAlign, widthPt, heightPt, leftPaddingPt, rightPaddingPt)
     : undefined
+  const label = richHtml ?? escapeHtml(text)
+  const url = hyperlink ? safeExternalUrl(hyperlink, { allowedProtocols: ['http:', 'https:', 'mailto:'] }) : null
+  const content = url
+    ? `<a class="cell-link" href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    : label
   return (
     `<div class="c${orientation ? ' oriented' : ''}" style="height:${round(heightPt)}pt;align-items:${align}${padding}">` +
     `<span${orientation ? ` class="oriented-text" style="${orientation}"` : ''}` +
-      `${rightToLeft ? ' dir="auto"' : ''}>${richHtml ?? escapeHtml(text)}</span></div>`
+      `${rightToLeft ? ' dir="auto"' : ''}>${content}</span></div>`
   )
 }
 
