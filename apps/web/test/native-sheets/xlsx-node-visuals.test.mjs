@@ -742,6 +742,69 @@ test('uses GenOffice paint colors for gradient and pattern fills in XLSX drawing
   assert.equal(visual.chart.plotAreaFill, '#7F007F')
 })
 
+test('preserves theme-referenced shape gradients through Web saves', async t => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const workbookRels = 'xl/_rels/workbook.xml.rels'
+  zip.file(workbookRels, (await textOf(zip)(workbookRels)).replace('</Relationships>',
+    `<Relationship Id="theme" Type="${relationships}theme" Target="theme/shape-paint.xml"/></Relationships>`))
+  zip.file('[Content_Types].xml', (await textOf(zip)('[Content_Types].xml')).replace('</Types>',
+    '<Override PartName="/xl/theme/shape-paint.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>'))
+  const slots = 'lt1 dk1 lt2 dk2 accent1 accent2 accent3 accent4 accent5 accent6 hlink folHlink'.split(' ')
+  const palette = slots.map(slot => `<p:${slot}><p:srgbClr val="042233"/></p:${slot}>`).join('')
+  zip.file('xl/theme/shape-paint.xml', `<p:theme xmlns:p="${mainNs}"><p:themeElements>
+    <p:clrScheme name="Fixture">${palette}</p:clrScheme><p:fmtScheme name="Fixture">
+      <p:fillStyleLst><p:solidFill><p:schemeClr val="phClr"/></p:solidFill>
+        <p:gradFill><p:gsLst>
+          <p:gs pos="0"><p:schemeClr val="phClr"/></p:gs>
+          <p:gs pos="50000"><p:schemeClr val="phClr"><p:satMod val="0"/></p:schemeClr></p:gs>
+          <p:gs pos="100000"><p:schemeClr val="phClr"><p:tint val="50000"/></p:schemeClr></p:gs>
+        </p:gsLst><p:lin ang="16200000"/></p:gradFill>
+      </p:fillStyleLst>
+    </p:fmtScheme>
+  </p:themeElements></p:theme>`)
+  const shape = (id, index, fill = '') => `<xdr:oneCellAnchor>
+    <xdr:from><xdr:col>${id - 81}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="900000" cy="450000"/><xdr:sp>
+      <xdr:nvSpPr><xdr:cNvPr id="${id}" name="Theme paint ${id}"/><xdr:cNvSpPr/></xdr:nvSpPr>
+      <xdr:spPr><a:prstGeom prst="rect"/>${fill}</xdr:spPr>
+      <xdr:style><a:fillRef idx="${index}"><a:schemeClr val="accent1"/></a:fillRef></xdr:style>
+    </xdr:sp><xdr:clientData/>
+  </xdr:oneCellAnchor>`
+  await appendDrawing(zip, shape(81, 2) + shape(82, 2, '<a:noFill/>') +
+    shape(83, 2, '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>') + shape(84, 1))
+  const styles = visuals => visuals.filter(visual => visual.name?.startsWith('Theme paint'))
+  const [gradient, transparent, solid, firstStyle] = styles(
+    await readWorkbookVisuals(textOf(zip), sourceSheet, slots.map(() => '#042233')),
+  )
+  const expected = { angle: 270, stops: [
+    { position: 0, color: '#042233' },
+    { position: 0.5, color: '#1C1C1C' },
+    { position: 1, color: '#829199' },
+  ] }
+  assert.deepEqual(gradient.fillGradient, expected)
+  assert.equal(gradient.fillColor, '#042233')
+  assert.equal(transparent.fillColor, 'none')
+  assert.equal(solid.fillColor, '#FF0000')
+  assert.equal(firstStyle.fillColor, '#042233')
+  for (const visual of [transparent, solid, firstStyle]) assert.equal(visual.fillGradient, undefined)
+
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-theme-gradient-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+  const inspected = await runtime.sheetsNative.inspect(bytes)
+  assert.deepEqual(styles(inspected.visuals)[0].fillGradient, expected)
+  const request = sheetsSaveRequest(inspected.sheets[0].id, [{ row: 0, column: 0, value: 42, writeValue: true }])
+  const saved = (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+  assert.deepEqual(styles((await runtime.sheetsNative.inspect(saved)).visuals)[0].fillGradient, expected)
+})
+
 test('opens XLSX freeform shapes with scaled paths and preserves their original geometry on save', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const pt = (x, y) => `<a:pt x="${x}" y="${y}"/>`

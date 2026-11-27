@@ -151,17 +151,86 @@ const flatPlot = (tag: string) => member(tag.replace(/^(bar|line|pie|area)3DChar
 const themeSlots = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink']
 const themeAliases: Record<string, string> = { tx1: 'dk1', tx2: 'dk2', bg1: 'lt1', bg2: 'lt2' }
 
+function schemeColor(scheme: XmlElement | undefined, theme: readonly string[]): string | undefined {
+  const slot = attribute(scheme, 'val') ?? ''
+  const base = theme[themeSlots.indexOf(themeAliases[slot] ?? slot)]
+  return base && /^#[\da-f]{6}$/i.test(base) ? base : undefined
+}
+
 function drawingColor(node: XmlElement | undefined, theme: readonly string[]): string | undefined {
   const direct = attribute(child(node, 'srgbClr'), 'val') ?? attribute(child(node, 'sysClr'), 'lastClr')
   if (direct && /^[\da-f]{6}$/i.test(direct)) return `#${direct.toUpperCase()}`
   const scheme = child(node, 'schemeClr')
-  const slot = attribute(scheme, 'val') ?? ''
-  const base = theme[themeSlots.indexOf(themeAliases[slot] ?? slot)]
-  if (!base || !/^#[\da-f]{6}$/i.test(base)) return undefined
+  const base = schemeColor(scheme, theme)
+  if (!base) return undefined
   const tint = finite(val(scheme, 'tint'))
   const shade = finite(val(scheme, 'shade'))
   return tint !== undefined ? applyTint(base, Math.max(0, Math.min(1, 1 - tint / 100_000)))
     : shade !== undefined ? applyTint(base, Math.max(-1, Math.min(0, shade / 100_000 - 1))) : base
+}
+
+function readThemeFillStyles(xml: string): XmlElement[] {
+  const root = roots(xml).find(node => node.tag === 'theme' && isDrawingMainName(node.name, node.namespace))
+  const theme = root && { ...root, drawingMainOnly: true }
+  return children(child(child(child(theme, 'themeElements'), 'fmtScheme'), 'fillStyleLst'))
+}
+
+/** Matches the desktop reader's DrawingML gradient color transforms in XML order. */
+function applyGradientColorModifiers(base: string, color: XmlElement | undefined): string {
+  const channel = (value: number) => Math.max(0, Math.min(255, Math.round(value)))
+  let rgb = [1, 3, 5].map(offset => Number.parseInt(base.slice(offset, offset + 2), 16))
+  for (const modifier of children(color)) {
+    const raw = finite(attribute(modifier, 'val'))
+    if (raw === undefined) continue
+    const factor = raw / 100_000
+    switch (modifier.tag) {
+      case 'lumMod':
+      case 'shade':
+        rgb = rgb.map(value => value * factor)
+        break
+      case 'lumOff':
+        rgb = rgb.map(value => value + 255 * factor)
+        break
+      case 'alpha':
+      case 'tint':
+        rgb = rgb.map(value => value * factor + 255 * (1 - factor))
+        break
+      case 'satMod': {
+        rgb = rgb.map(channel)
+        const high = Math.max(...rgb), low = Math.min(...rgb)
+        if (high === low) break
+        const luminance = (high + low) / 2
+        const saturation = (high - low) / (255 - Math.abs(high + low - 255))
+        // At fixed hue and luminance, the distance from gray is linear in saturation.
+        const ratio = Math.max(0, Math.min(factor, 1 / saturation))
+        rgb = rgb.map(value => channel(luminance + (value - luminance) * ratio))
+        break
+      }
+    }
+  }
+  return `#${rgb.map(value => channel(value).toString(16).padStart(2, '0')).join('').toUpperCase()}`
+}
+
+function styleFillGradient(
+  reference: XmlElement | undefined, theme: readonly string[], fillStyles: readonly XmlElement[],
+): WorkbookVisualObject['fillGradient'] {
+  const index = nonnegative(attribute(reference, 'idx'))
+  if (!index) return undefined
+  const gradient = fillStyles[index - 1]
+  if (gradient?.tag !== 'gradFill') return undefined
+  const scheme = child(reference, 'schemeClr')
+  const base = schemeColor(scheme, theme)
+  if (!base) return undefined
+  const placeholder = applyGradientColorModifiers(base, scheme)
+  const stops = children(child(gradient, 'gsLst')).flatMap(stop => {
+    if (stop.tag !== 'gs') return []
+    const position = finite(attribute(stop, 'pos'))
+    const color = children(stop).find(node => node.tag === 'schemeClr' || node.tag === 'srgbClr')
+    if (position === undefined || position < 0 || position > 100_000 || !color) return []
+    return [{ position: position / 100_000, color: applyGradientColorModifiers(placeholder, color) }]
+  })
+  const angle = finite(attribute(child(gradient, 'lin'), 'ang'))
+  return stops.length < 2 ? undefined : { angle: angle === undefined ? 90 : angle / 60_000, stops }
 }
 
 export function mixHexColors(first: string, last: string): string {
@@ -575,6 +644,7 @@ type DrawingReferences = {
   relationships: Relationships
   part: string
   hasPart: (path: string) => boolean
+  fillStyles: readonly XmlElement[]
 }
 
 function drawingHyperlink(id: string | undefined, relationships: Relationships) {
@@ -661,14 +731,17 @@ function readShape(
   const blip = child(child(properties, 'blipFill'), 'blip')
   const fillMediaPath = previewPath(references.relationships, references.part, relationshipAttribute(blip, 'embed'), references.hasPart) ??
     svgEmbedsPreview(svgBlipEmbeds(blip), references)
-  const fillColor = child(properties, 'noFill') ? 'none'
-    : areaColor(properties, theme) ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
+  const directFill = child(properties, 'noFill') ? 'none' : areaColor(properties, theme)
+  const fillGradient = directFill === undefined && !fillMediaPath
+    ? styleFillGradient(child(style, 'fillRef'), theme, references.fillStyles) : undefined
+  const fillColor = directFill ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
   return {
     ...base,
     kind: 'shape',
     shapeType,
     ...(customPath ? { customPath } : {}),
     fillColor,
+    ...(fillGradient ? { fillGradient } : {}),
     ...(fillMediaPath ? { fillMediaPath, fillMediaType: visualMediaType(fillMediaPath), opacity: blipOpacity(attribute(child(blip, 'alphaModFix'), 'amt')) } : {}),
     lineColor: child(line, 'noFill') ? 'none' : color(line, theme) ?? styleColor('lnRef') ?? 'none',
     lineWidth: width === undefined ? undefined : width / 12_700,
@@ -1053,6 +1126,9 @@ export async function readWorkbookVisuals(
   const workbook = 'xl/workbook.xml'
   const byName = new Map(sheets.map(sheet => [sheet.name, sheet.id]))
   const workbookRels = await readRelationships(read, workbook)
+  const themeId = [...workbookRels.entries()].find(([, rel]) => !rel.external && rel.type.endsWith('/theme'))?.[0]
+  const themePath = internalTarget(workbookRels, workbook, themeId, 'theme')
+  const fillStyles = themePath ? readThemeFillStyles(await read(themePath)) : []
   const result: WorkbookVisualObject[] = []
   let ordinal = 0
   let oleOrdinal = 0
@@ -1080,7 +1156,7 @@ export async function readWorkbookVisuals(
       if (!drawingPath || !/^xl\/drawings\/[\w./-]+\.xml$/.test(drawingPath)) continue
       const drawingXml = await read(drawingPath)
       const drawingRels = await readRelationships(read, drawingPath)
-      const references = { relationships: drawingRels, part: drawingPath, hasPart }
+      const references = { relationships: drawingRels, part: drawingPath, hasPart, fillStyles }
       const loadChart = async (relationshipId: string | undefined, base: VisualBase): Promise<WorkbookVisualObject | undefined> => {
         const chartPath = internalTarget(drawingRels, drawingPath, relationshipId, 'chart')
         if (!chartPath || !WORKBOOK_CHART_PATH.test(chartPath) || !hasPart(chartPath)) return undefined
