@@ -116,13 +116,22 @@ test('Web XLSX filter saves preserve unsupported criteria on untouched columns',
 
     const referenced = await JSZip.loadAsync(saved)
     const worksheet = await referenced.file(part).async('string')
+    const cached = '<custom><f>SUM(CommentOnly[Revenue])</f></custom>'
     referenced.file(part, worksheet.replace('</sheetData>',
-      '<row r="5"><c r="A5"><f>SUM(CommentOnly[Revenue])</f><v>20</v></c></row></sheetData>'))
+      '<row r="5"><c r="A5"><f>SUM(CommentOnly[Revenue])</f><v>20</v>' + cached + '</c></row></sheetData>'))
+    const tablePath = Object.keys(referenced.files).find(path => /^xl\/tables\/table\d+\.xml$/.test(path))
+    const calculated = '<calculatedColumnFormula>SUM(CommentOnly[Revenue])</calculatedColumnFormula>'
+    const table = await referenced.file(tablePath).async('string')
+    referenced.file(tablePath, table.replace('<tableColumn id="2" name="Formula"/>',
+      '<tableColumn id="2" name="Formula">' + calculated + '</tableColumn>'))
     rename.tableEdits[0].name = 'RenamedTable'
     const renamed = await save(await referenced.generateAsync({ type: 'nodebuffer' }), rename)
     const reopened = await native.readRange(renamed, 'Acceptance',
       { startRow: 4, endRow: 4, startColumn: 0, endColumn: 0 })
     assert.equal(reopened.cells[0].formula, '=SUM(RenamedTable[Revenue])')
+    const renamedZip = await JSZip.loadAsync(renamed)
+    assert.ok((await renamedZip.file(part).async('string')).includes(cached))
+    assert.ok((await renamedZip.file(tablePath).async('string')).includes(calculated.replace('CommentOnly', 'RenamedTable')))
   })
 
   await t.test('validates the table and defined names in the final save batch', async (t) => {

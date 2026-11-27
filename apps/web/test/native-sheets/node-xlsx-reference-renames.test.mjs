@@ -193,14 +193,13 @@ test(
       'rewrites and checks chart references that use an alternate namespace prefix',
       async (t) => {
         const base = await fixture()
+        const extension = '<c:extLst><c:ext uri="urn:example:cache"><c:numRef><c:f>Other!B9</c:f></c:numRef></c:ext></c:extLst>'
+        const aliased = (xml) => xml.replaceAll('xmlns:c=', 'xmlns:ch=').replaceAll('<c:', '<ch:').replaceAll('</c:', '</ch:')
         const canonical = await editPart(base, chartPath, (xml) =>
           xml.replace('Acceptance!$A$2:$A$3', 'Other!$A$1:$A$2'),
         )
         const alternate = await editPart(canonical, chartPath, (xml) =>
-          xml
-            .replaceAll('xmlns:c=', 'xmlns:ch=')
-            .replaceAll('<c:', '<ch:')
-            .replaceAll('</c:', '</ch:'),
+          aliased(xml.replace('</c:chartSpace>', extension + '</c:chartSpace>')),
         )
         const renames = [{ kind: 'rename-sheet', sheetId: second, newName: 'Updated' }]
         assert.equal(await chartRef(alternate), 'Other!$A$1:$A$2')
@@ -208,9 +207,10 @@ test(
         const bad = await save(alternate, renames, [first, second])
         const actual = await chartRef(bad),
           control = await chartRef(good)
-        await t.test('renames the chart series source', () => {
+        await t.test('renames the chart series source without rewriting cached extension formulas', async () => {
           assert.equal(control, 'Updated!$A$1:$A$2')
           assert.equal(actual, control)
+          assert.ok((await readPart(bad, chartPath)).includes(aliased(extension)))
         })
         await assert.rejects(
           save(canonical, [{ kind: 'remove-sheet', sheetId: second }], [first]),
@@ -221,6 +221,14 @@ test(
             save(alternate, [{ kind: 'remove-sheet', sheetId: second }], [first]),
             /Invalid workbook input/,
           )
+        })
+        await t.test('allows deletion when only an opaque chart extension names the sheet', async () => {
+          const extensionOnly = await editPart(base, chartPath, (xml) =>
+            aliased(xml.replace('</c:chartSpace>', extension + '</c:chartSpace>')),
+          )
+          const removed = await save(extensionOnly, [{ kind: 'remove-sheet', sheetId: second }], [first])
+          assert.deepEqual((await inspect(removed)).sheets.map((sheet) => sheet.name), ['Acceptance'])
+          assert.ok((await readPart(removed, chartPath)).includes(aliased(extension)))
         })
       },
     )

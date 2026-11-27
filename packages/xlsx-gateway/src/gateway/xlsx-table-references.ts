@@ -1,10 +1,13 @@
 import { rewriteWorksheetValidations } from './xlsx-dv.ts'
+import { rewriteWorksheetCellFormulas } from './xlsx-structure.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
 import {
   applyPatches,
   elementText,
   escapeXmlText,
+  isElement,
+  isSpreadsheetNamespace,
   patchElement,
   scopedChildren,
   withBody,
@@ -12,8 +15,6 @@ import {
   type XmlPatch,
 } from './xlsx-worksheet-xml.ts'
 
-const formulaTags = /<(?:[\w.-]+:)?(?:f|calculatedColumnFormula|totalsRowFormula)(?=[\s/>])/
-const worksheetFormulas = new Set(['f'])
 const tableFormulas = new Set(['calculatedColumnFormula', 'totalsRowFormula'])
 
 export function rewriteTableReferencesInPart(
@@ -22,31 +23,35 @@ export function rewriteTableReferencesInPart(
   rewrite: (formula: string) => string,
 ): string {
   if (!xml.includes('[') && !xml.includes('&#')) return xml
+  if (kind === 'worksheet') {
+    const cells = rewriteWorksheetCellFormulas(xml, rewrite)
+    return rewriteWorksheetVisualReferences(rewriteWorksheetValidations(cells, rewrite), rewrite)
+  }
+
   const [element] = childElements(xml)
   if (!element) return xml
   const root = withNamespaces(element, new Map())
-  if (root.local !== kind) return xml
+  if (root.local !== 'table' || !isSpreadsheetNamespace(root.namespace)) return xml
 
   const patches: XmlPatch[] = []
-  const names = kind === 'worksheet' ? worksheetFormulas : tableFormulas
-  const stack = [{ node: root, start: root.start }]
-  while (stack.length > 0) {
-    const { node, start } = stack.pop()!
-    if (node.namespace !== root.namespace || node.local === 'extLst') continue
-    if (names.has(node.local)) {
-      const formula = elementText(node.inner)
-      const replacement = rewrite(formula)
-      if (replacement !== formula) {
-        patches.push({ ...patchElement(node, withBody(node, escapeXmlText(replacement))), start })
+  const bodyStart = root.start + root.opening.length
+  for (const columns of scopedChildren(root)) {
+    if (!isElement(columns, 'tableColumns', root.namespace)) continue
+    const columnsStart = bodyStart + columns.start + columns.opening.length
+    for (const column of scopedChildren(columns)) {
+      if (!isElement(column, 'tableColumn', root.namespace)) continue
+      const columnStart = columnsStart + column.start + column.opening.length
+      for (const field of scopedChildren(column)) {
+        if (field.namespace !== root.namespace || !tableFormulas.has(field.local)) continue
+        const text = elementText(field.inner)
+        const replacement = rewrite(text)
+        if (replacement === text) continue
+        patches.push({
+          ...patchElement(field, withBody(field, escapeXmlText(replacement))),
+          start: columnStart + field.start,
+        })
       }
-    } else if (formulaTags.test(node.inner)) {
-      const bodyStart = start + node.opening.length
-      for (const child of scopedChildren(node))
-        stack.push({ node: child, start: bodyStart + child.start })
     }
   }
-  const rewritten = applyPatches(xml, patches)
-  return kind === 'worksheet'
-    ? rewriteWorksheetVisualReferences(rewriteWorksheetValidations(rewritten, rewrite), rewrite)
-    : rewritten
+  return applyPatches(xml, patches)
 }
