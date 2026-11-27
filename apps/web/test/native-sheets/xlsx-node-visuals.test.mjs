@@ -575,7 +575,11 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
     <xdr:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="900000" cy="450000"/>
       <a:chOff x="0" y="0"/><a:chExt cx="900000" cy="450000"/></a:xfrm></xdr:grpSpPr>
     ${shape(83, 'Grouped shape', 'fill', 'help')}</xdr:grpSp>`
-  await appendDrawing(zip, anchor(1, shape(81, 'Filled shape', 'fill', 'help')) + anchor(3, group) +
+  const opaque = '<v:cache xmlns:v="urn:vendor"><v:cNvPr name="Vendor" hidden="1"/></v:cache>'
+  const standalone = shape(81, 'Filled shape', 'fill', 'help')
+    .replace('<xdr:nvSpPr>', opaque + '<xdr:nvSpPr>')
+    .replace('<a:hlinkClick', '<d:hlinkClick xmlns:d="' + mainNs + '"')
+  await appendDrawing(zip, anchor(1, standalone) + anchor(3, group) +
     anchor(5, shape(84, 'External fill', 'external', 'fill')))
   zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>', `
     <Relationship Id="fill" Type="${relationships}image" Target="../media/shape-fill.png"/>
@@ -615,6 +619,18 @@ test('opens shape picture fills and hyperlinks and preserves them through a cell
   for (const part of [drawingPath, drawingRels, fillPath]) {
     assert.deepEqual(await savedZip.file(part).async('nodebuffer'), await zip.file(part).async('nodebuffer'))
   }
+
+  const edit = sheetsSaveRequest('sheet-1', [])
+  const newLink = 'https://example.invalid/updated'
+  edit.visualEdits = [{
+    drawingPath, drawingIndex: filled.drawingIndex, altText: 'Updated shape', hyperlink: newLink,
+  }]
+  const updated = (await native.savePlan(saved, await runtime.sheetsWorkbookPlanner(saved, edit))).bytes
+  const { visuals: updatedVisuals } = await native.inspect(updated)
+  assert.equal(updatedVisuals.find(visual => visual.id === filled.id).altText, 'Updated shape')
+  assert.equal(updatedVisuals.find(visual => visual.id === filled.id).hyperlink, newLink)
+  assert.equal(updatedVisuals.find(visual => visual.name === 'Grouped shape').hyperlink, href)
+  assert.ok((await textOf(await JSZip.loadAsync(updated))(drawingPath)).includes(opaque))
 })
 
 test('uses GenOffice paint colors for gradient and pattern fills in XLSX drawings', async () => {

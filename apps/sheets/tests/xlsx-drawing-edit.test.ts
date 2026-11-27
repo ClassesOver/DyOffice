@@ -1102,6 +1102,24 @@ describe('applyVisualEdits arrange properties', () => {
     ).rejects.toBeInstanceOf(VisualEditError)
   })
 
+  it('edits the selected object metadata and leaves vendor lookalikes intact', async () => {
+    const entries = entriesWith()
+    const opaque = '<v:cache xmlns:v="urn:vendor"><v:cNvPr descr="Vendor"><a:hlinkClick r:id="vendor"/></v:cNvPr></v:cache>'
+    entries.set(PATH, drawing
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:ref="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ')
+      .replace('<xdr:sp><xdr:nvSpPr>', '<xdr:sp>' + opaque + '<xdr:nvSpPr>')
+      .replace('<a:hlinkClick r:id="rId5"/>', `<d:hlinkClick ref:id='rId5'/>`)
+      .replace('name="Shape 1"', `name="Shape 1" descr='Old > text'`))
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 1, altText: 'New & text', hyperlink: '',
+    }], new Set())
+    const [, updated] = anchorsOf(entries.get(PATH)!)
+    expect(updated).toContain(opaque)
+    expect(updated).toContain('<xdr:cNvPr id="3" name="Shape 1" descr="New &amp; text"/>')
+    expect(updated).not.toContain('rId5')
+    expect(entries.get(RELS_PATH)).not.toContain('rId5')
+  })
+
   it('adds a hyperlink relationship and replaces or drops hlinkClick', async () => {
     const entries = entriesWith()
     const touched = new Set<string>()

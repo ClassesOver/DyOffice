@@ -17,13 +17,14 @@ import {
   drawingAnchorElements,
   drawingChild,
   drawingMainChild,
+  drawingNonVisualProperties,
   drawingRelationshipAttribute,
   isDrawingChild,
   pictureExtensionBlips,
   readDrawingGraphicFrame,
   readDrawingPicture,
 } from './xlsx-drawing-anchors.ts'
-import { hasXmlAttributeValue, readRelationshipId } from './xlsx-namespace.ts'
+import { hasXmlAttributeValue, OFFICE_RELATIONSHIPS_NAMESPACE, readRelationshipId } from './xlsx-namespace.ts'
 import {
   findRelationshipsRoot,
   parseRelationships,
@@ -33,7 +34,7 @@ import {
   removeRelationshipById,
   type ParsedRelationship,
 } from './xlsx-sheets.ts'
-import { updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { omitWorksheetTagAttributes, updateWorksheetTagAttribute } from './xlsx-structure.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, withNamespaces, worksheetRoot, type ScopedElement, type XmlPatch } from './xlsx-worksheet-xml.ts'
 
@@ -54,8 +55,11 @@ type OwnedPartRoot = {
   readonly recursive: boolean
 }
 
-const HYPERLINK_REL_TYPE =
-  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+function hyperlinkRelationshipNamespace(element: ScopedElement): string {
+  return element.namespace?.startsWith('http://purl.oclc.org/ooxml/')
+    ? 'http://purl.oclc.org/ooxml/officeDocument/relationships'
+    : OFFICE_RELATIONSHIPS_NAMESPACE
+}
 
 export async function applyVisualEdits(
   pkg: MutablePackage,
@@ -93,9 +97,10 @@ export async function applyVisualEdits(
     const hyperlinkRelIds = new Map<number, string>()
     for (const edit of group) {
       if (!edit.hyperlink || edit.remove) continue
+      const relationshipType = hyperlinkRelationshipNamespace(anchors[edit.drawingIndex]!.element) + '/hyperlink'
       hyperlinkRelIds.set(
         edit.drawingIndex,
-        await appendRelationship(pkg, relsPath, HYPERLINK_REL_TYPE, edit.hyperlink, 'External'),
+        await appendRelationship(pkg, relsPath, relationshipType, edit.hyperlink, 'External'),
       )
       touchedEntries.add(relsPath)
     }
@@ -150,7 +155,12 @@ export async function applyVisualEdits(
     const orphaned = droppedHyperlinkRelIds.filter((id) => !hasXmlAttributeValue(next, id))
     if (orphaned.length > 0 && (await pkg.has(relsPath))) {
       let relsXml = await pkg.readText(relsPath)
-      for (const id of orphaned) relsXml = removeRelationshipById(relsXml, id)
+      const links = parseRelationships(relsXml).filter((entry) => entry.type.endsWith('/hyperlink'))
+      for (const id of orphaned) {
+        if (links.some((entry) => relationshipIdsMatch(entry.id, id))) {
+          relsXml = removeRelationshipById(relsXml, id)
+        }
+      }
       pkg.write(relsPath, relsXml)
       touchedEntries.add(relsPath)
     }
@@ -396,8 +406,7 @@ const escapeXmlAttribute = (value: string): string =>
 
 /// Sets (or with null removes) one attribute on an opening tag string.
 export function setTagAttribute(tag: string, name: string, value: string | null): string {
-  const pattern = new RegExp(`\\s${escapeRegExp(name)}="[^"]*"`)
-  const stripped = tag.replace(pattern, '')
+  const stripped = omitWorksheetTagAttributes(tag, [name])
   if (value === null) return stripped
   const insertAt = stripped.endsWith('/>') ? stripped.length - 2 : stripped.length - 1
   return `${stripped.slice(0, insertAt)} ${name}="${escapeXmlAttribute(value)}"${stripped.slice(insertAt)}`
@@ -408,8 +417,6 @@ export function rotationAttribute(degrees: number): string | null {
   const normalized = ((Math.round(degrees * 60_000) % 21_600_000) + 21_600_000) % 21_600_000
   return normalized === 0 ? null : String(normalized)
 }
-
-const CNVPR_PATTERN = /<([A-Za-z_][\w.-]*:)?cNvPr\b[^>]*?(\/>|>[\s\S]*?<\/\1cNvPr>)/
 
 /// One anchor's edits applied to its XML text; null when the anchor is
 /// removed. Hyperlink relationships are allocated by the caller.
@@ -453,34 +460,7 @@ function applyOneEdit(
     patched = updateFrameTransform(patched, element, edit)
   }
   if (edit.altText !== undefined || edit.hyperlink !== undefined) {
-    const element = CNVPR_PATTERN.exec(patched)
-    if (!element) {
-      throw new VisualEditError('Drawing anchor has no non-visual properties element.')
-    }
-    const prefix = element[1] ?? ''
-    const selfClosing = element[2] === '/>'
-    const openEnd = selfClosing ? element[0].length - 2 : element[0].indexOf('>') + 1
-    let open = selfClosing ? `${element[0].slice(0, openEnd)}>` : element[0].slice(0, openEnd)
-    let inner = selfClosing ? '' : element[0].slice(openEnd, element[0].lastIndexOf('</'))
-    if (edit.altText !== undefined) {
-      open = setTagAttribute(open, 'descr', edit.altText === '' ? null : edit.altText)
-    }
-    if (edit.hyperlink !== undefined) {
-      for (const link of inner.matchAll(/<a:hlinkClick\b[^>]*?\br:id="([^"]+)"/g)) {
-        if (link[1] !== undefined) droppedHyperlinkRelIds.push(link[1])
-      }
-      inner = inner.replace(/<a:hlinkClick\b[^>]*?(?:\/>|>[\s\S]*?<\/a:hlinkClick>)/g, '')
-      if (hyperlinkRelId !== undefined) {
-        inner =
-          '<a:hlinkClick xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"' +
-          ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' +
-          ` r:id="${escapeXmlAttribute(hyperlinkRelId)}"/>` +
-          inner
-      }
-    }
-    const rebuilt = inner === '' ? `${open.slice(0, -1)}/>` : `${open}${inner}</${prefix}cNvPr>`
-    patched =
-      patched.slice(0, element.index) + rebuilt + patched.slice(element.index + element[0].length)
+    patched = updateNonVisualProperties(patched, element, edit, hyperlinkRelId, droppedHyperlinkRelIds)
   }
   if (edit.editAs !== undefined) {
     if (kind !== 'twoCellAnchor') {
@@ -493,10 +473,63 @@ function applyOneEdit(
   return patched
 }
 
+function updateNonVisualProperties(
+  xml: string,
+  original: ScopedElement,
+  edit: WorkbookVisualEdit,
+  hyperlinkRelId: string | undefined,
+  droppedHyperlinkRelIds: string[],
+): string {
+  const anchor = updatedAnchor(xml, original)
+  const located = anchor && drawingNonVisualProperties(anchor)
+  if (!located) throw new VisualEditError('Drawing anchor has no non-visual properties element.')
+  const { node, start } = located
+  const wasSelfClosing = node.opening.endsWith('/>')
+  let opening = node.opening
+  if (edit.altText !== undefined) {
+    const description = edit.altText === '' ? null : edit.altText
+    opening = node.attributes.has('descr')
+      ? updateWorksheetTagAttribute(opening, 'descr', description === null ? null : escapeXmlAttribute(description))
+      : setTagAttribute(opening, 'descr', description)
+  }
+  let inner = node.inner
+  let removedClick = false
+  if (edit.hyperlink !== undefined) {
+    const click = drawingMainChild(node, 'hlinkClick')
+    const oldId = drawingRelationshipAttribute(click, 'id')
+    if (oldId) droppedHyperlinkRelIds.push(escapeXmlAttribute(oldId))
+    let replacement = ''
+    if (hyperlinkRelId !== undefined) {
+      const strict = node.namespace?.startsWith('http://purl.oclc.org/ooxml/')
+      const main = strict ? 'http://purl.oclc.org/ooxml/drawingml/main' : 'http://schemas.openxmlformats.org/drawingml/2006/main'
+      const rels = hyperlinkRelationshipNamespace(node)
+      replacement = `<a:hlinkClick xmlns:a="${main}" xmlns:r="${rels}" r:id="${escapeXmlAttribute(hyperlinkRelId)}"/>`
+    }
+    removedClick = click !== undefined && replacement === ''
+    inner = click ? applyPatches(inner, [patchElement(click, replacement)]) : replacement + inner
+  }
+  let updated
+  if (wasSelfClosing && inner === '') {
+    updated = opening
+  } else if (removedClick && inner === '') {
+    updated = opening.slice(0, -1) + '/>'
+  } else {
+    if (wasSelfClosing) opening = opening.slice(0, -2) + '>'
+    const close = wasSelfClosing ? `</${node.name}>` : node.xml.slice(node.opening.length + node.inner.length)
+    updated = opening + inner + close
+  }
+  return xml.slice(0, start) + updated + xml.slice(start + node.xml.length)
+}
+
+function updatedAnchor(xml: string, original: ScopedElement): ScopedElement | undefined {
+  if (xml === original.xml) return original
+  const node = childElements(xml)[0]
+  return node && withNamespaces(node, original.namespaces)
+}
+
 function updateFrameTransform(xml: string, original: ScopedElement, edit: WorkbookVisualEdit): string {
   // Moving or repainting can change the frame's offset in the anchor.
-  const node = xml === original.xml ? original : childElements(xml)[0]
-  const anchor = node && (node === original ? original : withNamespaces(node, original.namespaces))
+  const anchor = updatedAnchor(xml, original)
   const object = anchor && scopedChildren(anchor).find(
     (child) => isDrawingChild(anchor, child) && ['pic', 'sp', 'cxnSp', 'grpSp'].includes(child.local),
   )

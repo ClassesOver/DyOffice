@@ -3,7 +3,7 @@ import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/share
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import {
-  drawingAnchorElements, drawingChild, drawingMainChild, drawingRelationshipAttribute, readDrawingGraphicFrame, readDrawingPicture,
+  drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, readDrawingGraphicFrame, readDrawingPicture,
 } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
 import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
 import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
@@ -554,8 +554,7 @@ type DrawingReferences = {
   hasPart: (path: string) => boolean
 }
 
-function drawingHyperlink(nonvisual: XmlElement | undefined, relationships: Relationships) {
-  const id = relationshipAttribute(child(nonvisual, 'hlinkClick'), 'id')
+function drawingHyperlink(id: string | undefined, relationships: Relationships) {
   const rel = id === undefined ? undefined : relationships.get(id)
   return rel?.type.endsWith('/hyperlink') ? rel.target || undefined : undefined
 }
@@ -728,7 +727,7 @@ function readGroupShapes(
       const shape = readShape(entry, {
         id, sheetId: base.sheetId, drawingPath: base.drawingPath, anchor,
         name: attribute(nonvisual, 'name'), altText: attribute(nonvisual, 'descr') || undefined,
-        hyperlink: drawingHyperlink(nonvisual, references.relationships),
+        hyperlink: drawingHyperlink(relationshipAttribute(child(nonvisual, 'hlinkClick'), 'id'), references.relationships),
       }, theme, references)
       if (shape) shapeVisuals.push(shape)
     }
@@ -950,26 +949,26 @@ export async function readWorkbookVisuals(
         const entry = roots(slot.element.xml, slot.element.namespaces)[0]
         if (!entry) continue
         const anchor = readDrawingAnchor(slot.element)
-        const nonvisual = first(entry, 'cNvPr')
+        const nonvisual = drawingNonVisualProperties(slot.element)?.node
         const shapeNode = child(entry, 'sp') ?? child(entry, 'cxnSp')
-        const shapeId = shapeNode && nonnegative(attribute(nonvisual, 'id'))
+        const shapeId = shapeNode && nonnegative(nonvisual?.attributes.get('id'))
         const ole = shapeId === undefined ? undefined : oleObjects.get(shapeId)
         if (ole && shapeId !== undefined) {
           if (!renderedOle.has(shapeId)) appendOle(ole, anchor)
           renderedOle.add(shapeId)
           continue
         }
-        if (!anchor || trueAttribute(nonvisual, 'hidden')) continue
+        if (!anchor || ['1', 'true'].includes(nonvisual?.attributes.get('hidden') ?? '')) continue
         const control = controlName(entry)
         if (control) {
           result.push({ id, sheetId, kind: 'slicer', anchor, name: control, text: captions.get(control) ?? control })
           continue
         }
-        const name = attribute(nonvisual, 'name')
+        const name = nonvisual?.attributes.get('name')
         const editAs = entry.tag === 'twoCellAnchor'
           ? member(attribute(entry, 'editAs'), ['twoCell', 'oneCell', 'absolute'] as const) ?? 'twoCell' : undefined
-        const altText = attribute(nonvisual, 'descr') || undefined
-        const hyperlink = drawingHyperlink(nonvisual, drawingRels)
+        const altText = nonvisual?.attributes.get('descr') || undefined
+        const hyperlink = drawingHyperlink(drawingRelationshipAttribute(drawingMainChild(nonvisual, 'hlinkClick'), 'id'), drawingRels)
         const base = { id, sheetId, anchor, name, drawingPath, drawingIndex, editAs, altText, ...(hyperlink ? { hyperlink } : {}) }
         const group = child(entry, 'grpSp')
         if (group) {

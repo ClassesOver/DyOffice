@@ -70,6 +70,27 @@ export function drawingRelationshipAttribute(
   return references[0]?.[1] ?? legacy
 }
 
+const nonVisualContainers = new Map([
+  ['pic', 'nvPicPr'],
+  ['sp', 'nvSpPr'],
+  ['cxnSp', 'nvCxnSpPr'],
+  ['grpSp', 'nvGrpSpPr'],
+  ['graphicFrame', 'nvGraphicFramePr'],
+])
+
+export function drawingNonVisualProperties(anchor: ScopedElement) {
+  const object = scopedChildren(anchor).find(
+    (node) => isDrawingChild(anchor, node) && nonVisualContainers.has(node.local),
+  )
+  if (!object) return undefined
+  const container = drawingChild(object, nonVisualContainers.get(object.local)!)
+  const node = drawingChild(container, 'cNvPr')
+  if (!container || !node) return undefined
+  const start = anchor.opening.length + object.start + object.opening.length +
+    container.start + container.opening.length + node.start
+  return { node, start }
+}
+
 export function readDrawingPicture(anchor: ScopedElement) {
   const picture = drawingChild(anchor, 'pic')
   if (!picture) return undefined
