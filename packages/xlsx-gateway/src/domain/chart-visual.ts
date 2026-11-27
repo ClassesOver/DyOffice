@@ -558,7 +558,10 @@ export function applyChartStateEdit(
         ...(typeOverride.chartTypes === undefined
           ? {}
           : { plot: undefined, secondaryAxis: undefined }),
-        ...(color === undefined ? {} : { color }),
+        ...(color === undefined ? {} : {
+          color,
+          lineColor: series.lineColor === 'none' ? 'none' : color,
+        }),
         ...(pointColors === undefined ? {} : { pointColors }),
         ...(pointExplosions === undefined ? {} : { pointExplosions }),
         ...(index === 0 && edit.explosionPct !== undefined

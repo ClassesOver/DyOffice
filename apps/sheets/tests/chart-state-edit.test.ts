@@ -70,6 +70,22 @@ describe('applyChartStateEdit', () => {
     expect(next.series[0]?.categories).toEqual(['a', 'b'])
   })
 
+  it('recolors authored and default strokes while preserving hidden strokes and line widths', () => {
+    const chart = base()
+    chart.chartTypes = ['lineChart']
+    chart.series[0] = { ...chart.series[0]!, lineColor: '#344455', lineWidth: 3, marker: 'diamond' }
+    chart.series[1] = { ...chart.series[1]!, lineColor: 'none', lineWidth: 4 }
+    chart.series.push({ name: 'Default stroke', categories: ['a', 'b'], values: [5, 6] })
+    const edited = applyChartStateEdit(chart, {
+      seriesColors: { 0: '#0099CC', 1: '#112233', 2: '#998877' },
+    })
+    expect(edited.series).toMatchObject([
+      { color: '#0099CC', lineColor: '#0099CC', lineWidth: 3, marker: 'diamond' },
+      { color: '#112233', lineColor: 'none', lineWidth: 4 },
+      { color: '#998877', lineColor: '#998877' },
+    ])
+  })
+
   it('keeps parsed outer-level groups on the same range and drops them on replacement', () => {
     const chart = base()
     const first = chart.series[0]!

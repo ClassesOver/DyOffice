@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import JSZip from 'jszip'
+import { applyChartStateEdit } from '@genoffice/xlsx-gateway/domain/chart-visual'
 import { changedPositions, reorderZ } from '../../../sheets/src/renderer/visual-arrange.ts'
 import { workbookFileSchema } from '../../../sheets/src/shared/desktop-api.ts'
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
@@ -491,6 +492,7 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
   assert.equal(chart.series[0].categoriesRef, "'Data Sheet'!$C$2:$C$3")
   assert.equal(chart.series[0].valuesRef, "'Data Sheet'!$D$2:$D$3")
   assert.equal(chart.series[0].categoryFormat, '0.00')
+  assert.equal(chart.series[0].lineColor, '#010203')
   assert.equal(chart.xAxis.max, 9)
   assert.equal(chart.yAxis.max, 50)
   assert.deepEqual(chart.valueAxis, { min: 10, max: 50 })
@@ -514,6 +516,7 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
     seriesColors: { 0: '#0099CC' },
     series: [{ index: 0, categories: ['1.25', '7.5'] }],
   }]
+  const [previewSeries] = applyChartStateEdit(chart, request.chartEdits[0]).series
   const saved = (await runtime.sheetsNative.savePlan(source, await runtime.sheetsWorkbookPlanner(source, request))).bytes
   const [{ chart: edited }] = (await runtime.sheetsNative.inspect(saved)).visuals
   assert.deepEqual(edited.xAxis, JSON.parse(JSON.stringify(chart.xAxis)))
@@ -521,6 +524,7 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
   assert.equal(edited.yAxis.majorGridlines, true)
   assert.deepEqual(edited.valueAxis, { min: 10, max: 80 })
   assert.equal(edited.series[0].lineColor, '#0099CC')
+  assert.equal(edited.series[0].lineColor, previewSeries.lineColor)
   assert.equal(edited.series[0].lineWidth, chart.series[0].lineWidth)
   assert.equal(edited.series[0].marker, 'diamond')
   assert.deepEqual(edited.series[0].categories, ['1.25', '7.5'])

@@ -3880,13 +3880,14 @@ function MarkerGlyph({
   y,
   symbol,
   color,
+  radius: r = 4,
 }: {
   readonly x: number
   readonly y: number
   readonly symbol: string
   readonly color: string
+  readonly radius?: number
 }): React.JSX.Element {
-  const r = 4
   if (symbol === 'diamond') {
     return (
       <polygon points={`${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`} fill={color} />
@@ -5016,6 +5017,9 @@ export function ScatterChart({
   readonly scatterStyle?: string | undefined
   readonly categoryFormat?: string | undefined
 } & ChartElementProps): React.JSX.Element {
+  const styleWantsLines = scatterStyle === 'line' || scatterStyle === 'lineMarker' ||
+    scatterStyle === 'smooth' || scatterStyle === 'smoothMarker'
+  const styleWantsMarkers = scatterStyle !== 'none' && scatterStyle !== 'line' && scatterStyle !== 'smooth'
   const points = seriesList.map((series) => {
     const xValues = series.categories.map((value, index) => {
       const parsed = Number.parseFloat(value)
@@ -5023,7 +5027,8 @@ export function ScatterChart({
     })
     // Blank cache slots are 0 fillers, not data — Excel plots no point.
     const blankSet = new Set(series.blanks ?? [])
-    return { series, xValues, blankSet }
+    const marker = series.marker ?? (styleWantsMarkers ? 'circle' : 'none')
+    return { series, xValues, blankSet, marker }
   })
   const allX = points.flatMap((entry) =>
     entry.xValues.filter((_, index) => !entry.blankSet.has(index)),
@@ -5034,9 +5039,6 @@ export function ScatterChart({
   if (allY.length === 0) return <></>
   const boundsX = scatterAxisBounds(allX, xAxis)
   const boundsY = scatterAxisBounds(allY, valueAxis)
-  // lineMarker / smoothMarker / line / smooth connect the points; a series
-  // whose spPr line is an explicit noFill stays marker-only.
-  const styleWantsLines = scatterStyle !== undefined && scatterStyle !== 'marker'
   const xFormat = xAxis?.numFmt ?? categoryFormat
   const plotX = (value: number): number =>
     60 + Math.max(0, Math.min(1, (value - boundsX.min) / (boundsX.max - boundsX.min))) * 520
@@ -5112,7 +5114,7 @@ export function ScatterChart({
           )}
         </g>
       ))}
-      {points.map(({ series, xValues, blankSet }, seriesIndex) => (
+      {points.map(({ series, xValues, blankSet, marker }, seriesIndex) => (
         <g key={seriesIndex}>
           {styleWantsLines && series.lineColor !== 'none' && series.values.length > 1 && (
             <polyline
@@ -5129,17 +5131,21 @@ export function ScatterChart({
                   : seriesColor(series, seriesIndex)
               }
               strokeWidth={series.lineWidth ?? 2}
+              onClick={
+                onElement
+                  ? (event) => {
+                      event.stopPropagation()
+                      onElement({ kind: 'series', seriesIndex })
+                    }
+                  : undefined
+              }
             />
           )}
-          {series.marker !== 'none' &&
+          {marker !== 'none' &&
             series.values.map((value, index) =>
               blankSet.has(index) ? null : (
-                <circle
+                <g
                   key={index}
-                  cx={plotX(xValues[index] ?? 0)}
-                  cy={plotY(value)}
-                  r={isSelectedPoint(selectedEl, seriesIndex, index) ? 6 : 4}
-                  fill={seriesColor(series, seriesIndex)}
                   opacity="0.85"
                   {...(isSelectedPoint(selectedEl, seriesIndex, index)
                     ? { stroke: '#107C41', strokeWidth: 2 }
@@ -5152,7 +5158,15 @@ export function ScatterChart({
                         }
                       : undefined
                   }
-                />
+                >
+                  <MarkerGlyph
+                    x={plotX(xValues[index] ?? 0)}
+                    y={plotY(value)}
+                    symbol={marker}
+                    color={seriesColor(series, seriesIndex)}
+                    radius={isSelectedPoint(selectedEl, seriesIndex, index) ? 6 : 4}
+                  />
+                </g>
               ),
             )}
           {dataLabels === 'value' &&
