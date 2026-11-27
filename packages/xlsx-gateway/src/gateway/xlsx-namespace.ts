@@ -103,7 +103,7 @@ export function* xmlAttributeValues(xml: string): Iterable<string> {
   }
 }
 
-function isOfficeRelationshipNamespace(uri: string | undefined): boolean {
+export function isOfficeRelationshipNamespace(uri: string | undefined): boolean {
   return uri === OFFICE_RELATIONSHIPS_NAMESPACE || uri === STRICT_OFFICE_RELATIONSHIPS_NAMESPACE
 }
 

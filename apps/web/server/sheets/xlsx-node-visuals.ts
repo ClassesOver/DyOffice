@@ -2,9 +2,10 @@ import { XMLParser } from 'fast-xml-parser'
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import { drawingAnchorElements, isDrawingChild } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
-import { elementText, scopedChildren, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
+import { isOfficeRelationshipNamespace } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-namespace.ts'
+import { elementText, scopedChildren, spreadsheetSheetRoot, withBody, type Attributes, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import { relsPathFor, resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
-import { decodeAttribute, parseSheetElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
+import { decodeAttribute, parseRelationships, parseSheetElements, type ParsedRelationship } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import { resolveWorkbookSheetTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts.ts'
 
 type ZipText = (path: string) => Promise<string>
@@ -16,29 +17,49 @@ type LinkedFormats = { value: string | undefined; category: string | undefined }
 type Anchor = WorkbookVisualObject['anchor']
 type ShapeParagraph = NonNullable<WorkbookVisualObject['paragraphs']>[number]
 type XmlToken = Record<string, unknown> & { ':@'?: Record<string, string>; '#text'?: string }
-type XmlElement = { tag: string; tokens: XmlToken[]; attrs?: Record<string, string> | undefined }
+type XmlElement = {
+  tag: string
+  tokens: XmlToken[]
+  namespaces: Attributes
+  attrs?: Record<string, string> | undefined
+}
+type Relationships = ReadonlyMap<string, ParsedRelationship>
 
 const xmlParser = new XMLParser({
-  preserveOrder: true, removeNSPrefix: true, ignoreAttributes: false,
+  preserveOrder: true, ignoreAttributes: false,
   processEntities: false, parseTagValue: false, trimValues: false,
-  cdataPropName: '#cdata', stopNodes: ['worksheet.sheetData'],
+  cdataPropName: '#cdata',
 })
 
-function elements(tokens: XmlToken[]): XmlElement[] {
+function elements(tokens: XmlToken[], inherited: Attributes): XmlElement[] {
   return tokens.flatMap(token => {
-    const tag = Object.keys(token).find(key => !/^[#?:]/.test(key))
-    return tag && Array.isArray(token[tag])
-      ? [{ tag, tokens: token[tag] as XmlToken[], attrs: token[':@'] }]
-      : []
+    const name = Object.keys(token).find(key => !/^[#?:]/.test(key))
+    if (!name || !Array.isArray(token[name])) return []
+    const attrs = token[':@']
+    let bindings: Map<string, string> | undefined
+    for (const [key, value] of Object.entries(attrs ?? {})) {
+      if (!key.startsWith('@_xmlns:')) continue
+      bindings ??= new Map(inherited)
+      bindings.set(key.slice('@_xmlns:'.length), decodeAttribute(value))
+    }
+    return [{ tag: name.slice(name.indexOf(':') + 1), tokens: token[name] as XmlToken[], attrs, namespaces: bindings ?? inherited }]
   })
 }
 
-function roots(xml: string): XmlElement[] {
+function roots(xml: string, namespaces: Attributes = new Map()): XmlElement[] {
   if (!xml) return []
-  try { return elements(xmlParser.parse(xml) as XmlToken[]) } catch { return [] }
+  try { return elements(xmlParser.parse(xml) as XmlToken[], namespaces) } catch { return [] }
 }
 
-const children = (node?: XmlElement) => node ? elements(node.tokens) : []
+function worksheetVisualRoot(xml: string): XmlElement | undefined {
+  const root = spreadsheetSheetRoot(xml)
+  if (!root) return undefined
+  const visualNodes = scopedChildren(root).filter(node => node.namespace === root.namespace &&
+    ['drawing', 'legacyDrawing', 'legacyDrawingHF', 'oleObjects'].includes(node.local))
+  return roots(withBody(root, visualNodes.map(node => node.xml).join('')), root.namespaces)[0]
+}
+
+const children = (node?: XmlElement) => node ? elements(node.tokens, node.namespaces) : []
 const child = (node: XmlElement | undefined, tag: string) => children(node).find(element => element.tag === tag)
 function* descendants(node?: XmlElement): Generator<XmlElement> {
   for (const element of children(node)) {
@@ -50,9 +71,30 @@ function first(node: XmlElement | undefined, tag: string) {
   for (const descendant of descendants(node)) if (descendant.tag === tag) return descendant
 }
 function attribute(node: XmlElement | undefined, key: string): string | undefined {
-  const raw = node?.attrs?.[`@_${key}`]
+  const raw = node?.attrs?.[`@_${key}`] ?? Object.entries(node?.attrs ?? {}).find(([name]) =>
+    !name.startsWith('@_xmlns:') && name.endsWith(`:${key}`)
+  )?.[1]
   return raw === undefined ? undefined : decodeAttribute(raw)
 }
+function relationshipAttribute(node: XmlElement | undefined, key: string): string | undefined {
+  if (!node?.attrs) return undefined
+  let found: string | undefined
+  let unbound: string | undefined
+  for (const [name, value] of Object.entries(node.attrs)) {
+    if (name.startsWith('@_xmlns:') || !name.endsWith(`:${key}`)) continue
+    const prefix = name.slice(2, -(key.length + 1))
+    const namespace = node.namespaces.get(prefix)
+    if (isOfficeRelationshipNamespace(namespace)) {
+      if (found !== undefined) return undefined
+      found = value
+    } else if (prefix === 'r' && namespace === undefined) {
+      unbound = value
+    }
+  }
+  const raw = found ?? unbound
+  return raw === undefined ? undefined : decodeAttribute(raw)
+}
+
 function text(node?: XmlElement): string | undefined {
   if (!node) return undefined
   return node.tokens.map(token => {
@@ -506,15 +548,15 @@ function readShapeParagraphs(body: XmlElement | undefined, theme: readonly strin
 
 type VisualBase = Pick<WorkbookVisualObject, 'id' | 'sheetId' | 'anchor' | 'name' | 'drawingPath' | 'drawingIndex' | 'editAs' | 'altText' | 'hyperlink'>
 type DrawingReferences = {
-  relationships: Map<string, XmlElement>
+  relationships: Relationships
   part: string
   hasPart: (path: string) => boolean
 }
 
-function drawingHyperlink(nonvisual: XmlElement | undefined, relationships: Map<string, XmlElement>) {
-  const id = attribute(child(nonvisual, 'hlinkClick'), 'id')
+function drawingHyperlink(nonvisual: XmlElement | undefined, relationships: Relationships) {
+  const id = relationshipAttribute(child(nonvisual, 'hlinkClick'), 'id')
   const rel = id === undefined ? undefined : relationships.get(id)
-  return attribute(rel, 'Type')?.endsWith('/hyperlink') ? attribute(rel, 'Target') || undefined : undefined
+  return rel?.type.endsWith('/hyperlink') ? rel.target || undefined : undefined
 }
 
 const pathCommands = new Map<string, readonly [letter: string, points: number]>([
@@ -594,7 +636,7 @@ function readShape(
   const frameWidth = finite(attribute(extent, 'cx'))
   const frameHeight = finite(attribute(extent, 'cy'))
   const blip = child(child(properties, 'blipFill'), 'blip')
-  const fillMediaPath = previewPath(references.relationships, references.part, attribute(blip, 'embed'), references.hasPart)
+  const fillMediaPath = previewPath(references.relationships, references.part, relationshipAttribute(blip, 'embed'), references.hasPart)
   const fillColor = child(properties, 'noFill') ? 'none'
     : areaColor(properties, theme) ?? (fillMediaPath ? 'none' : styleColor('fillRef') ?? 'none')
   return {
@@ -694,20 +736,16 @@ function readGroupShapes(
   return shapeVisuals
 }
 
-async function readRelationships(read: ZipText, part: string): Promise<Map<string, XmlElement>> {
-  const root = roots(await read(relsPathFor(part))).find(node => node.tag === 'Relationships')
-  return new Map(children(root).flatMap(node => {
-    const id = node.tag === 'Relationship' ? attribute(node, 'Id') : undefined
-    return id ? [[id, node]] : []
-  }))
+async function readRelationships(read: ZipText, part: string): Promise<Relationships> {
+  return new Map(parseRelationships(await read(relsPathFor(part))).flatMap(entry =>
+    entry.id ? [[decodeAttribute(entry.id), entry]] : []
+  ))
 }
 
-function internalTarget(rels: Map<string, XmlElement>, part: string, id: string | undefined, ...kinds: string[]) {
+function internalTarget(rels: Relationships, part: string, id: string | undefined, ...kinds: string[]) {
   const rel = id && rels.get(id)
-  if (!rel || attribute(rel, 'TargetMode') === 'External') return undefined
-  const type = attribute(rel, 'Type')
-  if (!kinds.some(kind => type?.endsWith(`/${kind}`))) return undefined
-  const target = attribute(rel, 'Target')
+  if (!rel || rel.external || !kinds.some(kind => rel.type.endsWith(`/${kind}`))) return undefined
+  const target = rel.target
   if (!target) return undefined
   try {
     return part === 'xl/workbook.xml' ? resolveWorkbookSheetTarget(target) : resolveRelTarget(part, target)
@@ -717,7 +755,7 @@ function internalTarget(rels: Map<string, XmlElement>, part: string, id: string 
 async function readVmlDrawing(
   read: ZipText,
   sheetPath: string,
-  sheetRels: Map<string, XmlElement>,
+  sheetRels: Relationships,
   id: string | undefined,
 ) {
   const path = internalTarget(sheetRels, sheetPath, id, 'vmlDrawing')
@@ -728,7 +766,7 @@ async function readVmlDrawing(
 }
 
 function previewPath(
-  rels: Map<string, XmlElement>, part: string, id: string | undefined, hasPart: (path: string) => boolean,
+  rels: Relationships, part: string, id: string | undefined, hasPart: (path: string) => boolean,
 ) {
   const path = internalTarget(rels, part, id, 'image')
   return path && visualMediaType(path) && hasPart(path) ? path : undefined
@@ -759,8 +797,8 @@ type HeaderFooterPicture = NonNullable<WorkbookPagePrintSettings['headerFooterPi
 export async function readHeaderFooterPictures(
   read: ZipText, sheetPath: string, sheetIndex: number, hasPart: (path: string) => boolean,
 ): Promise<(HeaderFooterPicture & { mediaPath: string })[]> {
-  const worksheet = roots(await read(sheetPath)).find(node => node.tag === 'worksheet')
-  const relationshipId = attribute(child(worksheet, 'legacyDrawingHF'), 'id')
+  const worksheet = worksheetVisualRoot(await read(sheetPath))
+  const relationshipId = relationshipAttribute(child(worksheet, 'legacyDrawingHF'), 'id')
   if (!relationshipId) return []
   const vml = await readVmlDrawing(read, sheetPath, await readRelationships(read, sheetPath), relationshipId)
   const pictures = new Map<string, HeaderFooterPicture & { mediaPath: string }>()
@@ -802,7 +840,7 @@ function vmlPaint(node: XmlElement, inherited: XmlElement | undefined, flag: str
 type OleObject = Pick<WorkbookVisualObject, 'progId' | 'mediaPath' | 'lineColor' | 'fillColor'> & { anchor?: Anchor | undefined }
 
 async function readOleObjects(
-  read: ZipText, worksheet: XmlElement | undefined, sheetPath: string, sheetRels: Map<string, XmlElement>,
+  read: ZipText, worksheet: XmlElement | undefined, sheetPath: string, sheetRels: Relationships,
   hasPart: (path: string) => boolean,
 ): Promise<Map<number, OleObject>> {
   const objects = new Map<number, OleObject>()
@@ -817,11 +855,11 @@ async function readOleObjects(
     objects.set(shapeId, {
       progId: existing?.progId ?? progId,
       anchor: existing?.anchor ?? (anchor && readAnchor(anchor, child, text, attribute)),
-      mediaPath: existing?.mediaPath ?? previewPath(sheetRels, sheetPath, attribute(properties, 'id'), hasPart),
+      mediaPath: existing?.mediaPath ?? previewPath(sheetRels, sheetPath, relationshipAttribute(properties, 'id'), hasPart),
     })
   }
   if (!objects.size) return objects
-  const vml = await readVmlDrawing(read, sheetPath, sheetRels, attribute(child(worksheet, 'legacyDrawing'), 'id'))
+  const vml = await readVmlDrawing(read, sheetPath, sheetRels, relationshipAttribute(child(worksheet, 'legacyDrawing'), 'id'))
   if (!vml) return objects
   const types = new Map(vml.elements.filter(node => node.tag === 'shapetype').map(node => ['#' + attribute(node, 'id'), node]))
   for (const node of vml.elements) {
@@ -838,10 +876,10 @@ async function readOleObjects(
   return objects
 }
 
-async function readControlCaptions(read: ZipText, sheetPath: string, relationships: Map<string, XmlElement>) {
+async function readControlCaptions(read: ZipText, sheetPath: string, relationships: Relationships) {
   const captions = new Map<string, string>()
   for (const [id, relation] of relationships) {
-    const kind = attribute(relation, 'Type')?.split('/').at(-1)
+    const kind = relation.type.split('/').at(-1)
     if (kind !== 'slicer' && kind !== 'timeline') continue
     const path = internalTarget(relationships, sheetPath, id, kind)
     if (!path) continue
@@ -885,7 +923,7 @@ export async function readWorkbookVisuals(
     if (!sheetId || !sheetPath) continue
     const sheetXml = await read(sheetPath)
     if (!sheetXml.includes('drawing') && !sheetXml.includes('oleObjects')) continue
-    const sheet = roots(sheetXml).find(node => node.tag === 'worksheet' || node.tag === 'chartsheet')
+    const sheet = worksheetVisualRoot(sheetXml)
     const sheetRels = await readRelationships(read, sheetPath)
     const captions = await readControlCaptions(read, sheetPath, sheetRels)
     const oleObjects = await readOleObjects(read, sheet, sheetPath, sheetRels, hasPart)
@@ -898,7 +936,7 @@ export async function readWorkbookVisuals(
     }
     const renderedOle = new Set<number>()
     for (const node of children(sheet).filter(node => node.tag === 'drawing')) {
-      const drawingPath = internalTarget(sheetRels, sheetPath, attribute(node, 'id'), 'drawing')
+      const drawingPath = internalTarget(sheetRels, sheetPath, relationshipAttribute(node, 'id'), 'drawing')
       if (!drawingPath || !/^xl\/drawings\/[\w./-]+\.xml$/.test(drawingPath)) continue
       const drawingXml = await read(drawingPath)
       const drawingRels = await readRelationships(read, drawingPath)
@@ -908,7 +946,7 @@ export async function readWorkbookVisuals(
         if (drawingIndex > 10_000) break
         // Compatibility branches and opaque nodes count as physical slots.
         if (!slot.topLevel || !slot.editable) continue
-        const entry = roots(slot.element.xml)[0]
+        const entry = roots(slot.element.xml, slot.element.namespaces)[0]
         if (!entry) continue
         const anchor = readDrawingAnchor(slot.element)
         const nonvisual = first(entry, 'cNvPr')
@@ -939,7 +977,7 @@ export async function readWorkbookVisuals(
         }
         const chartNode = first(child(entry, 'graphicFrame'), 'chart')
         if (chartNode) {
-          const chartPath = internalTarget(drawingRels, drawingPath, attribute(chartNode, 'id'), 'chart')
+          const chartPath = internalTarget(drawingRels, drawingPath, relationshipAttribute(chartNode, 'id'), 'chart')
           if (!chartPath || !/^xl\/charts\/.+\.xml$/.test(chartPath) || !hasPart(chartPath)) continue
           const chart = readChart(await read(chartPath), theme, lookup)
           if (chart) result.push({ ...base, kind: 'chart', chartPath, chart })
@@ -953,7 +991,7 @@ export async function readWorkbookVisuals(
         const picture = child(entry, 'pic')
         const blipFill = child(picture, 'blipFill')
         const blip = child(blipFill, 'blip')
-        const mediaPath = internalTarget(drawingRels, drawingPath, attribute(blip, 'embed'), 'image')
+        const mediaPath = internalTarget(drawingRels, drawingPath, relationshipAttribute(blip, 'embed'), 'image')
         if (!mediaPath?.startsWith('xl/media/') || !hasPart(mediaPath)) continue
         const mediaType = visualMediaType(mediaPath)
         if (!mediaType || (anchor.fromRow === anchor.toRow && anchor.fromColumn === anchor.toColumn &&

@@ -449,6 +449,35 @@ test('resolves an embedded picture without mislabeling unsupported or external d
   })
 })
 
+test('resolves drawing, chart, and picture relationships by their declared namespaces', async () => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const worksheet = 'xl/worksheets/sheet1.xml'
+  const rels = 'xl/worksheets/_rels/sheet1.xml.rels'
+  const office = relationships.slice(0, -1)
+  const foreign = 'urn:example:foreign'
+  const declarations = `xmlns:p="${office}" xmlns:f="${foreign}"`
+  zip.file(worksheet, (await textOf(zip)(worksheet)).replace(/<drawing r:id="([^"]+)"\/>/,
+    (_, id) => `<f:drawing ${declarations} p:id="${id}"/><drawing ${declarations} p:id="${id}" f:id="wrong"/>`))
+  zip.file(rels, (await textOf(zip)(rels)).replace('</Relationships>',
+    `<Relationship xmlns="${foreign}" Id="rId1" Type="${relationships}drawing" Target="../drawings/missing.xml"/></Relationships>`))
+  await appendDrawing(zip, '<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>3</xdr:row></xdr:from>' +
+    '<xdr:ext cx="50" cy="60"/><xdr:pic><xdr:blipFill><a:blip p:embed="image" f:embed="wrong"/></xdr:blipFill></xdr:pic>' +
+    '</xdr:oneCellAnchor>')
+  zip.file(drawingPath, (await textOf(zip)(drawingPath))
+    .replace('<xdr:wsDr ', `<xdr:wsDr ${declarations} `)
+    .replace(/<c:chart([^>]*)\br:id="([^"]+)"\/>/,
+      (_, attrs, id) => `<c:chart${attrs} p:id="${id}" f:id="wrong"/>`))
+  zip.file(drawingRels, (await textOf(zip)(drawingRels)).replace('</Relationships>',
+    `<Relationship Id="image" Type="${relationships}image" Target="../media/actual.png"/>` +
+    `<Relationship xmlns="${foreign}" Id="image" Type="${relationships}image" Target="../media/decoy.png"/></Relationships>`))
+  zip.file('xl/media/actual.png', 'fixture')
+  zip.file('xl/media/decoy.png', 'fixture')
+  const visuals = await readWorkbookVisuals(textOf(zip), sourceSheet, [], path => Boolean(zip.file(path)))
+  assert.deepEqual(visuals.map(visual => [visual.kind, visual.chartPath ?? visual.mediaPath]), [
+    ['chart', chartPath], ['image', 'xl/media/actual.png'],
+  ])
+})
+
 test('opens shape picture fills and hyperlinks and preserves them through a cell save', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const fillPath = 'xl/media/shape-fill.png'
