@@ -318,6 +318,13 @@ const WORKBOOK =
   '</sheets></workbook>'
 
 describe('applyPrintAreas', () => {
+  it('writes each selected area as an absolute reference on the same sheet', () => {
+    const xml = applyPrintAreas(WORKBOOK, [{ sheetName: 'P&L', printArea: 'B2:D4,F9' }])
+    expect(xml).toContain("'P&amp;L'!$B$2:$D$4,'P&amp;L'!$F$9</definedName>")
+    expect(() => applyPrintAreas(WORKBOOK, [{ sheetName: 'P&L', printArea: 'B2:D4,F:F' }]))
+      .toThrow(PageSetupError)
+  })
+
   it('clears deleted title rows while retaining the existing title columns', () => {
     const original = applyPrintAreas(WORKBOOK, [{ sheetName: 'Sheet1', printTitles: 'A:B,2:3' }])
     const updated = applyPrintAreas(original, [{ sheetName: 'Sheet1', clearPrintTitleRows: true }])

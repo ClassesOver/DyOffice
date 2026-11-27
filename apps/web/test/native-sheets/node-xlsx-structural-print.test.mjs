@@ -132,6 +132,20 @@ test(
       },
     )
     await t.test(
+      'saves and reopens all print areas on the selected sheet',
+      async () => {
+        const saved = await save(original, {
+          pageSetupStates: [{ sheetId: 'sheet-1', printArea: 'A1:A2,D3:F3' }],
+        })
+        const reopened = (await native.inspect(saved)).sheets[0]
+        assert.equal(reopened.printArea, "'Acceptance'!$A$1:$A$2,'Acceptance'!$D$3:$F$3")
+        const cleared = await save(saved, {
+          pageSetupStates: [{ sheetId: 'sheet-1', printArea: null }],
+        })
+        assert.equal((await native.inspect(cleared)).sheets[0].printArea, undefined)
+      },
+    )
+    await t.test(
       'clears deleted pending title rows while keeping file-backed title columns',
       async () => {
         const input = await book({

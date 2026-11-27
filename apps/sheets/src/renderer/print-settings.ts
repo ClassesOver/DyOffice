@@ -126,9 +126,7 @@ export function resolveEffectivePageSetup(
   const fitToHeight = journal.fitToHeight ?? file?.fitToHeight ?? (file?.fitToPage === true ? 1 : 0)
   const printArea =
     journal.printArea !== undefined
-      ? journal.printArea === null
-        ? []
-        : [journal.printArea]
+      ? printAreasFromFormula(journal.printArea ?? undefined)
       : printAreasFromFormula(names?.printArea)
           .map((area) => shiftPrintArea(area, ops))
           .filter((area) => area !== null)

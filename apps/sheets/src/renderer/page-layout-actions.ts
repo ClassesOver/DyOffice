@@ -94,6 +94,14 @@ const PAGE_SETUP_OP_FIELDS = new Set([
   'printArea',
 ])
 
+function selectedPrintAreas(worksheet: FWorksheet | null | undefined): string[] {
+  return (worksheet?.getSelection()?.getActiveRangeList() ?? []).map((range) => {
+    const row = range.getRow()
+    const column = range.getColumn()
+    return `${columnLabel(column)}${row + 1}:${columnLabel(column + range.getWidth() - 1)}${row + range.getHeight()}`
+  })
+}
+
 export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): void {
   const runtime = ctx.univerRef.current
   const state = ctx.lazyWorkbookRef.current
@@ -218,16 +226,11 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
         record({ printArea: null }, t('appPrintAreaCleared'))
         return
       }
-      const range = runtime.univerAPI.getActiveWorkbook()?.getActiveRange()
-      if (!range) {
+      const area = selectedPrintAreas(worksheet).join(',')
+      if (!area) {
         ctx.setMessage(t('appSelectPrintRange'))
         return
       }
-      const startColumn = range.getColumn()
-      const startRow = range.getRow()
-      const area =
-        `${columnLabel(startColumn)}${startRow + 1}` +
-        `:${columnLabel(startColumn + range.getWidth() - 1)}${startRow + range.getHeight()}`
       record({ printArea: area }, t('appPrintAreaNote', { area }))
       return
     }
@@ -560,12 +563,7 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
     state?.editJournal.structuralOps.get(sheetId) ?? [],
   )
   const chartSheet = fileSheet?.chartSheet === true
-  const selectedRanges = chartSheet ? [] : worksheet.getSelection()?.getActiveRangeList() ?? []
-  const selectionAreas = selectedRanges.map((range) => {
-    const row = range.getRow()
-    const column = range.getColumn()
-    return `${columnLabel(column)}${row + 1}:${columnLabel(column + range.getWidth() - 1)}${row + range.getHeight()}`
-  })
+  const selectionAreas = chartSheet ? [] : selectedPrintAreas(worksheet)
   const printableSheets = () =>
     workbook
       .getSheets()

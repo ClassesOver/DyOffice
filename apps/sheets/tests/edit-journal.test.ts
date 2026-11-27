@@ -1414,6 +1414,14 @@ describe('recordStructuralOp page-break remapping', () => {
 })
 
 describe('recordStructuralOp print range remapping', () => {
+  it('moves surviving pending print areas and drops only the areas that were deleted', () => {
+    const journal = createEditJournal()
+    recordPageSetup(journal, 'sheet-1', { printArea: 'A1:A1,B2:C3,F9' })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'remove-rows', index: 0, count: 1 })
+    recordStructuralOp(journal, 'sheet-1', { kind: 'insert-cols', index: 0, count: 1 })
+    expect(toSavePageSetupStates(journal)).toEqual([{ sheetId: 'sheet-1', printArea: 'C1:D2,G8' }])
+  })
+
   it('saves pending print ranges at their post-insert coordinates', () => {
     const journal = createEditJournal()
     recordPageSetup(journal, 'sheet-1', { printArea: 'B2:D3', printTitles: '2:3' })

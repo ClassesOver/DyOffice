@@ -866,8 +866,16 @@ const setPageSetupSchema = z.object({
   margins: z.enum(['normal', 'wide', 'narrow']).optional(),
   printGridlines: z.boolean().optional(),
   printHeadings: z.boolean().optional(),
-  /** A1 range to print; null clears the print area */
-  printArea: cellRangeSchema.nullable().optional(),
+  /** Comma-separated A1 ranges to print; null clears the print area */
+  printArea: z
+    .string()
+    .max(255)
+    .refine(
+      (areas) => areas.split(',').every((area) => cellRangeSchema.safeParse(area).success),
+      'Print area must contain comma-separated cell ranges inside the worksheet grid',
+    )
+    .nullable()
+    .optional(),
   /** title rows ("1:1") and/or columns ("A:A") repeated on every printed page; null clears */
   printTitles: z
     .string()

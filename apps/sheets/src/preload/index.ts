@@ -76,6 +76,8 @@ import {
   MAX_CREATE_DOCUMENT_TITLE_CHARS,
   MAX_CSV_EXPORT_CHARS,
   MAX_PDF_TEMPLATE_CHARS,
+  MAX_PRINT_AREA_FORMULA_CHARS,
+  MAX_PRINT_AREA_SAVE_CHARS,
   MAX_SAVE_EDITS,
   MAX_SAVE_EDITS_TOTAL,
   SAVE_EDITS_CHUNK_JSON_MAX,
@@ -1369,7 +1371,7 @@ function parseWorkbookFile(input: unknown): WorkbookFile {
       pivotTables: parsePivotTableInfos(sheet.pivotTables ?? []),
       sparklines: parseSparklineGroups(sheet.sparklines ?? []),
       cellImages: parseCellImages(sheet.cellImages ?? []),
-      ...(isBoundedString(sheet.printArea, 2_000) ? { printArea: sheet.printArea } : {}),
+      ...(isBoundedString(sheet.printArea, MAX_PRINT_AREA_FORMULA_CHARS) ? { printArea: sheet.printArea } : {}),
       ...(isBoundedString(sheet.printTitles, 2_000) ? { printTitles: sheet.printTitles } : {}),
       ...(sheet.hasScopedDefinedNames === true ? { hasScopedDefinedNames: true } : {}),
     }
@@ -3341,7 +3343,7 @@ function isPageSetupState(input: unknown): boolean {
     input.printArea !== null &&
     (typeof input.printArea !== 'string' ||
       input.printArea.length === 0 ||
-      input.printArea.length > 255)
+      input.printArea.length > MAX_PRINT_AREA_SAVE_CHARS)
   )
     return false
   if (

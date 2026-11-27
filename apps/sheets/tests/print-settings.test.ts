@@ -447,11 +447,11 @@ describe('resolveEffectivePageSetup', () => {
     expect(deleted.printTitles).toBeNull()
   })
 
-  it('does not remap session-set print areas (already screen space)', () => {
-    const setup = resolveEffectivePageSetup({ printArea: 'B2:C3' }, null, null, [
+  it('normalizes each session-set print area without remapping its screen coordinates', () => {
+    const setup = resolveEffectivePageSetup({ printArea: 'B2:C3,A1' }, null, null, [
       { kind: 'insert-rows', index: 0, count: 5 },
     ])
-    expect(setup.printAreas).toEqual(['B2:C3'])
+    expect(setup.printAreas).toEqual(['B2:C3', 'A1:A1'])
   })
 
   it('prints a reversed print area instead of refusing the export', () => {

@@ -10,6 +10,8 @@ import {
   MAX_CREATE_DOCUMENT_TITLE_CHARS,
   MAX_CSV_EXPORT_CHARS,
   MAX_PDF_TEMPLATE_CHARS,
+  MAX_PRINT_AREA_FORMULA_CHARS,
+  MAX_PRINT_AREA_SAVE_CHARS,
   MAX_SAVE_EDITS,
   MAX_SAVE_EDITS_TOTAL,
   SAVE_EDITS_CHUNK_JSON_MAX,
@@ -321,7 +323,7 @@ const worksheetMetadataSchema = z
       .default([]),
     /// Saved `_xlnm.Print_Area` / `_xlnm.Print_Titles` formulas for this
     /// sheet, verbatim from workbook.xml.
-    printArea: z.string().min(1).max(2_000).optional(),
+    printArea: z.string().min(1).max(MAX_PRINT_AREA_FORMULA_CHARS).optional(),
     printTitles: z.string().min(1).max(2_000).optional(),
     /// Any localSheetId-scoped definedName targets this sheet (hidden and
     /// _xlnm.* built-ins included); duplication is gated on it up front
@@ -1529,7 +1531,7 @@ export const workbookPageSetupStateSchema = z
     showHeadings: z.boolean().optional(),
     /// sheetView/@rightToLeft — the grid is mirrored (column A at the right).
     rightToLeft: z.boolean().optional(),
-    printArea: z.union([z.string().min(1).max(255), z.null()]).optional(),
+    printArea: z.union([z.string().min(1).max(MAX_PRINT_AREA_SAVE_CHARS), z.null()]).optional(),
     printTitles: z.union([z.string().regex(/^\d{1,7}:\d{1,7}$/), z.null()]).optional(),
     /// A structural edit removed the pending repeat rows. Keep file-backed repeat columns.
     clearPrintTitleRows: z.literal(true).optional(),

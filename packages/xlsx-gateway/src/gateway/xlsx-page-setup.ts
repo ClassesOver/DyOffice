@@ -486,7 +486,9 @@ export function applyPrintAreas(
         xml,
         '_xlnm.Print_Area',
         sheetIndex,
-        printArea === null ? null : `${quoted}!${toAbsoluteRange(printArea)}`,
+        printArea === null
+          ? null
+          : printArea.split(',').map((area) => `${quoted}!${toAbsoluteRange(area)}`).join(','),
       )
     }
     if (printTitles !== undefined || clearPrintTitleRows || clearPrintTitleColumns) {

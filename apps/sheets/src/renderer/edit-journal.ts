@@ -1964,7 +1964,11 @@ export function recordStructuralOp(
   if (pageSetup) {
     const next = { ...pageSetup }
     if (typeof pageSetup.printArea === 'string') {
-      next.printArea = shiftPrintArea(pageSetup.printArea, [rowColumnOp])
+      next.printArea = pageSetup.printArea
+        .split(',')
+        .map((area) => shiftPrintArea(area, [rowColumnOp]))
+        .filter((area) => area !== null)
+        .join(',') || null
     }
     if (axis === 'row' && typeof pageSetup.printTitles === 'string') {
       const moved = shiftPrintTitleRows(pageSetup.printTitles, shift)

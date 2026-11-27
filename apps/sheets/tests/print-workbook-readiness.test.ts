@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyPageSetupState } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import {
   handleExportPdf,
+  handlePageLayoutCommand,
   openHeaderFooterEditor,
   openPrintPreviewHost,
   type PageLayoutContext,
@@ -140,7 +141,7 @@ describe('print and PDF workbook readiness coordination', () => {
     }
     const workbook = {
       getActiveSheet: () => worksheet,
-      getActiveRange: () => null,
+      getActiveRange: () => selectedRanges.at(-1) ?? null,
       getSheets: () => [worksheet],
       getSheetBySheetId: () => worksheet,
       getSnapshot: () => ({ sheets: {} }),
@@ -263,6 +264,18 @@ describe('print and PDF workbook readiness coordination', () => {
       .toEqual(labels.map((label) => [`>${label}</span>`]))
     await host.print(job, { deviceName: null, pages: null, copies: 1, collate: true })
     expect(printWorkbookMock.mock.calls[0]?.[0].html).toBe(assemblePrintHtml(job.documents).html)
+  })
+
+  it('sets the print area from the full worksheet selection', () => {
+    const runOps = vi.fn().mockResolvedValue({ ok: true })
+    const ctx = createMockContext(createMockState(), [[0, 0], [1, 1]])
+    handlePageLayoutCommand({ ...ctx, runOps }, 'print-area:set')
+
+    expect(runOps).toHaveBeenCalledWith([{
+      op: 'set_page_setup',
+      sheetId: 'sheet-1',
+      printArea: 'A1:A1,B2:B2',
+    }], expect.any(String))
   })
 
   it('PDF export of a streamed workbook preloads it first and exports', async () => {
