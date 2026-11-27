@@ -909,9 +909,13 @@ window.__ModuleLoader__.load({
                   creationStatus.set(null)
                 }
                 if (requestId && requestId !== shown.current) {
-                  shown.current = requestId
                   const connection=await fetch(previewUrl(),{signal:controller.signal,cache:'no-store'})
-                  if(connection.status===428&&!controller.signal.aborted)setOrigin((await connection.json()).origin??'')
+                  if(connection.status===428){
+                    const {origin}=await connection.json()
+                    if(controller.signal.aborted)return
+                    setOrigin(origin??'')
+                    shown.current=requestId
+                  }
                 } else if(!requestId&&shown.current) {
                   shown.current=null
                   setOrigin(null)

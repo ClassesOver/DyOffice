@@ -42,6 +42,37 @@ test('a DyOffice command activates a fresh conversation without activating it fo
   assert.equal(view.isActive(projection.replace({nodes:[]})),false)
 })
 
+test('a pending conversation retries the authorization prompt after a temporary service error',async()=>{
+  let start,poll,lookups=0,requestId='pending'
+  const origins=[]
+  const react={useRef:()=>({current:null}),useState:value=>[value,origin=>origins.push(origin)],useEffect:effect=>{start=effect}}
+  runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{
+    URL,AbortController,setTimeout:fn=>{poll=fn;return 1},clearTimeout(){},
+    fetch:async url=>{
+      if(url.searchParams.has('authorizationSession'))return {ok:true,json:async()=>({requestId})}
+      return ++lookups===1?{status:503}:{status:428,json:async()=>({origin:'https://office.example'})}
+    },
+    window:{location:{href:'http://localhost/'},__ModuleLoader__:{load({factory}){
+      factory(()=>react).apply({effect:f=>f(),on(){},locale:{bind(){},register(){}},sidebarRightTabs:{register(){}},
+        uiConversation:{events:{register(){}},views:{register(){}},binding:()=>({activate(){}})},
+        slots:{inject:(_,f)=>f(),register:(spec,render)=>{if(spec.name==='conversation.input.overlay')render({sessionId:'session'})}},
+      })
+    }}},
+  })
+  const stop=start()
+  try {
+    await new Promise(resolve=>setImmediate(resolve))
+    assert.deepEqual(origins,[])
+    await poll()
+    await poll()
+    assert.deepEqual(origins,['https://office.example'])
+    assert.equal(lookups,2)
+    requestId=null
+    await poll()
+    assert.deepEqual(origins,['https://office.example',null])
+  } finally {stop()}
+})
+
 test('a delivered thumbnail opens in the right preview only on click',async()=>{
   const slots=new Map(),opened=[]
   const react={createElement:(component,props,...children)=>({component,props,children}),useEffect:f=>f(),useState:x=>[x,()=>{}]}
