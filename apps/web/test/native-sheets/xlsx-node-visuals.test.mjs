@@ -1318,6 +1318,21 @@ test('places nested group shapes and straight connectors with read-only child lo
   assert.ok(rotatedPicture?.groupTransform)
   assert.notEqual(rotatedChart.groupTransform.matrix[1], 0)
 
+  // The linearly scaled, reflected parent has no rotation of its own.
+  zip.file(drawingPath, reflectedDrawing
+    .replace('<a:chExt cx="50000" cy="100000"/>', '<a:chExt cx="50000" cy="50000"/>')
+    .replace('<xdr:xfrm><a:off x="60000" y="80000"/>', '<xdr:xfrm rot="5400000" flipH="1"><a:off x="60000" y="80000"/>'))
+  const reoriented = workbookFileSchema.shape.visuals.parse(
+    JSON.parse(JSON.stringify(await readWorkbookVisuals(textOf(zip), sourceSheet, theme))),
+  )
+  const reorientedChart = reoriented.find(visual => visual.id === chart.id)
+  const reorientedPicture = reoriented.find(visual => visual.id === picture.id)
+  assert.deepEqual(reorientedChart?.groupTransform, { matrix: [0, 2, -2, 0], width: 20000, height: 15000 })
+  assert.deepEqual(reorientedChart.anchor, {
+    fromRow: 2, fromColumn: 1, fromRowOffset: 107000, fromColumnOffset: 126000,
+    toRow: 2, toColumn: 1, toRowOffset: 147000, toColumnOffset: 156000,
+  })
+
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-group-image-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   await buildSheetsGateway(join(directory, 'gateway.mjs'))
@@ -1334,11 +1349,11 @@ test('places nested group shapes and straight connectors with read-only child lo
   const savedVisuals = (await runtime.sheetsNative.inspect(saved)).visuals
   const savedChart = savedVisuals.find(visual => visual.id === chart.id)
   assert.equal(savedChart.chart.title, 'Edited chart in group')
-  assert.deepEqual(savedChart.anchor, rotatedChart.anchor)
-  assert.deepEqual(savedChart.groupTransform, rotatedChart.groupTransform)
+  assert.deepEqual(savedChart.anchor, reorientedChart.anchor)
+  assert.deepEqual(savedChart.groupTransform, reorientedChart.groupTransform)
   assert.equal(savedVisuals.find(visual => visual.id === standalone.id).chart.title, standalone.chart.title)
   const savedPicture = savedVisuals.find(visual => visual.id === picture.id)
-  assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(rotatedPicture)))
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPicture)), JSON.parse(JSON.stringify(reorientedPicture)))
   assert.deepEqual(await runtime.sheetsNative.readMedia(saved, picture.id), {
     mediaType: 'image/svg+xml', base64: Buffer.from(svg).toString('base64'),
   })

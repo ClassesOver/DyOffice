@@ -823,6 +823,11 @@ fn expands_group_chart_children_with_their_part_path() {
                 <xdr:xfrm flipH="true"><a:off x="20" y="30"/><a:ext cx="40" cy="10"/></xdr:xfrm>
                 <a:graphic><a:graphicData><c:chart r:id="rId7"/></a:graphicData></a:graphic>
               </xdr:graphicFrame>
+              <xdr:graphicFrame>
+                <xdr:nvGraphicFramePr><xdr:cNvPr id="3" name="rotated chart child"/></xdr:nvGraphicFramePr>
+                <xdr:xfrm rot="5400000" flipH="true"><a:off x="20" y="30"/><a:ext cx="40" cy="10"/></xdr:xfrm>
+                <a:graphic><a:graphicData><c:chart r:id="rId7"/></a:graphicData></a:graphic>
+              </xdr:graphicFrame>
             </xdr:grpSp></xdr:wsDr>"#
     );
     let document = Document::parse(&xml).unwrap();
@@ -867,7 +872,7 @@ fn expands_group_chart_children_with_their_part_path() {
         GroupMapping::default(),
     )
     .unwrap();
-    assert_eq!(visuals.len(), 1);
+    assert_eq!(visuals.len(), 2);
     let child = &visuals[0];
     assert_eq!(child.kind, "chart");
     assert_eq!(child.chart_path.as_deref(), Some("xl/charts/chart1.xml"));
@@ -882,6 +887,14 @@ fn expands_group_chart_children_with_their_part_path() {
         child.drawing_index.is_none(),
         "group children are read-only"
     );
+    let rotated = &visuals[1];
+    assert_eq!(rotated.anchor.from_column_offset, 35);
+    assert_eq!(rotated.anchor.to_column_offset, 45);
+    assert_eq!(rotated.anchor.from_row_offset, 45);
+    assert_eq!(rotated.anchor.to_row_offset, 85);
+    let transform = rotated.group_transform.as_ref().unwrap();
+    assert_eq!(transform.matrix, [0.0, 1.0, -1.0, 0.0]);
+    assert_eq!((transform.width, transform.height), (40.0, 10.0));
 }
 
 #[test]

@@ -838,8 +838,11 @@ const groupTransform = (node: XmlElement) => child(drawingMainPart(node, 'grpSpP
 const transformValue = (transform: XmlElement | undefined, part: string, key: string) => integer(attribute(child(transform, part), key))
 const groupChildTags = new Set(['grpSp', 'sp', 'cxnSp', 'pic', 'graphicFrame'])
 
-function drawingOrientation(transform: XmlElement | undefined): DrawingMatrix {
-  const radians = ((finite(attribute(transform, 'rot')) ?? 0) % 21_600_000) * Math.PI / 10_800_000
+function drawingRotation(transform: XmlElement | undefined): number {
+  return ((finite(attribute(transform, 'rot')) ?? 0) % 21_600_000) * Math.PI / 10_800_000
+}
+
+function drawingOrientation(transform: XmlElement | undefined, radians: number): DrawingMatrix {
   const cos = Math.cos(radians)
   const sin = Math.sin(radians)
   const flipX = trueAttribute(transform, 'flipH') ? -1 : 1
@@ -877,7 +880,8 @@ async function readGroupVisuals(
   async function expand(node: XmlElement, box: GroupBox, depth: number, parent: DrawingTransform, parentRotated: boolean) {
     const transform = groupTransform(node)
     if (depth > 32) return
-    const rotated = parentRotated || (finite(attribute(transform, 'rot')) ?? 0) % 21_600_000 !== 0
+    const rotation = drawingRotation(transform)
+    const rotated = parentRotated || rotation !== 0
     const originX = transformValue(transform, 'chOff', 'x') ?? 0
     const originY = transformValue(transform, 'chOff', 'y') ?? 0
     const extentX = transformValue(transform, 'chExt', 'cx')
@@ -886,7 +890,7 @@ async function readGroupVisuals(
     const childHeight = extentY !== undefined && extentY > 0 ? extentY : box.height
     const scaleX = box.width / childWidth
     const scaleY = box.height / childHeight
-    const [a, b, c, d] = drawingOrientation(transform)
+    const [a, b, c, d] = drawingOrientation(transform, rotation)
     const matrix = multiplyDrawingMatrices(parent.matrix, [a * scaleX, b * scaleX, c * scaleY, d * scaleY])
     const [e, f, g, h] = parent.matrix
     const localCenterX = box.x + box.width / 2
@@ -918,9 +922,12 @@ async function readGroupVisuals(
         if (width > 0 && height > 0) await expand(entry, { x, y, width, height }, depth + 1, world, rotated)
         continue
       }
-      const orientation = drawingOrientation(transform)
+      const childRotation = drawingRotation(transform)
+      const orientation = drawingOrientation(transform, childRotation)
       // An unequal parent scale must apply after a child's rotation.
-      const useMatrix = rotated || (orientation[1] !== 0 && Math.abs(matrix[0]) !== Math.abs(matrix[3]))
+      // Grouped chart frames use the matrix for their own rotation as well.
+      const useMatrix = rotated || (entry.tag === 'graphicFrame' && childRotation !== 0)
+        || (orientation[1] !== 0 && Math.abs(matrix[0]) !== Math.abs(matrix[3]))
       const childMatrix = useMatrix ? multiplyDrawingMatrices(matrix, orientation) : matrix
       const centerX = world.x + matrix[0] * (x + width / 2) + matrix[2] * (y + height / 2)
       const centerY = world.y + matrix[1] * (x + width / 2) + matrix[3] * (y + height / 2)

@@ -1055,9 +1055,13 @@ pub(crate) fn expand_group(
             }
             continue;
         }
-        let orientation = drawing_orientation(child_xfrm, xfrm_radians(child_xfrm));
+        let child_rotation = xfrm_radians(child_xfrm);
+        let orientation = drawing_orientation(child_xfrm, child_rotation);
         // An unequal parent scale must apply after the child's rotation.
-        let use_matrix = rotated || (orientation[1] != 0.0 && matrix[0].abs() != matrix[3].abs());
+        // Grouped chart frames use the matrix for their own rotation as well.
+        let use_matrix = rotated
+            || (is_frame && child_rotation != 0.0)
+            || (orientation[1] != 0.0 && matrix[0].abs() != matrix[3].abs());
         let child_matrix = if use_matrix {
             multiply_drawing_matrices(matrix, orientation)
         } else {
