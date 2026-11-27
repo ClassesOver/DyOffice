@@ -69,6 +69,10 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   const workbookRels = 'xl/_rels/workbook.xml.rels'
   const chartSheet = 'xl/chartsheets/sheet1.xml'
   const chartSheetRels = 'xl/chartsheets/_rels/sheet1.xml.rels'
+  const headerVmlPath = 'xl/drawings/chart-header.vml'
+  const headerVml = '<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">' +
+    '<v:shape id="LH" style="width:1in;height:48px"><v:imagedata o:relid="logo"/></v:shape></xml>'
+  const headerPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jT4sAAAAASUVORK5CYII='
   const extension = '<extLst><ext uri="urn:example"><sheetPr xmlns="urn:example"><tabColor rgb="FF999999"/></sheetPr><sheetData xmlns="urn:example"/></ext></extLst>'
   zip.file(workbook, (await text(workbook))
     .replace('<workbookView/>', '<workbookView activeTab="1"/>')
@@ -76,10 +80,16 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   zip.file(workbookRels, (await text(workbookRels)).replace('</Relationships>',
     `<Relationship Id="rId9" Type="${relationships}chartsheet" Target="chartsheets/sheet1.xml"/></Relationships>`))
   zip.file('[Content_Types].xml', (await text('[Content_Types].xml')).replace('</Types>',
+    '<Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>' +
     `<Override PartName="/${chartSheet}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>`))
   zip.file(chartSheet, `<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1" zoomScale="125" zoomToFit="1"/></sheetViews><drawing r:id="rId1"/>${extension}</chartsheet>`)
-  zip.file(chartSheetRels, await text('xl/worksheets/_rels/sheet1.xml.rels'))
+    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1" zoomScale="125" zoomToFit="1"/></sheetViews><headerFooter><oddHeader>&amp;L&amp;G</oddHeader></headerFooter><drawing r:id="rId1"/><legacyDrawingHF r:id="header"/>${extension}</chartsheet>`)
+  zip.file(chartSheetRels, (await text('xl/worksheets/_rels/sheet1.xml.rels')).replace('</Relationships>',
+    `<Relationship Id="header" Type="${relationships}vmlDrawing" Target="../drawings/chart-header.vml"/></Relationships>`))
+  zip.file(headerVmlPath, headerVml)
+  zip.file('xl/drawings/_rels/chart-header.vml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    `<Relationship Id="logo" Type="${relationships}image" Target="../media/chart-header.png"/></Relationships>`)
+  zip.file('xl/media/chart-header.png', Buffer.from(headerPng, 'base64'))
   const worksheet = 'xl/worksheets/sheet1.xml'
   zip.file(worksheet, (await text(worksheet)).replace(/<drawing\b[^>]*\/>/, ''))
   zip.file(drawingPath, (await text(drawingPath))
@@ -136,27 +146,38 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal(original.yAxis?.displayUnitLabel, 'Thousands')
   assert.equal(original.yAxis?.numFmt, '0.0')
   assert.equal(original.legend, 'right')
+  const inspectHeaderPicture = async (input, sheetName = 'Chart') => {
+    const { pageSetup } = await runtime.sheetsNative.readRange(input, sheetName,
+      { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+    assert.equal(pageSetup.headerFooterPictures?.length, 1)
+    const [{ id, ...picture }] = pageSetup.headerFooterPictures
+    assert.deepEqual(picture, { position: 'LH', widthPt: 72, heightPt: 36, mediaType: 'image/png' })
+    assert.deepEqual(await runtime.sheetsNative.readMedia(input, id), { mediaType: 'image/png', base64: headerPng })
+    return pageSetup
+  }
+  assert.equal((await inspectHeaderPicture(bytes)).oddHeader, '&L&G')
   const printRequest = sheetsSaveRequest('sheet-9', [])
   printRequest.pageSetupStates = [
     { sheetId: 'sheet-9', orientation: 'landscape', paperSize: 9,
-      margins: 'narrow', header: { center: 'Chart &P' }, footer: { right: 'Quarterly' } },
+      margins: 'narrow', header: { left: '&G', center: 'Chart &P' }, footer: { right: 'Quarterly' } },
     { sheetId: 'sheet-1', orientation: 'portrait', printGridlines: true },
   ]
   const printSaved = (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, printRequest))).bytes
-  const printRange = await runtime.sheetsNative.readRange(printSaved, 'Chart',
-    { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
-  assert.equal(printRange.pageSetup.orientation, 'landscape')
-  assert.equal(printRange.pageSetup.paperSize, 9)
-  assert.equal(printRange.pageSetup.margins.left, 0.25)
-  assert.equal(printRange.pageSetup.oddHeader, '&CChart &P')
-  assert.equal(printRange.pageSetup.oddFooter, '&RQuarterly')
+  const printSetup = await inspectHeaderPicture(printSaved)
+  assert.equal(printSetup.orientation, 'landscape')
+  assert.equal(printSetup.paperSize, 9)
+  assert.equal(printSetup.margins.left, 0.25)
+  assert.equal(printSetup.oddHeader, '&L&G&CChart &P')
+  assert.equal(printSetup.oddFooter, '&RQuarterly')
   const worksheetPrintRange = await runtime.sheetsNative.readRange(printSaved, 'Acceptance',
     { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
   assert.equal(worksheetPrintRange.pageSetup.orientation, 'portrait')
   assert.equal(worksheetPrintRange.pageSetup.printGridlines, true)
-  const printXml = await textOf(await JSZip.loadAsync(printSaved))(chartSheet)
+  const printedPackage = textOf(await JSZip.loadAsync(printSaved))
+  const printXml = await printedPackage(chartSheet)
   assert.match(printXml, /<pageMargins\b[^>]*\/><pageSetup\b[^>]*\/><headerFooter>[\s\S]*?<\/headerFooter><drawing/)
   assert.ok(printXml.includes(extension))
+  assert.equal(await printedPackage(headerVmlPath), headerVml)
   const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 7, value: 42, writeValue: true }])
   request.pageSetupStates = [{ sheetId: 'sheet-9', zoomScale: 150 }]
   request.chartEdits = [{ chartPath, title: 'Chart sheet revenue', legend: 'bottom', axisTitles: { value: 'Net revenue' } }]
@@ -209,6 +230,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   const copy = copiedMetadata.sheets.find(({ name }) => name === 'Chart Copy')
   assert.equal(copy?.tabColor, '#654321')
   assert.equal(copy?.zoomScale, 150)
+  assert.equal((await inspectHeaderPicture(copied, 'Chart Copy')).oddHeader, '&L&G')
   const copiedVisual = copiedMetadata.visuals.find(({ sheetId }) => sheetId === copy.id)
   assert.equal(copiedVisual?.kind, 'chart')
   assert.notEqual(copiedVisual.chartPath, chartPath)
@@ -228,6 +250,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   removeCopy.sheetOrder = ['sheet-1', 'sheet-9']
   const removed = await save(edited, removeCopy)
   assert.equal((await inspect(removed, '#654321', 150)).title, 'Chart sheet revenue')
+  assert.equal((await inspectHeaderPicture(removed)).oddHeader, '&L&G')
   assert.equal((await JSZip.loadAsync(removed)).file(copiedVisual.chartPath), null)
 })
 

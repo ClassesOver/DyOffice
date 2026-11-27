@@ -786,6 +786,18 @@ async function readWorkbookStyles(text: ZipText) {
   return {styles,theme,themeFonts,normalFontName,color,dxfStyles,readRunStyle,customTableStyles}
 }
 
+function headerFooterMetadata(pageSetup: SheetMetadata['pageSetup'], pictures: Awaited<ReturnType<typeof readHeaderFooterPictures>>) {
+  const headerFooterMedia = new Map<string, string>()
+  const headerFooterPictures = pictures.map(({ mediaPath, ...picture }) => {
+    headerFooterMedia.set(picture.id, mediaPath)
+    return picture
+  })
+  return {
+    pageSetup: headerFooterPictures.length ? { ...pageSetup, headerFooterPictures } : pageSetup,
+    headerFooterMedia,
+  }
+}
+
 async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:readonly string[],
   imageSources:Awaited<ReturnType<typeof readCellImageSources>>,hasPart:(path:string)=>boolean,
   customTableStyles:ReturnType<typeof readCustomTableStyles>) {
@@ -800,6 +812,8 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
     const path = resolveWorkbookSheetTarget(rel.target)
     if (!hasPart(path)) continue
     const sheetXml = normalizeOoxmlPartPrefix(await text(path))
+    const loadHeaderPictures = () => sheetXml.includes('legacyDrawingHF')
+      ? readHeaderFooterPictures(text, path, sheetIndex, hasPart) : []
     if (rel.type.endsWith('/chartsheet')) {
       const root = spreadsheetSheetRoot(sheetXml)
       const children = root ? scopedChildren(root).filter(node => node.namespace === root.namespace) : []
@@ -810,7 +824,8 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
       const savedZoom = sizeValue(view?.attributes.get('zoomScale'))
       const zoomScale = savedZoom ? Math.max(10, Math.min(400, Math.round(savedZoom))) : 100
       sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,
-        pageSetup:readPageSetup(children),headerFooterMedia:new Map(),view:{tabColor:resolveColor(color).rgb??null,
+        ...headerFooterMetadata(readPageSetup(children), await loadHeaderPictures()),
+        view:{tabColor:resolveColor(color).rgb??null,
           showGridLines:false,showRowColHeaders:false,zoomScale:zoomScale===100?undefined:zoomScale}})
       continue
     }
@@ -828,18 +843,10 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
     const [comments,tables,headerPictures]=await Promise.all([
       readNodeSheetComments(text,path),
       readWorksheetTables(text,path,xml,theme,customTableStyles),
-      xml.includes('legacyDrawingHF') ? readHeaderFooterPictures(text,path,sheetIndex,hasPart) : [],
+      loadHeaderPictures(),
     ])
     const metadata=readWorksheetMetadata(xml,resolveColor,linkTargets)
-    const headerFooterMedia=new Map<string,string>()
-    if(headerPictures.length) {
-      const headerFooterPictures=headerPictures.map(({mediaPath,...picture})=>{
-        headerFooterMedia.set(picture.id,mediaPath)
-        return picture
-      })
-      metadata.pageSetup={...metadata.pageSetup,headerFooterPictures}
-    }
-    sheets.set(sheet.name,{...metadata,comments,tables,headerFooterMedia,
+    sheets.set(sheet.name,{...metadata,comments,tables,...headerFooterMetadata(metadata.pageSetup, headerPictures),
       imageCells:readSheetCellImages(xml,imageSources)})
   }
   return sheets
