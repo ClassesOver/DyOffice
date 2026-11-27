@@ -2469,7 +2469,7 @@ export function unescapeCssLeadingDigit(family: string): string {
   return family.replace(/^\\3([0-9]) /, '$1')
 }
 
-function extractRichText(p: unknown): { text: string; runs?: WorkbookRichRun[] } | undefined {
+export function extractRichText(p: unknown): { text: string; runs?: WorkbookRichRun[] } | undefined {
   if (typeof p !== 'object' || p === null) return undefined
   const body = (p as Record<string, unknown>).body
   if (typeof body !== 'object' || body === null) return undefined
@@ -2477,8 +2477,7 @@ function extractRichText(p: unknown): { text: string; runs?: WorkbookRichRun[] }
   if (typeof dataStream !== 'string') return undefined
   // Univer streams paragraph breaks as \r; the file model (and xlsx) use \n.
   const text = dataStream
-    .replace(/\r?\n$/, '')
-    .replace(/\r$/, '')
+    .replace(/(?:\r\n|[\r\n])$/, '')
     .replace(/\r/g, '\n')
   const runs = extractRichRuns(text, (body as Record<string, unknown>).textRuns)
   return runs === undefined ? { text } : { text, runs }

@@ -12,9 +12,9 @@ import { columnIndex, columnLabel } from '@genoffice/xlsx-gateway/domain/cell-ad
 import { parsePrintTitleSpan } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import { MAX_GRID_COLUMNS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 
-import type { WorkbookExportPdfRequest } from '../shared/desktop-api'
+import type { WorkbookExportPdfRequest, WorkbookRichRun } from '../shared/desktop-api'
 import { CENTER_ACROSS_END_KEY } from './center-continuous'
-import type { HeaderFooterParts } from './edit-journal'
+import { extractRichText, type HeaderFooterParts } from './edit-journal'
 import { expandHeaderFooterCodes, headerFooterRuns, type HeaderFooterTheme } from './print-hf-codes'
 import {
   bodyColumns,
@@ -461,6 +461,7 @@ export function layoutSheetPrint(
   // rows and columns use the sheet dimensions and have no cell content.
   const modelRows = worksheet.getMaxRows?.() ?? Infinity
   const modelColumns = worksheet.getMaxColumns?.() ?? Infinity
+  const matrix = sheet?.getCellMatrix?.()
   const hasCell = (row: number, column: number): boolean => row < modelRows && column < modelColumns
   const areaData = areas.map((area) => {
     const rows = Math.min(area.endRow + 1, modelRows) - area.startRow
@@ -485,6 +486,7 @@ export function layoutSheetPrint(
 
   const cellContentAt = (data: (typeof areaData)[number], row: number, column: number) => {
     const { area } = data
+    const rich = extractRichText(matrix?.getRow(row)?.[column]?.p)
     if (
       row >= area.startRow &&
       row <= area.endRow &&
@@ -494,22 +496,23 @@ export function layoutSheetPrint(
       const rowIndex = row - area.startRow
       const columnIndex = column - area.startColumn
       return {
-        text: data.display[rowIndex]?.[columnIndex] ?? '',
+        text: rich?.text ?? data.display[rowIndex]?.[columnIndex] ?? '',
         raw: data.raw[rowIndex]?.[columnIndex],
+        runs: rich?.runs,
       }
     }
     // Titles can print outside the cached area. Read the same raw value and
     // formatted text there without loading the intervening cells.
     const range = hasCell(row, column) ? worksheet.getRange(row, column, 1, 1) : null
     return {
-      text: range?.getDisplayValues()[0]?.[0] ?? '',
+      text: rich?.text ?? range?.getDisplayValues()[0]?.[0] ?? '',
       raw: range?.getValues()[0]?.[0],
+      runs: rich?.runs,
     }
   }
 
   const styleAt = (row: number, column: number): PrintCellStyle | null =>
     hasCell(row, column) ? worksheet.getRange(row, column).getCellStyleData() : null
-  const matrix = sheet?.getCellMatrix?.()
   const centerAcrossRuns = new Map<number, readonly { column: number; widthPt: number }[]>()
   const centerAcrossForRow = (row: number) => {
     const cached = centerAcrossRuns.get(row)
@@ -559,7 +562,7 @@ export function layoutSheetPrint(
     const diagonals = style?.bd?.tl_br || style?.bd?.bl_tr
       ? cellDiagonalHtml(style, mergedWidthPt ?? columnWidthPt(column), heightPt, rightToLeft, blackAndWhite)
       : ''
-    const { text, raw } = cellContentAt(data, row, column)
+    const { text, raw, runs } = cellContentAt(data, row, column)
     const horizontalAlign = cellHorizontalAlign(style, raw)
     const gridlines = setup.printGridlines && !worksheetDraft &&
       (dataArea === null || (row <= dataArea.endRow && column <= dataArea.endColumn))
@@ -579,10 +582,11 @@ export function layoutSheetPrint(
       right: borderEdge(style, 'r') !== undefined || (gridlines && !custom(row, near.rightOf, 'l')),
     }
     return (
-      `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, horizontalAlign, gridlines, blackAndWhite, rightToLeft, edges)}">` +
+      `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, horizontalAlign, gridlines, blackAndWhite, rightToLeft, edges, runs !== undefined)}">` +
       diagonals +
       cellTextHtml(hideText ? '' : text, style, horizontalAlign, heightPt,
-        mergedWidthPt ?? columnWidthPt(column), rightToLeft) +
+        mergedWidthPt ?? columnWidthPt(column), rightToLeft,
+        !hideText && runs ? richCellHtml(runs, blackAndWhite) : undefined) +
       '</td>'
     )
   }
@@ -629,19 +633,20 @@ export function layoutSheetPrint(
             if (offset === undefined) continue
             const style = styleAt(row, column)
             if (style?.ht !== 2) continue
-            const { text } = cellContentAt(data, row, column)
+            const { text, runs } = cellContentAt(data, row, column)
             if (!text) continue
             const start = Math.max(0, offset)
             const end = Math.min(band.sizePt, offset + widthPt)
             const left = rightToLeft ? tableWidthPt - band.positionPt - end : band.positionPt + start
             const textLeft = rightToLeft ? end - offset - widthPt : offset - start
             const fontCss = cellCss({ ...style, bg: null }, 'center', false, blackAndWhite, rightToLeft,
-              { top: false, bottom: false, left: false, right: false })
+              { top: false, bottom: false, left: false, right: false }, runs !== undefined)
             textOverlays.push(
               `<div class="center-across-clip" style="left:${round(left)}pt;top:${round(rowTopPt)}pt;` +
               `width:${round(end - start)}pt;height:${round(heightPt)}pt">` +
               `<div class="center-across-text" style="left:${round(textLeft)}pt;width:${round(widthPt)}pt;${fontCss}">` +
-              cellTextHtml(text, style, 'center', heightPt, widthPt, rightToLeft) + '</div></div>',
+              cellTextHtml(text, style, 'center', heightPt, widthPt, rightToLeft,
+                runs ? richCellHtml(runs, blackAndWhite) : undefined) + '</div></div>',
             )
             centered.add(column)
           }
@@ -1283,6 +1288,7 @@ function cellTextHtml(
   heightPt: number,
   widthPt: number,
   rightToLeft: boolean,
+  richHtml?: string,
 ): string {
   const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
   const leftPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.l ?? 0, 0) * 0.75
@@ -1296,8 +1302,34 @@ function cellTextHtml(
   return (
     `<div class="c${orientation ? ' oriented' : ''}" style="height:${round(heightPt)}pt;align-items:${align}${padding}">` +
     `<span${orientation ? ` class="oriented-text" style="${orientation}"` : ''}` +
-    `${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div>`
+      `${rightToLeft ? ' dir="auto"' : ''}>${richHtml ?? escapeHtml(text)}</span></div>`
   )
+}
+
+function fontFamilyCss(name: string | null | undefined): string | undefined {
+  // Font names come from the workbook. Keep stylesheet metacharacters
+  // out of the inline style, and fall back to the normal print stack.
+  const family = name?.replace(/[^\p{L}\p{N} \-_.]/gu, '')
+  return family
+    ? `font-family:'${family}',Calibri,'Helvetica Neue',Arial,${printCjkFonts(getLang())},sans-serif`
+    : undefined
+}
+
+function richCellHtml(runs: readonly WorkbookRichRun[], blackAndWhite: boolean): string {
+  return runs.map((run) => {
+    const rules = [`font-weight:${run.bold ? 700 : 400}`, `font-style:${run.italic ? 'italic' : 'normal'}`]
+    const decorations = [
+      run.underline ? 'underline' : '',
+      run.strikethrough ? 'line-through' : '',
+    ].filter(Boolean)
+    if (decorations.length > 0) rules.push(`text-decoration:${decorations.join(' ')}`)
+    if (run.size && Number.isFinite(run.size) && run.size > 0) rules.push(`font-size:${round(run.size)}pt`)
+    if (run.color) rules.push(`color:${blackAndWhite ? '#000000' : cssColor(run.color)}`)
+    const family = fontFamilyCss(run.family)
+    if (family) rules.push(family)
+    if (run.vertAlign) rules.push(`vertical-align:${run.vertAlign === 'subscript' ? 'sub' : 'super'}`)
+    return `<span style="${rules.join(';')}">${escapeHtml(run.text)}</span>`
+  }).join('')
 }
 
 function cellHorizontalAlign(style: PrintCellStyle | null, rawValue: unknown): HorizontalAlignment {
@@ -1362,6 +1394,7 @@ function cellCss(
   blackAndWhite: boolean,
   rightToLeft: boolean,
   edges: { top: boolean; bottom: boolean; left: boolean; right: boolean },
+  hasRichText = false,
 ): string {
   const rules: string[] = []
   if (style?.bl === 1) rules.push('font-weight:700')
@@ -1370,17 +1403,10 @@ function cellCss(
     style?.ul?.s === 1 ? 'underline' : '',
     style?.st?.s === 1 ? 'line-through' : '',
   ].filter(Boolean)
-  if (decorations.length > 0) rules.push(`text-decoration:${decorations.join(' ')}`)
+  if (!hasRichText && decorations.length > 0) rules.push(`text-decoration:${decorations.join(' ')}`)
   if (style?.fs) rules.push(`font-size:${round(style.fs)}pt`)
-  // a font name comes straight from styles.xml; anything outside the whitelist could
-  // close the style attribute and inject markup into the exported page
-  const family = style?.ff?.replace(/[^\p{L}\p{N} \-_.]/gu, '')
-  // fallbacks mirror the body stack: an uninstalled family (e.g. Aptos)
-  // must not drop to the browser's serif default in the exported page
-  if (family)
-    rules.push(
-      `font-family:'${family}',Calibri,'Helvetica Neue',Arial,${printCjkFonts(getLang())},sans-serif`,
-    )
+  const family = fontFamilyCss(style?.ff)
+  if (family) rules.push(family)
   if (style?.cl?.rgb) rules.push(`color:${blackAndWhite ? '#000000' : cssColor(style.cl.rgb)}`)
   const fill = !blackAndWhite && style?.bg?.rgb ? cssColor(style.bg.rgb) : undefined
   const shadows: string[] = []

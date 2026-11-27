@@ -1152,6 +1152,41 @@ describe('layoutSheetPrint', () => {
     expect(body).toContain('rotate(-45deg)')
   })
 
+  it('prints rich-text runs, escapes the text, and keeps run styling in monochrome', () => {
+    const base = fakeWorksheet()
+    const text = 'Bold <&>\rTail\r\r\n'
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getSheet: () => ({
+        getRowVisible: () => true,
+        getColVisible: () => true,
+        getCellMatrix: () => ({
+          getRow: () => ({ 0: { p: { body: { dataStream: text, textRuns: [
+            { st: 0, ed: 4, ts: { bl: 1, ul: { s: 1 }, cl: { rgb: '#ff0000' }, fs: 14 } },
+            { st: 4, ed: 8, ts: { it: 1, va: 3, ff: 'Georgia' } },
+          ] } } } }),
+        }),
+      }),
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getDisplayValues: () => [[text]],
+        getCellStyleData: () => ({ bl: 1, ul: { s: 1 }, tb: 3 }),
+      }),
+    }
+    const setup = payloadSetup({ printAreas: ['A1:A1'] })
+    const body = layout(worksheet, setup).pages[0]?.body ?? ''
+    expect(body).toContain('font-weight:700;font-style:normal;text-decoration:underline;font-size:14pt;color:#ff0000">Bold</span>')
+    expect(body).toContain('font-weight:400;font-style:italic;')
+    expect(body).toContain("font-family:'Georgia'")
+    expect(body).toContain('vertical-align:super"> &lt;&amp;&gt;</span>')
+    expect(body).toContain('\nTail\n</span>')
+    expect(body).not.toMatch(/<td style="[^"]*text-decoration:underline/)
+
+    const mono = layout(worksheet, { ...setup, blackAndWhite: true }).pages[0]?.body ?? ''
+    expect(mono).toContain('font-size:14pt;color:#000000">Bold</span>')
+    expect(mono).not.toContain('#ff0000')
+  })
+
   it('preserves value alignment for titles outside the saved print area', () => {
     const values = [[0.25, '005'], [true, 12], [34, 99]]
     const display = [['25%', '005'], ['TRUE', '12'], ['34', '99']]
