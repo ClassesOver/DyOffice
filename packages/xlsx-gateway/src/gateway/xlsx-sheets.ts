@@ -5,7 +5,7 @@ import {
   readDefinedNameText,
   readWorksheetTagAttribute,
   rewriteDefinedNames,
-  rewriteWorksheetCore,
+  rewriteWorksheetCellFormulas,
   rewriteWorksheetHyperlinks,
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
@@ -133,8 +133,6 @@ export interface WorksheetRenameExemptions {
   readonly sparklineSources: ReadonlyMap<string, string>
 }
 
-const WORKSHEET_FORMULA =
-  /(<f(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/f>)/g
 const HYPERLINK_LOCATION = /^('(?:[^']|'')+'|[^'!]+)!([\s\S]*)$/
 function sheetNameLookup(renames: SheetEditPlan['renames']): SheetNameLookup {
   const names = new Map(renames.map(({ sheetName, newName }) => [sheetName.toLowerCase(), newName]))
@@ -205,16 +203,7 @@ function rewriteWorksheetReferences(
   rewriteLocation: ReferenceRewrite,
   preserve?: WorksheetRenameExemptions,
 ): string {
-  let xml = rewriteWorksheetCore(worksheetXml, (core) =>
-    core.replace(
-      WORKSHEET_FORMULA,
-      (full, opening: string, body: string, closing: string) => {
-        const formula = decodeEntities(body)
-        const rewritten = rewriteFormula(formula)
-        return rewritten === formula ? full : opening + escapeXmlText(rewritten) + closing
-      },
-    ),
-  )
+  let xml = rewriteWorksheetCellFormulas(worksheetXml, rewriteFormula)
   xml = rewriteWorksheetHyperlinks(xml, (location, cell) =>
     cell !== undefined && preserve?.hyperlinkLocations.get(cell) === location
       ? location

@@ -268,6 +268,26 @@ test(
       },
     )
     await t.test(
+      'moves and renames a cell formula while preserving embedded formulas',
+      async () => {
+        const extension = '<extLst><ext uri="urn:example:cell"><f xmlns="urn:example:cell">Acceptance!A2</f></ext></extLst>'
+        const namesake = '<other xmlns="urn:example:cell"><f>Acceptance!A2</f></other>'
+        const fixture = await book((xml) => beforeDrawing(
+          xml.replace('<c r="E2" s="3"><v>1234.567</v></c>',
+            '<c r="E2" s="3"><s:f xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><![CDATA[Acceptance!A2+A2]]></s:f><v>25</v>' +
+            extension + '</c>'), namesake,
+        ))
+        const cellFormula = async (bytes, tab, row, column) =>
+          (await read(bytes, tab)).cells.find((cell) => cell.row === row && cell.column === column)?.formula
+        assert.equal(await cellFormula(fixture, 'Acceptance', 1, 4), '=Acceptance!A2+A2')
+        const moved = await save(fixture, { structuralOps: insert, sheetOps: rename })
+        assert.equal(await cellFormula(moved, 'New Tab', 2, 5), "='New Tab'!B3+B3")
+        const xml = await (await JSZip.loadAsync(moved)).file(sheet).async('string')
+        assert.ok(xml.includes(extension))
+        assert.ok(xml.includes(namesake))
+      },
+    )
+    await t.test(
       'moves a quoted legacy array extent along with its master and formula',
       async () => {
         const fixture = (q) =>
