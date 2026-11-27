@@ -101,6 +101,17 @@ describe('printAreasFromFormula', () => {
     expect(printAreasFromFormula("'S'!#REF!,'S'!$D$3")).toEqual(['D3:D3'])
   })
 
+  it('keeps print areas on quoted sheet names containing an error-like string', () => {
+    expect(printAreasFromFormula("'O''Brien, #REF!'!$B$2:$B$3,#REF!")).toEqual(['B2:B3'])
+  })
+
+  it('falls back to the used range for addresses outside the worksheet grid', () => {
+    expect(printAreasFromFormula("'S'!$A$0:$B$2")).toEqual([])
+    expect(printAreasFromFormula("'S'!$A$1048577")).toEqual([])
+    expect(printAreasFromFormula("'S'!$XFE$1:$XFE$2")).toEqual([])
+    expect(printAreasFromFormula("'S'!$XFD$1048576")).toEqual(['XFD1048576:XFD1048576'])
+  })
+
   it('returns [] when absent', () => {
     expect(printAreasFromFormula(undefined)).toEqual([])
   })

@@ -6,6 +6,7 @@
  */
 import { columnIndex, columnLabel, parseRange } from '@genoffice/xlsx-gateway/domain/cell-address'
 import { encodeHeaderFooterSections } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import type { WorkbookPagePrintSettings } from '../shared/desktop-api'
 import type { HeaderFooterParts, PageSetupJournalState, StructuralJournalOp } from './edit-journal'
 import { matchHeaderFooterFormat } from './print-hf-codes'
@@ -285,17 +286,15 @@ export function printAreasFromFormula(formula: string | undefined): string[] {
   if (formula === undefined || formula === '') return []
   const areas: string[] = []
   for (const part of splitAreas(formula)) {
-    if (/#REF!/i.test(part)) continue
+    if (/#REF!/i.test(part.replace(/'(?:[^']|'')*'/g, ''))) continue
     const reference = plainReference(part).toUpperCase()
-    if (/^[A-Z]{1,3}[0-9]{1,7}$/.test(reference)) {
-      areas.push(`${reference}:${reference}`)
-      continue
-    }
-    if (/^[A-Z]{1,3}[0-9]{1,7}:[A-Z]{1,3}[0-9]{1,7}$/.test(reference)) {
-      areas.push(normaliseArea(reference))
-      continue
-    }
-    return []
+    if (!/^[A-Z]{1,3}[1-9]\d{0,6}(?::[A-Z]{1,3}[1-9]\d{0,6})?$/.test(reference)) return []
+    const bounds = parseRange(reference)
+    if (bounds.endRow >= MAX_GRID_ROWS || bounds.endColumn >= MAX_GRID_COLUMNS) return []
+    areas.push(
+      `${columnLabel(bounds.startColumn)}${bounds.startRow + 1}:` +
+        `${columnLabel(bounds.endColumn)}${bounds.endRow + 1}`,
+    )
   }
   return areas
 }
@@ -340,15 +339,6 @@ export function clampTitleRows(start: number, end: number): string {
   const safeStart = Number.isFinite(start) ? Math.max(1, Math.floor(start)) : 1
   const safeEnd = Number.isFinite(end) ? Math.floor(end) : safeStart
   return `${safeStart}:${Math.min(Math.max(safeEnd, safeStart), safeStart + MAX_PRINT_TITLE_ROWS - 1)}`
-}
-
-/// `$B$4:$A$1` → A1:B4; the print layout reads corners positionally.
-function normaliseArea(reference: string): string {
-  const bounds = parseRange(reference)
-  return (
-    `${columnLabel(bounds.startColumn)}${bounds.startRow + 1}:` +
-    `${columnLabel(bounds.endColumn)}${bounds.endRow + 1}`
-  )
 }
 
 /// Excel's encoded header/footer → left/center/right parts. Unmarked text
