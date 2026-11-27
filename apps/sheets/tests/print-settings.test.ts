@@ -1095,6 +1095,26 @@ describe('layoutSheetPrint', () => {
     expect(body.match(/class="oriented-text"/g)).toHaveLength(3)
   })
 
+  it('keeps spreadsheet text padding in printed horizontal and rotated cells', () => {
+    const base = fakeWorksheet()
+    const worksheet: PrintWorksheet = {
+      ...base,
+      getRange: (row, column, rows = 1, columns = 1) => ({
+        ...base.getRange(row, column, rows, columns),
+        getCellStyleData: () => column === 0
+          ? { pd: { l: 8 }, fs: 6 }
+          : { pd: { r: 16 }, ht: 3, tr: { a: 45 } },
+      }),
+    }
+    const document = layout(worksheet, payloadSetup({ printAreas: ['A1:B1'] }))
+    const body = document.pages[0]?.body ?? ''
+    expect(body).toContain('font-size:6pt;text-align:left')
+    expect(body).toContain('align-items:flex-end;padding-left:8pt')
+    expect(body).toContain('align-items:flex-end;padding-right:14pt')
+    expect(body).toContain('left:calc(100% - 14pt);top:100%;')
+    expect(body).toContain('rotate(-45deg)')
+  })
+
   it('preserves value alignment for titles outside the saved print area', () => {
     const values = [[0.25, '005'], [true, 12], [34, 99]]
     const display = [['25%', '005'], ['TRUE', '12'], ['34', '99']]

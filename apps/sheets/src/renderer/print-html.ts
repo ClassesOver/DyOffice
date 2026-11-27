@@ -61,6 +61,7 @@ const GRIDLINE_PT = 0.75
 /// The row/column heading strip (8.5pt text, padding, border).
 const HEADING_ROW_HEIGHT_PT = 14
 const HEADING_COLUMN_WIDTH_PT = 24
+const CELL_TEXT_INSET_PT = 2
 /// Header/footer text size before scaleWithDoc applies.
 const HEADER_FOOTER_FONT_SIZE_PT = 9
 
@@ -133,6 +134,7 @@ interface PrintCellStyle {
   readonly vt?: number
   readonly tb?: number
   readonly tr?: { readonly a?: number; readonly v?: number } | null
+  readonly pd?: { readonly l?: number; readonly r?: number } | null
   readonly bd?: Partial<
     Record<'t' | 'b' | 'l' | 'r' | 'tl_br' | 'bl_tr', { s?: number; cl?: { rgb?: string | null } | null } | null>
   > | null
@@ -519,8 +521,16 @@ export function layoutSheetPrint(
     const { text, raw } = cellContentAt(data, row, column)
     const align = style?.vt === 1 ? 'flex-start' : style?.vt === 2 ? 'center' : 'flex-end'
     const horizontalAlign = cellHorizontalAlign(style, raw)
+    const leftPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.l ?? 0, 0) * 0.75
+    const rightPaddingPt = CELL_TEXT_INSET_PT + finitePt(style?.pd?.r ?? 0, 0) * 0.75
+    const padding =
+      (leftPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-left:${round(leftPaddingPt)}pt`) +
+      (rightPaddingPt === CELL_TEXT_INSET_PT ? '' : `;padding-right:${round(rightPaddingPt)}pt`)
     const orientation = text && style?.tr
-      ? orientedTextCss(style, horizontalAlign, mergedWidthPt ?? columnWidthPt(column), heightPt)
+      ? orientedTextCss(
+          style, horizontalAlign, mergedWidthPt ?? columnWidthPt(column), heightPt,
+          leftPaddingPt, rightPaddingPt,
+        )
       : undefined
     const gridlines = setup.printGridlines && !worksheetDraft &&
       (dataArea === null || (row <= dataArea.endRow && column <= dataArea.endColumn))
@@ -542,7 +552,7 @@ export function layoutSheetPrint(
     return (
       `<td${span}${diagonals ? ' class="has-diagonal"' : ''} style="${cellCss(style, horizontalAlign, gridlines, blackAndWhite, rightToLeft, edges)}">` +
       diagonals +
-      `<div class="c${orientation ? ' oriented' : ''}" style="height:${round(heightPt)}pt;align-items:${align}">` +
+      `<div class="c${orientation ? ' oriented' : ''}" style="height:${round(heightPt)}pt;align-items:${align}${padding}">` +
       `<span${orientation ? ` class="oriented-text" style="${orientation}"` : ''}` +
       `${rightToLeft ? ' dir="auto"' : ''}>${escapeHtml(text)}</span></div></td>`
     )
@@ -770,7 +780,7 @@ body { font-family: Calibri, 'Helvetica Neue', Arial, ${printCjkFonts(lang)}, sa
 .hf img { vertical-align: bottom; }
 table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 td, th { padding: 0; border: 0; overflow: hidden; font-size: 11pt; vertical-align: bottom; }
-td .c { display: flex; overflow: hidden; padding: 0 2pt; line-height: 1.2; }
+td .c { display: flex; overflow: hidden; padding: 0 ${CELL_TEXT_INSET_PT}pt; line-height: 1.2; }
 td .c > span { width: 100%; }
 td .c.oriented { position: relative; }
 td .c > .oriented-text { position: absolute; width: max-content; transform-origin: left top; }
@@ -1215,6 +1225,8 @@ function orientedTextCss(
   align: HorizontalAlignment,
   widthPt: number,
   heightPt: number,
+  leftPaddingPt: number,
+  rightPaddingPt: number,
 ): string | undefined {
   const stacked = style.tr?.v === 1
   const angle = -(style.tr?.a ?? 0)
@@ -1222,7 +1234,13 @@ function orientedTextCss(
 
   const x = align === 'left' ? 0 : align === 'center' ? 0.5 : 1
   const y = style.vt === 1 ? 0 : style.vt === 2 ? 0.5 : 1
-  const left = x === 0 ? '2pt' : x === 0.5 ? '50%' : 'calc(100% - 2pt)'
+  const midpointShiftPt = round((leftPaddingPt - rightPaddingPt) / 2)
+  const center = midpointShiftPt === 0
+    ? '50%'
+    : `calc(50% ${midpointShiftPt < 0 ? '-' : '+'} ${Math.abs(midpointShiftPt)}pt)`
+  const left = x === 0
+    ? `${round(leftPaddingPt)}pt`
+    : x === 0.5 ? center : `calc(100% - ${round(rightPaddingPt)}pt)`
   const position = `left:${left};top:${y * 100}%;`
   if (stacked) {
     return position +
@@ -1241,7 +1259,7 @@ function orientedTextCss(
     `translate(${round4((originX - x) * cosine * 100)}%,${round4((originY - y) * cosine * 100)}%) ` +
     `rotate(${angle}deg) translate(${-originX * 100}%,${-originY * 100}%)`
   const lineWidthPt = Math.max(1, Math.min(
-    (widthPt - 4) / cosine,
+    (widthPt - leftPaddingPt - rightPaddingPt) / cosine,
     heightPt / Math.abs(Math.sin(radians)),
   ))
   return position + `transform:${transform}` +
