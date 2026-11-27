@@ -807,6 +807,14 @@ describe('applyChartEdit gridlines', () => {
     )
   })
 
+  it('recognizes spaced gridline markup and inserts on an axis without axPos', () => {
+    const spaced = AXIS_CHART.replace('<c:majorGridlines/>', '<c:majorGridlines />')
+    expect(applyChartEdit(spaced, { chartPath: 'xl/charts/chart1.xml', gridlines: true })).toBe(spaced)
+    const noPosition = NO_GRID.replace('<c:delete val="0"/><c:axPos val="l"/>', '')
+    const edited = applyChartEdit(noPosition, { chartPath: 'xl/charts/chart1.xml', gridlines: true })
+    expect(edited).toContain('<c:axId val="222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:majorGridlines/>')
+  })
+
   it('false removes the element, expanded form included', () => {
     const removed = applyChartEdit(AXIS_CHART, {
       chartPath: 'xl/charts/chart1.xml',
@@ -1134,6 +1142,26 @@ const SCATTER_CHART =
   '</c:plotArea></c:chart></c:chartSpace>'
 
 describe('applyChartEdit scatter series data', () => {
+  it('edits Y-axis bounds, title, and gridlines without changing the X axis', () => {
+    const gridlines = '<c:majorGridlines><c:spPr><a:ln w="12700">' +
+      '<a:solidFill><a:srgbClr val="336699"/></a:solidFill><a:prstDash val="dash"/>' +
+      '</a:ln></c:spPr></c:majorGridlines>'
+    const source = SCATTER_CHART.replace('<c:axPos val="l"/>',
+      "<c:axPos val='l' />" + gridlines)
+    const x = '<c:valAx><c:axId val="111"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
+      '<c:delete val="0"/><c:axPos val="b"/><c:crossAx val="222"/></c:valAx>'
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      valueAxis: { min: 10, max: 80 },
+      axisTitles: { value: 'Measured Y' },
+      gridlines: true,
+    })
+    expect(xml).toContain(x)
+    expect(xml).toContain('<c:axId val="222"/><c:scaling><c:orientation val="minMax"/><c:max val="80"/><c:min val="10"/></c:scaling>')
+    expect(xml).toContain("<c:axPos val='l' />" + gridlines + '<c:title>')
+    expect(xml).toContain('<a:t>Measured Y</a:t>')
+    expect(xml.match(/<c:majorGridlines[>/]/g)).toHaveLength(1)
+  })
   it('rewrites name, X values, and Y values with refs and caches', () => {
     const xml = applyChartEdit(SCATTER_CHART, {
       chartPath: 'xl/charts/chart1.xml',

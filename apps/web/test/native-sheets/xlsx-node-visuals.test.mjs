@@ -466,17 +466,17 @@ test('remaps compacted category bands and omits bands with ambiguous members', a
   assert.equal((await series(north + south, outer.replace(' idx="2"', ''))).categoryGroups, undefined)
 })
 
-test('keeps scatter X and Y caches separate and exposes their distinct axis bounds', async () => {
+test('keeps scatter X and Y caches separate and saves edits to the Y axis', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
-  zip.file(chartPath, `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>
+  zip.file(chartPath, `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="${mainNs}"><c:chart><c:plotArea>
     <c:scatterChart><c:scatterStyle val="lineMarker"/><c:ser><c:tx><c:v>Observations</c:v></c:tx>
       <c:xVal><c:numRef><c:f>'Data Sheet'!$C$2:$C$3</c:f><c:numCache><c:formatCode>0.00</c:formatCode><c:pt idx="0"><c:v>0.1</c:v></c:pt><c:pt idx="1"><c:v>7.2</c:v></c:pt></c:numCache></c:numRef></c:xVal>
       <c:yVal><c:numRef><c:f>'Data Sheet'!$D$2:$D$3</c:f><c:numCache><c:pt idx="0"><c:v>20</c:v></c:pt><c:pt idx="1"><c:v>40</c:v></c:pt></c:numCache></c:numRef></c:yVal>
     </c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart>
-    <c:valAx><c:axId val="1"/><c:axPos val="b"/><c:scaling><c:min val="0"/><c:max val="9"/></c:scaling></c:valAx>
-    <c:valAx><c:axId val="2"/><c:axPos val="l"/><c:scaling><c:min val="10"/><c:max val="50"/></c:scaling></c:valAx>
+    <c:valAx><c:axId val="1"/><c:scaling><c:max val="9"/><c:min val="0"/></c:scaling><c:axPos val="b"/></c:valAx>
+    <c:valAx><c:axId val="2"/><c:scaling><c:max val="50" /><c:min val="10"/></c:scaling><c:axPos val="l"/></c:valAx>
     </c:plotArea></c:chart></c:chartSpace>`)
-  const [{ chart }] = await readWorkbookVisuals(textOf(zip), sourceSheet)
+  const [{ chart }] = workbookFileSchema.shape.visuals.parse(await readWorkbookVisuals(textOf(zip), sourceSheet))
   assert.deepEqual(chart.chartTypes, ['scatterChart'])
   assert.equal(chart.scatterStyle, 'lineMarker')
   assert.deepEqual(chart.series[0].categories, ['0.1', '7.2'])
@@ -487,6 +487,27 @@ test('keeps scatter X and Y caches separate and exposes their distinct axis boun
   assert.equal(chart.xAxis.max, 9)
   assert.equal(chart.yAxis.max, 50)
   assert.deepEqual(chart.valueAxis, { min: 10, max: 50 })
+
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-scatter-axis-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await buildSheetsGateway(join(directory, 'gateway.mjs'))
+  const runtime = await configuredSheetsRuntime({
+    DYOFFICE_AUTH_MODE: 'local', DYOFFICE_SANDBOX_MODE: 'subprocess', DYOFFICE_DEPLOYMENT_ID: randomUUID(),
+    DYOFFICE_XLSX_NODE_ENGINE: join(directory, 'xlsx-node-engine.mjs'),
+    DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
+  }, { enabled: true })
+  t.after(() => runtime.close())
+  const source = await zip.generateAsync({ type: 'nodebuffer' })
+  const request = sheetsSaveRequest('sheet-1', [])
+  request.chartEdits = [{ chartPath, axisTitles: { value: 'Measured Y' }, valueAxis: { max: 80 }, gridlines: true }]
+  const saved = (await runtime.sheetsNative.savePlan(source, await runtime.sheetsWorkbookPlanner(source, request))).bytes
+  const [{ chart: edited }] = (await runtime.sheetsNative.inspect(saved)).visuals
+  assert.deepEqual(edited.xAxis, JSON.parse(JSON.stringify(chart.xAxis)))
+  assert.equal(edited.yAxis.title, 'Measured Y')
+  assert.equal(edited.yAxis.majorGridlines, true)
+  assert.deepEqual(edited.valueAxis, { min: 10, max: 80 })
+  const savedXml = await textOf(await JSZip.loadAsync(saved))(chartPath)
+  assert.equal(savedXml.match(/<c:max\b/g).length, 2)
 })
 
 test('resolves an embedded picture without mislabeling unsupported or external drawing objects', async () => {

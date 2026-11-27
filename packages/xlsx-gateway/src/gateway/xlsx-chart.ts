@@ -1,6 +1,6 @@
 import type { WorkbookChartEdit } from '../shared/edit-schemas.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
-import { withBody } from './xlsx-worksheet-xml.ts'
+import { withBody, withNamespaces } from './xlsx-worksheet-xml.ts'
 
 /// Surgical edits to a chart part (xl/charts/chartN.xml): title text, chart
 /// type conversion within the axis-based family, and series solid colors.
@@ -254,34 +254,18 @@ function spliceMatch(xml: string, match: RegExpExecArray, replacement: string): 
   return xml.slice(0, match.index) + replacement + xml.slice(match.index + match[0].length)
 }
 
-const GRIDLINES_PATTERN = /<c:majorGridlines\/>|<c:majorGridlines>[\s\S]*?<\/c:majorGridlines>/
+const AXIS_HEADER = ['c:axId', 'c:scaling', 'c:delete', 'c:axPos']
 
-const VAL_AXIS_PATTERN = /<c:valAx>([\s\S]*?)<\/c:valAx>/
-
-/// Major gridlines on the first value axis on/off. CT_ValAx order: axId,
+/// Major gridlines on the primary value axis on/off. CT_ValAx order: axId,
 /// scaling, delete, axPos, majorGridlines, minorGridlines, title, …
 function setGridlines(chartXml: string, on: boolean): string {
-  const axisMatch = VAL_AXIS_PATTERN.exec(chartXml)
-  if (!axisMatch || axisMatch[1] === undefined) {
-    throw new ChartEditError('Chart has no value axis.')
-  }
-  const inner = axisMatch[1]
-  if (!on) {
-    return spliceMatch(
-      chartXml,
-      axisMatch,
-      `<c:valAx>${inner.replace(GRIDLINES_PATTERN, '')}</c:valAx>`,
-    )
-  }
-  if (GRIDLINES_PATTERN.test(inner)) return chartXml
-  const anchor = /<c:axPos val="[^"]*"\/>/.exec(inner) ?? /<c:delete val="[^"]*"\/>/.exec(inner)
-  if (!anchor) throw new ChartEditError('Chart axis is missing its position element.')
-  const at = anchor.index + anchor[0].length
-  return spliceMatch(
-    chartXml,
-    axisMatch,
-    `<c:valAx>${inner.slice(0, at)}<c:majorGridlines/>${inner.slice(at)}</c:valAx>`,
-  )
+  return editChartAxis(chartXml, 'valAx', inner => {
+    const existing = childElements(inner).filter(child => child.name === 'c:majorGridlines')
+    if (on) {
+      return existing.length ? inner : insertAfterLastChild(inner, AXIS_HEADER, '<c:majorGridlines/>')
+    }
+    return existing.reverse().reduce((body, child) => replaceChildMarkup(body, child, ''), inner)
+  })
 }
 
 /// Bar/line/area `c:grouping`. 'clustered' maps to 'standard' for line/area
@@ -320,24 +304,19 @@ function setGrouping(
   return chartXml.replace(plotMatch[0], () => `<c:${plot}>${inner}</c:${plot}>`)
 }
 
-/// Value-axis min/max on the first value axis; null resets a bound to auto.
+/// Value-axis min/max on the primary value axis; null resets a bound to auto.
 function setValueAxisBounds(
   chartXml: string,
   bounds: NonNullable<WorkbookChartEdit['valueAxis']>,
 ): string {
-  const axisMatch = VAL_AXIS_PATTERN.exec(chartXml)
-  if (!axisMatch || axisMatch[1] === undefined) {
-    throw new ChartEditError('Chart has no value axis.')
-  }
-  const scalingMatch = /<c:scaling>([\s\S]*?)<\/c:scaling>/.exec(axisMatch[1])
-  if (!scalingMatch || scalingMatch[1] === undefined) {
-    throw new ChartEditError('Chart value axis has no scaling element.')
-  }
-  let scaling = scalingMatch[1]
-  if (bounds.max !== undefined) scaling = patchScalingBound(scaling, 'max', bounds.max)
-  if (bounds.min !== undefined) scaling = patchScalingBound(scaling, 'min', bounds.min)
-  const inner = spliceMatch(axisMatch[1], scalingMatch, `<c:scaling>${scaling}</c:scaling>`)
-  return spliceMatch(chartXml, axisMatch, `<c:valAx>${inner}</c:valAx>`)
+  return editChartAxis(chartXml, 'valAx', inner => {
+    const scaling = childElements(inner).find(child => child.name === 'c:scaling')
+    if (!scaling) throw new ChartEditError('Chart value axis has no scaling element.')
+    let body = scaling.inner
+    if (bounds.max !== undefined) body = patchScalingBound(body, 'max', bounds.max)
+    if (bounds.min !== undefined) body = patchScalingBound(body, 'min', bounds.min)
+    return body === scaling.inner ? inner : replaceChildMarkup(inner, scaling, withBody(scaling, body))
+  })
 }
 
 /// CT_Scaling order: logBase, orientation, max, min.
@@ -346,19 +325,12 @@ function patchScalingBound(
   bound: 'max' | 'min',
   value: number | null,
 ): string {
-  const pattern = new RegExp(`<c:${bound} val="[^"]*"/>`)
-  if (value === null) return scalingInner.replace(pattern, '')
+  const existing = childElements(scalingInner).find(child => child.name === `c:${bound}`)
+  if (value === null) return existing ? replaceChildMarkup(scalingInner, existing, '') : scalingInner
   const element = `<c:${bound} val="${value}"/>`
-  if (pattern.test(scalingInner)) return scalingInner.replace(pattern, () => element)
-  const anchors =
-    bound === 'max'
-      ? /<c:logBase val="[^"]*"\/>|<c:orientation val="[^"]*"\/>/g
-      : /<c:logBase val="[^"]*"\/>|<c:orientation val="[^"]*"\/>|<c:max val="[^"]*"\/>/g
-  let insertAt = 0
-  for (const found of scalingInner.matchAll(anchors)) {
-    insertAt = found.index + found[0].length
-  }
-  return scalingInner.slice(0, insertAt) + element + scalingInner.slice(insertAt)
+  if (existing) return replaceChildMarkup(scalingInner, existing, element)
+  const leading = bound === 'max' ? ['c:logBase', 'c:orientation'] : ['c:logBase', 'c:orientation', 'c:max']
+  return insertAfterLastChild(scalingInner, leading, element)
 }
 
 /// CT_BarChart order: …ser*, dLbls, gapWidth, overlap, axId.
@@ -758,6 +730,11 @@ function replaceChildMarkup(inner: string, child: ChildElement, replacement: str
   return inner.slice(0, child.start) + replacement + inner.slice(child.start + child.xml.length)
 }
 
+function insertAfterLastChild(inner: string, names: readonly string[], markup: string): string {
+  const anchor = childElements(inner).filter(child => names.includes(child.name)).at(-1)
+  return anchor ? replaceChildMarkup(inner, anchor, anchor.xml + markup) : markup + inner
+}
+
 function editChartContents(chartXml: string, edit: (inner: string) => string): string {
   const root = childElements(chartXml)[0]
   const chart = root?.name === 'c:chartSpace'
@@ -877,16 +854,28 @@ function setPlotLabelChild(
   return labels.slice(0, start) + replacement + labels.slice(start + (existing?.xml.length ?? 0))
 }
 
-/// Sets or removes (null) the title of the first category/value axis.
+/// Sets or removes (null) the title of the category or primary value axis.
 function setAxisTitle(chartXml: string, axis: 'catAx' | 'valAx', title: string | null): string {
+  return editChartAxis(chartXml, axis, inner => patchAxisInnerTitle(inner, title))
+}
+
+function editChartAxis(chartXml: string, axis: 'catAx' | 'valAx', edit: (inner: string) => string): string {
   return editChartContents(chartXml, inner => {
     const plot = childElements(inner).find(child => child.name === 'c:plotArea')
     if (!plot) throw new ChartEditError('Chart part has no plot area.')
     const axes = childElements(plot.inner)
-    const existing = axes.find(child => child.name === `c:${axis}`) ??
-      (axis === 'catAx' ? axes.find(child => child.name === 'c:dateAx') : undefined)
+    const matching = axes.filter(child => child.name === `c:${axis}`)
+    const fallback = axis === 'catAx' ? axes.find(child => child.name === 'c:dateAx') : undefined
+    // Readers prefer the left value axis, regardless of XML order.
+    const left = axis === 'valAx' ? matching.find(candidate => {
+      const position = childElements(candidate.inner).find(child => child.name === 'c:axPos')
+      return position && withNamespaces(position, new Map()).attributes.get('val') === 'l'
+    }) : undefined
+    const existing = left ?? matching[0] ?? fallback
     if (!existing) throw new ChartEditError(`Chart has no ${axis === 'catAx' ? 'category' : 'value'} axis.`)
-    const updatedAxis = withBody(existing, patchAxisInnerTitle(existing.inner, title))
+    const body = edit(existing.inner)
+    if (body === existing.inner) return inner
+    const updatedAxis = withBody(existing, body)
     return replaceChildMarkup(inner, plot, withBody(plot, replaceChildMarkup(plot.inner, existing, updatedAxis)))
   })
 }
@@ -898,9 +887,7 @@ function patchAxisInnerTitle(axisInner: string, title: string | null): string {
   if (title === null) return existing ? replaceChildMarkup(axisInner, existing, '') : axisInner
   const escaped = escapeXmlText(title)
   if (existing) return replaceChildMarkup(axisInner, existing, rewriteTitleText(existing, escaped))
-  const leading = new Set(['c:axId', 'c:scaling', 'c:delete', 'c:axPos', 'c:majorGridlines', 'c:minorGridlines'])
-  const anchor = children.filter(child => leading.has(child.name)).at(-1)
-  return anchor ? replaceChildMarkup(axisInner, anchor, anchor.xml + builtTitle(escaped)) : builtTitle(escaped) + axisInner
+  return insertAfterLastChild(axisInner, [...AXIS_HEADER, 'c:majorGridlines', 'c:minorGridlines'], builtTitle(escaped))
 }
 
 /// Rewrites a series' name and/or data (reference + cached values together).
