@@ -508,6 +508,7 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
     valueAxis: { max: 80 },
     gridlines: true,
     seriesColors: { 0: '#0099CC' },
+    series: [{ index: 0, categories: ['1.25', '7.5'] }],
   }]
   const saved = (await runtime.sheetsNative.savePlan(source, await runtime.sheetsWorkbookPlanner(source, request))).bytes
   const [{ chart: edited }] = (await runtime.sheetsNative.inspect(saved)).visuals
@@ -518,9 +519,22 @@ test('keeps scatter X and Y caches separate and saves axis and color edits', asy
   assert.equal(edited.series[0].lineColor, '#0099CC')
   assert.equal(edited.series[0].lineWidth, chart.series[0].lineWidth)
   assert.equal(edited.series[0].marker, 'diamond')
+  assert.deepEqual(edited.series[0].categories, ['1.25', '7.5'])
+  assert.equal(edited.series[0].categoriesRef, chart.series[0].categoriesRef)
+  assert.equal(edited.series[0].categoryFormat, '0.00')
+  assert.deepEqual(edited.series[0].values, [20, 40])
   const savedXml = await textOf(await JSZip.loadAsync(saved))(chartPath)
   assert.equal(savedXml.match(/<c:max\b/g).length, 2)
   assert.ok(savedXml.includes(strokeStyle))
+
+  const retarget = sheetsSaveRequest('sheet-1', [])
+  const newXRange = 'Acceptance!$A$2:$A$3'
+  retarget.chartEdits = [{ chartPath, series: [{ index: 0, categoriesRef: newXRange, categories: [] }] }]
+  const retargeted = (await runtime.sheetsNative.savePlan(saved, await runtime.sheetsWorkbookPlanner(saved, retarget))).bytes
+  const [{ chart: reopened }] = (await runtime.sheetsNative.inspect(retargeted)).visuals
+  assert.equal(reopened.series[0].categoriesRef, newXRange)
+  assert.deepEqual(reopened.series[0].categories, [])
+  assert.deepEqual(reopened.series[0].values, [20, 40])
 })
 
 test('resolves an embedded picture without mislabeling unsupported or external drawing objects', async () => {

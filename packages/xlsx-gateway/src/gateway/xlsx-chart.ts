@@ -966,58 +966,56 @@ function setSeriesData(
       }
       categories = undefined
     }
-    if (categories !== undefined) {
-      if (isScatter) {
-        next = setScatterXValues(next, categories, entry.categoriesRef)
+    if (isScatter && (entry.categories !== undefined || entry.categoriesRef !== undefined)) {
+      next = setScatterXValues(next, entry.categories, entry.categoriesRef)
+    } else if (categories !== undefined) {
+      // Numeric categories cached as numRef/numLit (dates) keep that
+      // shape and its formatCode; a strRef rewrite drops the format for good.
+      const numeric = categories.map((value) => Number(value))
+      const keepNumeric =
+        /<c:num(?:Ref|Lit)[\s>]/.test(previousCat) &&
+        categories.length > 0 &&
+        categories.every((value, idx) => value.trim() !== '' && Number.isFinite(numeric[idx]))
+      // A ref-less entry must not demote an existing reference to a
+      // literal: keep the previous c:f (already escaped) and only refresh
+      // the cache.
+      const catRefXml =
+        entry.categoriesRef !== undefined
+          ? escapeXmlText(entry.categoriesRef)
+          : /<c:f>([\s\S]*?)<\/c:f>/.exec(previousCat)?.[1]
+      let cat: string
+      if (keepNumeric) {
+        const formatCode =
+          /<c:formatCode>([^<]*)<\/c:formatCode>/.exec(previousCat)?.[1] ?? 'General'
+        const data =
+          `<c:formatCode>${formatCode}</c:formatCode>` +
+          `<c:ptCount val="${categories.length}"/>` +
+          numeric.map((value, idx) => `<c:pt idx="${idx}"><c:v>${value}</c:v></c:pt>`).join('')
+        // c:f is mandatory inside numRef, so ref-less data must be a literal.
+        cat =
+          catRefXml === undefined
+            ? `<c:cat><c:numLit>${data}</c:numLit></c:cat>`
+            : `<c:cat><c:numRef><c:f>${catRefXml}</c:f>` +
+              `<c:numCache>${data}</c:numCache></c:numRef></c:cat>`
       } else {
-        // Numeric categories cached as numRef/numLit (dates) keep that
-        // shape and its formatCode; a strRef rewrite drops the format for good.
-        const numeric = categories.map((value) => Number(value))
-        const keepNumeric =
-          /<c:num(?:Ref|Lit)[\s>]/.test(previousCat) &&
-          categories.length > 0 &&
-          categories.every((value, idx) => value.trim() !== '' && Number.isFinite(numeric[idx]))
-        // A ref-less entry must not demote an existing reference to a
-        // literal: keep the previous c:f (already escaped) and only refresh
-        // the cache.
-        const catRefXml =
-          entry.categoriesRef !== undefined
-            ? escapeXmlText(entry.categoriesRef)
-            : /<c:f>([\s\S]*?)<\/c:f>/.exec(previousCat)?.[1]
-        let cat: string
-        if (keepNumeric) {
-          const formatCode =
-            /<c:formatCode>([^<]*)<\/c:formatCode>/.exec(previousCat)?.[1] ?? 'General'
-          const data =
-            `<c:formatCode>${formatCode}</c:formatCode>` +
-            `<c:ptCount val="${categories.length}"/>` +
-            numeric.map((value, idx) => `<c:pt idx="${idx}"><c:v>${value}</c:v></c:pt>`).join('')
-          // c:f is mandatory inside numRef, so ref-less data must be a literal.
-          cat =
-            catRefXml === undefined
-              ? `<c:cat><c:numLit>${data}</c:numLit></c:cat>`
-              : `<c:cat><c:numRef><c:f>${catRefXml}</c:f>` +
-                `<c:numCache>${data}</c:numCache></c:numRef></c:cat>`
-        } else {
-          const points =
-            `<c:ptCount val="${categories.length}"/>` +
-            categories
-              .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
-              .join('')
-          // c:f is mandatory inside strRef, so ref-less data must be a literal.
-          cat =
-            catRefXml === undefined
-              ? `<c:cat><c:strLit>${points}</c:strLit></c:cat>`
-              : `<c:cat><c:strRef><c:f>${catRefXml}</c:f>` +
-                `<c:strCache>${points}</c:strCache></c:strRef></c:cat>`
-        }
-        if (previousCat !== '') {
-          next = next.replace(catPattern, () => cat)
-        } else {
-          const valElement = /<c:val\/>|<c:val>/.exec(next)
-          if (!valElement) throw new ChartEditError('Chart series has no value element.')
-          next = next.slice(0, valElement.index) + cat + next.slice(valElement.index)
-        }
+        const points =
+          `<c:ptCount val="${categories.length}"/>` +
+          categories
+            .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
+            .join('')
+        // c:f is mandatory inside strRef, so ref-less data must be a literal.
+        cat =
+          catRefXml === undefined
+            ? `<c:cat><c:strLit>${points}</c:strLit></c:cat>`
+            : `<c:cat><c:strRef><c:f>${catRefXml}</c:f>` +
+              `<c:strCache>${points}</c:strCache></c:strRef></c:cat>`
+      }
+      if (previousCat !== '') {
+        next = next.replace(catPattern, () => cat)
+      } else {
+        const valElement = /<c:val\/>|<c:val>/.exec(next)
+        if (!valElement) throw new ChartEditError('Chart series has no value element.')
+        next = next.slice(0, valElement.index) + cat + next.slice(valElement.index)
       }
     }
     if (entry.values !== undefined) {
@@ -1078,35 +1076,37 @@ function setSeriesData(
 /// falls back to its own index.
 function setScatterXValues(
   serXml: string,
-  categories: readonly string[],
+  categories: readonly string[] | undefined,
   categoriesRef: string | undefined,
 ): string {
-  const points =
-    `<c:formatCode>General</c:formatCode><c:ptCount val="${categories.length}"/>` +
-    categories
-      .map((value, idx) => {
-        const numeric = Number(value)
-        const x = value.trim() !== '' && Number.isFinite(numeric) ? numeric : idx
-        return `<c:pt idx="${idx}"><c:v>${x}</c:v></c:pt>`
-      })
-      .join('')
-  const xValPattern = /<c:xVal\/>|<c:xVal>[\s\S]*?<\/c:xVal>/
-  // Same demotion guard as c:cat/c:val: a ref-less rewrite keeps an
-  // existing c:f rather than baking the reference into a literal.
-  const refXml =
-    categoriesRef !== undefined
-      ? escapeXmlText(categoriesRef)
-      : /<c:f>([\s\S]*?)<\/c:f>/.exec(xValPattern.exec(serXml)?.[0] ?? '')?.[1]
-  const xVal =
-    refXml === undefined
-      ? `<c:xVal><c:numLit>${points}</c:numLit></c:xVal>`
-      : `<c:xVal><c:numRef><c:f>${refXml}</c:f>` +
-        `<c:numCache>${points}</c:numCache></c:numRef></c:xVal>`
-  if (xValPattern.test(serXml)) return serXml.replace(xValPattern, () => xVal)
-  // CT_ScatterSer: xVal precedes yVal and smooth.
-  const anchor = /<c:yVal[>/]|<c:smooth[\s/>]/.exec(serXml)
-  const at = anchor ? anchor.index : serXml.lastIndexOf('</c:ser>')
-  return serXml.slice(0, at) + xVal + serXml.slice(at)
+  const [series] = childElements(serXml)
+  if (!series) throw new ChartEditError('Chart has no series to update.')
+  const children = childElements(series.inner)
+  const previous = children.find(child => child.name === 'c:xVal')
+  const previousRef = /<c:f>([\s\S]*?)<\/c:f>/.exec(previous?.inner ?? '')?.[1]
+  const ref = categoriesRef === undefined ? previousRef : escapeXmlText(categoriesRef)
+  // A reference-only edit has no new points to cache.
+  if (!categories?.length && ref !== undefined && ref === previousRef) return serXml
+
+  let cache = ''
+  if (categories !== undefined && (categories.length > 0 || ref === undefined)) {
+    const formatCode = /<c:formatCode>([^<]*)<\/c:formatCode>/.exec(previous?.inner ?? '')?.[1] ?? 'General'
+    const points = categories.map((value, idx) => {
+      const numeric = Number(value)
+      const x = value.trim() !== '' && Number.isFinite(numeric) ? numeric : idx
+      return `<c:pt idx="${idx}"><c:v>${x}</c:v></c:pt>`
+    }).join('')
+    cache = `<c:formatCode>${formatCode}</c:formatCode><c:ptCount val="${categories.length}"/>${points}`
+  }
+  const source = ref === undefined ? `<c:numLit>${cache}</c:numLit>`
+    : `<c:numRef><c:f>${ref}</c:f>${cache ? `<c:numCache>${cache}</c:numCache>` : ''}</c:numRef>`
+  const xVal = `<c:xVal>${source}</c:xVal>`
+  if (previous) return withBody(series, replaceChildMarkup(series.inner, previous, xVal))
+  // CT_ScatterSer: xVal precedes yVal, smooth and extLst.
+  const following = children.find(child => ['c:yVal', 'c:smooth', 'c:extLst'].includes(child.name))
+  const body = following ? replaceChildMarkup(series.inner, following, xVal + following.xml)
+    : series.inner + xVal
+  return withBody(series, body)
 }
 
 /// Replaces the first title run's text (preserving its styling), blanks any

@@ -1250,6 +1250,36 @@ describe('applyChartEdit scatter series data', () => {
     )
   })
 
+  it('preserves the X number format when refreshing its values', () => {
+    const source = SCATTER_CHART.replace('<c:xVal><c:numLit>',
+      '<c:xVal><c:numLit><c:formatCode>0.000 &quot;ms&quot;</c:formatCode>')
+    const xml = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, categories: ['1.25', '2.5'] }],
+    })
+    expect(xml).toContain('<c:xVal><c:numLit><c:formatCode>0.000 &quot;ms&quot;</c:formatCode>' +
+      '<c:ptCount val="2"/><c:pt idx="0"><c:v>1.25</c:v></c:pt>')
+  })
+
+  it('writes a changed X reference without a cache when values are unavailable', () => {
+    const previous = '<c:xVal><c:numRef><c:f>Data!A2:A3</c:f><c:numCache>' +
+      '<c:formatCode>0.00</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt>' +
+      '</c:numCache></c:numRef></c:xVal>'
+    const source = SCATTER_CHART.replace(/<c:xVal>[\s\S]*?<\/c:xVal>/, previous)
+    const edit = { index: 0, categoriesRef: "'New & Old'!A2:A3" }
+    const expected = "<c:xVal><c:numRef><c:f>'New &amp; Old'!A2:A3</c:f></c:numRef></c:xVal>"
+    for (const series of [{ ...edit, name: 'Updated Series' }, { ...edit, categories: [] }]) {
+      const xml = applyChartEdit(source, { chartPath: 'xl/charts/chart1.xml', series: [series] })
+      expect(xml).toContain(expected)
+      expect(xml).not.toContain(previous)
+    }
+    const sameRange = applyChartEdit(source, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, categoriesRef: 'Data!A2:A3', categories: [] }],
+    })
+    expect(sameRange).toContain(previous)
+  })
+
   it('inserts xVal before yVal on a series that lacks one', () => {
     const bare = SCATTER_CHART.replace(/<c:xVal>[\s\S]*?<\/c:xVal>/, '')
     const xml = applyChartEdit(bare, {
