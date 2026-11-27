@@ -743,6 +743,16 @@ function packageWithDefaultNsDrawing(): Map<string, string> {
 }
 
 describe('applyVisualEdits on default-namespace (openpyxl) drawings', () => {
+  it('uses the same physical index as the visual reader when a comment looks like an anchor', async () => {
+    const entries = packageWithDefaultNsDrawing()
+    const comment = '<!-- <oneCellAnchor><from><row>9</row></from></oneCellAnchor> -->'
+    entries.set(PATH, DEFAULT_NS_DRAWING.replace('<oneCellAnchor>', comment + '<oneCellAnchor>'))
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, anchor: ANCHOR }], new Set())
+    const xml = entries.get(PATH)!
+    expect(xml).toContain(comment)
+    expect(xml).toContain('<from><col>1</col><colOff>9525</colOff><row>2</row><rowOff>0</rowOff></from>')
+  })
+
   it('moves an unprefixed two-cell anchor, keeping its markers unprefixed', async () => {
     const entries = packageWithDefaultNsDrawing()
     await applyVisualEdits(

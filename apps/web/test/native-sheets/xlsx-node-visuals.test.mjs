@@ -198,10 +198,13 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   book.file(sheet, (await textOf(book)(sheet)).replace('</worksheet>', background + '</worksheet>'))
   book.file(sheetRels, (await textOf(book)(sheetRels)).replace('</Relationships>', foreign + image + '</Relationships>'))
   const foreignAnchor = '<xdr:extLst><xdr:ext uri="urn:example:cache"><xdr:from><xdr:row>8</xdr:row></xdr:from></xdr:ext></xdr:extLst>'
+  const foreignRow = '<row xmlns="urn:example:cache">99</row>'
+  const comment = '<!-- <xdr:twoCellAnchor><xdr:from><xdr:row>100</xdr:row></xdr:from></xdr:twoCellAnchor> -->'
   book.file(drawingPath, (await textOf(book)(drawingPath))
     .replace(/<xdr:from>[\s\S]*?<\/xdr:from>/, (from) => from
       .replace('<xdr:from>', '<xdr:from xmlns:cache="urn:example:cache" cache:keep="1">')
-      .replace(/<xdr:row>([0-9]+)<\/xdr:row>/, (_, row) => `<xdr:row><![CDATA[${row}]]></xdr:row>`))
+      .replace(/<xdr:row>([0-9]+)<\/xdr:row>/, (_, row) => `${foreignRow}<xdr:row><![CDATA[${row}]]></xdr:row>`))
+    .replace('<xdr:twoCellAnchor>', comment + '<xdr:twoCellAnchor>')
     .replace('</xdr:wsDr>', foreignAnchor + '</xdr:wsDr>'))
   book.file(media, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
   const contentTypes = '[Content_Types].xml'
@@ -246,6 +249,8 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   assert.deepEqual(copy.chart.series[0].values, original.chart.series[0].values)
   const copiedZip = await JSZip.loadAsync(copied)
   assert.ok((await textOf(copiedZip)(copy.drawingPath)).includes(foreignAnchor))
+  assert.ok((await textOf(copiedZip)(copy.drawingPath)).includes(foreignRow))
+  assert.ok(original.anchor.fromRow < 99)
   const copiedSheetPath = 'xl/worksheets/sheet2.xml'
   const copiedRelsPath = 'xl/worksheets/_rels/sheet2.xml.rels'
   assert.ok((await textOf(copiedZip)(copiedSheetPath)).includes(background))
@@ -258,10 +263,16 @@ test('duplicates a worksheet with an independently editable embedded chart', { t
   assert.equal(value.cells[0].value, 'Revenue')
   const edit = sheetsSaveRequest(copiedSheet.id, [])
   edit.chartEdits = [{ chartPath: copy.chartPath, title: 'Worksheet copy chart' }]
+  const moved = { ...copy.anchor, fromRow: copy.anchor.fromRow + 1, toRow: copy.anchor.toRow + 1 }
+  edit.visualEdits = [{ drawingPath: copy.drawingPath, drawingIndex: copy.drawingIndex, anchor: moved }]
   const edited = await save(copied, edit)
   const reopened = await runtime.sheetsNative.inspect(edited)
   assert.equal(reopened.visuals.find(({ chartPath: path }) => path === chartPath)?.chart.title, original.chart.title)
-  assert.equal(reopened.visuals.find(({ chartPath: path }) => path === copy.chartPath)?.chart.title, 'Worksheet copy chart')
+  const editedCopy = reopened.visuals.find(({ chartPath: path }) => path === copy.chartPath)
+  assert.equal(editedCopy?.chart.title, 'Worksheet copy chart')
+  assert.deepEqual(editedCopy?.anchor, moved)
+  const editedDrawing = await textOf(await JSZip.loadAsync(edited))(copy.drawingPath)
+  for (const preserved of [foreignAnchor, foreignRow, comment, 'cache:keep="1"']) assert.ok(editedDrawing.includes(preserved))
   const remove = sheetsSaveRequest(originalSheet.id, [])
   remove.sheetOps = [{ kind: 'remove-sheet', sheetId: copiedSheet.id }]
   remove.sheetOrder = [originalSheet.id]

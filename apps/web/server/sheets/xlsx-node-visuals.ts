@@ -1,6 +1,8 @@
 import { XMLParser } from 'fast-xml-parser'
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
 import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
+import { drawingAnchorElements, isDrawingChild } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
+import { elementText, scopedChildren, type ScopedElement } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-worksheet-xml.ts'
 import { relsPathFor, resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
 import { decodeAttribute, parseSheetElements } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
 import { resolveWorkbookSheetTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-workbook-parts.ts'
@@ -393,7 +395,12 @@ function readChart(xml: string, theme: readonly string[], lookup: SourceNumberFo
   }
 }
 
-function readAnchor(node: XmlElement): Anchor | undefined {
+function readAnchor<Node>(
+  node: Node,
+  child: (node: Node | undefined, key: string) => Node | undefined,
+  text: (node: Node | undefined) => string | undefined,
+  attribute: (node: Node | undefined, key: string) => string | undefined,
+): Anchor | undefined {
   const from = child(node, 'from')
   const row = from ? nonnegative(text(child(from, 'row'))) : 0
   const column = from ? nonnegative(text(child(from, 'col'))) : 0
@@ -403,7 +410,7 @@ function readAnchor(node: XmlElement): Anchor | undefined {
   const fromColumnOffset = integer(from ? text(child(from, 'colOff')) : attribute(position, 'x')) ?? 0
   const start = { fromRow: row, fromColumn: column, fromRowOffset, fromColumnOffset }
   const to = child(node, 'to')
-  if (to && from) {
+  if (to !== undefined && from !== undefined) {
     const toRow = nonnegative(text(child(to, 'row')))
     const toColumn = nonnegative(text(child(to, 'col')))
     if (toRow === undefined || toColumn === undefined || toRow >= 1_048_576 || toColumn >= 16_384) return undefined
@@ -417,6 +424,17 @@ function readAnchor(node: XmlElement): Anchor | undefined {
   if (width === undefined || height === undefined || !Number.isSafeInteger(fromRowOffset + height) ||
       !Number.isSafeInteger(fromColumnOffset + width)) return undefined
   return { ...start, toRow: row, toColumn: column, toRowOffset: fromRowOffset + height, toColumnOffset: fromColumnOffset + width }
+}
+
+function readDrawingAnchor(node: ScopedElement): Anchor | undefined {
+  return readAnchor(
+    node,
+    (parent, key) => parent && scopedChildren(parent).find(field =>
+      field.local === key && isDrawingChild(parent, field),
+    ),
+    field => field && elementText(field.inner),
+    (field, key) => field?.attributes.get(key),
+  )
 }
 
 export function visualMediaType(path: string): string | undefined {
@@ -798,7 +816,7 @@ async function readOleObjects(
     const existing = objects.get(shapeId)
     objects.set(shapeId, {
       progId: existing?.progId ?? progId,
-      anchor: existing?.anchor ?? (anchor && readAnchor(anchor)),
+      anchor: existing?.anchor ?? (anchor && readAnchor(anchor, child, text, attribute)),
       mediaPath: existing?.mediaPath ?? previewPath(sheetRels, sheetPath, attribute(properties, 'id'), hasPart),
     })
   }
@@ -819,8 +837,6 @@ async function readOleObjects(
   }
   return objects
 }
-
-const anchorTags = new Set(['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor'])
 
 async function readControlCaptions(read: ZipText, sheetPath: string, relationships: Map<string, XmlElement>) {
   const captions = new Map<string, string>()
@@ -884,18 +900,17 @@ export async function readWorkbookVisuals(
     for (const node of children(sheet).filter(node => node.tag === 'drawing')) {
       const drawingPath = internalTarget(sheetRels, sheetPath, attribute(node, 'id'), 'drawing')
       if (!drawingPath || !/^xl\/drawings\/[\w./-]+\.xml$/.test(drawingPath)) continue
-      const drawing = roots(await read(drawingPath)).find(node => node.tag === 'wsDr')
+      const drawingXml = await read(drawingPath)
       const drawingRels = await readRelationships(read, drawingPath)
       const references = { relationships: drawingRels, part: drawingPath, hasPart }
-      const directAnchors = new Set(children(drawing).map(node => node.tokens))
-      const anchors = [...descendants(drawing)].filter(node => anchorTags.has(node.tag))
-      for (const [drawingIndex, entry] of anchors.entries()) {
+      for (const [drawingIndex, slot] of [...drawingAnchorElements(drawingXml)].entries()) {
         const id = `visual-${++ordinal}`
         if (drawingIndex > 10_000) break
-        // Save-side indices count every physical anchor, including unsupported
-        // alternate-content branches. Only top-level anchors render here.
-        if (!directAnchors.has(entry.tokens)) continue
-        const anchor = readAnchor(entry)
+        // Compatibility branches and opaque nodes count as physical slots.
+        if (!slot.topLevel || !slot.editable) continue
+        const entry = roots(slot.element.xml)[0]
+        if (!entry) continue
+        const anchor = readDrawingAnchor(slot.element)
         const nonvisual = first(entry, 'cNvPr')
         const shapeNode = child(entry, 'sp') ?? child(entry, 'cxnSp')
         const shapeId = shapeNode && nonnegative(attribute(nonvisual, 'id'))

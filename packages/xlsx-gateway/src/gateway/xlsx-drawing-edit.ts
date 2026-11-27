@@ -12,6 +12,7 @@ import {
   solidFillXml,
   type MutablePackage,
 } from './xlsx-drawing-add.ts'
+import { drawingAnchorElements, isDrawingChild } from './xlsx-drawing-anchors.ts'
 import { hasXmlAttributeValue, readRelationshipId } from './xlsx-namespace.ts'
 import {
   findRelationshipsRoot,
@@ -22,15 +23,10 @@ import {
   removeRelationshipById,
   type ParsedRelationship,
 } from './xlsx-sheets.ts'
-import { isElement, scopedChildren, worksheetRoot } from './xlsx-worksheet-xml.ts'
+import { applyPatches, isElement, patchElement, prefixOf, scopedChildren, withBody, worksheetRoot, type ScopedElement, type XmlPatch } from './xlsx-worksheet-xml.ts'
 
 export class VisualEditError extends Error {}
 
-// The spreadsheetDrawing namespace is conventionally bound to `xdr:`, but
-// openpyxl writes it as the DEFAULT namespace (no prefix) — and the sidecar
-// counts anchors by local name, so the index pairing must see those too.
-const ANCHOR_PATTERN =
-  /<([A-Za-z_][\w.-]*:)?(twoCellAnchor|oneCellAnchor|absoluteAnchor)\b[\s\S]*?<\/\1\2>/g
 const CHART_OWNED_RELATIONSHIP_TYPES =
   /\/(?:chartStyle|chartColorStyle|package|oleObject|theme|themeOverride|chartUserShapes|image|externalLink)$/
 const CHART_OWNED_PATHS =
@@ -65,7 +61,7 @@ export async function applyVisualEdits(
       throw new VisualEditError(`Workbook is missing ${drawingPath}.`)
     }
     const xml = await pkg.readText(drawingPath)
-    const anchors = [...xml.matchAll(ANCHOR_PATTERN)]
+    const anchors = [...drawingAnchorElements(xml)]
     const byIndex = new Map<number, WorkbookVisualEdit>()
     for (const edit of group) {
       if (byIndex.has(edit.drawingIndex)) {
@@ -75,6 +71,9 @@ export async function applyVisualEdits(
         throw new VisualEditError(
           `Drawing anchor #${edit.drawingIndex} was not found — the file may have changed.`,
         )
+      }
+      if (!anchors[edit.drawingIndex]?.editable) {
+        throw new VisualEditError('The selected drawing anchor is not editable.')
       }
       byIndex.set(edit.drawingIndex, edit)
     }
@@ -90,28 +89,26 @@ export async function applyVisualEdits(
     }
     const removedRelationships: RemovedAnchorRelationship[] = []
     const droppedHyperlinkRelIds: string[] = []
-    const patched = anchors.map((match, index) => {
+    const patched = anchors.map(({ element }, index) => {
       const edit = byIndex.get(index)
       return edit
         ? applyOneEdit(
-            match,
+            element,
             edit,
             removedRelationships,
             hyperlinkRelIds.get(index),
             droppedHyperlinkRelIds,
           )
-        : match[0]
+        : element.xml
     })
     // Document order is z-order. Anchors carrying a zIndex permute among
     // their own slots (sorted by zIndex); every other anchor — and all the
     // markup between anchors, e.g. mc:AlternateContent wrappers — stays put.
     const movable = anchors
-      .map((match, index) => ({ match, index }))
+      .map((entry, index) => ({ entry, index }))
       .filter(
-        ({ match, index }) =>
-          byIndex.get(index)?.zIndex !== undefined &&
-          patched[index] !== null &&
-          !insideAlternateContent(xml, match.index),
+        ({ entry, index }) =>
+          byIndex.get(index)?.zIndex !== undefined && patched[index] !== null && entry.topLevel,
       )
     const sorted = [...movable].sort(
       (left, right) =>
@@ -124,10 +121,10 @@ export async function applyVisualEdits(
     })
     let next = xml
     for (let index = anchors.length - 1; index >= 0; index -= 1) {
-      const match = anchors[index]!
+      const { element, start } = anchors[index]!
       const text = placed[index]
-      if (text === match[0]) continue
-      next = next.slice(0, match.index) + (text ?? '') + next.slice(match.index + match[0].length)
+      if (text === element.xml) continue
+      next = next.slice(0, start) + (text ?? '') + next.slice(start + element.xml.length)
     }
     if (removedRelationships.length > 0) {
       await cleanupRemovedAnchorRelationships(
@@ -380,15 +377,6 @@ async function cleanupEmptyDrawingHookup(
   }
 }
 
-/// True when the position sits inside an open mc:AlternateContent (slicer
-/// and timeline anchors live in its Choice/Fallback branches).
-function insideAlternateContent(xml: string, position: number): boolean {
-  const prefix = xml.slice(0, position)
-  const opens = prefix.match(/<mc:AlternateContent\b/g)?.length ?? 0
-  const closes = prefix.match(/<\/mc:AlternateContent>/g)?.length ?? 0
-  return opens > closes
-}
-
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const escapeXmlAttribute = (value: string): string =>
@@ -415,15 +403,15 @@ const CNVPR_PATTERN = /<([A-Za-z_][\w.-]*:)?cNvPr\b[^>]*?(\/>|>[\s\S]*?<\/\1cNvP
 /// One anchor's edits applied to its XML text; null when the anchor is
 /// removed. Hyperlink relationships are allocated by the caller.
 function applyOneEdit(
-  match: RegExpMatchArray,
+  element: ScopedElement,
   edit: WorkbookVisualEdit,
   removedRelationships: RemovedAnchorRelationship[],
   hyperlinkRelId: string | undefined,
   droppedHyperlinkRelIds: string[],
 ): string | null {
-  const anchorXml = match[0]
-  const p = match[1] ?? ''
-  const kind = match[2]
+  const anchorXml = element.xml
+  const p = prefixOf(element.name)
+  const kind = element.local
   if (edit.remove) {
     // A chart's graphicFrame anchor cascades: its rel, part, and override
     // are collected here and removed after the drawing XML is final.
@@ -443,42 +431,10 @@ function applyOneEdit(
     }
     return null
   }
-  let patched = anchorXml
-  const pre = escapeRegExp(p)
-  // Re-applying the current paint rebuilds identical XML; that is a no-op,
-  // not a failure.
+  let patched = edit.anchor ? moveVisualAnchor(element, edit.anchor) : anchorXml
+  // Re-applying the current paint rebuilds identical XML.
   if (edit.fillColor !== undefined || edit.lineColor !== undefined) {
     patched = repaintShape(patched, p, edit.fillColor, edit.lineColor)
-  }
-  const anchor = edit.anchor
-  if (anchor) {
-    if (kind === 'absoluteAnchor') {
-      throw new VisualEditError('This visual uses an absolute anchor — moving it is not supported.')
-    }
-    const from =
-      `<${p}from><${p}col>${anchor.fromColumn}</${p}col>` +
-      `<${p}colOff>${anchor.fromColumnOffset}</${p}colOff>` +
-      `<${p}row>${anchor.fromRow}</${p}row>` +
-      `<${p}rowOff>${anchor.fromRowOffset}</${p}rowOff></${p}from>`
-    const moved = patched.replace(new RegExp(`<${pre}from>[\\s\\S]*?</${pre}from>`), () => from)
-    if (moved === patched && !patched.includes(`<${p}from>`)) {
-      throw new VisualEditError('Drawing anchor has no from marker — moving it is not supported.')
-    }
-    patched = moved
-    if (kind === 'twoCellAnchor') {
-      const to =
-        `<${p}to><${p}col>${anchor.toColumn}</${p}col>` +
-        `<${p}colOff>${anchor.toColumnOffset}</${p}colOff>` +
-        `<${p}row>${anchor.toRow}</${p}row>` +
-        `<${p}rowOff>${anchor.toRowOffset}</${p}rowOff></${p}to>`
-      // An unchanged edge replaces to an identical string, so presence must be
-      // checked directly (an NW resize touches only the from marker).
-      const withTo = patched.replace(new RegExp(`<${pre}to>[\\s\\S]*?</${pre}to>`), () => to)
-      if (withTo === patched && !patched.includes(`<${p}to>`)) {
-        throw new VisualEditError('Drawing anchor has no to marker — moving it is not supported.')
-      }
-      patched = withTo
-    }
   }
   if (edit.frameSize) {
     // A rotated shape resized through its AABB: the anchor holds the rotated
@@ -549,6 +505,48 @@ function applyOneEdit(
     patched = tag + patched.slice(open[0].length)
   }
   return patched
+}
+
+function moveVisualAnchor(
+  element: ScopedElement,
+  anchor: NonNullable<WorkbookVisualEdit['anchor']>,
+): string {
+  if (element.local === 'absoluteAnchor') {
+    throw new VisualEditError('This visual uses an absolute anchor — moving it is not supported.')
+  }
+  const markers = scopedChildren(element).filter((child) => isDrawingChild(element, child))
+  const writes: XmlPatch[] = []
+  for (const kind of ['from', 'to'] as const) {
+    if (kind === 'to' && element.local !== 'twoCellAnchor') break
+    const mark = markers.find((child) => child.local === kind)
+    if (!mark)
+      throw new VisualEditError(
+        `Drawing anchor has no ${kind} marker — moving it is not supported.`,
+      )
+    const values =
+      kind === 'from'
+        ? [anchor.fromColumn, anchor.fromColumnOffset, anchor.fromRow, anchor.fromRowOffset]
+        : [anchor.toColumn, anchor.toColumnOffset, anchor.toRow, anchor.toRowOffset]
+    const names = ['col', 'colOff', 'row', 'rowOff']
+    const fields = scopedChildren(mark).filter((child) => isDrawingChild(mark, child))
+    const ordered = names.map((name) => fields.find((child) => child.local === name))
+    const coordinates: XmlPatch[] = []
+    const missing = new Map<number, string>()
+    for (const [index, name] of names.entries()) {
+      const value = String(values[index])
+      const field = ordered[index]
+      if (field) {
+        coordinates.push(patchElement(field, withBody(field, value)))
+      } else {
+        const start = ordered.slice(index + 1).find(Boolean)?.start ?? mark.inner.length
+        const tag = prefixOf(mark.name) + name
+        missing.set(start, (missing.get(start) ?? '') + `<${tag}>${value}</${tag}>`)
+      }
+    }
+    for (const [start, xml] of missing) coordinates.push({ start, length: 0, xml })
+    writes.push(patchElement(mark, withBody(mark, applyPatches(mark.inner, coordinates))))
+  }
+  return withBody(element, applyPatches(element.inner, writes))
 }
 
 const SP_PR_FILL =

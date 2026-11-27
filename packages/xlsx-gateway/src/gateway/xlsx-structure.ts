@@ -8,6 +8,7 @@ import type { WorkbookStyleEdit } from '../shared/edit-schemas.ts'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { rewriteChartReferences } from './xlsx-chart-references.ts'
 import { workbookNameParts } from './xlsx-defined-names.ts'
+import { isDrawingNamespace } from './xlsx-drawing-anchors.ts'
 import { rewriteWorksheetValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
 import { readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
@@ -904,16 +905,8 @@ function rowColumnOps(ops: readonly StructuralOp[]): RowColumnOp[] {
   return ops.filter((op): op is RowColumnOp => 'index' in op)
 }
 
-const DRAWING_NAMESPACES = new Set([
-  'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
-  'http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing',
-])
 const MARKUP_COMPATIBILITY_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 const compatibilityBranches = new Set(['AlternateContent', 'Choice', 'Fallback'])
-
-function isDrawingNamespace(namespace: string | undefined): boolean {
-  return namespace !== undefined && DRAWING_NAMESPACES.has(namespace)
-}
 
 /// Shifts drawing markers, leaving absolute anchors and opaque extensions alone.
 export function shiftDrawingAnchors(drawingXml: string, ops: readonly StructuralOp[]): string {
