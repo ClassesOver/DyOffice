@@ -69,6 +69,7 @@ const rowsBody = rows => (req, res) => { res.writeHead(200, { 'content-type': 'a
 async function queryBatchFixture(t, afterCapture) {
   const f = await fixture(t, { buildApp: false }), targets = await postgresTargets(t, f)
   const sources = createSourceService({ transactions: f.transactions, credentialKeys: credentialKeys(), egressTargets: targets.approvals })
+  f.cleanup.unshift(() => sources.close())
   const stored = createWorkspaceSourceResults({ transactions: f.transactions })
   const results = { ...stored, async capture(token, snapshot, hash) {
     const artifact = await stored.capture(token, snapshot, hash)

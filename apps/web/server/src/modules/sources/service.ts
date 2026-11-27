@@ -50,8 +50,8 @@ export async function describeSourceMetadata(
   for (const table of requested) {
     if (!schemaAllowed(table) || (allowed ? !allowed.includes(table) : /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(table))) throw withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
   }
-  // 单表使用原生搜索；宽表和批量查询沿用支持偏移量的 DBHub 目录查询。
-  if (!batch && requested.length === 1 && columnOffset === 0) {
+  // MySQL-compatible sources support DBHub schema search for the first page of a single table.
+  if (row.kind !== 'postgres' && !batch && requested.length === 1 && columnOffset === 0) {
     const [schema, table] = requested[0]!.split('.')
     const execution = { ...executionFor(row.kind, row.config), maxRows: 1000 }
     const page = await searchDbhubObjects(policy, row.kind, secret, { object_type: 'column', schema, table, detail_level: 'summary', limit: 1000 }, execution)
