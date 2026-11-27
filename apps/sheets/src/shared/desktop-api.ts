@@ -1063,6 +1063,7 @@ export const workbookRangeResultSchema = z
     pageSetup: z
       .object({
         orientation: z.enum(['portrait', 'landscape']).optional(),
+        pageOrder: z.enum(['downThenOver', 'overThenDown']).optional(),
         paperSize: z.number().int().min(1).max(256).optional(),
         scale: z.number().int().min(10).max(400).optional(),
         fitToWidth: z.number().int().min(0).max(32_767).optional(),

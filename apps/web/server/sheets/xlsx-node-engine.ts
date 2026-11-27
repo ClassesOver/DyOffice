@@ -250,11 +250,13 @@ function readPageSetup(children: readonly ScopedElement[]): SheetMetadata['pageS
   const properties=section('sheetPr')
   const pageProperties=properties && scopedChildren(properties).find(child=>isElement(child,'pageSetUpPr',properties.namespace))
   const orientation=setup?.attributes.get('orientation')
+  const pageOrder=setup?.attributes.get('pageOrder')
   const keys=['left','right','top','bottom','header','footer'] as const
   const pageMargins=section('pageMargins')
   const margins=keys.map(key=>sizeValue(pageMargins?.attributes.get(key)))
   const print:PageSetup={
     orientation:orientation==='portrait'||orientation==='landscape'?orientation:undefined,
+    pageOrder:pageOrder==='downThenOver'||pageOrder==='overThenDown'?pageOrder:undefined,
     paperSize:printInteger(setup,'paperSize',1,256),scale:printInteger(setup,'scale',10,400),
     fitToWidth:printInteger(setup,'fitToWidth',0,32_767),fitToHeight:printInteger(setup,'fitToHeight',0,32_767),
     fitToPage:enabled(pageProperties?.attributes.get('fitToPage'))||undefined,

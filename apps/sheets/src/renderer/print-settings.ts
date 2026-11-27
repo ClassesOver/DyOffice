@@ -33,6 +33,7 @@ export type HeaderFooterPictureSlot = NonNullable<
 /// Concrete values the print layout consumes; every field resolved.
 export interface EffectivePageSetup {
   readonly orientation: 'portrait' | 'landscape'
+  readonly pageOrder: NonNullable<WorkbookPagePrintSettings['pageOrder']>
   /// OOXML paper-size code.
   readonly paperSize: number
   /// Percent; applies only when fitToPage is off.
@@ -219,6 +220,7 @@ export function resolveEffectivePageSetup(
       : null
   return {
     orientation: journal.orientation ?? file?.orientation ?? 'portrait',
+    pageOrder: file?.pageOrder ?? 'downThenOver',
     paperSize: journal.paperSize ?? file?.paperSize ?? 9,
     scale: journal.scale ?? file?.scale ?? 100,
     fitToWidth,

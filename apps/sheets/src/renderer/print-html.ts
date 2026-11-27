@@ -339,6 +339,7 @@ export function layoutSheetPrint(
   const breaks = setup.fitToPage ? null : options.breaks
   const plan: PaginationInput = {
     ...baseInput,
+    order: setup.pageOrder,
     rowBreaks: breaks?.rowBreaks ?? [],
     colBreaks: breaks?.colBreaks ?? [],
     pageWidthPt: printableWidthPt / scale,

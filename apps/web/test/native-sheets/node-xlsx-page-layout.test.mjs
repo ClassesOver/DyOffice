@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { XMLValidator } from 'fast-xml-parser'
 import JSZip from 'jszip'
+import { workbookRangeResultSchema } from '../../../sheets/src/shared/desktop-api.ts'
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
 import { sheetsSaveRequest } from '../helpers/sheets-request.mjs'
@@ -44,7 +45,8 @@ test('Web XLSX saves view and print settings without changing other worksheet st
     return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
   }
   const sheetXml = async (bytes) => (await JSZip.loadAsync(bytes)).file(sheetPart).async('string')
-  const pageSetup = async (bytes) => (await native.readRange(bytes, 'Acceptance', range)).pageSetup
+  const pageSetup = async (bytes) =>
+    workbookRangeResultSchema.parse(await native.readRange(bytes, 'Acceptance', range)).pageSetup
 
   await t.test(
     'updates single-quoted attributes and clears settings restored to their default',
@@ -57,10 +59,11 @@ test('Web XLSX saves view and print settings without changing other worksheet st
           )
           .replace(
             '<drawing ',
-            "<pageSetup orientation = 'portrait' scale='75' paperSize='9' xmlns:audit='urn:test' audit:note=\"orientation='portrait' >\"/><drawing ",
+            "<pageSetup orientation = 'portrait' scale='75' paperSize='9' pageOrder='overThenDown' xmlns:audit='urn:test' audit:note=\"orientation='portrait' >\"/><drawing ",
           ),
       )
       assert.equal((await native.inspect(bytes)).sheets[0].showGridLines, false)
+      assert.equal((await pageSetup(bytes)).pageOrder, 'overThenDown')
       const saved = await save(bytes, {
         showGridlines: true,
         zoomScale: 100,
@@ -71,6 +74,7 @@ test('Web XLSX saves view and print settings without changing other worksheet st
       assert.equal(XMLValidator.validate(xml), true)
       assert.ok(xml.includes(`audit:note="orientation='portrait' >"`))
       const layout = await pageSetup(saved)
+      assert.equal(layout.pageOrder, 'overThenDown')
       assert.deepEqual(
         [layout.orientation, layout.paperSize, layout.scale],
         ['landscape', 9, undefined],

@@ -454,6 +454,7 @@ function fakeWorksheet(): PrintWorksheet {
 function payloadSetup(overrides: Partial<EffectivePageSetup>): EffectivePageSetup {
   return {
     orientation: 'portrait',
+    pageOrder: 'downThenOver',
     paperSize: 9,
     scale: 100,
     fitToWidth: 0,
@@ -507,6 +508,22 @@ function layout(
 }
 
 describe('layoutSheetPrint', () => {
+  it('prints worksheet pages in the order saved in the file', () => {
+    const options = { breaks: { rowBreaks: [1], colBreaks: [1] } }
+    const starts = (pageOrder?: 'downThenOver' | 'overThenDown') =>
+      layout(
+        fakeWorksheet(),
+        resolveEffectivePageSetup({}, pageOrder === undefined ? null : { pageOrder }, null),
+        undefined,
+        undefined,
+        options,
+      ).pages.map(({ page }) => [page.rowStart, page.colStart])
+
+    expect(starts('overThenDown')).toEqual([[0, 0], [0, 1], [1, 0], [1, 1]])
+    expect(starts('downThenOver')).toEqual([[0, 0], [1, 0], [0, 1], [1, 1]])
+    expect(starts()).toEqual(starts('downThenOver'))
+  })
+
   it('maps common OOXML paper sizes instead of falling back to A4', () => {
     expect(layout(fakeWorksheet(), payloadSetup({ paperSize: 12 })).paper.pageSize).toEqual({
       width: 9.84,
