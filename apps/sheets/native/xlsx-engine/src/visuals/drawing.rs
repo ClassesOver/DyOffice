@@ -640,23 +640,17 @@ pub(crate) fn shape_visual(
                 let base = scheme_color_rgb(scheme.attribute("val")?, colors)?;
                 Some(apply_color_modifiers(scheme, base))
             };
-            let fill_gradient = if fill_color.is_none() && fill_media_path.is_none() {
-                style_fill_gradient(style_node, colors)
+            let (theme_fill_color, fill_gradient) = if fill_color.is_none() && fill_media_path.is_none() {
+                style_fill(style_node, colors)
             } else {
-                None
+                (None, None)
             };
             // An explicit spPr blipFill replaces the style fillRef entirely:
             // the frame stays transparent while the image loads.
             // No spPr fill, no blip and no style reference is DrawingML's
             // "no fill": Excel draws the shape transparent.
             let fill_color = fill_color
-                .or_else(|| {
-                    if fill_media_path.is_some() {
-                        Some("none".into())
-                    } else {
-                        style_color("fillRef")
-                    }
-                })
+                .or(theme_fill_color)
                 .or_else(|| fill_gradient.is_none().then(|| "none".into()));
             let line_node = shape_node
                 .children()

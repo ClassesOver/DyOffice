@@ -799,6 +799,16 @@ test('preserves theme-referenced shape gradients through Web saves', async t => 
           <p:gs pos="100000"><p:srgbClr val="AA0000"/></p:gs>
         </p:gsLst></p:gradFill>
       </p:fillStyleLst>
+      <p:bgFillStyleLst>
+        <p:solidFill><p:srgbClr val="008800"/></p:solidFill>
+        <p:gradFill><p:gsLst>
+          <p:gs pos="0"><p:schemeClr val="phClr"/></p:gs>
+          <p:gs pos="100000"><p:srgbClr val="AA0000"/></p:gs>
+        </p:gsLst></p:gradFill>
+        <p:pattFill prst="pct50"><p:fgClr><p:schemeClr val="phClr"/></p:fgClr>
+          <p:bgClr><p:schemeClr val="accent2"/></p:bgClr></p:pattFill>
+        <p:noFill/>
+      </p:bgFillStyleLst>
     </p:fmtScheme>
   </p:themeElements></p:theme>`)
   const shape = (id, index, fill = '', reference = '<a:schemeClr val="accent1"/>') => `<xdr:oneCellAnchor>
@@ -811,10 +821,13 @@ test('preserves theme-referenced shape gradients through Web saves', async t => 
   </xdr:oneCellAnchor>`
   await appendDrawing(zip, shape(81, 2) + shape(82, 2, '<a:noFill/>') +
     shape(83, 2, '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>') + shape(84, 1) +
-    shape(85, 3, '', '') + shape(86, 2, '', '<a:srgbClr val="FF0000"/>'))
+    shape(85, 3, '', '') + shape(86, 2, '', '<a:srgbClr val="FF0000"/>') +
+    shape(87, 1001) + shape(88, 1002) + shape(89, 1003) + shape(90, 1004) +
+    shape(91, 1000) + shape(92, 1002, '<a:solidFill><a:srgbClr val="010203"/></a:solidFill>'))
   const styles = visuals => visuals.filter(visual => visual.name?.startsWith('Theme paint'))
   const themeShapes = styles(await readWorkbookVisuals(textOf(zip), sourceSheet, colors))
-  const [gradient, transparent, solid, firstStyle, fixedGradient, rgbReference] = themeShapes
+  const [gradient, transparent, solid, firstStyle, fixedGradient, rgbReference,
+    backgroundSolid, backgroundGradient, backgroundPattern, backgroundNoFill, reserved, override] = themeShapes
   const expected = { angle: 270, stops: [
     { position: 0, color: '#042233' },
     { position: 0.25, color: '#66331A' },
@@ -835,6 +848,16 @@ test('preserves theme-referenced shape gradients through Web saves', async t => 
   ] })
   assert.equal(rgbReference.fillGradient.stops[0].color, '#FF0000')
   assert.equal(rgbReference.fillGradient.stops[1].color, '#66331A')
+  assert.equal(backgroundSolid.fillColor, '#008800')
+  assert.deepEqual(backgroundGradient.fillGradient, { angle: 90, stops: [
+    { position: 0, color: '#042233' },
+    { position: 1, color: '#AA0000' },
+  ] })
+  assert.equal(backgroundPattern.fillColor, '#027719')
+  assert.equal(backgroundNoFill.fillColor, 'none')
+  assert.equal(reserved.fillColor, 'none')
+  assert.equal(override.fillColor, '#010203')
+  assert.equal(override.fillGradient, undefined)
 
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-web-theme-gradient-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -847,12 +870,12 @@ test('preserves theme-referenced shape gradients through Web saves', async t => 
   t.after(() => runtime.close())
   const bytes = await zip.generateAsync({ type: 'nodebuffer' })
   const inspected = await runtime.sheetsNative.inspect(bytes)
-  const gradients = visuals => styles(visuals).map(visual => visual.fillGradient)
-  const expectedGradients = gradients(themeShapes)
-  assert.deepEqual(gradients(inspected.visuals), expectedGradients)
+  const paints = visuals => styles(visuals).map(({ fillColor, fillGradient }) => ({ fillColor, fillGradient }))
+  const expectedPaints = paints(themeShapes)
+  assert.deepEqual(paints(inspected.visuals), expectedPaints)
   const request = sheetsSaveRequest(inspected.sheets[0].id, [{ row: 0, column: 0, value: 42, writeValue: true }])
   const saved = (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
-  assert.deepEqual(gradients((await runtime.sheetsNative.inspect(saved)).visuals), expectedGradients)
+  assert.deepEqual(paints((await runtime.sheetsNative.inspect(saved)).visuals), expectedPaints)
 })
 
 test('opens XLSX freeform shapes with scaled paths and preserves their original geometry on save', async t => {

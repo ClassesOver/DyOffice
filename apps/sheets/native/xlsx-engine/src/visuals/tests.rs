@@ -649,8 +649,7 @@ fn sole_unnamed_series_keeps_placeholder_title() {
 fn theme_colors() -> ColorContext {
     ColorContext {
         theme: (0..12).map(|slot| (slot as u8, 0x22, 0x33)).collect(),
-        fill_styles: Vec::new(),
-        indexed: Vec::new(),
+        ..ColorContext::default()
     }
 }
 
@@ -1925,13 +1924,13 @@ fn resolves_style_fill_ref_theme_gradient() {
             </a:gsLst></a:gradFill>
             </a:fillStyleLst>"#;
     let document = Document::parse(theme).unwrap();
-    let fill_styles: Vec<Option<ThemeGradient>> = document
+    let fill_styles = document
         .root_element()
         .children()
         .filter(|node| node.is_element())
-        .map(parse_theme_gradient)
-        .collect();
-    assert!(fill_styles[0].is_none());
+        .map(parse_theme_fill)
+        .collect::<Vec<_>>();
+    assert!(matches!(fill_styles[0], Some(ThemeFill::Solid(_))));
     let colors = ColorContext {
         fill_styles,
         ..theme_colors()
@@ -1941,7 +1940,7 @@ fn resolves_style_fill_ref_theme_gradient() {
             <a:fillRef idx="2"><a:schemeClr val="accent1"/></a:fillRef>
             </xdr:style>"#;
     let document = Document::parse(style).unwrap();
-    let gradient = style_fill_gradient(Some(document.root_element()), &colors).expect("gradient");
+    let gradient = style_fill(Some(document.root_element()), &colors).1.expect("gradient");
     assert_eq!(gradient.angle, 270.0);
     let stops = gradient
         .stops
@@ -1961,24 +1960,87 @@ fn resolves_style_fill_ref_theme_gradient() {
 
     let fixed = style.replace(r#"idx="2"><a:schemeClr val="accent1"/>"#, r#"idx="3">"#);
     let document = Document::parse(&fixed).unwrap();
-    let gradient = style_fill_gradient(Some(document.root_element()), &colors).expect("fixed colors");
+    let gradient = style_fill(Some(document.root_element()), &colors).1.expect("fixed colors");
     assert_eq!(gradient.stops[0].color, "#0000AA");
     assert_eq!(gradient.stops[1].color, "#AA0000");
 
     let reference = style.replace(r#"<a:schemeClr val="accent1"/>"#, r#"<a:srgbClr val="FF0000"/>"#);
     let document = Document::parse(&reference).unwrap();
-    let gradient = style_fill_gradient(Some(document.root_element()), &colors).expect("RGB reference");
+    let gradient = style_fill(Some(document.root_element()), &colors).1.expect("RGB reference");
     assert_eq!(gradient.stops[0].color, "#FF0000");
     assert_eq!(gradient.stops[1].color, "#66331A");
 
-    // idx 1 is the solid entry; idx 1001+ (bgFillStyleLst) is out of range.
+    // idx 1 is the solid entry; there is no background list in this fixture.
     for idx in ["1", "1001", "0"] {
         let style = format!(
             r#"<xdr:style xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:fillRef idx="{idx}"><a:schemeClr val="accent1"/></a:fillRef></xdr:style>"#
         );
         let document = Document::parse(&style).unwrap();
-        assert!(style_fill_gradient(Some(document.root_element()), &colors).is_none());
+        assert!(style_fill(Some(document.root_element()), &colors).1.is_none());
     }
+}
+
+#[test]
+fn reads_theme_background_fill_styles_for_shapes() {
+    use std::io::Write;
+
+    let palette = ["lt1", "dk1", "lt2", "dk2", "accent1", "accent2", "accent3", "accent4",
+        "accent5", "accent6", "hlink", "folHlink"]
+        .into_iter()
+        .map(|slot| {
+            let color = if slot == "accent2" { "00CC00" } else { "042233" };
+            format!(r#"<a:{slot}><a:srgbClr val="{color}"/></a:{slot}>"#)
+        })
+        .collect::<String>();
+    let theme = format!(
+        r#"<a:theme {XDR}><a:themeElements><a:clrScheme>{palette}</a:clrScheme>
+          <a:fmtScheme><a:bgFillStyleLst>
+            <a:solidFill><a:srgbClr val="008800"/></a:solidFill>
+            <a:gradFill><a:gsLst>
+              <a:gs pos="0"><a:schemeClr val="phClr"/></a:gs>
+              <a:gs pos="100000"><a:srgbClr val="AA0000"/></a:gs>
+            </a:gsLst></a:gradFill>
+            <a:pattFill prst="pct50"><a:fgClr><a:schemeClr val="phClr"/></a:fgClr>
+              <a:bgClr><a:schemeClr val="accent2"/></a:bgClr></a:pattFill>
+            <a:noFill/>
+          </a:bgFillStyleLst></a:fmtScheme>
+        </a:themeElements></a:theme>"#
+    );
+    let theme_path = "xl/theme/shape-paint.xml";
+    let drawing_path = "xl/drawings/drawing1.xml";
+    let mut writer = zip::ZipWriter::new(tempfile::tempfile().unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    writer.start_file(theme_path, options).unwrap();
+    writer.write_all(theme.as_bytes()).unwrap();
+    writer.start_file(drawing_path, options).unwrap();
+    write!(writer, "<xdr:wsDr {XDR}>").unwrap();
+    for (idx, fill) in [(1001, ""), (1002, ""), (1003, ""), (1004, ""), (1000, ""),
+        (1002, r#"<a:solidFill><a:srgbClr val="010203"/></a:solidFill>"#)] {
+        write!(writer, r#"<xdr:oneCellAnchor>
+          <xdr:from><xdr:col>0</xdr:col><xdr:row>1</xdr:row></xdr:from>
+          <xdr:ext cx="900000" cy="450000"/><xdr:sp>
+            <xdr:spPr><a:prstGeom prst="rect"/>{fill}</xdr:spPr>
+            <xdr:style><a:fillRef idx="{idx}"><a:schemeClr val="accent1"/></a:fillRef></xdr:style>
+          </xdr:sp><xdr:clientData/>
+        </xdr:oneCellAnchor>"#).unwrap();
+    }
+    writer.write_all(b"</xdr:wsDr>").unwrap();
+    let mut archive = ZipArchive::new(writer.finish().unwrap()).unwrap();
+    let colors = read_theme_palette(&mut archive, theme_path).unwrap();
+    let visuals = read_drawing(
+        &mut archive, drawing_path, "sheet1", 0, &colors, &HashSet::new(),
+        &HashMap::new(), &mut SourceFormats::new(Vec::new(), &[]),
+    ).unwrap();
+    assert_eq!(visuals.len(), 6);
+    assert_eq!(visuals[0].fill_color.as_deref(), Some("#008800"));
+    let gradient = visuals[1].fill_gradient.as_ref().expect("background gradient");
+    assert_eq!(gradient.stops[0].color, "#042233");
+    assert_eq!(gradient.stops[1].color, "#AA0000");
+    assert_eq!(visuals[2].fill_color.as_deref(), Some("#027719"));
+    assert_eq!(visuals[3].fill_color.as_deref(), Some("none"));
+    assert_eq!(visuals[4].fill_color.as_deref(), Some("none"));
+    assert_eq!(visuals[5].fill_color.as_deref(), Some("#010203"));
+    assert!(visuals[5].fill_gradient.is_none());
 }
 
 /// A combo chart tags every series with its own plot group: one bar series

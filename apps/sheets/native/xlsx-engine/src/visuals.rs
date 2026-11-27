@@ -669,12 +669,23 @@ pub(crate) struct BorderSet {
 #[derive(Clone, Default)]
 pub struct ColorContext {
     theme: Vec<(u8, u8, u8)>,
-    /// fmtScheme/fillStyleLst entries (1-based fillRef idx order); None for
-    /// non-gradient entries.
-    fill_styles: Vec<Option<ThemeGradient>>,
+    /// fmtScheme/fillStyleLst and bgFillStyleLst in document order.
+    fill_styles: Vec<Option<ThemeFill>>,
+    background_fill_styles: Vec<Option<ThemeFill>>,
     /// styles.xml colors/indexedColors override of the legacy palette
     /// (hex without '#'); indexes past its end fall back to the builtin.
     indexed: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+enum ThemeFill {
+    Transparent,
+    Solid(ThemePaintColor),
+    Pattern {
+        foreground: Option<ThemePaintColor>,
+        background: Option<ThemePaintColor>,
+    },
+    Gradient(ThemeGradient),
 }
 
 /// A theme gradient whose placeholder stops resolve to the fillRef color
@@ -690,13 +701,18 @@ pub struct ThemeGradient {
 pub struct ThemeGradientStop {
     /// 0..1 along the gradient axis.
     pub position: f64,
-    pub color: ThemeGradientColor,
-    /// (transform tag, val/100000) pairs in document order.
-    pub modifiers: Vec<(String, f64)>,
+    color: ThemePaintColor,
 }
 
 #[derive(Clone, Debug)]
-pub enum ThemeGradientColor {
+struct ThemePaintColor {
+    base: ThemePaintBase,
+    /// (transform tag, val/100000) pairs in document order.
+    modifiers: Vec<(String, f64)>,
+}
+
+#[derive(Clone, Debug)]
+enum ThemePaintBase {
     Rgb((u8, u8, u8)),
     Scheme(String),
 }
@@ -725,8 +741,7 @@ impl ColorContext {
     pub(crate) fn with_theme(theme: Vec<(u8, u8, u8)>) -> Self {
         ColorContext {
             theme,
-            fill_styles: Vec::new(),
-            indexed: Vec::new(),
+            ..ColorContext::default()
         }
     }
 
