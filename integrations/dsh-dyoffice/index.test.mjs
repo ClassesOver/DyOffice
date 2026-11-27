@@ -200,7 +200,7 @@ test('natural language saves a filled Word document and only an owner navigation
  assert.deepEqual(requests,[])
  const navigate=async(url,kind,site,destination='document')=>new Promise((resolve,reject)=>{
   const response={writeHead(status,headers){this.result={status,headers}},end(body){resolve({...this.result,body})}}
-  handler({method:'GET',url,headers:{'sec-fetch-site':site,'sec-fetch-mode':'navigate','sec-fetch-dest':destination}},response,{principal:{kind}}).catch(reject)
+  handler({method:'GET',url,headers:{'sec-fetch-site':site,'sec-fetch-mode':'navigate','sec-fetch-dest':destination}},response,kind ? {principal:{kind}} : undefined).catch(reject)
  })
  assert.equal((await navigate(created.url,'guest','same-origin')).status,403)
  assert.equal((await navigate(created.url,'owner','cross-site')).status,403)
@@ -212,7 +212,11 @@ test('natural language saves a filled Word document and only an owner navigation
   assert.ok(landing.body.includes('href="?edit='+createdId+'" target="_blank"'))
  }
  assert.deepEqual(requests,[])
- const redirect=await navigate(created.url,'owner','same-origin')
+ const originalGet=ctx.get
+ ctx.get=name=>name==='connection'?{admit:()=>({rejection:401})}:originalGet(name)
+ assert.equal((await navigate(created.url,null,'same-origin')).status,403)
+ ctx.get=name=>name==='connection'?{admit:()=>({peer:{principal:{kind:'owner'}}})}:originalGet(name)
+ const redirect=await navigate(created.url,null,'same-origin')
  assert.equal(redirect.status,303)
  assert.equal(redirect.headers.Location,origin+'/dsh-edit#'+ticket)
  assert.deepEqual(requests,[[`/api/v1/assistant-channels/member/documents/${createdId}/edit-ticket`,proof]])

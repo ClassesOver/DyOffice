@@ -114,7 +114,8 @@ function createHandler(config, authorizationRequests, createdDocument, creations
       response.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
       response.end(JSON.stringify(value))
     }
-    if (peer?.principal.kind !== 'owner') return send(403, {error: 'forbidden'})
+    const requester = peer ?? ctx.get?.('connection')?.admit?.(request)?.peer
+    if (requester?.principal.kind !== 'owner') return send(403, {error: 'forbidden'})
     const query = new URL(request.url, 'http://localhost').searchParams
     if(request.method==='GET'&&query.has('edit')){
       const fileId = query.get('edit')
