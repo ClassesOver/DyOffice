@@ -742,6 +742,37 @@ test('uses GenOffice paint colors for gradient and pattern fills in XLSX drawing
   assert.equal(visual.chart.plotAreaFill, '#7F007F')
 })
 
+test('applies DrawingML color modifiers to chart and shape paint in document order', async () => {
+  const zip = await JSZip.loadAsync(await readFile(fixture))
+  const chart = await textOf(zip)(chartPath)
+  zip.file(chartPath, (chart.includes('xmlns:a=') ? chart : chart.replace('<c:chartSpace ', `<c:chartSpace xmlns:a="${mainNs}" `))
+    .replace('</c:plotArea>', `<c:spPr><a:solidFill><a:schemeClr val="accent1">
+      <a:shade val="50000"/><a:tint val="50000"/>
+    </a:schemeClr></a:solidFill></c:spPr></c:plotArea>`)
+    .replace('</c:chartSpace>', `<c:spPr><a:solidFill><a:srgbClr val="000000">
+      <a:alpha val="50000"/>
+    </a:srgbClr></a:solidFill></c:spPr></c:chartSpace>`))
+  await appendDrawing(zip, `<xdr:oneCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="900000" cy="450000"/><xdr:sp>
+      <xdr:nvSpPr><xdr:cNvPr id="81" name="Toned shape"/><xdr:cNvSpPr/></xdr:nvSpPr>
+      <xdr:spPr><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="2080C0">
+        <a:lumMod val="50000"/><a:lumOff val="10000"/>
+      </a:srgbClr></a:solidFill><a:ln><a:solidFill><a:sysClr val="windowText"/></a:solidFill></a:ln></xdr:spPr>
+      <xdr:txBody><a:bodyPr/><a:p><a:r><a:rPr><a:solidFill>
+        <a:sysClr val="window" lastClr="446688"><a:shade val="50000"/></a:sysClr>
+      </a:solidFill></a:rPr><a:t>System color</a:t></a:r></a:p></xdr:txBody>
+    </xdr:sp><xdr:clientData/>
+  </xdr:oneCellAnchor>`)
+  const [visual, shape] = await readWorkbookVisuals(textOf(zip), sourceSheet,
+    ['#FFFFFF', '#000000', '#EEEEEE', '#111111', '#9F0033'])
+  assert.equal(visual.chart.chartAreaFill, '#808080')
+  assert.equal(visual.chart.plotAreaFill, '#A7808C')
+  assert.equal(shape.fillColor, '#2A5A7A')
+  assert.equal(shape.lineColor, '#000000')
+  assert.equal(shape.paragraphs[0].runs[0].color, '#223344')
+})
+
 test('preserves theme-referenced shape gradients through Web saves', async t => {
   const zip = await JSZip.loadAsync(await readFile(fixture))
   const workbookRels = 'xl/_rels/workbook.xml.rels'

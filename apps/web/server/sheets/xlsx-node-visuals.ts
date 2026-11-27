@@ -1,7 +1,6 @@
 import { XMLParser } from 'fast-xml-parser'
 import { WORKBOOK_CHART_PATH } from '../../../../packages/xlsx-gateway/src/shared/workbook-chart-path.ts'
 import type { WorkbookPagePrintSettings, WorkbookVisualObject } from '../../../sheets/src/shared/desktop-api.ts'
-import { applyTint } from '../../../sheets/src/renderer/table-styles.ts'
 import {
   drawingAnchorElements, drawingChild, drawingMainChild, drawingNonVisualProperties, drawingRelationshipAttribute, isDrawingChartName, isDrawingMainName, readDrawingGraphicFrame, SVG_BLIP_NAMESPACE,
 } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-anchors.ts'
@@ -158,15 +157,19 @@ function schemeColor(scheme: XmlElement | undefined, theme: readonly string[]): 
 }
 
 function drawingColor(node: XmlElement | undefined, theme: readonly string[]): string | undefined {
-  const direct = attribute(child(node, 'srgbClr'), 'val') ?? attribute(child(node, 'sysClr'), 'lastClr')
-  if (direct && /^[\da-f]{6}$/i.test(direct)) return `#${direct.toUpperCase()}`
-  const scheme = child(node, 'schemeClr')
+  const scope = node && { ...node, drawingMainOnly: true }
+  const srgb = child(scope, 'srgbClr')
+  const direct = attribute(srgb, 'val', true)
+  if (direct && /^[\da-f]{6}$/i.test(direct)) return applyDrawingColorModifiers(`#${direct}`, srgb)
+  const system = child(scope, 'sysClr')
+  const cached = attribute(system, 'lastClr', true)
+  const name = attribute(system, 'val', true)
+  const systemBase = cached && /^[\da-f]{6}$/i.test(cached) ? `#${cached}`
+    : name === 'window' ? '#FFFFFF' : name === 'windowText' ? '#000000' : undefined
+  if (systemBase) return applyDrawingColorModifiers(systemBase, system)
+  const scheme = child(scope, 'schemeClr')
   const base = schemeColor(scheme, theme)
-  if (!base) return undefined
-  const tint = finite(val(scheme, 'tint'))
-  const shade = finite(val(scheme, 'shade'))
-  return tint !== undefined ? applyTint(base, Math.max(0, Math.min(1, 1 - tint / 100_000)))
-    : shade !== undefined ? applyTint(base, Math.max(-1, Math.min(0, shade / 100_000 - 1))) : base
+  return base ? applyDrawingColorModifiers(base, scheme) : undefined
 }
 
 function readThemeFillStyles(xml: string): XmlElement[] {
@@ -175,12 +178,14 @@ function readThemeFillStyles(xml: string): XmlElement[] {
   return children(child(child(child(theme, 'themeElements'), 'fmtScheme'), 'fillStyleLst'))
 }
 
-/** Matches the desktop reader's DrawingML gradient color transforms in XML order. */
-function applyGradientColorModifiers(base: string, color: XmlElement | undefined): string {
-  const channel = (value: number) => Math.max(0, Math.min(255, Math.round(value)))
+/** Matches the desktop reader's DrawingML color transforms in XML order. */
+function applyDrawingColorModifiers(base: string, color: XmlElement | undefined): string {
+  const modifiers = children(color)
+  if (!modifiers.length) return base.toUpperCase()
+  const channel = (value: number) => Number.isNaN(value) ? 0 : Math.max(0, Math.min(255, Math.round(value)))
   let rgb = [1, 3, 5].map(offset => Number.parseInt(base.slice(offset, offset + 2), 16))
-  for (const modifier of children(color)) {
-    const raw = finite(attribute(modifier, 'val'))
+  for (const modifier of modifiers) {
+    const raw = finite(attribute(modifier, 'val', true))
     if (raw === undefined) continue
     const factor = raw / 100_000
     switch (modifier.tag) {
@@ -221,13 +226,13 @@ function styleFillGradient(
   const scheme = child(reference, 'schemeClr')
   const base = schemeColor(scheme, theme)
   if (!base) return undefined
-  const placeholder = applyGradientColorModifiers(base, scheme)
+  const placeholder = applyDrawingColorModifiers(base, scheme)
   const stops = children(child(gradient, 'gsLst')).flatMap(stop => {
     if (stop.tag !== 'gs') return []
     const position = finite(attribute(stop, 'pos'))
     const color = children(stop).find(node => node.tag === 'schemeClr' || node.tag === 'srgbClr')
     if (position === undefined || position < 0 || position > 100_000 || !color) return []
-    return [{ position: position / 100_000, color: applyGradientColorModifiers(placeholder, color) }]
+    return [{ position: position / 100_000, color: applyDrawingColorModifiers(placeholder, color) }]
   })
   const angle = finite(attribute(child(gradient, 'lin'), 'ang'))
   return stops.length < 2 ? undefined : { angle: angle === undefined ? 90 : angle / 60_000, stops }
