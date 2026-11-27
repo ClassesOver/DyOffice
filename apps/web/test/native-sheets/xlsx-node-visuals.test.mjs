@@ -136,6 +136,27 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal(original.yAxis?.displayUnitLabel, 'Thousands')
   assert.equal(original.yAxis?.numFmt, '0.0')
   assert.equal(original.legend, 'right')
+  const printRequest = sheetsSaveRequest('sheet-9', [])
+  printRequest.pageSetupStates = [
+    { sheetId: 'sheet-9', orientation: 'landscape', paperSize: 9,
+      margins: 'narrow', header: { center: 'Chart &P' }, footer: { right: 'Quarterly' } },
+    { sheetId: 'sheet-1', orientation: 'portrait', printGridlines: true },
+  ]
+  const printSaved = (await runtime.sheetsNative.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, printRequest))).bytes
+  const printRange = await runtime.sheetsNative.readRange(printSaved, 'Chart',
+    { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+  assert.equal(printRange.pageSetup.orientation, 'landscape')
+  assert.equal(printRange.pageSetup.paperSize, 9)
+  assert.equal(printRange.pageSetup.margins.left, 0.25)
+  assert.equal(printRange.pageSetup.oddHeader, '&CChart &P')
+  assert.equal(printRange.pageSetup.oddFooter, '&RQuarterly')
+  const worksheetPrintRange = await runtime.sheetsNative.readRange(printSaved, 'Acceptance',
+    { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 })
+  assert.equal(worksheetPrintRange.pageSetup.orientation, 'portrait')
+  assert.equal(worksheetPrintRange.pageSetup.printGridlines, true)
+  const printXml = await textOf(await JSZip.loadAsync(printSaved))(chartSheet)
+  assert.match(printXml, /<pageMargins\b[^>]*\/><pageSetup\b[^>]*\/><headerFooter>[\s\S]*?<\/headerFooter><drawing/)
+  assert.ok(printXml.includes(extension))
   const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 7, value: 42, writeValue: true }])
   request.pageSetupStates = [{ sheetId: 'sheet-9', zoomScale: 150 }]
   request.chartEdits = [{ chartPath, title: 'Chart sheet revenue', legend: 'bottom', axisTitles: { value: 'Net revenue' } }]
@@ -176,6 +197,9 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   await assert.rejects(save(cleared, cellEdit), /Invalid workbook input/)
   cellEdit.pageSetupStates = [{ sheetId: 'sheet-9', zoomScale: 150 }]
   await assert.rejects(save(cleared, cellEdit), /Invalid workbook input/)
+  const gridPrintSetting = sheetsSaveRequest('sheet-9', [])
+  gridPrintSetting.pageSetupStates = [{ sheetId: 'sheet-9', orientation: 'portrait', printGridlines: true }]
+  await assert.rejects(save(cleared, gridPrintSetting), /Invalid workbook input/)
 
   const duplicate = sheetsSaveRequest('sheet-9', [])
   duplicate.sheetOps = [{ kind: 'duplicate-sheet', sheetId: 'chart-copy', sourceSheetId: 'sheet-9', name: 'Chart Copy' }]

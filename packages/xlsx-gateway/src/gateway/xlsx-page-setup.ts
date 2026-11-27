@@ -93,13 +93,13 @@ const printElementRank = new Map<string, number>(
 )
 type PrintElementEdit = (qualifiedName: string, existing?: ScopedElement) => string
 
-/// Limits edits to direct SpreadsheetML worksheet children.
+/// Limits edits to direct SpreadsheetML sheet children.
 function editPrintElements(
   xml: string,
   edits: ReadonlyMap<PrintElement, PrintElementEdit>,
 ): string {
   if (edits.size === 0) return xml
-  const root = worksheetRoot(xml)
+  const root = spreadsheetSheetRoot(xml)
   if (!root) {
     throw new PageSetupError('Worksheet has no root element.')
   }
@@ -440,6 +440,17 @@ export function applyPageSetupState(worksheetXml: string, state: SheetPageSetupS
   if (colBreaks !== undefined)
     edits.set('colBreaks', (tag, existing) => renderPageBreaks(tag, colBreaks, existing))
   return editPrintElements(xml, edits)
+}
+
+const CHART_SHEET_SETUP_FIELDS = new Set([
+  'sheetName', 'zoomScale', 'orientation', 'paperSize', 'margins', 'header', 'footer',
+])
+
+export function applyChartSheetPageSetupState(xml: string, state: SheetPageSetupState): string {
+  if (Object.entries(state).some(([field, value]) => value !== undefined && !CHART_SHEET_SETUP_FIELDS.has(field))) {
+    throw new PageSetupError(`This page setup setting is unavailable on chart sheet "${state.sheetName}".`)
+  }
+  return applyPageSetupState(xml, state)
 }
 
 /// Maintains the sheet-scoped `_xlnm.Print_Area` / `_xlnm.Print_Titles`

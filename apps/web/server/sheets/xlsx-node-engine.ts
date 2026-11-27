@@ -810,7 +810,7 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
       const savedZoom = sizeValue(view?.attributes.get('zoomScale'))
       const zoomScale = savedZoom ? Math.max(10, Math.min(400, Math.round(savedZoom))) : 100
       sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,
-        headerFooterMedia:new Map(),view:{tabColor:resolveColor(color).rgb??null,
+        pageSetup:readPageSetup(children),headerFooterMedia:new Map(),view:{tabColor:resolveColor(color).rgb??null,
           showGridLines:false,showRowColHeaders:false,zoomScale:zoomScale===100?undefined:zoomScale}})
       continue
     }

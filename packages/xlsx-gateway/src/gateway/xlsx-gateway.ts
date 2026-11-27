@@ -146,7 +146,7 @@ import {
   type DefinedNamesState,
 } from './xlsx-defined-names.ts'
 import { applyDvRules, type DvCellArea, type DvWireRule } from './xlsx-dv.ts'
-import { applyPageSetupState, applyPrintAreas, type SheetPageSetupState } from './xlsx-page-setup.ts'
+import { applyChartSheetPageSetupState, applyPageSetupState, applyPrintAreas, type SheetPageSetupState } from './xlsx-page-setup.ts'
 import {
   applyProtectedRanges,
   applySheetProtection,
@@ -1370,16 +1370,11 @@ export async function planCellEditsToXlsx(
       additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName))
     const worksheetXml = await pkg.readText(worksheetPath)
     if (readRootOpening(worksheetXml)?.name.split(':').at(-1) === 'chartsheet') {
-      const states = pageSetupStates.filter((state) => state.sheetName === sheetName)
-      const zoomOnly = states.every((state) =>
-        state.zoomScale !== undefined && Object.entries(state).every(
-          ([field, value]) => value === undefined || field === 'sheetName' || field === 'zoomScale',
-        ),
-      )
-      if (gridEditSheetNames.has(sheetName) || !zoomOnly) {
+      if (gridEditSheetNames.has(sheetName)) {
         throw new Error(`Cell and grid edits are unavailable on chart sheet "${sheetName}".`)
       }
-      const updated = states.reduce(applyPageSetupState, worksheetXml)
+      const updated = pageSetupStates.filter((state) => state.sheetName === sheetName)
+        .reduce(applyChartSheetPageSetupState, worksheetXml)
       if (updated !== worksheetXml) {
         pkg.write(worksheetPath, updated)
         touchedEntries.add(worksheetPath)
