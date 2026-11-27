@@ -295,7 +295,7 @@ function escapeStrayAmpersands(text: string): string {
 
 /// Left/center/right → Excel's `&L..&C..&R..` code string, empty sections
 /// omitted; the caller XML-escapes the result.
-function encodeHeaderFooterSections(parts: HeaderFooterParts): string {
+export function encodeHeaderFooterSections(parts: HeaderFooterParts): string {
   const sections: readonly (readonly [string, string | undefined])[] = [
     ['&L', parts.left],
     ['&C', parts.center],

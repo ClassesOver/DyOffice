@@ -5,6 +5,7 @@
  * _xlnm.Print_Area / _xlnm.Print_Titles defined names).
  */
 import { columnIndex, columnLabel, parseRange } from '@genoffice/xlsx-gateway/domain/cell-address'
+import { encodeHeaderFooterSections } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import type { WorkbookPagePrintSettings } from '../shared/desktop-api'
 import type { HeaderFooterParts, PageSetupJournalState, StructuralJournalOp } from './edit-journal'
 import { fileRangeToScreenRange, fileToScreen } from './view-transform'
@@ -196,22 +197,18 @@ export function resolveEffectivePageSetup(
       : journal.clearPrintTitleRows
         ? null
         : mapTitleRowsToScreen(printTitleRowsFromFormula(names?.printTitles), ops)
-  const header =
-    journal.header !== undefined
-      ? journal.header
-      : file?.oddHeader !== undefined
-        ? decodeHeaderFooter(file.oddHeader)
-        : null
-  const footer =
-    journal.footer !== undefined
-      ? journal.footer
-      : file?.oddFooter !== undefined
-        ? decodeHeaderFooter(file.oddFooter)
-        : null
-  // The session edits the odd header/footer only (like Excel's Page Setup
-  // dialog); the file's first/even variants keep applying to their pages.
+  // Use the same encoding for pending edits as on save.
   const decodeOptional = (encoded: string | undefined): HeaderFooterParts | null =>
     encoded === undefined ? null : decodeHeaderFooter(encoded)
+  const header =
+    journal.header === undefined
+      ? decodeOptional(file?.oddHeader)
+      : journal.header && decodeHeaderFooter(encodeHeaderFooterSections(journal.header))
+  const footer =
+    journal.footer === undefined
+      ? decodeOptional(file?.oddFooter)
+      : journal.footer && decodeHeaderFooter(encodeHeaderFooterSections(journal.footer))
+  // The session edits the odd header/footer only.
   const firstPage =
     file?.differentFirst === true
       ? { header: decodeOptional(file.firstHeader), footer: decodeOptional(file.firstFooter) }
@@ -352,12 +349,13 @@ function normaliseArea(reference: string): string {
 /// Formatting toggles and codes the layout cannot render; any other &X is literal text.
 const STRIPPED_CODES = new Set(['B', 'I', 'U', 'S', 'E', 'X', 'Y', 'Z', 'O', 'H'])
 
-/// Excel's encoded header/footer → left/center/right parts. Field codes the
-/// layout resolves (&P &N &D &T &F &A &G picture, && literal) stay verbatim;
-/// formatting codes (font/size/color/bold/…) and unsupported codes (&Z path)
-/// are stripped, while an unrecognised &X is kept as the literal text Excel
-/// prints. Text before the first section marker is centered.
-export function decodeHeaderFooter(encoded: string): HeaderFooterParts | null {
+/// Excel's encoded header/footer → left/center/right parts. The editor keeps
+/// formatting codes for saving. Print layout keeps fields and strips the
+/// formatting codes it cannot render. Unmarked text goes in the center.
+export function decodeHeaderFooter(
+  encoded: string,
+  preserveFormatting = false,
+): HeaderFooterParts | null {
   const sections = { L: '', C: '', R: '' }
   let current: 'L' | 'C' | 'R' = 'C'
   let index = 0
@@ -369,28 +367,35 @@ export function decodeHeaderFooter(encoded: string): HeaderFooterParts | null {
       continue
     }
     const next = encoded[index + 1]
-    if (next === undefined) break
+    if (next === undefined) {
+      if (preserveFormatting) sections[current] += '&'
+      break
+    }
     if (next === '&') {
       sections[current] += '&&'
       index += 2
       continue
     }
-    // &"Font Name,Style" — skip the whole quoted spec.
+    const start = index
+    // &"Font Name,Style" — consume the whole quoted spec.
     if (next === '"') {
       const close = encoded.indexOf('"', index + 2)
       index = close === -1 ? encoded.length : close + 1
+      if (preserveFormatting) sections[current] += encoded.slice(start, index)
       continue
     }
     // &nn font size.
     if (/[0-9]/.test(next)) {
       index += 2
       while (index < encoded.length && /[0-9]/.test(encoded[index] ?? '')) index += 1
+      if (preserveFormatting) sections[current] += encoded.slice(start, index)
       continue
     }
     const code = next.toUpperCase()
     // &K followed by an RRGGBB or theme color spec.
     if (code === 'K') {
       index += 8
+      if (preserveFormatting) sections[current] += encoded.slice(start, index)
       continue
     }
     if (code === 'L' || code === 'C' || code === 'R') {
@@ -398,24 +403,9 @@ export function decodeHeaderFooter(encoded: string): HeaderFooterParts | null {
       index += 2
       continue
     }
-    if (
-      code === 'P' ||
-      code === 'N' ||
-      code === 'D' ||
-      code === 'T' ||
-      code === 'F' ||
-      code === 'A' ||
-      code === 'G'
-    ) {
-      sections[current] += `&${code}`
-      index += 2
-      continue
+    if (preserveFormatting || !STRIPPED_CODES.has(code)) {
+      sections[current] += preserveFormatting ? encoded.slice(start, start + 2) : `&${code}`
     }
-    if (STRIPPED_CODES.has(code)) {
-      index += 2
-      continue
-    }
-    sections[current] += `&${code}`
     index += 2
   }
   if (sections.L === '' && sections.C === '' && sections.R === '') return null

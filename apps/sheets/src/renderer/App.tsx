@@ -483,7 +483,7 @@ import {
   type RibbonCommandContext,
 } from './ribbon-actions'
 import {
-  handleApplyHeaderFooter as handleApplyHeaderFooterImpl,
+  openHeaderFooterEditor,
   handleExportPdf as handleExportPdfImpl,
   handlePageLayoutCommand as handlePageLayoutCommandImpl,
   openPrintPreviewHost,
@@ -6748,7 +6748,7 @@ export function App({
         onCreateSubtotal={(config) => handleCreateSubtotalImpl(dataToolsContext(), config)}
         onCreateConsolidate={(config) => handleCreateConsolidateImpl(dataToolsContext(), config)}
         onGetConsolidateDefault={() => consolidateDefaultReferenceImpl(dataToolsContext())}
-        onApplyHeaderFooter={(result) => handleApplyHeaderFooterImpl(pageLayoutContext(), result)}
+        onOpenHeaderFooter={() => openHeaderFooterEditor(pageLayoutContext())}
       />
       {openingWorkbook && !host?.inPlaceSave && (
         <div className="workbook-opening-screen" role="status" aria-live="polite">

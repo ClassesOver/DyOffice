@@ -18,6 +18,7 @@ import {
   recordPageSetup,
   recordThemeColors,
   recordThemeFonts,
+  type HeaderFooterParts,
   type PageSetupJournalState,
 } from './edit-journal'
 import type { HeaderFooterResult } from './HeaderFooterDialog'
@@ -38,6 +39,7 @@ import {
 } from './print-html'
 import {
   clampTitleRows,
+  decodeHeaderFooter,
   resolveEffectivePageSetup,
   type EffectivePageSetup,
   type HeaderFooterPictureSlot,
@@ -351,25 +353,62 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
   }
 }
 
-/// Insert → Header & Footer OK: journals the printed header/footer of the
-/// active sheet; the save writes the worksheet's <headerFooter> element.
-export function handleApplyHeaderFooter(
-  ctx: PageLayoutContext,
-  result: HeaderFooterResult,
-): string | null {
+export interface HeaderFooterEditor extends HeaderFooterResult {
+  apply(result: HeaderFooterResult): string | null
+}
+
+function sameHeaderFooter(a: HeaderFooterParts | null, b: HeaderFooterParts | null): boolean {
+  return (
+    (a?.left ?? '') === (b?.left ?? '') &&
+    (a?.center ?? '') === (b?.center ?? '') &&
+    (a?.right ?? '') === (b?.right ?? '')
+  )
+}
+
+export async function openHeaderFooterEditor(ctx: PageLayoutContext): Promise<HeaderFooterEditor | null> {
   const state = ctx.lazyWorkbookRef.current
-  if (!state) return t('appHfNeedsFile')
-  const sheetId = ctx.univerRef.current?.univerAPI
+  if (!state) {
+    ctx.setMessage(t('appHfNeedsFile'))
+    return null
+  }
+  const activeSheetId = () => ctx.univerRef.current?.univerAPI
     .getActiveWorkbook()
     ?.getActiveSheet()
     ?.getSheetId()
-  if (!sheetId || isSheetRemoved(state.editJournal, sheetId)) {
-    return t('appActiveSheetUnavailable')
+  const sheetId = activeSheetId()
+  if (!sheetId || isSheetRemoved(state.editJournal, sheetId) ||
+      !(await ensureSheetFileState(state, sheetId, ctx.lazyWorkbookRef))) {
+    ctx.setMessage(t('appActiveSheetUnavailable'))
+    return null
   }
-  recordPageSetup(state.editJournal, sheetId, { header: result.header, footer: result.footer })
-  ctx.setPendingEdits(journalSize(state.editJournal))
-  ctx.setMessage(t('appHfUpdated'))
-  return null
+  const isCurrent = (): boolean =>
+    ctx.lazyWorkbookRef.current === state && activeSheetId() === sheetId &&
+    !isSheetRemoved(state.editJournal, sheetId)
+  if (!isCurrent()) return null
+
+  const saved = state.sheetFilePageSetups.get(sheetId)
+  const pending = state.editJournal.pageSetup.get(sheetId)
+  const header = pending?.header === undefined
+    ? decodeHeaderFooter(saved?.oddHeader ?? '', true)
+    : pending.header
+  const footer = pending?.footer === undefined
+    ? decodeHeaderFooter(saved?.oddFooter ?? '', true)
+    : pending.footer
+  return {
+    header,
+    footer,
+    apply(result) {
+      if (!isCurrent()) return t('appActiveSheetUnavailable')
+      const patch: PageSetupJournalState = {}
+      if (!sameHeaderFooter(header, result.header)) patch.header = result.header
+      if (!sameHeaderFooter(footer, result.footer)) patch.footer = result.footer
+      if (Object.keys(patch).length === 0) return null
+      recordPageSetup(state.editJournal, sheetId, patch)
+      ctx.setPendingEdits(journalSize(state.editJournal))
+      ctx.setMessage(t('appHfUpdated'))
+      return null
+    },
+  }
 }
 
 /// One sheet laid out as print pages with its Page Layout settings, the

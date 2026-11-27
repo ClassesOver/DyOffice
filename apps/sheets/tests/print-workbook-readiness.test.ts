@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { applyPageSetupState } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import {
   handleExportPdf,
+  openHeaderFooterEditor,
   openPrintPreviewHost,
   type PageLayoutContext,
 } from '../src/renderer/page-layout-actions'
-import { createEditJournal } from '../src/renderer/edit-journal'
+import { createEditJournal, toSavePageSetupStates } from '../src/renderer/edit-journal'
 import { startFullLoad } from '../src/renderer/full-load'
 import { workbookCellCounts } from '../src/renderer/load-budget'
 import { setModuleLang } from '../src/renderer/i18n/locale'
+import { resolveEffectivePageSetup } from '../src/renderer/print-settings'
 import { fullLoadGate } from '../src/renderer/reorder-gate'
 import type { LazyWorkbookState, UniverRuntime } from '../src/renderer/univer-state'
 import { preloadEntireWorkbook } from '../src/renderer/univer-sync'
@@ -142,6 +145,48 @@ describe('print and PDF workbook readiness coordination', () => {
       runOps: () => Promise.reject(new Error('page layout ops are not used here')),
     }
   }
+
+  it('loads the saved header and footer and preserves formatting in untouched sections', async () => {
+    const state = createMockState()
+    const ctx = createMockContext(state)
+    const oddHeader = '&LOld&C&BReport&B'
+    const oddFooter = '&R&"Calibri,Bold"&12Page &P'
+    const readWorkbookRange = vi.fn().mockResolvedValue(fileStateResult({ oddHeader, oddFooter }))
+    vi.stubGlobal('window', { desktopApi: { readWorkbookRange } })
+    const editor = await openHeaderFooterEditor(ctx)
+    expect(readWorkbookRange).toHaveBeenCalledOnce()
+    expect(editor).toMatchObject({
+      header: { left: 'Old', center: '&BReport&B' },
+      footer: { right: '&"Calibri,Bold"&12Page &P' },
+    })
+    if (editor === null) throw new Error('Header and footer editor did not open')
+    expect(editor.apply({ header: editor.header, footer: editor.footer })).toBeNull()
+    expect(toSavePageSetupStates(state.editJournal)).toEqual([])
+    expect(editor.apply({
+      header: { ...editor.header, left: 'Updated' },
+      footer: editor.footer,
+    })).toBeNull()
+
+    const changes = toSavePageSetupStates(state.editJournal)
+    expect(changes).toEqual([
+      { sheetId: 'sheet-1', header: { left: 'Updated', center: '&BReport&B' } },
+    ])
+    const originalFooter = '<oddFooter>&amp;R&amp;"Calibri,Bold"&amp;12Page &amp;P</oddFooter>'
+    const output = applyPageSetupState(
+      `<worksheet><sheetData/><headerFooter><oddHeader>&amp;LOld&amp;C&amp;BReport&amp;B</oddHeader>${originalFooter}</headerFooter></worksheet>`,
+      { sheetName: 'Sheet1', ...changes[0] },
+    )
+    expect(output).toContain('<oddHeader>&amp;LUpdated&amp;C&amp;BReport&amp;B</oddHeader>')
+    expect(output).toContain(originalFooter)
+    expect(resolveEffectivePageSetup(changes[0] ?? {}, { oddHeader, oddFooter }, null).header)
+      .toEqual({ left: 'Updated', center: 'Report' })
+
+    const reopened = await openHeaderFooterEditor(ctx)
+    if (reopened === null) throw new Error('Header and footer editor did not reopen')
+    expect(reopened.header).toEqual({ left: 'Updated', center: '&BReport&B' })
+    expect(reopened.apply({ header: reopened.header, footer: null })).toBeNull()
+    expect(toSavePageSetupStates(state.editJournal)[0]?.footer).toBeNull()
+  })
 
   it('PDF export of a streamed workbook preloads it first and exports', async () => {
     const state = createMockState()
