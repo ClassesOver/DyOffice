@@ -802,11 +802,16 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:r
     const sheetXml = normalizeOoxmlPartPrefix(await text(path))
     if (rel.type.endsWith('/chartsheet')) {
       const root = spreadsheetSheetRoot(sheetXml)
-      const properties = root && scopedChildren(root).find(node => isElement(node,'sheetPr',root.namespace))
+      const children = root ? scopedChildren(root).filter(node => node.namespace === root.namespace) : []
+      const properties = children.find(node => node.local === 'sheetPr')
       const tab = properties && scopedChildren(properties).find(node => isElement(node,'tabColor',properties.namespace))
       const color = tab && Object.fromEntries([...tab.attributes].map(([name,value]) => [`@_${name}`,value]))
+      const view = lastWorksheetView(children.find(node => node.local === 'sheetViews'))
+      const savedZoom = sizeValue(view?.attributes.get('zoomScale'))
+      const zoomScale = savedZoom ? Math.max(10, Math.min(400, Math.round(savedZoom))) : 100
       sheets.set(sheet.name,{...EMPTY_SHEET_METADATA,imageCells:undefined,
-        headerFooterMedia:new Map(),view:{...EMPTY_SHEET_METADATA.view,tabColor:resolveColor(color).rgb??null}})
+        headerFooterMedia:new Map(),view:{tabColor:resolveColor(color).rgb??null,
+          showGridLines:false,showRowColHeaders:false,zoomScale:zoomScale===100?undefined:zoomScale}})
       continue
     }
     const xml = inferWorksheetAddresses(sheetXml)

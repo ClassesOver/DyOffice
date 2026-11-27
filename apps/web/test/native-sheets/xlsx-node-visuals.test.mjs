@@ -78,7 +78,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   zip.file('[Content_Types].xml', (await text('[Content_Types].xml')).replace('</Types>',
     `<Override PartName="/${chartSheet}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>`))
   zip.file(chartSheet, `<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1"/></sheetViews><drawing r:id="rId1"/>${extension}</chartsheet>`)
+    xmlns:r="${relationships.slice(0, -1)}"><sheetPr><tabColor rgb="FF112233"/></sheetPr><sheetViews><sheetView workbookViewId="0" tabSelected="1" zoomScale="125" zoomToFit="1"/></sheetViews><drawing r:id="rId1"/>${extension}</chartsheet>`)
   zip.file(chartSheetRels, await text('xl/worksheets/_rels/sheet1.xml.rels'))
   const worksheet = 'xl/worksheets/sheet1.xml'
   zip.file(worksheet, (await text(worksheet)).replace(/<drawing\b[^>]*\/>/, ''))
@@ -110,11 +110,15 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
     DYOFFICE_XLSX_GATEWAY_RUNNER: join(directory, 'gateway-process.mjs'),
   }, { enabled: true })
   t.after(() => runtime.close())
-  const inspect = async (input, tabColor) => {
+  const inspect = async (input, tabColor, zoomScale = 125) => {
     const metadata = await runtime.sheetsNative.inspect(input)
     assert.deepEqual(metadata.sheets.map(({ name }) => name), ['Acceptance', 'Chart'])
     assert.equal(metadata.sheets[metadata.activeTab].id, 'sheet-9')
     assert.equal(metadata.sheets[metadata.activeTab].tabColor, tabColor)
+    assert.equal(metadata.sheets[1].zoomScale, zoomScale)
+    assert.equal(metadata.sheets[1].showGridLines, false)
+    assert.equal(metadata.sheets[1].showRowColHeaders, false)
+    assert.equal(metadata.sheets[0].showGridLines, true)
     const visual = metadata.visuals.find(({ sheetId }) => sheetId === 'sheet-9')
     assert.equal(visual?.kind, 'chart')
     assert.equal(visual.chartPath, chartPath)
@@ -133,6 +137,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   assert.equal(original.yAxis?.numFmt, '0.0')
   assert.equal(original.legend, 'right')
   const request = sheetsSaveRequest('sheet-1', [{ row: 0, column: 7, value: 42, writeValue: true }])
+  request.pageSetupStates = [{ sheetId: 'sheet-9', zoomScale: 150 }]
   request.chartEdits = [{ chartPath, title: 'Chart sheet revenue', legend: 'bottom', axisTitles: { value: 'Net revenue' } }]
   request.sheetOps = [
     { kind: 'set-sheet-tab-color', sheetId: 'sheet-9', color: '#654321' },
@@ -141,7 +146,11 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   const save = async (input, edit) =>
     (await runtime.sheetsNative.savePlan(input, await runtime.sheetsWorkbookPlanner(input, edit))).bytes
   const saved = await save(bytes, request)
-  const chart = await inspect(saved, '#654321')
+  const chart = await inspect(saved, '#654321', 150)
+  const savedSheet = await textOf(await JSZip.loadAsync(saved))(chartSheet)
+  assert.match(savedSheet, /<sheetView\b[^>]*tabSelected="1"[^>]*zoomScale="150"/)
+  assert.match(savedSheet, /<sheetView\b[^>]*zoomToFit="0"/)
+  assert.ok(!savedSheet.includes('zoomScaleNormal'))
   assert.equal((await runtime.sheetsNative.inspect(saved)).sheets[0].tabColor, '#123456')
   assert.equal(chart.title, 'Chart sheet revenue')
   assert.deepEqual(chart.series, original.series)
@@ -156,14 +165,16 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   const clear = sheetsSaveRequest('sheet-9', [])
   clear.sheetOps = [{ kind: 'set-sheet-tab-color', sheetId: 'sheet-9', color: null }]
   const cleared = await save(saved, clear)
-  assert.equal((await inspect(cleared, null)).title, 'Chart sheet revenue')
+  assert.equal((await inspect(cleared, null, 150)).title, 'Chart sheet revenue')
   const xml = await textOf(await JSZip.loadAsync(cleared))(chartSheet)
   assert.ok(xml.includes(extension))
   assert.ok(!xml.replace(extension, '').includes('<sheetData'))
   const recolor = sheetsSaveRequest('sheet-9', [])
   recolor.sheetOps = [{ kind: 'set-sheet-tab-color', sheetId: 'sheet-9', color: '#ABCDEF' }]
-  assert.equal((await inspect(await save(cleared, recolor), '#ABCDEF')).title, 'Chart sheet revenue')
+  assert.equal((await inspect(await save(cleared, recolor), '#ABCDEF', 150)).title, 'Chart sheet revenue')
   const cellEdit = sheetsSaveRequest('sheet-9', [{ row: 0, column: 0, value: 'invalid', writeValue: true }])
+  await assert.rejects(save(cleared, cellEdit), /Invalid workbook input/)
+  cellEdit.pageSetupStates = [{ sheetId: 'sheet-9', zoomScale: 150 }]
   await assert.rejects(save(cleared, cellEdit), /Invalid workbook input/)
 
   const duplicate = sheetsSaveRequest('sheet-9', [])
@@ -173,6 +184,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   const copiedMetadata = await runtime.sheetsNative.inspect(copied)
   const copy = copiedMetadata.sheets.find(({ name }) => name === 'Chart Copy')
   assert.equal(copy?.tabColor, '#654321')
+  assert.equal(copy?.zoomScale, 150)
   const copiedVisual = copiedMetadata.visuals.find(({ sheetId }) => sheetId === copy.id)
   assert.equal(copiedVisual?.kind, 'chart')
   assert.notEqual(copiedVisual.chartPath, chartPath)
@@ -191,7 +203,7 @@ test('opens a chart sheet and preserves its chart through a Web save', { timeout
   removeCopy.sheetOps = [{ kind: 'remove-sheet', sheetId: copy.id }]
   removeCopy.sheetOrder = ['sheet-1', 'sheet-9']
   const removed = await save(edited, removeCopy)
-  assert.equal((await inspect(removed, '#654321')).title, 'Chart sheet revenue')
+  assert.equal((await inspect(removed, '#654321', 150)).title, 'Chart sheet revenue')
   assert.equal((await JSZip.loadAsync(removed)).file(copiedVisual.chartPath), null)
 })
 

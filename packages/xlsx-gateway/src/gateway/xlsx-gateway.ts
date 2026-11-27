@@ -1350,7 +1350,7 @@ export async function planCellEditsToXlsx(
 
   // Formula caches can be refreshed on a sheet the user did not edit (a
   // cross-sheet dependent), so those worksheets must be loaded too.
-  const sheetNames = new Set([
+  const gridEditSheetNames = new Set([
     ...edits.map((edit) => edit.sheetName),
     // a cached-value-only save (no cell edits) still patches its sheets
     ...formulaValues.map((sheet) => sheet.sheetName),
@@ -1361,19 +1361,32 @@ export async function planCellEditsToXlsx(
     ...cfStates.map((state) => state.sheetName),
     ...dvStates.map((state) => state.sheetName),
     ...sheetProtections.map((state) => state.sheetName),
-    ...pageSetupStates.map((state) => state.sheetName),
     ...protectedRangeStates.map((state) => state.sheetName),
   ])
   const worksheetXmls = new Map<string, string>()
   const worksheetPaths = new Map<string, string>()
-  for (const sheetName of sheetNames) {
+  for (const sheetName of new Set([...gridEditSheetNames, ...pageSetupStates.map((state) => state.sheetName)])) {
     const worksheetPath =
       additionPaths.get(sheetName) ?? (await resolveWorksheetPath(pkg, sheetName))
-    worksheetPaths.set(sheetName, worksheetPath)
     const worksheetXml = await pkg.readText(worksheetPath)
     if (readRootOpening(worksheetXml)?.name.split(':').at(-1) === 'chartsheet') {
-      throw new Error(`Cell and grid edits are unavailable on chart sheet "${sheetName}".`)
+      const states = pageSetupStates.filter((state) => state.sheetName === sheetName)
+      const zoomOnly = states.every((state) =>
+        state.zoomScale !== undefined && Object.entries(state).every(
+          ([field, value]) => value === undefined || field === 'sheetName' || field === 'zoomScale',
+        ),
+      )
+      if (gridEditSheetNames.has(sheetName) || !zoomOnly) {
+        throw new Error(`Cell and grid edits are unavailable on chart sheet "${sheetName}".`)
+      }
+      const updated = states.reduce(applyPageSetupState, worksheetXml)
+      if (updated !== worksheetXml) {
+        pkg.write(worksheetPath, updated)
+        touchedEntries.add(worksheetPath)
+      }
+      continue
     }
+    worksheetPaths.set(sheetName, worksheetPath)
     // Every later anchor lookup would report a bare "no sheetData"; name the
     // part and what was read so an empty or truncated extraction is visible.
     if (!worksheetXml.includes('<sheetData')) {

@@ -12,6 +12,16 @@ const WITH_VIEW =
   '<worksheet><sheetViews><sheetView workbookViewId="0"/></sheetViews>' + '<sheetData/></worksheet>'
 
 describe('applyPageSetupState', () => {
+  it('creates a fixed zoom chart sheet view before the drawing when no view exists', () => {
+    const xml = '<chartsheet><sheetPr/><drawing r:id="rId1"/></chartsheet>'
+    const updated = applyPageSetupState(xml, { sheetName: 'Chart', zoomScale: 125 })
+    expect(updated).toBe('<chartsheet><sheetPr/><sheetViews>' +
+      '<sheetView workbookViewId="0" zoomScale="125" zoomToFit="0"/>' +
+      '</sheetViews><drawing r:id="rId1"/></chartsheet>')
+    expect(applyPageSetupState(updated, { sheetName: 'Chart', zoomScale: 100 }))
+      .toBe(updated.replace(' zoomScale="125"', ''))
+  })
+
   it('creates pageSetup with orientation and paper size before </worksheet>', () => {
     const xml = applyPageSetupState(BARE, {
       sheetName: 'Sheet1',

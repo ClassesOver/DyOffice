@@ -13,7 +13,7 @@ import {
   updateWorksheetTagAttribute,
 } from './xlsx-structure.ts'
 import { childElements, type ChildElement } from './xlsx-style-entries.ts'
-import { isElement, lastWorksheetView, scopedChildren, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
+import { isElement, lastWorksheetView, scopedChildren, spreadsheetSheetRoot, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export class PageSetupError extends Error {}
 
@@ -220,9 +220,15 @@ function applyWorksheetViewState(xml: string, state: SheetPageSetupState): strin
   if (state.showHeadings !== undefined) attributes.showRowColHeaders = state.showHeadings ? null : '0'
   if (state.rightToLeft !== undefined) attributes.rightToLeft = state.rightToLeft ? '1' : null
 
-  const changes = Object.entries(attributes)
   const replacePane = state.frozenRows !== undefined || state.frozenColumns !== undefined
-  if (!replacePane && changes.length === 0) return xml
+  if (!replacePane && Object.keys(attributes).length === 0) return xml
+  const root = spreadsheetSheetRoot(xml)
+  const chartSheet = root?.local === 'chartsheet'
+  if (chartSheet && state.zoomScale !== undefined) {
+    delete attributes.zoomScaleNormal
+    attributes.zoomToFit = '0'
+  }
+  const changes = Object.entries(attributes)
   const rows = state.frozenRows ?? 0
   const columns = state.frozenColumns ?? 0
   const hasPane = rows > 0 || columns > 0
@@ -239,7 +245,6 @@ function applyWorksheetViewState(xml: string, state: SheetPageSetupState): strin
   )
 
   const create = hasPane || changes.some(([, value]) => value !== null)
-  const root = worksheetRoot(xml)
   if (!root) {
     if (!create) return xml
     throw new PageSetupError('Worksheet has no root element.')
@@ -268,15 +273,16 @@ function applyWorksheetViewState(xml: string, state: SheetPageSetupState): strin
 
   const qualifier = prefix(views?.name ?? root.name)
   const name = qualifier + 'sheetView'
-  const newView = openingWithUpdates(`<${name} workbookViewId="0">`) + pane(name) + `</${name}>`
+  const newAttributes = changes.flatMap(([key, value]) => value === null ? [] : [` ${key}="${value}"`]).join('')
+  const newOpening = `<${name} workbookViewId="0"${newAttributes}`
+  const newView = hasPane ? `${newOpening}>${pane(name)}</${name}>` : `${newOpening}/>`
   if (views) {
     return replaceElement(xml, { ...views, start: offset + views.start }, withChildren(views, views.inner + newView))
   }
-  const anchor = children.find((child) =>
-    child.local === 'sheetFormatPr' || child.local === 'cols' || child.local === 'sheetData',
-  )
-  if (!anchor) throw new PageSetupError('Worksheet has no sheetData element.')
-  const at = offset + anchor.start
+  const anchor = chartSheet ? children.find(child => child.local !== 'sheetPr')
+    : children.find(child => child.local === 'sheetFormatPr' || child.local === 'cols' || child.local === 'sheetData')
+  if (!anchor && !chartSheet) throw new PageSetupError('Worksheet has no sheetData element.')
+  const at = offset + (anchor?.start ?? root.inner.length)
   return xml.slice(0, at) + `<${qualifier}sheetViews>${newView}</${qualifier}sheetViews>` + xml.slice(at)
 }
 
