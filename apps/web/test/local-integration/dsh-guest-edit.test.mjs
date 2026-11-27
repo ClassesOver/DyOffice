@@ -56,6 +56,12 @@ test('DSH guest authorization is explicit and bound to the channel document',asy
  const redeemed=await redeem(ticket)
  assert.equal(redeemed.statusCode,200,redeemed.body)
  assert.equal((await redeem(ticket)).statusCode,401)
+ const embeddedStart=await f.app.inject({url:'/dsh-edit?dshEmbed=1'})
+ assert.match(embeddedStart.headers['content-security-policy'],/frame-ancestors [^;]*http:\/\/127\.0\.0\.1:3080/)
+ const framed=await f.app.inject({method:'POST',url:'/dsh-edit/redeem',headers:{origin},payload:{ticket:(await open(memberToken,file.fileId)).json().ticket,embedded:true}})
+ assert.equal(framed.statusCode,200,framed.body)
+ assert.equal(new URL(framed.json().url,origin).searchParams.get('dshEmbed'),'1')
+ assert.match(framed.headers['set-cookie'],/SameSite=None; Partitioned/)
  const otherTab=await redeem((await open(memberToken,file.fileId)).json().ticket)
  const expiredEditor=new URL(otherTab.json().url,origin).searchParams.get('editorId')
  const expiredCookie=otherTab.headers['set-cookie'].split(';')[0]
@@ -79,6 +85,11 @@ test('DSH guest authorization is explicit and bound to the channel document',asy
  const write=(method,url,payload,extra={})=>f.app.inject({method,url,payload,headers:{...headers,origin,'x-csrf-token':proof.json().csrfToken,...extra}})
  assert.equal((await write('POST',route+'/lease',{editorId:crypto.randomUUID()})).statusCode,404)
  assert.equal((await write('POST',route+'/lease',{editorId},{'x-csrf-token':'x'.repeat(43)})).statusCode,403)
+ const sync='/api/v1/files/'+file.fileId+'/word-collab'
+ const joinDocument={revision:file.revision,clientId:editorId}
+ assert.equal((await write('POST',sync,joinDocument)).statusCode,200)
+ assert.equal((await write('POST',sync,{...joinDocument,clientId:crypto.randomUUID()})).statusCode,403)
+ assert.equal((await write('POST','/api/v1/files/'+other.fileId+'/word-collab',joinDocument)).statusCode,404)
  const lease=await write('POST',route+'/lease',{editorId})
  assert.equal(lease.statusCode,200,lease.body)
  const bytes=await docxBytes()

@@ -39,6 +39,7 @@ export function syncWord(transactions:PrincipalTransactions,token:string,fileId:
     !steps.every(validStep) ||
     (steps.length&&input.version===undefined))throw authError(400)
   return runFileTransaction(transactions,token,'files:write',async(c,p)=>{
+    if(p.dshEdit && (p.dshEdit.fileId!==file || p.dshEdit.editorId!==client || p.dshEdit.format!=='docx'))throw authError(403)
     const current=await loadFile(c,p,file,false,steps.length?'UPDATE':'SHARE')
     if(current.format!=='docx')throw authError(415)
     if(steps.length)await assertOfficeWritable(current)

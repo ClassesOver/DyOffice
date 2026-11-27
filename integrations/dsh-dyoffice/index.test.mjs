@@ -17,9 +17,10 @@ test('registers /dyoffice as an input command for the supported Office formats',
   assert.ok(command)
   assert.equal(command.input.hint,'<word|xlsx|pptx|pdf> <instruction>')
   assert.match(command.description,/Word.*XLSX.*PPTX.*PDF/)
-  assert.deepEqual(await command.handler({rawInput:'  ',signal:new AbortController().signal,agent:{}}),{
-    kind:'success',text:'用法：/dyoffice <word|xlsx|pptx|pdf> <任务>\n生成 Word：/dyoffice word 创建一个活动策划\n使用 DSH Skill：/dyoffice word --skill=名称 创建活动策划\n创建空白文件：/dyoffice word 创建空白文件 demo\n分析当前频道文档：/dyoffice word 总结当前文档',
-  })
+  const help=await command.handler({rawInput:'  ',signal:new AbortController().signal,agent:{}})
+  assert.equal(help.kind,'success')
+  assert.match(help.text,/帮我写一份.*Word/)
+  assert.doesNotMatch(help.text,/\/dyoffice/)
 })
 
 test('parses the four /dyoffice format subcommands',()=>{
@@ -162,12 +163,12 @@ test('natural language saves a filled Word document and only an owner navigation
  const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
  const createdId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
  const ticket='x'.repeat(43),proof='d'.repeat(64),requests=[],documents=[]
- let linkedFile=fileId
+ let linkedFile=fileId,embedOrigins=[]
  const directory=await mkdtemp(join(tmpdir(),'dsh-guest-'))
  t.after(()=>rm(directory,{recursive:true,force:true}))
  const server=createServer(async(request,response)=>{
   assert.equal(request.headers.authorization,'Bearer sample-token')
-  if(request.method==='GET')return response.end(JSON.stringify({conversationId:fileId,member:{membershipId:fileId},fileId:linkedFile,canEdit:true}))
+  if(request.method==='GET')return response.end(JSON.stringify({conversationId:fileId,member:{membershipId:fileId},fileId:linkedFile,fileName:linkedFile && '读书会.docx',dshEditorOrigins:embedOrigins,canEdit:true}))
   if(request.url.endsWith('/member/documents')){
    const chunks=[]
    for await(const chunk of request)chunks.push(chunk)
@@ -187,6 +188,7 @@ test('natural language saves a filled Word document and only an owner navigation
  apply(ctx,{memberFile})
  const opened=await tool.execute({action:'open'},{signal:t.signal})
  const created=await tool.execute({action:'create',format:'docx',title:'demo'},{signal:t.signal})
+ assert.equal(opened.name,'读书会.docx')
  assert.equal(opened.url,origin+'/web/dyoffice-preview?edit='+fileId)
  assert.equal(created.url,origin+'/web/dyoffice-preview?edit='+createdId)
  const text='活动安排\n周五下午举行活动。'
@@ -196,7 +198,7 @@ test('natural language saves a filled Word document and only an owner navigation
  await assert.rejects(tool.execute({action:'create',format:'pdf',title:'demo',body:text},{signal:t.signal}),/正文/)
  linkedFile=null
  apply(ctx,{memberFile})
- assert.equal((await tool.execute({action:'open_recent'},{signal:t.signal})).url,created.url)
+ assert.deepEqual(await tool.execute({action:'open_recent'},{signal:t.signal}),created)
  assert.deepEqual(requests,[])
  const navigate=async(url,kind,site,destination='document')=>new Promise((resolve,reject)=>{
   const response={writeHead(status,headers){this.result={status,headers}},end(body){resolve({...this.result,body})}}
@@ -220,6 +222,11 @@ test('natural language saves a filled Word document and only an owner navigation
  assert.equal(redirect.status,303)
  assert.equal(redirect.headers.Location,origin+'/dsh-edit#'+ticket)
  assert.deepEqual(requests,[[`/api/v1/assistant-channels/member/documents/${createdId}/edit-ticket`,proof]])
+
+ embedOrigins=[origin]
+ const embedded=await navigate(created.url,'owner','same-origin','iframe')
+ assert.equal(embedded.status,303)
+ assert.equal(embedded.headers.Location,origin+'/dsh-edit?dshEmbed=1#'+ticket)
 
  // A client without a published DSH web URL must still receive its saved document.
  apply({...ctx,get:()=>undefined},{memberFile})

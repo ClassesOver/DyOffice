@@ -105,7 +105,11 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
  async function channel(c:PoolClient,p:BusinessPrincipal,conversationId:string) {
   const row=(await c.query('SELECT * FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 FOR UPDATE',[...scope(p),uuid(conversationId)])).rows[0]
   if(!row)throw fail(404)
-  if(row.file_id)await loadFile(c,p,row.file_id)
+  if(row.file_id){
+   const file=await loadFile(c,p,row.file_id)
+   row.file_name=file.name
+   row.file_format=file.format
+  }
   return row
  }
  async function consumeInvite(c:PoolClient,p:BusinessPrincipal,sealed:Sealed,code:string) {
@@ -457,7 +461,7 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     await expire(c,p,sealed.conversationId)
     const tasks=(await c.query("SELECT * FROM task_runtime_channel WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND (sender=$4 OR recipient=$4) ORDER BY (state IN ('queued','running','waiting_peer','cancel_requested','unknown_outcome')) DESC,created_at DESC,task_id LIMIT 64",[...scope(p),sealed.conversationId,actor.id])).rows.map(taskPreview)
     const sequence=Number((await c.query('SELECT sequence FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3',[...scope(p),sealed.conversationId])).rows[0].sequence)
-    return {conversationId:sealed.conversationId,fileId:ch.file_id,paused:ch.paused,canCreate:!ch.paused&&sealed.allowCreate===true,canEdit:!ch.paused&&sealed.allowEdit===true,member:memberDto(actor.member!,ch.paused),tasks,sequence}
+    return {conversationId:sealed.conversationId,fileId:ch.file_id,fileName:ch.file_name??null,fileFormat:ch.file_format??null,paused:ch.paused,canCreate:!ch.paused&&sealed.allowCreate===true,canEdit:!ch.paused&&sealed.allowEdit===true,member:memberDto(actor.member!,ch.paused),tasks,sequence}
    })
   },
   async memberPreview(token:string,memberId:string) {

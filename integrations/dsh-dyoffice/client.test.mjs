@@ -113,6 +113,14 @@ test('a delivered thumbnail opens in the right preview only on click',async()=>{
   assert.equal(new URL(button.children[0].props.src).searchParams.get('snapshot'),'two.pdf')
   button.props.onClick()
   assert.deepEqual(opened,['two.pdf'])
+  const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const url='http://localhost/dyoffice-preview?edit='+id
+  const step={finalNode:{},blocks:[{kind:'text',text:'[其他站点](https://other.example/dyoffice-preview?edit='+id+') [读书会.docx]('+url+')'}]}
+  const message={...turn,data:new Map(),steps:[{data:new Map([['assistant-step',step]])}]}
+  const inline=render({...props,turn:message})
+  assert.equal(inline.children.length,1)
+  assert.equal(inline.children[0].props.url,url)
+
 })
 
 test('the DSH sidebar can sync the bound Word document from its editor window',async()=>{

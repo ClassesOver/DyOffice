@@ -97,6 +97,8 @@ export async function connectOffice(signal, config) {
     connectionKey: createHash('sha256').update(origin + '\n' + token).digest('hex'),
     conversationId: identity.conversationId,
     fileId: identity.fileId,
+    fileName: identity.fileName,
+    fileFormat: identity.fileFormat,
     paused: identity.paused === true,
     canCreate: identity.canCreate,
     canEdit: identity.canEdit === true,

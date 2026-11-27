@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const {createElement: h, useEffect, useRef, useState, useSyncExternalStore} = require('react')
     const id = '@local/dsh-dyoffice'
     const copy = {
-      zh: {messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
+      zh: {showDocument:'在聊天中打开',messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
         url: 'DyOffice 服务地址', code: '授权码', codeHint: '粘贴从「频道分享」复制的 DSH 插件授权码',
@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
         truncated: '正文仅显示前 24,000 字符。', tasks: '任务进度', noTasks: '暂无任务。',
         queued: '排队中', running: '运行中', waiting_peer: '等待协作', cancel_requested: '正在取消',
         succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown_outcome: '结果待核对'},
-      en: {messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
+      en: {showDocument:'Open in chat',messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
         url: 'DyOffice service URL', code: 'Authorization code', codeHint: 'Paste the DSH plugin authorization code from channel sharing',
@@ -722,19 +722,36 @@ window.__ModuleLoader__.load({
             !failed&&h('img',{src:url.href,alt:t('snapshot'),loading:'lazy',onError:()=>setFailed(true),style:{maxWidth:'100%',maxHeight:180,objectFit:'contain'}}),
             h('strong',null,path.split('/').at(-1)),h('small',null,t(failed?'snapshotUnavailable':'previewRight')))
         }
+        function ChatDocument({url,t}){
+          const [mounted,setMounted]=useState(false)
+          return h('details',{onToggle:event=>{if(event.currentTarget.open)setMounted(true)}},
+            h('summary',null,t('showDocument')),
+            mounted&&h('iframe',{title:t('livePreview'),src:url,style:{display:'block',width:'100%',height:'min(70vh,760px)',border:0}}))
+        }
         ctx.effect(()=>ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({
           name:'conversation.chat.turnTail',id:'dyoffice-snapshot',locale:namespace,
         },function SnapshotTail({turn,sessionId,openFile,t}){
           const data=turn.data.get('deliverables')
           const paths=[...(data?.presented??[]),...(data?.produced??[])].map(file=>file.path)
+          const blocks=(turn.steps??[]).map(step=>step.data.get('assistant-step')).filter(step=>step?.finalNode).at(-1)?.blocks??[]
+          const documents=new Set()
+          for(const block of blocks)if(block.kind==='text'){
+            for(const match of block.text.matchAll(/\[[^\]\n]*\]\(<?([^<>\s)]+)>?\)/gu)){
+              try{
+                const url=new URL(match[1])
+                if(url.origin===previewUrl().origin&&url.pathname===previewUrl().pathname&&uuid.test(url.searchParams.get('edit')??'')){
+                  documents.add(guestEditorUrl(url.searchParams.get('edit')))
+                }
+              }catch{/* Relative paths are handled by the file preview. */}
+            }
+          }
           if(!paths.some(path=>typeof path==='string'&&/\.(docx|xlsx|pptx|pdf)$/iu.test(path))){
-            const blocks=turn.steps.map(step=>step.data.get('assistant-step')).filter(step=>step?.finalNode).at(-1)?.blocks??[]
             for(const block of blocks)if(block.kind==='text')for(const match of block.text.matchAll(/\[[^\]\n]*\]\(<?([^<>\n)]+?\.(?:docx|xlsx|pptx|pdf))>?\)/giu)){
               try{const path=decodeURIComponent(match[1].replace(/^sandbox:(?=\/[^/])/iu,''));if(!/^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(path))paths.push(path)}catch{}
             }
           }
           const files=[...new Set(paths.filter(path=>typeof path==='string'&&/\.(docx|xlsx|pptx|pdf)$/iu.test(path)))].slice(0,4)
-          return files.length?h('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},...files.map(path=>h(FileThumbnail,{key:path,path,sessionId,openFile,t}))):null
+          return documents.size||files.length?h('div',null,...Array.from(documents,url=>h(ChatDocument,{key:url,url,t})),...files.map(path=>h(FileThumbnail,{key:path,path,sessionId,openFile,t}))):null
         })))
         ctx.effect(() => ctx.slots.inject('conversation.chat.commandview', () => ctx.slots.register({
           name:'conversation.chat.commandview', key:'dyoffice', locale:namespace,

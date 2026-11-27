@@ -92,7 +92,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   if (prefs.theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = prefs.theme
   setAuthorName(prefs.authorName ?? '')
-  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed||guest?'unavailable':'joining'
+  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed?'unavailable':'joining'
   let peerSaveTimer:ReturnType<typeof setTimeout>|undefined
   let checkingWriter=false,nextWriterCheck=0,reopenToSave=false, journalAhead=false, lastSynced=-1
   let syncedSavedRevision:string|undefined
@@ -117,7 +117,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     }catch{/* Another editor may have acquired the lease first. */}finally{checkingWriter=false}
   }
   function onCollabEditor(editor:Editor|null){
-    if(citationMode||guest)return
+    if(citationMode)return
     wordSync?.dispose();wordSync=undefined;clearTimeout(peerSaveTimer)
     syncedSavedRevision=undefined
     if(!editor||disposed||signed)return
@@ -129,7 +129,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         peerSaveTimer=setTimeout(()=>{if(!disposed&&!closing&&host.getState(fileId).lease&&editorHandle?.isDirty())void editorHandle.save()},1200)
       },checkWriter)
   }
-  const bridge = createDocsBridge(host,fileId,prefs,() => changed(),undefined,{
+  const bridge = createDocsBridge(host,fileId,prefs,() => changed(),guest ? async () => null : undefined,{
     knowledgeRequest:assistant?.request,
     wordCheckpoint:async()=>wordSync?.checkpoint(),
     onSourceOpenFailed:()=>{

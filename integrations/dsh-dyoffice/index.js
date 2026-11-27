@@ -15,9 +15,9 @@ function createdPreviews(config) {
   try {
     path=officeSettings(config).memberFile+'.previews.json'
     const saved=JSON.parse(readFileSync(path,'utf8'))
-    for(const {fileId,format,proof,connectionKey} of saved.slice(-previewLimit)){
+    for(const {fileId,name,format,proof,connectionKey} of saved.slice(-previewLimit)){
       if(uuid.test(fileId)&&/^(docx|xlsx|pptx|pdf)$/u.test(format)&&digest.test(proof)&&digest.test(connectionKey)){
-        previews.set(fileId,{format,proof,connectionKey})
+        previews.set(fileId,{name,format,proof,connectionKey})
       }
     }
   } catch {/* A new profile has no saved previews. */}
@@ -32,7 +32,7 @@ function createdPreviews(config) {
       if(!path)return
       const next=path+'.'+randomUUID()
       try {
-        const saved=[...previews].map(([fileId,{format,proof,connectionKey}])=>({fileId,format,proof,connectionKey}))
+        const saved=[...previews].map(([fileId,{name,format,proof,connectionKey}])=>({fileId,name,format,proof,connectionKey}))
         writeFileSync(next,JSON.stringify(saved),{flag:'wx',mode:0o600})
         renameSync(next,path)
       } catch {
@@ -53,11 +53,10 @@ async function sendSnapshot(kit, extension, source, response, signal) {
 }
 
 const DYOFFICE_USAGE = [
-  '用法：/dyoffice <word|xlsx|pptx|pdf> <任务>',
-  '生成 Word：/dyoffice word 创建一个活动策划',
-  '使用 DSH Skill：/dyoffice word --skill=名称 创建活动策划',
-  '创建空白文件：/dyoffice word 创建空白文件 demo',
-  '分析当前频道文档：/dyoffice word 总结当前文档',
+  '直接在聊天里说你想做什么，例如：',
+  '“帮我写一份读书会活动策划，保存成 Word。”',
+  '“打开刚才创建的文档。”',
+  '“建一张空白 Excel 表，命名为活动预算。”',
 ].join('\n')
 
 export function parseDyOfficeCommand(rawInput) {
@@ -124,8 +123,8 @@ function createHandler(config, authorizationRequests, createdDocument, creations
       if (!uuid.test(fileId ?? '') || request.headers['sec-fetch-mode'] !== 'navigate') {
         return send(403, {error:'forbidden'})
       }
-      // DSH can open chat links in a sidebar iframe. Open the editor in a new window from there.
-      if ((site === 'same-origin' && destination === 'iframe') || (site === 'none' && destination === 'document')) {
+      const frame = site === 'same-origin' && destination === 'iframe'
+      const landing = () => {
         response.writeHead(200, {
           'Content-Type':'text/html; charset=utf-8',
           'Cache-Control':'no-store',
@@ -135,16 +134,23 @@ function createHandler(config, authorizationRequests, createdDocument, creations
         })
         return response.end(`<!doctype html><html lang="zh"><meta charset="utf-8"><title>DyOffice</title><p><a href="?edit=${fileId}" target="_blank" rel="noopener noreferrer">在新窗口编辑 DyOffice 文档</a></p></html>`)
       }
-      if (site !== 'same-origin' || destination !== 'document') {
+      if (site === 'none' && destination === 'document') return landing()
+      if (!frame && (site !== 'same-origin' || destination !== 'document')) {
         return send(403, {error:'forbidden'})
       }
       try {
         const office=await connectOffice(AbortSignal.timeout(20000),config)
         const created=createdDocument.get(fileId)
+        if(frame){
+          const advertised=ctx.get?.('webApp')?.getAdvertisedUrl?.()
+          const origins=office.dshEditorOrigins??[office.dshEditorOrigin]
+          const format=fileId===office.fileId?office.fileFormat:created?.format
+          if(format!=='docx'||!URL.canParse(advertised)||!origins.includes(new URL(advertised).origin))return landing()
+        }
         if(!office.canEdit||office.paused||(fileId!==office.fileId&&created?.connectionKey!==office.connectionKey))return send(403,{error:'edit_not_authorized'})
         const {ticket}=await office.editTicket(fileId,fileId===office.fileId?undefined:created.proof)
         if(!/^[A-Za-z0-9_-]{43}$/.test(ticket))throw Error('Invalid edit ticket')
-        response.writeHead(303,{'Location':office.origin+'/dsh-edit#'+ticket,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+        response.writeHead(303,{'Location':office.origin+'/dsh-edit'+(frame?'?dshEmbed=1':'')+'#'+ticket,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
         return response.end()
       } catch(error){return send(error.status??502,{error:'edit_unavailable'})}
     }
@@ -360,13 +366,13 @@ export function apply(ctx, config) {
     })
     if (!uuid.test(document.fileId) || typeof document.name !== 'string') throw Error('DyOffice 未返回有效的文档链接。')
     if (typeof document.previewProof === 'string' && digest.test(document.previewProof)) {
-      createdDocument.set(document.fileId, {format, proof: document.previewProof, connectionKey: office.connectionKey, writing:writing?.(document) ?? null})
+      createdDocument.set(document.fileId, {name:document.name,format, proof: document.previewProof, connectionKey: office.connectionKey, writing:writing?.(document) ?? null})
     }
     return {fileId:document.fileId,name:document.name,url:office.origin+'/#/file/'+document.fileId}
   }
   ctx.tools?.register({
     name: 'dyoffice_document',
-    description: 'Use for natural-language requests to open the current DyOffice channel document, reopen the most recently created document, or create a Word, Excel, PowerPoint, or PDF document. When the user asks you to write a document (such as a report, letter, or plan), write the complete content in the user’s language, then create a Word document with that text in body. Omit body for blank documents. Return the saved document as a clickable Markdown link. Never ask for an authorization code in chat; the plugin prompts privately.',
+    description: 'Use for natural-language requests to open the current DyOffice channel document, reopen the most recently created document, or create a Word, Excel, PowerPoint, or PDF document. When the user asks you to write a document (such as a report, letter, or plan), write the complete content in the user’s language, then create a Word document with that text in body. Omit body for blank documents. Use the returned filename as the clickable Markdown link text. Never ask for an authorization code in chat; the plugin prompts privately.',
     parameters: {type:'object',additionalProperties:false,required:['action'],properties:{
       action: {type:'string', enum:['open','open_recent','create']},
       format: {type:'string', enum:['docx','xlsx','pptx','pdf'], description:'Required when creating a document. Writing a body is supported for Word (docx).'},
@@ -397,10 +403,10 @@ export function apply(ctx, config) {
       if (action === 'open_recent') {
         const fileId = createdDocument.latest(office.connectionKey)
         if (!fileId) throw Error('当前授权下还没有创建过文档。')
-        return {fileId,name:'最近创建的文档',url:editLink(office,fileId)}
+        return {fileId,name:createdDocument.get(fileId)?.name||'最近创建的文档',url:editLink(office,fileId)}
       }
       if (!uuid.test(office.fileId)) throw Error('此频道还未绑定文档。可以打开最近创建的 DyOffice 文档，或新建文档。')
-      return {fileId:office.fileId,name:'频道文档',url:editLink(office,office.fileId)}
+      return {fileId:office.fileId,name:office.fileName||'频道文档',url:editLink(office,office.fileId)}
     },
   })
   ctx.inject(['webServer'], scope => {

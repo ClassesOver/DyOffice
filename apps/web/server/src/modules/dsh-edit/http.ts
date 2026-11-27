@@ -10,6 +10,7 @@ const tokenPattern=/^[A-Za-z0-9_-]{43}$/
 const nativePath=/^\/native-(docx|xlsx|pptx|pdf)\/(?:index\.html)?$/
 // Only the scoped editor routes read this request credential. The account cookie parser stays unchanged.
 const requestTokens=new WeakMap<FastifyRequest,string>()
+export const isDshEditorRequest=(request:FastifyRequest)=>requestTokens.has(request)
 export const editorFileToken=(request:FastifyRequest)=>requestTokens.get(request)??cookies(request).session??''
 
 export async function authenticateEditorFile(
@@ -43,11 +44,12 @@ const formatPath:Record<string,string>={xlsx:'sheets',pptx:'slides',pdf:'pdf'}
 const csrfPaths=new Set(['/api/v1/auth/csrf','/api/v1/auth/session-proof'])
 const preferencePaths=new Set(['/api/preferences','/api/v1/preferences'])
 const startScript=`
+const embedded=location.search==='?dshEmbed=1'
 const ticket=location.hash.slice(1)
 history.replaceState(null,'',location.pathname)
 if (/^[A-Za-z0-9_-]{43}$/.test(ticket)) {
  fetch('/dsh-edit/redeem',{method:'POST',credentials:'same-origin',redirect:'error',referrerPolicy:'same-origin',
-   headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket})})
+   headers:{'Content-Type':'application/json'},body:JSON.stringify(embedded?{ticket,embedded:true}:{ticket})})
  .then(async r=>{
    if(!r.ok)throw Error()
    const {url}=await r.json()
@@ -57,8 +59,8 @@ if (/^[A-Za-z0-9_-]{43}$/.test(ticket)) {
 }
 `
 
-export function registerDshEdit(app:FastifyInstance,{transactions,csrf,origin,insecureHttpDev,nativeFormats}:{
- transactions:McpPrincipalTransactions;csrf:ReturnType<typeof createCsrfService>;origin:string;insecureHttpDev?:boolean|undefined;nativeFormats:ReadonlySet<string>
+export function registerDshEdit(app:FastifyInstance,{transactions,csrf,origin,insecureHttpDev,nativeFormats,embedOrigins}:{
+ transactions:McpPrincipalTransactions;csrf:ReturnType<typeof createCsrfService>;origin:string;insecureHttpDev?:boolean|undefined;nativeFormats:ReadonlySet<string>;embedOrigins:()=>Promise<string[]>
 }) {
  const cookiePrefix=(insecureHttpDev?'':'__Host-')+'dyoffice-guest-'
  function cookieEntries(request:FastifyRequest) {
@@ -94,17 +96,22 @@ export function registerDshEdit(app:FastifyInstance,{transactions,csrf,origin,in
    return edit
   })
  }
- const pageHeaders={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"}
- app.get('/dsh-edit',async(_request,reply)=>reply.headers(pageHeaders).type('text/html; charset=utf-8').send(
-  '<!doctype html><html lang="zh"><meta charset="utf-8"><title>DyOffice</title><script defer src="/dsh-edit/start.js"></script><p>正在打开文档。如未跳转，请从 DSH 重新打开，或请文档所有者检查编辑授权。</p></html>'))
- app.get('/dsh-edit/start.js',async(_request,reply)=>reply.headers(pageHeaders).type('text/javascript; charset=utf-8').send(startScript))
- app.post('/dsh-edit/redeem',{bodyLimit:1024,schema:{body:{type:'object',additionalProperties:false,required:['ticket'],properties:{ticket:{type:'string',pattern:'^[A-Za-z0-9_-]{43}$'}}}}},async(request,reply)=>{
+ const pageHeaders=(ancestors:string)=>({'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':`default-src 'none'; script-src 'self'; connect-src 'self'; frame-ancestors ${ancestors}; base-uri 'none'; form-action 'none'`})
+ app.get('/dsh-edit',async(request,reply)=>{
+  const embedded=new URL(request.url,origin).searchParams.get('dshEmbed')==='1'
+  const ancestors=embedded?(await embedOrigins()).join(' '):''
+  return reply.headers(pageHeaders(ancestors||"'none'")).type('text/html; charset=utf-8').send(
+   '<!doctype html><html lang="zh"><meta charset="utf-8"><title>DyOffice</title><script defer src="/dsh-edit/start.js"></script><p>正在打开文档。如未跳转，请从 DSH 重新打开，或请文档所有者检查编辑授权。</p></html>')
+ })
+ app.get('/dsh-edit/start.js',async(_request,reply)=>reply.headers(pageHeaders("'none'")).type('text/javascript; charset=utf-8').send(startScript))
+ app.post('/dsh-edit/redeem',{bodyLimit:1024,schema:{body:{type:'object',additionalProperties:false,required:['ticket'],properties:{ticket:{type:'string',pattern:'^[A-Za-z0-9_-]{43}$'},embedded:{type:'boolean'}}}}},async(request,reply)=>{
   csrf.originCheck(request)
   const replacement=randomBytes(32).toString('base64url')
   const {fileId,editorId,format}=await transactions.redeemDshEditTicket((request.body as {ticket:string}).ticket,replacement)
   if(!nativeFormats.has(format))throw authError(503)
-  reply.header('Set-Cookie',cookiePrefix+editorId+'='+replacement+'; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600'+(insecureHttpDev?'':'; Secure'))
-  return {url:'/native-'+format+'/?fileId='+fileId+'&guest=1&editorId='+editorId}
+  const embedded=(request.body as {embedded?:boolean}).embedded===true && format==='docx'
+  reply.header('Set-Cookie',cookiePrefix+editorId+'='+replacement+'; Path=/; HttpOnly; Max-Age=3600'+(embedded&&!insecureHttpDev?'; SameSite=None; Partitioned':'; SameSite=Lax')+(insecureHttpDev?'':'; Secure'))
+  return {url:'/native-'+format+'/?fileId='+fileId+'&guest=1&editorId='+editorId+(embedded?'&dshEmbed=1':'')}
  })
  app.addHook('onRequest',async(request,reply)=>{
   if(!request.url.startsWith('/api/'))return
@@ -119,7 +126,7 @@ export function registerDshEdit(app:FastifyInstance,{transactions,csrf,origin,in
   const special=method==='GET'&&(csrfPaths.has(route)||preferencePaths.has(route))
   const allowed=special||(method==='GET'&&route==='/api/v1/capabilities')||
    ((method==='PUT'&&route==='/api/v1/uploads/:id/content')||(method==='DELETE'&&route==='/api/v1/uploads/:id'))||
-   (isFile&&(common.has(method+' '+suffix)||(method==='POST'&&suffix.startsWith(prefix)&&formatRoutes[target.format]?.has(suffix.slice(prefix.length)))))
+   (isFile&&((target.format==='docx'&&method==='POST'&&suffix==='/word-collab')||common.has(method+' '+suffix)||(method==='POST'&&suffix.startsWith(prefix)&&formatRoutes[target.format]?.has(suffix.slice(prefix.length)))))
   if(!allowed)throw authError(404)
   const mutation=!['GET','HEAD'].includes(method)
   csrf.originCheck(request,mutation)

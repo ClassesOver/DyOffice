@@ -224,7 +224,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     ], codingConfig.defaultId ?? 'codex') : undefined
     const files = config.objectStore ? createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides || nativePdf ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: nativePdf ? 'editable' : 'unsupported',...(nativePdf?{pdfEditor:'editable' as const}:{}) } : undefined }) : undefined
     const authorizeNative = assistantChannels&&files
-      ? registerDshEdit(app,{transactions,csrf,origin:config.origin,insecureHttpDev:config.insecureHttpDev,
+      ? registerDshEdit(app,{transactions,csrf,embedOrigins:officeEmbedOrigins,origin:config.origin,insecureHttpDev:config.insecureHttpDev,
         nativeFormats:new Set(Object.entries(files.capabilities).filter(([,value])=>value==='editable').map(([format])=>format))})
       : (request:import('fastify').FastifyRequest)=>sessions.authenticate(cookies(request).session??'')
     if(assistantChannels)registerAssistantChannelRoutes(app,assistantChannels,csrf,{data:harnessData,baseUrl:config.origin+'/api/v1/agents'},config.objectStore,files,officeEmbedOrigins)
