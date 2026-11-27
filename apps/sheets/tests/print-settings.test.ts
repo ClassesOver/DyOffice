@@ -772,6 +772,18 @@ describe('layoutSheetPrint', () => {
     expect(html.match(/<div class="page /g)).toHaveLength(2)
   })
 
+  it('prints cells once when the saved print area is entirely covered by titles', () => {
+    const setup = resolveEffectivePageSetup({}, null, {
+      printArea: "'S'!$A$1:$A$2",
+      printTitles: "'S'!$1:$2,'S'!$A:$A",
+    })
+    const document = layout(fakeWorksheet(), setup)
+    expect(document.pages).toHaveLength(1)
+    const body = document.pages[0]?.body ?? ''
+    expect(body.match(/<span>A[12]<\/span>/g)).toEqual(['<span>A1</span>', '<span>A2</span>'])
+    expect(body).not.toContain('<span>B1</span>')
+  })
+
   it('paginates wide sheets across columns and honours manual breaks', () => {
     // 20 columns of 100px = 1500pt on a ~495pt wide A4 portrait page.
     const wide: PrintWorksheet = {

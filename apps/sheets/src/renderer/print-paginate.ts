@@ -37,8 +37,8 @@ export interface PaginationInput {
   readonly order?: 'downThenOver' | 'overThenDown'
 }
 
-/// One printed page: the body rows/columns it carries (title rows/columns
-/// repeat on top of them and are never part of the body).
+/// One printed page: its body rows/columns, or the title overlap on an axis
+/// where the area contains only visible title cells.
 export interface PrintPage {
   readonly area: number
   readonly rowStart: number
@@ -112,6 +112,21 @@ export function bodyColumns(
   return columns
 }
 
+/// A visible title inside the print area can supply an axis on its own.
+function overlappingTitleBand(
+  start: number,
+  end: number,
+  titles: IndexSpan | null,
+  sizeOf: (index: number) => number,
+): IndexSpan[] {
+  if (titles === null) return []
+  const overlap = { start: Math.max(start, titles.start), end: Math.min(end, titles.end) }
+  for (let index = overlap.start; index <= overlap.end; index += 1) {
+    if (sizeOf(index) > 0) return [overlap]
+  }
+  return []
+}
+
 export function planPrintPages(input: PaginationInput): PrintPage[] {
   const rowCapacity =
     input.pageHeightPt - input.headingHeightPt - spanSize(input.titleRows, input.rowHeightPt)
@@ -123,9 +138,13 @@ export function planPrintPages(input: PaginationInput): PrintPage[] {
   input.areas.forEach((area, areaIndex) => {
     const rows = bodyRows(area, input)
     const columns = bodyColumns(area, input)
-    if (rows.length === 0 || columns.length === 0) return
-    const rowBands = bandIndices(rows, input.rowHeightPt, rowCapacity, rowBreaks)
-    const columnBands = bandIndices(columns, input.columnWidthPt, columnCapacity, colBreaks)
+    const rowBands = rows.length > 0
+      ? bandIndices(rows, input.rowHeightPt, rowCapacity, rowBreaks)
+      : overlappingTitleBand(area.startRow, area.endRow, input.titleRows, input.rowHeightPt)
+    const columnBands = columns.length > 0
+      ? bandIndices(columns, input.columnWidthPt, columnCapacity, colBreaks)
+      : overlappingTitleBand(area.startColumn, area.endColumn, input.titleColumns, input.columnWidthPt)
+    if (rowBands.length === 0 || columnBands.length === 0) return
     const page = (rowBand: IndexSpan, columnBand: IndexSpan): PrintPage => ({
       area: areaIndex,
       rowStart: rowBand.start,
