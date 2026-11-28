@@ -10,6 +10,7 @@ import {chromium,expect} from '@playwright/test'
 import JSZip from 'jszip'
 import { PNG } from 'pngjs'
 import {imageSizeFromBytes} from '@genoffice/pptx-render'
+import {syncRedactExt} from '@genoffice/pptx-engine'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {launchTestBrowser} from '../helpers/browser.mjs'
@@ -539,6 +540,64 @@ test('PPTX keeps the section of a middle slide cut and pasted back at its origin
   await openDeck(f,file.fileId,'light',3)
   await expect(thumbnails).toHaveCount(3)
   assert.deepEqual(await actual(),sections)
+})
+
+test('Web PowerPoint AI Beautify attaches only eligible slide screenshots for the selected model',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f
+  await f.preferences.update(f.alice.token,{theme:'light',showAssistant:true,autoSave:false})
+  const deck=await JSZip.loadAsync(await readFile(deckFixture))
+  const slide='ppt/slides/slide2.xml'
+  const originalRun='<a:rPr/><a:t>Acceptance title</a:t>'
+  const xml=await deck.file(slide).async('string')
+  assert.ok(xml.includes(originalRun))
+  deck.file(slide,xml.replace(originalRun,syncRedactExt('<a:rPr/>','a:rPr','Fixture withholding')+'<a:t>Withhold this fixture text</a:t>'))
+  const original=await deck.generateAsync({type:'nodebuffer'})
+  const {file}=await importFile(f,f.alice.token,original,'Beautify.pptx')
+  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[
+    {id:'vision',label:'Vision',model:'gpt-4o',providerId:'openai'},
+    {id:'text',label:'Text only',model:'deepseek-v4-pro',providerId:'deepseek'},
+  ],defaultId:'vision'}}))
+  const requests=[]
+  await page.route('**/api/v1/ai/turns',route=>{
+    const request=route.request().postDataJSON()
+    const n=requests.push(request)
+    return route.fulfill({contentType:'text/event-stream',body:`event: delta\ndata: {"text":"Beautify reply ${n}"}\n\nevent: done\ndata: {}\n\n`})
+  })
+  await openDeck(f,file.fileId,'light')
+  const beautify=async n=>{
+    await page.locator('.ribbon').getByRole('button',{name:'AI Beautify',exact:true}).click()
+    await expect(page.getByText(`Beautify reply ${n}`,{exact:true})).toBeVisible()
+    const request=requests[n-1]
+    return {model:request.modelId,message:request.request.messages.findLast(item=>item.role==='user')}
+  }
+  const selectModel=async name=>{
+    await page.locator('.ai-model-chip').click()
+    await page.getByRole('option',{name,exact:true}).click()
+  }
+
+  const visual=await beautify(1)
+  assert.equal(visual.model,'vision')
+  assert.match(visual.message.text,/current rendering of this slide, slideIndex 0/)
+  assert.equal(visual.message.images?.length,1)
+  assert.equal(visual.message.images[0].mime,'image/png')
+  const image=PNG.sync.read(Buffer.from(visual.message.images[0].base64,'base64'))
+  assert.ok(image.width>100&&image.height>100)
+
+  await selectModel('deepseek-v4-pro')
+  const text=await beautify(2)
+  assert.equal(text.model,'text')
+  assert.equal(text.message.images,undefined)
+  assert.doesNotMatch(text.message.text,/Attached image/)
+
+  await selectModel('gpt-4o')
+  await page.locator('.thumb').nth(1).click()
+  const withheld=await beautify(3)
+  assert.equal(withheld.model,'vision')
+  assert.equal(withheld.message.images,undefined)
+  assert.match(withheld.message.text,/contains text withheld from you/)
+  assert.equal(requests.length,3)
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 })
 
 test('Web PowerPoint pastes a native clipboard picture when async clipboard reads are denied',{timeout:90000},async t=>{

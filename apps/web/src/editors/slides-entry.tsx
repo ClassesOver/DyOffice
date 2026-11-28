@@ -9,6 +9,7 @@ import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-c
 import ReactDOM from 'react-dom/client'
 import {createPortal} from 'react-dom'
 import {useEffect,useState} from 'react'
+import {AI_PROVIDERS,endpointSupportsVision} from '@genoffice/ai-provider/browser'
 import {createSessionFileHost, type SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 import {createSlidesBridge} from './slides-bridge.ts'
@@ -77,6 +78,12 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   let assistantLoadFinished=false
   let assistantResult:Parameters<typeof editorAssistantNotice>[0]={assistant:undefined,failure:undefined}
   let sharedAssistant:AssistantResult['assistant']
+  const supportsVision=()=>{
+    const assistant=sharedAssistant
+    const entry=assistant?.catalog.entries.find(model=>model.id===assistant.selected())
+    const provider=AI_PROVIDERS.find(model=>model.id===entry?.providerId)?.id
+    return !!provider&&!!entry?.model&&endpointSupportsVision({provider,providers:{[provider]:{model:entry.model,apiKey:''}}})
+  }
   let assistantContinuation:NonNullable<SlidesAppHost['assistant']>['continuation']
   const originalDesktop = Object.getOwnPropertyDescriptor(stage, 'desktop')
   let installedDesktop: typeof stage.desktop | undefined
@@ -376,7 +383,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       {loaded && !failed && state.status !== 'unauthorized' && <a className="dyoffice-slides-download-saved"
         href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.download}</a>}
     </>
-    const hostProps: SlidesAppHost = {openWorkspaceFile,saveDownload,hasGeneratedName:bridge.hasGeneratedName,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, presenterAudienceAvailable:false, documentStorageScope:`workspace:${fileId}`, assistantAvailable:Boolean(sharedAssistant?.available),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
+    const hostProps: SlidesAppHost = {openWorkspaceFile,saveDownload,hasGeneratedName:bridge.hasGeneratedName,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, presenterAudienceAvailable:false, documentStorageScope:`workspace:${fileId}`, assistantAvailable:Boolean(sharedAssistant?.available),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,supportsVision,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
     const audienceWindow=audience.current()
     hostProps.presenterBrowserAudience={
       active:!!audienceWindow,

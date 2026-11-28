@@ -415,6 +415,7 @@ export interface SlidesAppHost {
     extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]
     agents?: readonly import('@genoffice/ui').AssistantParticipant[]
     mediaCapabilities?: {imageGeneration:boolean;mediaAnalysis:boolean}
+    supportsVision?: () => boolean
     onManageAgents?: () => void
     control?: import('@genoffice/ui').AssistantControl
     continuation?: SlidesAssistantContinuation
@@ -4086,6 +4087,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                 assistantAgents={host?.assistant?.agents}
                 extraSkills={host?.assistant?.extraSkills}
                 mediaCapabilities={host?.assistant?.mediaCapabilities}
+                supportsVision={host?.assistant?.supportsVision}
                 onManageAgents={host?.assistant?.onManageAgents}
                 onGeneratedDraftReady={host?.hasGeneratedName?async()=>{if(hostRef.current?.hasGeneratedName?.())await saveRef.current(true,true)}:undefined}
                 key={aiPanelKey}
