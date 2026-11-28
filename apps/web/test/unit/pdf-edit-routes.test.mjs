@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Fastify from 'fastify'
+import {once} from 'node:events'
 import {request as httpRequest} from 'node:http'
+import {editorRouteAuth} from '../helpers/editor-route-auth.mjs'
 import {registerPdfRoutes} from '../../server/src/modules/pdf/routes.ts'
 
 test('PDF original text edits require a session, CSRF and a revision-bound operation',async t=>{
@@ -191,15 +193,32 @@ test('PDF original text edits require a session, CSRF and a revision-bound opera
 
 test('PDF route disconnect aborts the service operation before it can publish', {timeout:5000}, async t=>{
  const app=Fastify(),fileId='74ad6054-8061-44ef-b42c-ef55e5bf851d'
- let started,finish,signal
+ const {token,headers,sessions,csrf}=editorRouteAuth()
+ let started,finish
  const running=new Promise(resolve=>{started=resolve})
- registerPdfRoutes(app,{async stageTextEdit(_token,_id,_body,current){signal=current;started();return new Promise(resolve=>{finish=resolve})}},{async authenticate(){}},{originCheck(){},requireSession(){}})
- await app.listen({host:'127.0.0.1',port:0});t.after(()=>app.close())
+ registerPdfRoutes(app,{async stageTextEdit(value,id,_body,signal){
+  assert.equal(value,token);assert.equal(id,fileId)
+  started(signal)
+  return new Promise(resolve=>{finish=resolve})
+ }},sessions,csrf)
+ await app.listen({host:'127.0.0.1',port:0})
+ t.after(()=>app.close())
  const payload=JSON.stringify({baseRevision:fileId,editorId:fileId,leaseEpoch:1,operations:[{page:1,oldText:'Old',newText:'New'}]})
- const req=httpRequest({host:'127.0.0.1',port:app.server.address().port,path:`/api/v1/files/${fileId}/pdf/edit-text/uploads`,method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(payload)}})
- req.on('error',()=>{});req.end(payload)
+ const req=httpRequest({host:'127.0.0.1',port:app.server.address().port,path:`/api/v1/files/${fileId}/pdf/edit-text/uploads`,method:'POST',headers:{...headers,'content-type':'application/json','content-length':Buffer.byteLength(payload)}})
+ const earlyResponse=new Promise((_,reject)=>{
+  req.once('response',response=>{
+   response.resume()
+   reject(new Error(`HTTP ${response.statusCode} before PDF editing started`))
+  })
+  req.once('error',reject)
+ })
  try{
-  await running;req.destroy();await new Promise(resolve=>setTimeout(resolve,30))
-  assert.equal(signal?.aborted,true)
+  req.end(payload)
+  const signal=await Promise.race([running,earlyResponse])
+  assert.equal(signal.aborted,false)
+  const aborted=once(signal,'abort',{signal:t.signal})
+  req.destroy()
+  await aborted
+  assert.equal(signal.aborted,true)
  }finally{finish?.({});req.destroy()}
 })
