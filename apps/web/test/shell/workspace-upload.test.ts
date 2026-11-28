@@ -122,10 +122,10 @@ test('queued files can be removed before uploading',async()=>{
 test('ODF conversion waits for consent, skips a declined file and remembers a confirmed choice',async()=>{
  const files=['decline.ods','template.ots','next.ods'].map(name=>new File(['workbook'],name))
  const upload=vi.fn(async(_file:File)=>{})
- const rememberOdfPrompt=vi.fn(async()=>{})
+ const rememberImportPrompt=vi.fn(async()=>{})
  ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
  document.body.innerHTML='<div id="upload"></div>';root=createRoot(document.getElementById('upload')!)
- await act(async()=>root.render(h(WorkspaceUploadDialog,{open:true,initialFiles:files,fileImports:['ods','ots'],rememberOdfPrompt,upload,onClose:vi.fn()})))
+ await act(async()=>root.render(h(WorkspaceUploadDialog,{open:true,initialFiles:files,fileImports:['ods','ots'],rememberImportPrompt,upload,onClose:vi.fn()})))
  await click('开始上传（3）')
  expect(upload).not.toHaveBeenCalled()
  expect(document.querySelector('[aria-label="OpenDocument 转换"]')?.textContent).toContain('decline.ods')
@@ -134,7 +134,33 @@ test('ODF conversion waits for consent, skips a declined file and remembers a co
  await act(async()=>document.querySelector<HTMLInputElement>('[aria-label="下次直接转换"]')!.click())
  await click('转换并打开')
  await vi.waitFor(()=>expect(upload.mock.calls.map(([file])=>file.name)).toEqual(['template.ots','next.ods']))
- expect(rememberOdfPrompt).toHaveBeenCalledOnce()
+ expect(rememberImportPrompt).toHaveBeenCalledExactlyOnceWith('skipOdsImportPrompt')
+})
+
+test('remembering a Word 97 conversion skips the template and still asks for PowerPoint and Hancom',async()=>{
+ const files=['Report.doc','Template.dot','Deck.ppt','Memo.hwpx'].map(name=>new File(['source'],name))
+ const upload=vi.fn(async(_file:File)=>{})
+ const readImportPromptPreferences=vi.fn(async()=>({skipOdfImportPrompt:true}))
+ const rememberImportPrompt=vi.fn(async(_field:string)=>{})
+ ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
+ document.body.innerHTML='<div id="upload"></div>';root=createRoot(document.getElementById('upload')!)
+ await act(async()=>root.render(h(WorkspaceUploadDialog,{open:true,initialFiles:files,fileImports:['doc','dot','ppt','hwpx'],readImportPromptPreferences,rememberImportPrompt,upload,onClose:vi.fn()})))
+ await click('开始上传（4）')
+ const prompt=()=>document.querySelector('[aria-label="旧版 Office 转换"]')
+ expect(prompt()?.textContent).toContain('Report.doc')
+ expect(upload).not.toHaveBeenCalled()
+ const remember=document.querySelector<HTMLInputElement>('[aria-label="下次直接转换"]')
+ expect(remember).not.toBeNull()
+ await act(async()=>remember!.click())
+ await click('转换并打开')
+ await vi.waitFor(()=>expect(prompt()?.textContent).toContain('Deck.ppt'))
+ expect(upload.mock.calls.map(([file])=>file.name)).toEqual(['Report.doc','Template.dot'])
+ await click('跳过此文件')
+ expect(document.querySelector('[aria-label="Hancom 转换"]')?.textContent).toContain('Memo.hwpx')
+ await click('转换并打开')
+ expect(upload.mock.calls.map(([file])=>file.name)).toEqual(['Report.doc','Template.dot','Memo.hwpx'])
+ expect(readImportPromptPreferences).toHaveBeenCalledOnce()
+ expect(rememberImportPrompt).toHaveBeenCalledExactlyOnceWith('skipWord97ImportPrompt')
 })
 
 test.each([

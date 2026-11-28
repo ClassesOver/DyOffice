@@ -391,7 +391,7 @@ test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} upload
   assert.deepEqual(await edited.file('xl/media/image1.png').async('nodebuffer'),image)
   await legacyTab.focus()
   await page.keyboard.press('ControlOrMeta+o')
-  await expect(picker).toHaveAttribute('accept',/\.ods,\.ots$/)
+  await expect(picker).toHaveAttribute('accept',/(?:^|,)\.ods,\.ots(?:,|$)/)
   const odf=await readFile(new URL('../../../sheets/native/xlsx-engine/tests/fixtures/cross-sheet-references.ods',import.meta.url))
   const template=await JSZip.loadAsync(odf)
   template.file('mimetype','application/vnd.oasis.opendocument.spreadsheet-template')
@@ -409,7 +409,8 @@ test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} upload
   await prompt.getByRole('button',{name:'转换并打开'}).click()
   await expect(upload).toContainText('已完成 2 · 已跳过 1',{timeout:60000})
   await upload.getByRole('button',{name:'完成',exact:true}).click()
-  assert.equal((await f.preferences.get(f.alice.token)).skipOdfImportPrompt,true)
+  assert.equal((await f.preferences.get(f.alice.token)).skipOdsImportPrompt,true)
+  assert.equal((await f.preferences.get(f.alice.token)).skipOdtImportPrompt,false)
   const postImport=(await f.files.listFiles(f.alice.token)).files
   assert.equal(postImport.some(file=>file.name==='Skip.xlsx'),false)
   for(const name of ['References.xlsx','Template.xlsx']){
@@ -445,7 +446,7 @@ for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace co
  const legacy=family==='legacy Office',hancom=family==='Hancom'
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+13
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
- await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,skipOdfImportPrompt:legacy||hancom})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,skipOdfImportPrompt:legacy})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
   origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
   nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),
@@ -535,7 +536,9 @@ for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace co
   await expect(prompt).toContainText(`${name}.${ext}`,{timeout:30000})
   await expect(prompt).toContainText(format.toUpperCase()+' 副本')
   if(index===0)assert.deepEqual(await workspaceFiles(),[])
+  if(hancom)await prompt.getByRole('checkbox',{name:'下次直接转换'}).check()
   await prompt.getByRole('button',{name:'转换并打开',exact:true}).click()
+  if(hancom)break
  }
  await expect(dialog).toContainText(`已完成 ${docs.length}`,{timeout:60000})
  await dialog.getByRole('button',{name:'完成',exact:true}).click()
@@ -549,6 +552,37 @@ for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace co
   await expect(native.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
   const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.id,file.revision))
   assert.ok((await zip.file(part).async('string')).includes(content),file.name)
+ }
+ if(hancom){
+  const saved=await f.preferences.get(token)
+  assert.equal(saved.skipHwpImportPrompt,true)
+  assert.equal(saved.skipOdtImportPrompt,false)
+  const uploadAgain=async name=>{
+   await page.getByRole('tab',{name:'首页',exact:true}).click()
+   await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+   await picker.setInputFiles({...sources[1],name})
+   await dialog.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+  }
+  await page.reload()
+  await uploadAgain('Remembered.hwpx')
+  await expect(dialog).toContainText('已完成 1',{timeout:30000})
+  await dialog.getByRole('button',{name:'完成',exact:true}).click()
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await accountAction(page,'个人设置')
+  const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  const confirm=settings.getByRole('switch',{name:'确认文件格式转换',exact:true})
+  await expect(confirm).not.toBeChecked()
+  await confirm.check()
+  await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+  await expect(settings).toContainText('个人偏好已保存')
+  await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+  assert.equal((await f.preferences.get(token)).skipHwpImportPrompt,false)
+  await uploadAgain('Ask again.hwpx')
+  await expect(prompt).toContainText('Ask again.hwpx')
+  await prompt.getByRole('button',{name:'跳过此文件',exact:true}).click()
+  await expect(dialog).toContainText('已跳过 1')
+  assert.equal((await workspaceFiles()).some(file=>file.name==='Ask again.docx'),false)
  }
 })
 

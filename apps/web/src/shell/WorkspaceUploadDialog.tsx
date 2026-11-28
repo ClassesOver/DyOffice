@@ -2,7 +2,7 @@ import {Alert,Button,Input,Modal,Space,Tag,Typography,Upload} from 'antd'
 import {CheckCircleFilled,CloseCircleFilled,CloudUploadOutlined,DeleteOutlined,FileExcelOutlined,FileOutlined,FilePdfOutlined,FilePptOutlined,FileWordOutlined,LoadingOutlined} from '@ant-design/icons'
 import {useEffect,useRef,useState} from 'react'
 import type {RecentEntry} from '../../../shell/src/shared/home-api'
-import {hancomConversionTargets,legacyOfficeConversionTargets,odfConversionTargets,workspaceConversionTarget} from '../../../../packages/web-contracts/src/file-imports'
+import {hancomConversionTargets,importPromptField,odfConversionTargets,skipsImportPrompt,workspaceConversionTarget,type ImportPromptField,type ImportPromptPreferences} from '../../../../packages/web-contracts/src/file-imports'
 import {IncorrectOfficeUploadPassword} from './local-client'
 import {isWorkspaceFileName,type WorkspaceImportFormat,workspaceFileAccept} from './workspace-file-formats'
 import './workspace-upload.css'
@@ -12,8 +12,8 @@ type WorkspaceUploadDialogProps={
  open:boolean
  initialFiles?:File[]
  fileImports?:readonly WorkspaceImportFormat[]
- readSkipOdfPrompt?:()=>Promise<boolean>
- rememberOdfPrompt?:()=>Promise<void>
+ readImportPromptPreferences?:()=>Promise<ImportPromptPreferences>
+ rememberImportPrompt?:(field:ImportPromptField)=>Promise<void>
  upload:(file:File,password?:string)=>Promise<void|'password-required'>
  onClose:()=>void
  loadRecent?:()=>Promise<RecentDocument[]>
@@ -33,7 +33,7 @@ async function needsOfficePassword(file:File){
  const header=new Uint8Array(await file.slice(0,compoundFileHeader.length).arrayBuffer())
  return compoundFileHeader.every((byte,index)=>header[index]===byte)
 }
-export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readSkipOdfPrompt,rememberOdfPrompt,upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
+export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readImportPromptPreferences,rememberImportPrompt,upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
  const sequence=useRef(0),locked=useRef(false)
  const mounted=useRef(false),answerPassword=useRef<((password:string|null)=>void)|null>(null)
  const answerConversion=useRef<((remember:boolean|null)=>void)|null>(null)
@@ -108,25 +108,27 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
  async function start(){
   if(locked.current||!queued.length)return
   locked.current=true;setBusy(true)
-  let skipOdfPrompt:boolean|undefined
+  let importPreferences:ImportPromptPreferences|undefined
   const update=(id:number,state:UploadItem['state'],error?:string)=>setItems(current=>current.map(entry=>entry.id===id?{...entry,state,error}:entry))
   try{for(const entry of queued){
    if(!mounted.current)break
    update(entry.id,'processing')
    try{
     const extension=entry.file.name.split('.').at(-1)?.toLowerCase()??''
-    const odf=Object.hasOwn(odfConversionTargets,extension)
-    const hancom=Object.hasOwn(hancomConversionTargets,extension)
+    const preference=importPromptField(extension)
     const target=workspaceConversionTarget(extension)
-    if(target&&(odf||hancom||Object.hasOwn(legacyOfficeConversionTargets,extension))){
-     if(odf)skipOdfPrompt??=await readSkipOdfPrompt?.().catch(()=>false)??false
+    if(target&&preference){
+     importPreferences??=await readImportPromptPreferences?.().catch(()=>({}))??{}
      if(!mounted.current)break
-     if(!odf||!skipOdfPrompt){
-      const kind=odf?'odf':hancom?'hancom':'legacyOffice'
+     if(!skipsImportPrompt(importPreferences,preference)){
+      const kind=Object.hasOwn(odfConversionTargets,extension)?'odf':Object.hasOwn(hancomConversionTargets,extension)?'hancom':'legacyOffice'
       const remember=await new Promise<boolean|null>(resolve=>{answerConversion.current=resolve;setConversionPrompt({file:entry.file,target,kind})})
       if(!mounted.current)break
       if(remember===null){update(entry.id,'skipped');continue}
-      if(odf&&remember){skipOdfPrompt=true;await rememberOdfPrompt?.().catch(()=>{})}
+      if(remember){
+       importPreferences={...importPreferences,[preference]:true}
+       await rememberImportPrompt?.(preference).catch(()=>{})
+      }
      }
     }
     const state=await uploadFile(entry.file);if(mounted.current)update(entry.id,state)
@@ -165,7 +167,7 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
   {conversionPrompt&&<section className="workspace-upload-password" aria-label={{odf:'OpenDocument 转换',legacyOffice:'旧版 Office 转换',hancom:'Hancom 转换'}[conversionPrompt.kind]} role="group">
    <Typography.Text strong>转换 {conversionPrompt.file.name}？</Typography.Text>
    <Typography.Text>工作区会创建 {conversionPrompt.target.toUpperCase()} 副本。{conversionPrompt.kind==='hancom'?'正文、表格和图片会转换，公式、脚注和嵌入对象可能丢失。':conversionDetails[conversionPrompt.target]}</Typography.Text>
-   {conversionPrompt.kind==='odf'&&rememberOdfPrompt&&<label><input type="checkbox" aria-label="下次直接转换" checked={rememberConversion} onChange={event=>setRememberConversion(event.target.checked)}/> 下次直接转换，不再提示</label>}
+   {rememberImportPrompt&&<label><input type="checkbox" aria-label="下次直接转换" checked={rememberConversion} onChange={event=>setRememberConversion(event.target.checked)}/> 下次直接转换此格式</label>}
    <Space><Button autoInsertSpace={false} onClick={()=>submitConversion(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" onClick={()=>submitConversion(rememberConversion)}>转换并打开</Button></Space>
   </section>}
   <Typography.Paragraph type="secondary" className="workspace-upload-intro">将本地文件添加到工作区，上传成功后在文档标签页中打开。</Typography.Paragraph>

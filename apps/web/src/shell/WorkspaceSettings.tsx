@@ -1,6 +1,7 @@
 import './personal-settings-page.css'
 import {useCallback,useEffect,useId,useRef,useState} from 'react'
 import type {PersonalPreferences} from '../../../../packages/browser-host/src/preferences'
+import {IMPORT_PROMPT_FIELDS,skipsImportPrompt} from '../../../../packages/web-contracts/src/file-imports'
 import {CSV_IMPORT_DEFAULT_LIMIT_MB,CSV_IMPORT_LIMIT_CHOICES_MB,isCsvImportLimitMb} from '@genoffice/xlsx-gateway/gateway/csv-limits'
 import {AI_CUSTOM_FONT_MAX_PX,AI_CUSTOM_FONT_MIN_PX,DEFAULT_AI_PANEL_PREFS,aiPanelFontPx,type AiFontSize} from '@genoffice/ui/ai-panel-prefs'
 import {LocalPasswordForm} from './LocalPasswordForm'
@@ -122,8 +123,11 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-sleep`} aria-describedby={`${preferenceId}-sleep-hint`} checked={draft?.sleepInactiveTabs!==false} onChange={event=>edit({sleepInactiveTabs:event.target.checked})}/>
    </div>
    <div className="personal-page-preference-row personal-page-switch-row">
-    <div><label htmlFor={`${preferenceId}-odf-import`}>确认 OpenDocument 转换</label><p id={`${preferenceId}-odf-import-hint`} className="personal-page-field-hint">导入 OpenDocument 文件并创建可编辑副本前询问。</p></div>
-    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-odf-import`} aria-describedby={`${preferenceId}-odf-import-hint`} checked={draft?.skipOdfImportPrompt!==true} onChange={event=>edit({skipOdfImportPrompt:!event.target.checked})}/>
+    <div><label htmlFor={`${preferenceId}-file-import`}>确认文件格式转换</label><p id={`${preferenceId}-file-import-hint`} className="personal-page-field-hint">开启后，导入旧版 Office、OpenDocument 或 Hancom 文件时会询问是否转换。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-file-import`} aria-describedby={`${preferenceId}-file-import-hint`} checked={IMPORT_PROMPT_FIELDS.every(field=>!skipsImportPrompt(draft??undefined,field))} onChange={event=>{
+     const skip=!event.target.checked
+     edit({skipOdfImportPrompt:skip,...Object.fromEntries(IMPORT_PROMPT_FIELDS.map(field=>[field,skip]))})
+    }}/>
    </div>
    <div className="personal-page-preference-row">
     <div><label htmlFor={`${preferenceId}-csv-import-limit`}>CSV 导入上限</label><p id={`${preferenceId}-csv-import-limit-hint`} className="personal-page-field-hint">设置 Excel「从文本/CSV」导入的单个文件大小上限。</p></div>
