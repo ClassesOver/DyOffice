@@ -437,6 +437,8 @@ export type PdfAssistantView = {
   pages: readonly number[]
   currentPage: number
   selection: { pages: readonly number[]; text: string } | null
+  preset: { text: string; nonce: number } | null
+  onPresetHandled(preset: { text: string; nonce: number }): void
   recognizeText(page: number, signal?: AbortSignal): Promise<string | null>
   searchIndex: PdfAppDeps['searchIndex']
   sourceTextIndex: PdfAppDeps['searchIndex']
@@ -8258,6 +8260,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   const menuInsertAfter = menuInGap ? (thumbMenu.afterOrigIdx ?? -1) : menuOrig
 
   /** Ribbon AI buttons: expand the dock and auto-run the prompt in the assistant */
+  const aiPresetsAvailable = !hostSave || !!hostAssistant
   const runAiPreset = (text: string): void => {
     setAiCollapsed(false)
     setAiPreset({ text, nonce: Date.now() })
@@ -8845,7 +8848,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                     </span>
                     <span>AI 助手</span>
                   </button>
-                  {!hostSave && <><button
+                  {aiPresetsAvailable && <><button
                     className="rb-big ai-entry"
                     data-tip={t('aiSummarizeBtn')}
                     onClick={() =>
@@ -8977,6 +8980,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                 <div className="ribbon-group-items">
                   <button
                     className="rb-big ai-entry"
+                    disabled={!aiPresetsAvailable}
                     data-tip={t('aiReviewSummaryBtn')}
                     onClick={() => runAiPreset(t('aiReviewSummaryPrompt'))}
                   >
@@ -8989,7 +8993,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                   </button>
                   <button
                     className="rb-big ai-entry"
-                    disabled={readOnly}
+                    disabled={readOnly || !aiPresetsAvailable}
                     data-tip={t('aiProcessNotesBtn')}
                     onClick={() => runAiPreset(t('aiProcessNotesPrompt'))}
                   >
@@ -9259,7 +9263,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                 <div className="ribbon-group-items">
                   <button
                     className="rb-big ai-entry"
-                    disabled={readOnly}
+                    disabled={readOnly || !aiPresetsAvailable}
                     data-tip={t('aiFillFormBtn')}
                     onClick={() => runAiPreset(t('aiFillFormPrompt'))}
                   >
@@ -9763,6 +9767,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
       <div className="app-main">
         {hostAssistant?.({doc, editRestriction, pages: visList, currentPage, recognizeText,
           selection: aiSelection ? { pages: aiSelection.originalPages, text: aiSelection.text } : null,
+          preset: aiPreset, onPresetHandled: preset => setAiPreset(current => current === preset ? null : current),
           gotoPage: scrollToPage, collapsed: aiCollapsed, setCollapsed: setAiCollapsed,
           searchIndex: aiApi.searchIndex, sourceTextIndex: () => doc ? searchIndexCache.get(doc) : null,
           addMarkup: aiApi.addMarkup, editText: queueAiTextEdit,
@@ -11594,7 +11599,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                     <span className="pdf-sel-popup-sep" aria-hidden />
                   </>
                 )}
-                <button
+                {aiPresetsAvailable && <button
                   type="button"
                   className="pdf-sel-ask"
                   data-tip={t('aiAskTitle')}
@@ -11608,7 +11613,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                     />
                   </svg>
                   {t('aiAskBtn')}
-                </button>
+                </button>}
               </div>
             )}
             {askPop && (

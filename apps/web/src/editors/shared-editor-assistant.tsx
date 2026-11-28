@@ -1,5 +1,5 @@
 import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT_IMAGE_EXTS,type AgentImage,type AttachedSkill} from '@genoffice/agent-core'
-import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
+import {useEffect,useEffectEvent,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
 import type {AiPanelPrefs,AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
 import {AiComposer,AiPanelSideButton,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAiPanelPrefs,useAssistantFileHistory,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
@@ -13,6 +13,7 @@ import './ai-dock-theme.css'
 type Assistant=Awaited<ReturnType<typeof createEditorAssistant>>
 type DraftFile=AiAttachmentLike&{image?:AgentImage}
 type ComposerDraft={text:string;files:DraftFile[];skills:string[];version:number}
+type AssistantPreset={text:string;nonce:number}
 type ChatItem={id:number;role:'user'|'assistant';text:string;sender?:'dsh';files?:AiAttachmentLike[];skills?:string[];tools?:ToolActivity[]}
 type ImageAttachments=ReadonlyMap<string,{name:string;image:AgentImage}>
 const toolImageAttachments=new WeakMap<AbortSignal,ImageAttachments>()
@@ -20,7 +21,7 @@ export function resolveTurnImageAttachment(reference:string,signal?:AbortSignal)
  return signal&&!signal.aborted?toolImageAttachments.get(signal)?.get(reference)?.image:undefined
 }
 
-export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,onMovePanel,onLocalEditDone,assistantNav,imageAttachmentReferences=false}:{assistant:Assistant;lang:'zh'|'en';context?:string;dock?:{collapsed:boolean;setCollapsed(value:boolean):void};widthKey?:string;onMovePanel?:(side:AiPanelSide)=>Promise<AiPanelPrefs>;onLocalEditDone?:()=>void;assistantNav?:MarkdownNav;imageAttachmentReferences?:boolean}){
+export function SharedEditorAssistant({assistant,lang,context='',dock,preset,onPresetHandled,widthKey,onMovePanel,onLocalEditDone,assistantNav,imageAttachmentReferences=false}:{assistant:Assistant;lang:'zh'|'en';context?:string;dock?:{collapsed:boolean;setCollapsed(value:boolean):void};preset?:AssistantPreset|null;onPresetHandled?:(preset:AssistantPreset)=>void;widthKey?:string;onMovePanel?:(side:AiPanelSide)=>Promise<AiPanelPrefs>;onLocalEditDone?:()=>void;assistantNav?:MarkdownNav;imageAttachmentReferences?:boolean}){
  const [items,setItems]=useState<ChatItem[]>([]),[draft,setDraft]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('')
  const [files,setFiles]=useState<DraftFile[]>([]),[attaching,setAttaching]=useState(false)
  const [skills,setSkills]=useState<string[]>([]),[readingSkills,setReadingSkills]=useState(false)
@@ -293,6 +294,17 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
    setDraft(draft);setFiles(files);setSkills(skills)
   }
  }
+ const handledPreset=useRef<AssistantPreset|null>(null)
+ const sendPreset=useEffectEvent((request:AssistantPreset)=>{
+  if(handledPreset.current===request)return
+  handledPreset.current=request
+  onPresetHandled?.(request)
+  const retryDraft=draft||files.length||skills.length?undefined:{text:request.text,files:[],skills:[],version:draftVersion.current}
+  if(assistant.workspace.isOffice()&&!addingFiles.current&&runOffice(request.text,undefined,undefined,retryDraft))return
+  draftVersion.current++
+  setDraft(current=>current.trim()&&current!==request.text?`${current}\n\n${request.text}`:request.text)
+ })
+ useEffect(()=>{if(preset)sendPreset(preset)},[preset])
  function stop(){
   if(pendingSkills.current){
    pendingSkills.current.abort();pendingSkills.current=undefined;setReadingSkills(false)

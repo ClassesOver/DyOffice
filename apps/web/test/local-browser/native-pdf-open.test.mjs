@@ -1287,6 +1287,87 @@ test('native PDF form marks and editable static fills follow an unsaved reorder'
  recordVerifiedOfficeEffect('pdf','add_form_mark')
 })
 
+test('native Web PDF sends the desktop ribbon and selected-text assistant prompts',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((request,response)=>app.routing(request,response))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,autoSave:false})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([400,400]).drawText('Selected text for the assistant',{x:40,y:320})
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'Quick actions.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,
+  csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
+ const requests=[]
+ let release
+ const hold=new Promise(resolve=>{release=resolve})
+ await page.route('**/api/v1/ai/turns',async route=>{
+  const message=route.request().postDataJSON().request.messages.findLast(item=>item.role==='user').text
+  const n=requests.push(message)
+  if(n===1)await hold
+  await route.fulfill({contentType:'text/event-stream',body:`event: delta\ndata: {"text":"Quick action reply ${n}"}\n\nevent: done\ndata: {}\n\n`})
+ })
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const action=name=>page.getByRole('button',{name,exact:true})
+ const assistant=page.locator('.shared-editor-assistant'),composer=assistant.getByRole('textbox',{name:'Message'})
+ const reply=n=>expect(assistant.getByText(`Quick action reply ${n}`,{exact:true})).toBeVisible()
+ await action('Annotate').click()
+ await action('AI Review Summary').click()
+ try{
+  await expect.poll(()=>requests.length).toBe(1)
+  assert.match(requests[0],/summarize the review feedback page by page/)
+  await composer.fill('Keep this draft.')
+  await action('Home').click()
+  await action('AI Key Points').click()
+  await expect(composer).toHaveValue('Keep this draft.\n\nPlease extract the key points of this document as a list.')
+  assert.equal(requests.length,1)
+ }finally{release()}
+ await reply(1)
+ await assistant.getByRole('button',{name:'Send',exact:true}).click()
+ await reply(2)
+ assert.match(requests[1],/Keep this draft\..*extract the key points/s)
+ for(const [tab,button,prompt] of [
+  [null,'AI Summarize',/summarize the main content/],
+  ['Annotate','AI Process Notes',/work through the notes/],
+  ['Fill Form','AI Fill Form',/identify the form fields/],
+ ]){
+  if(tab)await action(tab).click()
+  const next=requests.length+1
+  await action(button).click()
+  await reply(next)
+  assert.match(requests.at(-1),prompt)
+ }
+ const text=page.locator('.textLayer span').getByText('Selected text for the assistant',{exact:true})
+ await expect(text).toBeVisible()
+ await text.evaluate(element=>{
+  const selection=window.getSelection(),range=document.createRange()
+  range.selectNodeContents(element)
+  selection.removeAllRanges()
+  selection.addRange(range)
+  element.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}))
+ })
+ await page.locator('.pdf-sel-ask').click()
+ const ask=page.locator('.ai-ask-pop').getByRole('textbox')
+ await ask.fill('Explain the selected text.')
+ await ask.press('Enter')
+ await reply(6)
+ assert.match(requests.at(-1),/Explain the selected text/)
+ assert.match(requests.at(-1),/selected the following text.*Selected text for the assistant/s)
+ assert.equal(requests.length,6)
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
+
 test('native PDF model receives visible page and selection context, and cites navigable pages',{skip:!directory,timeout:60000},async t=>{
  const origin='http://localhost:4268',f=await fileFixture(t,{origin,buildApp:false})
  const source=await PDFDocument.create()

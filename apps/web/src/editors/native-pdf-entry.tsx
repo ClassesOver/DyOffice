@@ -1085,7 +1085,7 @@ async function mount(){
    const page=parsePdfNavHref(href)
    return page!==null&&Number.isSafeInteger(page)&&page>=1&&page<=value.pages.length?page:null
   }
-  return assistant?.available?<SharedEditorAssistant assistant={assistant} lang={prefs?.language??'zh'} dock={value} onMovePanel={side=>appearance.movePanel(side,assistant?.sessionProof)} widthKey="dyoffice:native-pdf:ai-panel-width" imageAttachmentReferences onLocalEditDone={()=>{void autoSaveBlank()}} assistantNav={{
+  return assistant?.available?<SharedEditorAssistant assistant={assistant} lang={prefs?.language??'zh'} dock={value} preset={value.preset} onPresetHandled={value.onPresetHandled} onMovePanel={side=>appearance.movePanel(side,assistant?.sessionProof)} widthKey="dyoffice:native-pdf:ai-panel-width" imageAttachmentReferences onLocalEditDone={()=>{void autoSaveBlank()}} assistantNav={{
    scheme:PDF_NAV_SCHEME,accepts:href=>!!value.doc&&citationPage(href)!==null,
    onNavigate:href=>{const page=citationPage(href);if(value.doc&&page!==null)value.gotoPage(page)},
   }}/>:null
