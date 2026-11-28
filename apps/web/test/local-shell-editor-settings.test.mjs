@@ -25,7 +25,7 @@ function fixture({roles=['personal','config_admin'],recovery=false,openInitial=t
   client:{onSessionEnded:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}},documentTabs,entryRecoveryNotice:'',entryRecovery:undefined,sourceWorkspace:undefined,
   createEntryNavigator,entryHash,parseEntryHash,localNewFormats,resolveOpenDocument,
   URL,URLSearchParams,navigator:{deviceMemory:16},location,history:{replaceState(_data,_title,hash){location.hash=hash},pushState(_data,_title,hash){location.hash=hash}},window:stage,
-  workspaceWindow:undefined,officeImportUnlocks:new Map(),takeOfficeImportUnlock(){},saveWorkspaceEntries(){},updateAutoFileTab(){},
+  workspaceWindow:undefined,officeImportUnlocks:new Map(),takeOfficeImportUnlock(){},saveWorkspaceEntries(){},updateAutoFileTab(){},saveWorkspaceAssistantSide(){throw new Error('Unexpected preference save')},
   defaultMaxLiveTabs,DEFAULT_IDLE_MS,SLEEP_SWEEP_INTERVAL_MS,sleepInactiveTabs:false,canCheckpointWorkspace:false,restoreSession:false,logoutPending:false,
   document:{querySelectorAll:selector=>selector==='.workspace-document-frame'?[{contentWindow:caller}]:[]},
   user:{id:'me',roles},capabilities:{},showUpload(){},showChromeMenu(){},showTrash(){},notice(){},updateAutoPdfTab(){},

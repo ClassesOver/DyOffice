@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createRequire} from 'node:module'
+import {ASSISTANT_PREFERENCES_FIELDS} from '../../../packages/web-contracts/src/preferences.ts'
 const root=new URL('../../../',import.meta.url).pathname.replace(/\/$/,'')
 const require=createRequire(root+'/package.json')
 const Fastify=require('fastify')
@@ -89,16 +90,20 @@ test('production restore and password-rotation wiring share the fenced preferenc
  const {readFile}=await import('node:fs/promises');const {runInNewContext}=await import('node:vm');const {transform}=await import('esbuild')
  const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.url),'utf8')
  const f=lifecycle();const writes=[];let owner='A',proof='a'.repeat(43)
- const workspace=()=>({bound:{proof,request:async(path,method)=>{if(path.endsWith('/me'))return{user:{id:owner}};if(path.endsWith('/capabilities'))return{};if(method==='PUT')writes.push(proof);return initial}}})
- const context={createSourceWorkspaceSession:async()=>workspace(),preferenceSession:f.scoped,preferences:f.scoped.preferences,globalSettingsSession:{bind(){}},workspaceSession:{bind(){}},client:{...f.client,changePassword:async()=>{proof='b'.repeat(43);return proof}},user:null,userSkills:null,sourceWorkspace:null,entryRecovery:undefined,documentTabs:{list:()=>[]},capabilities:{},initialLanguage:'zh',document:{documentElement:{dataset:{}}},installBridge(){},createUserSkillsClient:()=>({}),useState:()=>[0,()=>{}],useMemo:run=>run(),jsx:(type,props)=>({type,props}),WorkspaceSettings:'settings',sessionsClient:{},historyClient:{},UserSkillsPanel:'skills',logout(){}}
+ const workspace=()=>({bound:{proof,request:async(path,method,body)=>{if(path.endsWith('/me'))return{user:{id:owner}};if(path.endsWith('/capabilities'))return{};if(method==='PUT'){writes.push(proof);return {...initial,...body}}return initial}}})
+ const context={createSourceWorkspaceSession:async()=>workspace(),preferenceSession:f.scoped,preferences:f.scoped.preferences,globalSettingsSession:{bind(){}},workspaceSession:{bind(){}},client:{...f.client,changePassword:async()=>{proof='b'.repeat(43);return proof}},user:null,userSkills:null,sourceWorkspace:null,entryRecovery:undefined,documentTabs:{list:()=>[],renderedDocuments:()=>[]},ASSISTANT_PREFERENCES_FIELDS,capabilities:{},initialLanguage:'zh',document:{documentElement:{dataset:{}}},installBridge(){},createUserSkillsClient:()=>({}),useState:()=>[0,()=>{}],useMemo:run=>run(),jsx:(type,props)=>({type,props}),WorkspaceSettings:'settings',sessionsClient:{},historyClient:{},UserSkillsPanel:'skills',logout(){}}
  const selected=source.slice(source.indexOf('function saveWorkspaceEntries('),source.indexOf('async function resolveOpenDocument('))+source.slice(source.indexOf('async function restore('),source.indexOf('async function logout('))+source.slice(source.indexOf('function WorkspacePageContent('),source.indexOf('function Account('))
  const {code}=await transform(selected,{loader:'tsx',jsxFactory:'jsx',target:'es2022'})
- const api=runInNewContext(code+'\n({restore,WorkspacePageContent})',context)
+ const api=runInNewContext(code+'\n({restore,WorkspacePageContent,saveWorkspaceAssistantSide})',context)
  await api.restore();const props=api.WorkspacePageContent({page:'settings',onClose(){},onCloseGuardChange(){}}).props
  assert.equal(props.load,f.scoped.preferences.getPreferences)
  await props.save({theme:'dark'});assert.equal(writes.at(-1),'a'.repeat(43))
  await props.security.changePassword('old','new');await props.save({theme:'light'});assert.equal(writes.at(-1),'b'.repeat(43))
- owner='B';await props.security.changePassword('old','new');await assert.rejects(props.save({theme:'dark'}));assert.equal(writes.length,2)
+ await assert.rejects(api.saveWorkspaceAssistantSide('right','a'.repeat(43)),/登录状态已改变/)
+ assert.equal(writes.length,2)
+ assert.equal((await api.saveWorkspaceAssistantSide('right','b'.repeat(43))).aiPanelSide,'right')
+ assert.equal(writes.at(-1),'b'.repeat(43))
+ owner='B';await props.security.changePassword('old','new');await assert.rejects(props.save({theme:'dark'}));assert.equal(writes.length,3)
 })
 test('ordinary permission 403 with unchanged proof does not incorrectly end the workspace',async()=>{
  let ended=0,writes=0
