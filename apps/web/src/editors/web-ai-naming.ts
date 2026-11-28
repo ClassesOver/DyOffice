@@ -34,7 +34,7 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
   formatLabel.className='web-ai-naming-format'
   formatLabel.textContent=en?'File format':'文件格式'
   select.setAttribute('aria-label',formatLabel.textContent)
-  const options=documentExports
+  const options: readonly (readonly [string,string])[] = documentExports
    ? [['docx',en?'Word document (.docx)':'Word 文档（.docx）'],['pdf','PDF (.pdf)'],['html','HTML (.html)'],['md','Markdown (.md)']]
    : [['xlsx',en?'Excel workbook (.xlsx)':'Excel 工作簿（.xlsx）'],['csv',en?'CSV (.csv)':'CSV（.csv）']]
   for(const [value,text] of options){

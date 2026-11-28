@@ -5,7 +5,7 @@ import { folderChoices } from '../workspace-folder-options'
 import { pickLocalFiles } from './pick-local-files'
 import './web-ai-naming.css'
 
-const formatLabels = { xlsx: 'Excel (.xlsx)', csv: 'CSV (.csv)', docx: 'Word (.docx)', pdf: 'PDF (.pdf)' }
+const formatLabels = { xlsx: 'Excel (.xlsx)', xlsm: 'Excel (.xlsm)', csv: 'CSV (.csv)', docx: 'Word (.docx)', pdf: 'PDF (.pdf)' }
 type SourceFormat = keyof typeof formatLabels
 type WorkspaceChoice = { id: string; format: SourceFormat }
 type Choice = 'local' | WorkspaceChoice[]

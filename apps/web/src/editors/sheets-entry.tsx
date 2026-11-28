@@ -58,7 +58,8 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     const state = host.getState(fileId), sessionId = editor.getWorkbookSessionId()
     if (state.status === 'idle' && state.lease && sessionId && bridge.getWorkbookRevision(sessionId) === state.revision.revision) return state.revision.revision
   }
-  const guest=new URLSearchParams(location.search).get('guest')==='1'
+  const params=new URLSearchParams(location.search)
+  const guest=params.get('guest')==='1'
   const opened = await host.open(fileId)
   const isCsv=opened.format==='csv', isXlsm=opened.format==='xlsm'
   const copyExtension=isXlsm?'.xlsm':'.xlsx'
@@ -75,7 +76,16 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   applyBrowserEditorTheme(document.documentElement, prefs)
   let naming = false, copying = false, copyNotice = ''
   const copyLifetime = new AbortController()
-  const bridge = createSheetsBridge(host,fileId,prefs,{isCsv,confirmCsvSave:()=>confirmWebCsvSave(locale,!!copyAuthority?.current() && canCopy()),getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
+  const bridge = createSheetsBridge(host,fileId,prefs,{
+    isCsv,confirmCsvSave:()=>confirmWebCsvSave(locale,!!copyAuthority?.current() && canCopy()),
+    getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},
+    docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),
+    getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null),
+    ...(!params.has('sourceRevision')&&copyAuthority?.request&&copyAuthority.proof?{workspaceSources:{
+      request:copyAuthority.request,proof:copyAuthority.proof,verify:()=>copyAuthority.verify(),
+      readBytes:(id,revision)=>host.readBytes(id,revision),
+    }}:{}),
+  })
   const revision=host.getState(fileId).revision.revision
   const importUnlock=passwordProtected&&!guest?takeOfficeImportUnlock(revision):undefined
   const initiallyUnlocked=!passwordProtected||!!importUnlock&&await bridge.adoptWorkbookImportUnlock(revision,importUnlock)

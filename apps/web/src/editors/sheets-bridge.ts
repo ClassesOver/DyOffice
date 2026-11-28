@@ -10,6 +10,7 @@ import {printInBrowser} from './browser-print.ts'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {draftCopyParentActive} from './draft-copy-authority'
 import type {RegisterWorkbookPicker} from './workbook-tab-picker'
+import type {WorkspaceSourceAccess} from './workspace-source-picker'
 import type {HomeApi} from '../../../shell/src/shared/home-api'
 import {CSV_IMPORT_DEFAULT_LIMIT_MB} from '@genoffice/xlsx-gateway/gateway/csv-limits'
 import {
@@ -41,8 +42,24 @@ type OpeningViewport = {sheetId:string;endRow:number;endColumn:number;result:Wor
 type Session = {openingViewport?:OpeningViewport; revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
 const mergeExtensions = ['xlsx','xlsm','xls','csv','tsv'] as const
+const mergeMaxFiles=8
+const localMergeAccept=mergeExtensions.map(ext=>'.'+ext).join(',')
 const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,isCsv=false,confirmCsvSave=async()=>'cancel' as const,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean;isCsv?:boolean;confirmCsvSave?:()=>Promise<'csv'|'xlsx'|'cancel'>;getExportLayout?:(sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
+type SheetsBridgeOptions = {
+  fetchImpl?: typeof fetch
+  onChange?: () => void
+  getAttachmentFile?: (path:string)=>Promise<File|null>
+  docxCreationAvailable?: boolean
+  isCsv?: boolean
+  confirmCsvSave?: ()=>Promise<'csv'|'xlsx'|'cancel'>
+  getExportLayout?: (sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout
+  pickMergeFiles?: (signal:AbortSignal)=>Promise<File[]>
+  workspaceSources?: WorkspaceSourceAccess & {proof: string}
+}
+export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {
+  fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,
+  isCsv=false,confirmCsvSave=async()=>'cancel',pickMergeFiles,workspaceSources,
+}: SheetsBridgeOptions = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
@@ -160,31 +177,31 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     releaseWorkbookUnlock()
     return false
   }
-  async function requestAttachment(revision:string,name:string,file:File){
+  async function requestAttachment(revision:string,name:string,file:File,sessionProof?:string){
     if(disposed)throw hostError('UNAVAILABLE','disposed')
     const controller=new AbortController();controllers.add(controller)
     try{
       for(let attempt=0;attempt<2;attempt++){
-        if(!csrf){const response=await fetchImpl('/api/v1/auth/csrf',{credentials:'same-origin',cache:'no-store',signal:controller.signal});if(!response.ok)throw hostError('UNAUTHORIZED','session');const body=await response.json();if(typeof body?.csrfToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken))throw hostError('INVALID_RESPONSE','csrf');csrf=body.csrfToken}
-        const proof=csrf,query=new URLSearchParams({revision,name})
+        if(!sessionProof&&!csrf){const response=await fetchImpl('/api/v1/auth/csrf',{credentials:'same-origin',cache:'no-store',signal:controller.signal});if(!response.ok)throw hostError('UNAUTHORIZED','session');const body=await response.json();if(typeof body?.csrfToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken))throw hostError('INVALID_RESPONSE','csrf');csrf=body.csrfToken}
+        const proof=sessionProof??csrf,query=new URLSearchParams({revision,name})
         const response=await fetchImpl(`/api/v1/files/${fileId}/sheets/merge-sources/open?${query}`,{method:'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/octet-stream','x-csrf-token':proof!},body:file})
-        if(response.status===403&&attempt===0){if(csrf===proof)csrf=undefined;continue}
+        if(!sessionProof&&response.status===403&&attempt===0){if(csrf===proof)csrf=undefined;continue}
         if(!response.ok)throw hostError(response.status===401||response.status===403?'UNAUTHORIZED':response.status===409?'CONFLICT':'UNAVAILABLE','merge attachment')
         if(!response.headers.get('content-type')?.includes('application/json'))throw hostError('INVALID_RESPONSE','merge attachment')
         return await response.json()
       }
     }finally{controllers.delete(controller)}
   }
-  async function openMergeFiles(files:File[],revision:string,check=()=>true){
+  async function openMergeFiles(files:File[],revision:string,check=()=>true,sessionProof?:string){
     const supported:readonly string[]=mergeExtensions
-    if(files.length>8||files.some(file=>!file.size||file.size>50*1024*1024||!supported.includes(file.name.split('.').at(-1)?.toLowerCase()??''))){
+    if(files.length>mergeMaxFiles||files.some(file=>!file.size||file.size>50*1024*1024||!supported.includes(file.name.split('.').at(-1)?.toLowerCase()??''))){
       throw new Error(prefs.language==='zh'?'请选择最多 8 个工作簿，每个最多 50 MiB。':'Choose up to 8 supported workbooks, each at most 50 MiB.')
     }
     const opened:WorkbookFile[]=[]
     try{
       for(const file of files){
         if(!check()||host.getState(fileId).revision.revision!==revision)throw hostError('CONFLICT','merge source revision')
-        const raw=await requestAttachment(revision,file.name,file)
+        const raw=await requestAttachment(revision,file.name,file,sessionProof)
         const source=workbookFileSchema.parse({...raw,readOnly:true,needsSaveAs:false,automaticRecoveryDisabled:true})
         sessions.set(source.sessionId,{revision,file:source,attachment:true})
         opened.push(source)
@@ -198,6 +215,16 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }))
       throw error
     }
+  }
+  async function chooseMergeFiles(signal:AbortSignal):Promise<File[]> {
+    if(pickMergeFiles)return pickMergeFiles(signal)
+    if(!workspaceSources)return pickLocalFiles(localMergeAccept,signal,true)
+    const {pickWorkspaceSourceFiles}=await import('./workspace-source-picker')
+    const language=prefs.language
+    return pickWorkspaceSourceFiles(workspaceSources,{
+      title:language==='en'?'Select workbooks to merge':'选择要合并的工作簿',
+      formats:['xlsx','xlsm','csv'],language,localAccept:localMergeAccept,maxFiles:mergeMaxFiles,maxBytes:32*1024*1024,
+    },signal)
   }
   async function call(revision: string, method: string, input: object = {}) {
     if (waiting.length >= 64) throw hostError('UNAVAILABLE','read capacity')
@@ -501,18 +528,18 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       const controller=new AbortController()
       controllers.add(controller)
       try{
-        const files=await pickMergeFiles(controller.signal)
+        const files=await chooseMergeFiles(controller.signal)
         if(!files.length)return []
         const stillCurrent=()=>{
           const current=host.getState(fileId)
           return !disposed&&!!base.lease&&!!current.lease&&base.revision.revision===current.revision.revision&&
             base.lease.editorId===current.lease.editorId&&base.lease.leaseEpoch===current.lease.leaseEpoch
         }
-        return await openMergeFiles(files,base.revision.revision,stillCurrent)
+        return await openMergeFiles(files,base.revision.revision,stillCurrent,workspaceSources?.proof)
       }finally{controllers.delete(controller)}
     },
     async openWorkbooksForMerge(paths:string[]){
-      if(!getAttachmentFile||!Array.isArray(paths)||paths.length<1||paths.length>8)throw new Error(text.unavailable)
+      if(!getAttachmentFile||!Array.isArray(paths)||paths.length<1||paths.length>mergeMaxFiles)throw new Error(text.unavailable)
       const files:File[]=[]
       for(const path of paths){
         if(typeof path!=='string'||!path.startsWith('web-attachment:'))throw new Error(text.unavailable)

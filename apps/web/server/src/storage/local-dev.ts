@@ -24,6 +24,7 @@ export async function createLocalObjectStore({ directory }: { directory: string 
       try {
         const stat = await handle.stat()
         if (!stat.isFile() || stat.size !== reference.size) throw storageError()
+        signal?.throwIfAborted()
         return await consume(handle.createReadStream({ autoClose: false, signal }), reference)
       } finally { await handle.close() }
     } catch { throw storageError() }
