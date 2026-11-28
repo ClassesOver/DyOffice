@@ -1,4 +1,4 @@
-import {PDFArray,PDFDict,PDFName,PDFRef,PDFSignature} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFName,PDFRef,PDFSignature} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {pdfFormValueFields} from './form-values-job.mjs'
 import {fail} from './job-common.mjs'
 

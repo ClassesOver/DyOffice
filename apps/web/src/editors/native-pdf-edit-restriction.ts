@@ -1,4 +1,4 @@
-import {PDFDocument} from 'pdf-lib'
+import {PDFDocument} from '../../../pdf/src/shared/pdf-lib.ts'
 import {staticFormFillsFromCatalog} from '../../../pdf/src/shared/static-form-fills'
 import {assertPdfEditStructure,hasUnsupportedPdfForm} from '../../shared/pdf-edit-structure.mjs'
 

@@ -1,4 +1,4 @@
-import {PDFArray,PDFDict,PDFName,PDFRef,PDFString,PDFHexString,PDFRadioGroup,PDFCheckBox} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFName,PDFRef,PDFString,PDFHexString,PDFRadioGroup,PDFCheckBox} from '../../../../pdf/src/shared/pdf-lib.ts'
 const n=PDFName.of
 function fail(){throw Object.assign(Error('PDF_EDIT_UNSUPPORTED_STRUCTURE'),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})}
 const widget=dict=>String(dict.lookup(n('Subtype')))==='/Widget'

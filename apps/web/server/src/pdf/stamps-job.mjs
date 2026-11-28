@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {PDFName,PDFDict,PDFArray,PDFRef,PDFStream,PDFHexString,PDFNumber} from 'pdf-lib'
+import {PDFName,PDFDict,PDFArray,PDFRef,PDFStream,PDFHexString,PDFNumber} from '../../../../pdf/src/shared/pdf-lib.ts'
 import fontkit from '@pdf-lib/fontkit'
 import {validatePdfStampOperation} from '../../../../../packages/web-contracts/src/pdf-stamp-ops.ts'
 import {drawingNames} from './isolate-image-resources.mjs'

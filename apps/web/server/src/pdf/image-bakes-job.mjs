@@ -1,6 +1,6 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {replacePdfImagePixels,createPdfImagePixelSource} from './isolate-image-resources.mjs'
-import {PDFDocument,PDFName} from 'pdf-lib'
+import {PDFDocument,PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {catalog,pdfImageEditsSafetyCodes} from './image-edits-job.mjs'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'

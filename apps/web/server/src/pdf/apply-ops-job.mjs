@@ -1,4 +1,4 @@
-import {PDFDocument,PDFName,PDFDict,PDFNumber,PDFRef,PDFHexString,PDFString} from 'pdf-lib'
+import {PDFDocument,PDFName,PDFDict,PDFNumber,PDFRef,PDFHexString,PDFString} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openPdfForPendingEdits as open} from './pending-document.mjs'
 import {pdfInsertFormState,assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {updatePdfFormFieldAppearances,pdfFormFieldsSafetyCodes} from './form-fields-job.mjs'

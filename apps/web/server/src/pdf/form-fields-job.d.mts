@@ -1,4 +1,4 @@
-import type {PDFDocument} from 'pdf-lib'
+import type {PDFDocument} from '../../../../pdf/src/shared/pdf-lib.ts'
 import type {PdfAnnotationProcessor} from './annotation-job.mjs'
 import type {PdfFormField,PdfFormFieldOperation} from '../../../../../packages/web-contracts/src/pdf-form-fields.ts'
 export {validatePdfFormFieldOperations} from '../../../../../packages/web-contracts/src/pdf-form-fields.ts'

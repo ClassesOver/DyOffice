@@ -1,5 +1,5 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
-import {EncryptedPDFError,PDFArray,PDFDict,PDFDocument,PDFName} from 'pdf-lib'
+import {EncryptedPDFError,PDFArray,PDFDict,PDFDocument,PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 

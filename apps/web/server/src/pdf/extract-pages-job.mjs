@@ -1,5 +1,5 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-import {PDFName} from 'pdf-lib'
+import {PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openEditablePdf} from './editable-document.mjs'
 import {openPdfForInserts} from './insert-form-integrity.mjs'
 import {fail,check,hash,requireEnvelope} from './job-common.mjs'

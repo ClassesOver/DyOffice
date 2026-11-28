@@ -1,4 +1,4 @@
-import {PDFArray,PDFName} from 'pdf-lib'
+import {PDFArray,PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openEditablePdf} from './editable-document.mjs'
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
 import {openPdfForInserts,pdfInsertFormState} from './insert-form-integrity.mjs'

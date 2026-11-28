@@ -1,4 +1,4 @@
-import {PDFArray,PDFDict,PDFName,PDFRef} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFName,PDFRef} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openEditablePdf} from './editable-document.mjs'
 import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 

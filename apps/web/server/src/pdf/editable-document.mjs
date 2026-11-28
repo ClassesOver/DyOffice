@@ -1,4 +1,4 @@
-import {EncryptedPDFError,PDFDocument,PDFName} from 'pdf-lib'
+import {EncryptedPDFError,PDFDocument,PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {assertPdfEditStructure} from '../../../shared/pdf-edit-structure.mjs'
 import {fail} from './job-common.mjs'
 

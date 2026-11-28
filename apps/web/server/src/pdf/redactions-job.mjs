@@ -1,4 +1,4 @@
-import {PDFName} from 'pdf-lib'
+import {PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openEditablePdf} from './editable-document.mjs'
 import {capturePdfManagedStamps} from './stamps-job.mjs'
 import {REDACT_PATTERNS,findPattern} from '../../../../pdf/src/renderer/redact-patterns.ts'

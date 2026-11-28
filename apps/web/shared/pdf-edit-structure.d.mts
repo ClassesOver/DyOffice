@@ -1,4 +1,4 @@
-import type {PDFDocument} from 'pdf-lib'
+import type {PDFDocument} from '../../pdf/src/shared/pdf-lib.ts'
 
 export const MAX_PDF_EDIT_PAGES:100
 export const MAX_PDF_DRAFT_BLANK_PAGES:20

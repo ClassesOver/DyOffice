@@ -1,5 +1,5 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
-import {EncryptedPDFError,PDFDocument} from 'pdf-lib'
+import {EncryptedPDFError,PDFDocument} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {pdfjsDocumentParams} from './pdfjs-open.mjs'

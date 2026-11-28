@@ -1,5 +1,5 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-import {PDFArray,PDFDict,PDFName,PDFNumber} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFName,PDFNumber} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openEditablePdf} from './editable-document.mjs'
 import {hasUnsupportedPdfForm} from '../../../shared/pdf-edit-structure.mjs'
 import {pdfInsertFormState} from './insert-form-integrity.mjs'

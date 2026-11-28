@@ -1,4 +1,4 @@
-import {PDFDict,PDFName} from 'pdf-lib'
+import {PDFDict,PDFName} from '../../pdf/src/shared/pdf-lib.ts'
 import {assertNoPdfSignatures} from '../../pdf/src/shared/pdf-signature-guard.ts'
 
 export const MAX_PDF_EDIT_PAGES=100

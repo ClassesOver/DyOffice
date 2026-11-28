@@ -1,4 +1,4 @@
-import {PDFArray,PDFDict,PDFName,PDFNumber,PDFRef,PDFStream} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFName,PDFNumber,PDFRef,PDFStream} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {createHash} from 'node:crypto'
 import {openEditablePdf} from './editable-document.mjs'
 import {assertPdfManagedStamps} from './stamps-job.mjs'
