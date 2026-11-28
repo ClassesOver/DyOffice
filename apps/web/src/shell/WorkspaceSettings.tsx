@@ -96,6 +96,10 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-spellcheck`} aria-describedby={`${preferenceId}-assistant-spellcheck-hint`} checked={draft?.aiSpellcheck!==false} onChange={event=>edit({aiSpellcheck:event.target.checked})}/>
    </div>
    <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant-selection`}>显示选区旁的「询问 AI」</label><p id={`${preferenceId}-assistant-selection-hint`} className="personal-page-field-hint">在 Word、Excel 和 PowerPoint 的选区旁显示浮动按钮。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-selection`} aria-describedby={`${preferenceId}-assistant-selection-hint`} checked={draft?.aiShowAskTrigger!==false} onChange={event=>edit({aiShowAskTrigger:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
     <div><label htmlFor={`${preferenceId}-assistant-startup`}>在新文档中恢复 AI 助手</label><p id={`${preferenceId}-assistant-startup-hint`} className="personal-page-field-hint">开启后按编辑器记住上次的展开或收起状态。关闭后，新打开的文档会收起助手。</p></div>
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-startup`} aria-describedby={`${preferenceId}-assistant-startup-hint`} checked={draft?.aiOpenInNewDocs===true} onChange={event=>edit({aiOpenInNewDocs:event.target.checked})}/>
    </div>

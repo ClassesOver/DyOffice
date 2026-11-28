@@ -6,7 +6,7 @@ import {createLocalPreferencesSession} from '../shell/local-preferences-session'
 import type {WorkspaceOpenFrame} from './browser-document-command'
 import {createAssistantPreferenceSync} from './assistant-preference-sync'
 
-const attributes = ['data-web-ai-panel-side', 'data-web-ai-font-size', 'data-web-ai-custom-font-size', 'data-web-ai-spellcheck', 'data-web-ai-open-in-new-docs']
+const attributes = ['data-web-ai-panel-side', 'data-web-ai-font-size', 'data-web-ai-custom-font-size', 'data-web-ai-spellcheck', 'data-web-ai-open-in-new-docs', 'data-web-ai-show-ask-trigger']
 
 /** Publish saved account preferences to a mounted workspace document. */
 export function publishBrowserAssistantPreferences(root: HTMLElement, prefs: AssistantPreferences): void {
@@ -15,6 +15,7 @@ export function publishBrowserAssistantPreferences(root: HTMLElement, prefs: Ass
   root.dataset.webAiCustomFontSize = String(prefs.aiCustomFontSize ?? DEFAULT_AI_PANEL_PREFS.customFontSize)
   root.dataset.webAiSpellcheck = String(prefs.aiSpellcheck ?? DEFAULT_AI_PANEL_PREFS.spellcheck)
   root.dataset.webAiOpenInNewDocs = String(prefs.aiOpenInNewDocs === true)
+  root.dataset.webAiShowAskTrigger = String(prefs.aiShowAskTrigger ?? DEFAULT_AI_PANEL_PREFS.showAiAskTrigger)
 }
 
 /** Apply account appearance on top of the editor's own dock state. */
@@ -54,7 +55,7 @@ export async function installBrowserAssistantPreferences(prefs: AssistantPrefere
     },
   })
   const withAppearance = (base = panelPrefs): AiPanelPrefs => {
-    const {webAiPanelSide, webAiFontSize, webAiCustomFontSize, webAiSpellcheck, webAiOpenInNewDocs} = root.dataset
+    const {webAiPanelSide, webAiFontSize, webAiCustomFontSize, webAiSpellcheck, webAiOpenInNewDocs, webAiShowAskTrigger} = root.dataset
     return {
       ...base,
       side: webAiPanelSide === 'left' || webAiPanelSide === 'right' ? webAiPanelSide : prefs.aiPanelSide ?? base.side,
@@ -62,6 +63,7 @@ export async function installBrowserAssistantPreferences(prefs: AssistantPrefere
       customFontSize: webAiCustomFontSize === undefined ? prefs.aiCustomFontSize ?? base.customFontSize : Number(webAiCustomFontSize),
       spellcheck: webAiSpellcheck === undefined ? prefs.aiSpellcheck ?? base.spellcheck : webAiSpellcheck === 'true',
       openInNewDocs: webAiOpenInNewDocs === undefined ? prefs.aiOpenInNewDocs === true : webAiOpenInNewDocs === 'true',
+      showAiAskTrigger: webAiShowAskTrigger === undefined ? prefs.aiShowAskTrigger ?? base.showAiAskTrigger : webAiShowAskTrigger === 'true',
     }
   }
   const apply = () => {

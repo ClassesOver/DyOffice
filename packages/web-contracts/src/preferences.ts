@@ -16,23 +16,26 @@ export interface AssistantPreferences {
   aiCustomFontSize?: number
   aiSpellcheck?: boolean
   aiOpenInNewDocs?: boolean
+  aiShowAskTrigger?: boolean
 }
 
-export const ASSISTANT_PREFERENCES_FIELDS = ['aiPanelSide', 'aiFontSize', 'aiCustomFontSize', 'aiSpellcheck', 'aiOpenInNewDocs'] as const
+export const ASSISTANT_PREFERENCES_FIELDS = ['aiPanelSide', 'aiFontSize', 'aiCustomFontSize', 'aiSpellcheck', 'aiOpenInNewDocs', 'aiShowAskTrigger'] as const
 export const DEFAULT_ASSISTANT_PREFERENCES = {
   aiPanelSide: DEFAULT_AI_PANEL_PREFS.side,
   aiFontSize: DEFAULT_AI_PANEL_PREFS.fontSize,
   aiCustomFontSize: DEFAULT_AI_PANEL_PREFS.customFontSize,
   aiSpellcheck: DEFAULT_AI_PANEL_PREFS.spellcheck,
   aiOpenInNewDocs: false,
+  aiShowAskTrigger: DEFAULT_AI_PANEL_PREFS.showAiAskTrigger,
 } satisfies Required<AssistantPreferences>
 
 export function isAssistantPreferences(value: Partial<Record<typeof ASSISTANT_PREFERENCES_FIELDS[number], unknown>>): boolean {
-  const {aiPanelSide, aiFontSize, aiCustomFontSize, aiSpellcheck, aiOpenInNewDocs} = value
+  const {aiPanelSide, aiFontSize, aiCustomFontSize, aiSpellcheck, aiOpenInNewDocs, aiShowAskTrigger} = value
   return (aiPanelSide === undefined || aiPanelSide === 'left' || aiPanelSide === 'right') &&
     (aiFontSize === undefined || isAiFontSize(aiFontSize)) &&
     (aiCustomFontSize === undefined || (typeof aiCustomFontSize === 'number' && Number.isInteger(aiCustomFontSize) &&
       aiCustomFontSize >= AI_CUSTOM_FONT_MIN_PX && aiCustomFontSize <= AI_CUSTOM_FONT_MAX_PX)) &&
     (aiSpellcheck === undefined || typeof aiSpellcheck === 'boolean') &&
-    (aiOpenInNewDocs === undefined || typeof aiOpenInNewDocs === 'boolean')
+    (aiOpenInNewDocs === undefined || typeof aiOpenInNewDocs === 'boolean') &&
+    (aiShowAskTrigger === undefined || typeof aiShowAskTrigger === 'boolean')
 }

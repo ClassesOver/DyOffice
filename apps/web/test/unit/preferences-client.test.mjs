@@ -146,3 +146,17 @@ test('assistant panel side round trips as a strict left or right preference',asy
  response={...response,aiPanelSide:'bottom'}
  await assert.rejects(client.getPreferences(),/无法确认/)
 })
+
+test('selection Ask AI preference persists both choices and rejects a non-boolean receipt',async()=>{
+ let response=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')response={...response,...patch}
+  return response
+ })
+ for(const aiShowAskTrigger of [false,true]){
+  assert.equal((await client.updatePreferences({aiShowAskTrigger})).aiShowAskTrigger,aiShowAskTrigger)
+  assert.equal((await client.getPreferences()).aiShowAskTrigger,aiShowAskTrigger)
+ }
+ response={...response,aiShowAskTrigger:'false'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})

@@ -12,6 +12,7 @@ const patchSchema = { type: 'object', additionalProperties: false, properties: {
   aiCustomFontSize: { type: 'integer', minimum: AI_CUSTOM_FONT_MIN_PX, maximum: AI_CUSTOM_FONT_MAX_PX },
   aiSpellcheck: { type: 'boolean' },
   aiOpenInNewDocs: { type: 'boolean' },
+  aiShowAskTrigger: { type: 'boolean' },
 } } as const
 export function registerPreferenceRoutes(app: FastifyInstance, preferences: ReturnType<typeof createPreferenceService>, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>) {
   for (const url of ['/api/preferences','/api/v1/preferences']) {

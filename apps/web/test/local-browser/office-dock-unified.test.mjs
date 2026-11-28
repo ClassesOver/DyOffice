@@ -11,6 +11,7 @@ import {PDFDocument} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
+import {backgroundDocumentBytes} from '../helpers/background-documents.mjs'
 import {password} from '../helpers/identity.mjs'
 import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
@@ -93,7 +94,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
  })
  await t.test('account assistant appearance updates all mounted editors and survives reopen',async()=>{
   const appearanceFiles={}
-  for(const [format,bytes] of fixtures)appearanceFiles[format]=(await importFile(f,f.alice.token,bytes,'appearance.'+format)).file
+  for(const [format,bytes] of fixtures)appearanceFiles[format]=(await importFile(f,f.alice.token,format==='docx'?await backgroundDocumentBytes('docx','Select this sentence to ask AI.'):bytes,'appearance.'+format)).file
   await f.preferences.update(f.alice.token,{aiFontSize:'large',aiSpellcheck:false})
   await page.goto(origin)
   await expect(page.locator('.home')).toBeVisible()
@@ -170,15 +171,60 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
    await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
   }
-  async function setStartup(enabled){
+  async function setAssistantSwitch(name,enabled){
    await accountAction(page,'个人设置')
    const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
    await settingsTab(settings,'通用偏好')
-   await settings.getByRole('switch',{name:'在新文档中恢复 AI 助手',exact:true}).setChecked(enabled)
+   await settings.getByRole('switch',{name,exact:true}).setChecked(enabled)
    await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
    await expect(settings).toContainText('个人偏好已保存')
    await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
   }
+  const setStartup=enabled=>setAssistantSwitch('在新文档中恢复 AI 助手',enabled)
+  async function selectContent(format){
+   const file=appearanceFiles[format], editor=frame(file)
+   await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+   if(format==='docx'){
+    const paragraph=editor.locator('.tiptap.doc-page p').filter({hasText:/\S/}).first()
+    await paragraph.click({position:{x:3,y:7}})
+    await page.keyboard.press('Home')
+    await page.keyboard.press('Shift+End')
+    await expect.poll(()=>paragraph.evaluate(node=>node.ownerDocument.getSelection()?.toString().trim())).toMatch(/\S/)
+   }else{
+    const target=editor.locator(format==='xlsx'?'#univer-container canvas':'.stage-rel').first()
+    await expect(target).toBeVisible()
+    const box=await target.boundingBox()
+    assert.ok(box,format+' editor selection surface')
+    if(format==='xlsx'){
+     // Drag across multiple real cells so the grid opens its selection chip.
+     await page.mouse.move(box.x+105,box.y+52)
+     await page.mouse.down()
+     await page.mouse.move(box.x+245,box.y+99,{steps:8})
+     await page.mouse.up()
+    }else{
+     // The acceptance slide's title starts at 7% x and 13% y.
+     await page.mouse.click(box.x+box.width*.12,box.y+box.height*.2)
+    }
+   }
+   return editor.locator('.ai-ask-trigger').first()
+  }
+  for(const format of ['docx','xlsx','pptx'])await expect(await selectContent(format),format+' selection Ask AI default').toBeVisible()
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await setAssistantSwitch('显示选区旁的「询问 AI」',false)
+  for(const format of ['docx','xlsx','pptx']){
+   const file=appearanceFiles[format]
+   await expect(editorHtml(file)).toHaveAttribute('data-web-ai-show-ask-trigger','false')
+   await expect(await selectContent(format),format+' selection Ask AI disabled').toHaveCount(0)
+  }
+  const wordFile=appearanceFiles.docx
+  await selectContent('docx')
+  await frame(wordFile).locator('.ai-panel-collapse').first().click()
+  await frame(wordFile).locator('.ai-rail').first().click()
+  await expect(composer(wordFile)).toBeVisible()
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await setAssistantSwitch('显示选区旁的「询问 AI」',true)
+  for(const format of ['docx','xlsx','pptx'])await expect(await selectContent(format),format+' selection Ask AI restored').toBeVisible()
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
   await page.reload()
   await expect(page.locator('.home')).toBeVisible()
   await setStartup(true)
