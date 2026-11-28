@@ -26,18 +26,26 @@ fn worksheet_hyperlinks_resolve_the_office_relationship_namespace() {
     ]);
     let mut sessions = WorkbookSessions::new();
     let metadata = sessions.open(&path).unwrap();
-    let result = sessions
-        .read_range(
-            &metadata.session_id,
-            "sheet-1",
-            &CellRange {
-                start_row: 0,
-                end_row: 0,
-                start_column: 0,
-                end_column: 2,
-            },
-        )
-        .unwrap();
+    let range = CellRange {
+        start_row: 0,
+        end_row: 0,
+        start_column: 0,
+        end_column: 2,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let result = loop {
+        let result = sessions
+            .read_range(&metadata.session_id, &metadata.sheets[0].id, &range)
+            .unwrap();
+        if result.indexing_complete {
+            break result;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worksheet indexing timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
     let links: Vec<_> = result
         .hyperlinks
         .iter()
