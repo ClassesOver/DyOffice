@@ -1,5 +1,6 @@
 import {BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES} from '../../../docs/src/shared/merge-data'
 import {takeOfficeImportUnlock,workspaceOpenAction} from './browser-document-command'
+import {applyBrowserEditorTheme} from './browser-editor-theme'
 import { officeSignatureNotice } from './office-signature-notice'
 import {readHandoffSkill} from './document-handoff-spec'
 import {joinWordCollab,type WordSyncState} from './word-collab'
@@ -104,8 +105,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   if(importUnlock)unlockedBytes=await host.claimDocxImportUnlock(fileId,importUnlock,!signed&&!citationMode).catch(()=>undefined)
   const initiallyUnlocked=!initiallyProtected||!!unlockedBytes
   setModuleLang(locale); document.documentElement.lang = locale
-  if (prefs.theme === 'system') delete document.documentElement.dataset.theme
-  else document.documentElement.dataset.theme = prefs.theme
+  applyBrowserEditorTheme(document.documentElement, prefs)
   setAuthorName(prefs.authorName ?? '')
   let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed||initiallyProtected?'unavailable':'joining'
   let collabEditor:Editor|null=null, collabProtected=initiallyProtected, resumeCollab=false

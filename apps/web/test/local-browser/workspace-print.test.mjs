@@ -22,6 +22,71 @@ const built=Boolean(process.env.DYOFFICE_TEST_OFFICE_ASSETS||(
  process.env.DYOFFICE_TEST_SHEETS_DIST&&process.env.DYOFFICE_TEST_SLIDES_DIST&&process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 ))
 
+test('workspace document theme updates the open Word and Excel canvases without saving either file',{skip:!built,timeout:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+6
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',theme:'dark',documentTheme:'light',showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),nativeDocsDirectory:officeBrowserAsset('docs'),
+  nativeSheetsDirectory:officeBrowserAsset('sheets'),...sheets,
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const originals=[await docxBytes(),await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))]
+ const files=[]
+ for(const [index,name] of ['theme.docx','theme.xlsx'].entries())files.push((await importFile(f,f.alice.token,originals[index],name)).file)
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ for(const file of files){
+  await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+  await expect(frame(file.fileId).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+  await expect(frame(file.fileId).locator('html')).toHaveAttribute('data-doc-theme','light')
+  await expect(frame(file.fileId).locator('html')).toHaveAttribute('data-theme','dark')
+ }
+ const word=frame(files[0].fileId).locator('.workspace').first(),excel=frame(files[1].fileId).locator('html')
+ await expect(word).not.toHaveClass(/page-dark/)
+ await expect(excel).not.toHaveClass(/univer-dark/)
+ async function setTheme(documentTheme,lightUi=false){
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await accountAction(page,'个人设置')
+  const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  if(lightUi){
+   const light=settings.getByRole('radio',{name:'浅色',exact:true})
+   await light.press('Space')
+   await expect(light).toBeChecked()
+  }
+  await settings.getByLabel('文档主题',{exact:true}).selectOption(documentTheme)
+  await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+  await expect(settings).toContainText('个人偏好已保存')
+  await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+ }
+ await setTheme('dark',true)
+ await expect(page.locator('html')).toHaveAttribute('data-theme','light')
+ await expect(word).toHaveClass(/page-dark/)
+ await expect(excel).toHaveClass(/univer-dark/)
+ await setTheme('follow')
+ await expect(word).not.toHaveClass(/page-dark/)
+ await expect(excel).not.toHaveClass(/univer-dark/)
+ for(const [index,file] of files.entries()){
+  await expect(frame(file.fileId).locator('html')).not.toHaveAttribute('data-doc-theme',/./)
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),originals[index])
+ }
+})
+
 test('workspace file menus, shortcuts and tab recovery work across four native editors',{skip:!built,timeout:210000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)
  const origin='http://localhost:'+port

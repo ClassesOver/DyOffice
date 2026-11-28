@@ -1,4 +1,5 @@
 import {takeOfficeImportUnlock,workspaceOpenAction} from './browser-document-command'
+import {applyBrowserEditorTheme} from './browser-editor-theme'
 import { officeSignatureNotice } from './office-signature-notice'
 import {createDraftCopyAuthority,draftCopyParentActive} from './draft-copy-authority'
 import {mountDocumentHandoff} from './document-handoff'
@@ -68,8 +69,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
   const exportCsvLabel = locale === 'en' ? 'Export active sheet as CSV' : '导出当前工作表为 CSV'
   setModuleLang(locale); document.documentElement.lang = locale
-  if (prefs.theme === 'system') delete document.documentElement.dataset.theme
-  else document.documentElement.dataset.theme = prefs.theme
+  applyBrowserEditorTheme(document.documentElement, prefs)
   let naming = false, copying = false, copyNotice = ''
   const copyLifetime = new AbortController()
   const bridge = createSheetsBridge(host,fileId,prefs,{getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})

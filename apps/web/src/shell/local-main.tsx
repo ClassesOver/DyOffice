@@ -1,4 +1,5 @@
 import {WorkspaceLoading} from './WorkspaceLoading'
+import {applyBrowserEditorTheme} from '../editors/browser-editor-theme'
 import {HomeHero} from './HomeHero'
 import type {PreparedAiDocumentCreator} from './pdf-create-document-skill'
 import {createAiDocCreationQueue,type AiDocCreationResult} from './ai-doc-creation'
@@ -144,6 +145,13 @@ function saveWorkspaceEntries(tabs:ReturnType<typeof documentTabs.list>){
 }
 async function saveWorkspacePreferences(patch:Parameters<typeof preferences.updatePreferences>[0]){
  const saved=await preferences.updatePreferences(patch)
+ if(patch.documentTheme!==undefined||patch.theme!==undefined){
+  for(const tab of documentTabs.renderedDocuments()){
+   if(tab.format!=='docx'&&tab.format!=='xlsx')continue
+   const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement
+   if(root)applyBrowserEditorTheme(root,saved)
+  }
+ }
  sleepInactiveTabs=saved.sleepInactiveTabs!==false
  restoreSession=saved.restoreSession!==false
  if(restoreSession){

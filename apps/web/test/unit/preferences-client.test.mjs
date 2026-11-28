@@ -89,3 +89,17 @@ test('PDF zoom preferences round trip and reject unknown modes',async()=>{
  value={...value,pdfDefaultZoom:'actual'}
  await assert.rejects(client.getPreferences(),/无法确认/)
 })
+
+test('document appearance is independent of the workspace theme',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ const saved=await client.updatePreferences({theme:'dark',documentTheme:'light'})
+ assert.equal(saved.theme,'dark')
+ assert.equal(saved.documentTheme,'light')
+ assert.equal((await client.updatePreferences({documentTheme:'follow'})).documentTheme,'follow')
+ value={...value,documentTheme:'system'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})
