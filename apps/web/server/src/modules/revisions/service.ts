@@ -10,8 +10,7 @@ import { validateFileName } from '../files/validation.ts'
 import { assertLiveLease, leaseEpoch } from '../leases/queries.ts'
 import { tokenHash, authError } from '../auth/sessions.ts'
 import { appendRevisionEvent } from '../../outbox/service.ts'
-import type { SaveInput, RevisionRef } from '../../../../../../packages/web-contracts/src/api.ts'
-import type { EncryptedOfficeFormat } from '../files/workbook-password-core.ts'
+import { isEncryptedOfficeFormat, isSpreadsheetArchive, type SaveInput, type RevisionRef, type EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
 
 type DraftInput = { size: number; baseRevision: string; leaseEpoch: number; editorId: string }
 type History = { id: string; parent_revision: string | null; restored_from: string | null; object_key: string; source: 'import' | 'save' | 'restore'; sha256: string; size: number; created_at: Date }
@@ -63,8 +62,9 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
       if(autoPdfName!==undefined && validateFileName(autoPdfName)!=='pdf')throw authError(400)
       return reserve(token,fileId,input,null,autoPdfName)
     },
-    stageProtectedWorkbookUpload(token:string,fileId:string,input:DraftInput) {
-      return reserve(token,fileId,input,null,undefined,'xlsx')
+    stageProtectedWorkbookUpload(token:string,fileId:string,input:DraftInput,format:EncryptedOfficeFormat='xlsx') {
+      if(!isSpreadsheetArchive(format))throw authError(415)
+      return reserve(token,fileId,input,null,undefined,format)
     },
     async prepareProtectedDocx(token:string,fileId:string,input:Omit<DraftInput,'size'>,unlockId:string,bytes:Buffer,signal?:AbortSignal){
       if(!Buffer.isBuffer(bytes)||!bytes.length)throw authError(400)
@@ -137,7 +137,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
         const file = await loadFile(connection,principal,fileId,false,'UPDATE')
         await assertLiveLease(connection,principal,fileId,epoch,upload.editor_id)
         if (file.current_revision !== base) throw authError(409)
-        const protectedFormat=upload.office_password_protected&&(upload.format==='docx'||upload.format==='xlsx')?upload.format:undefined
+        const protectedFormat=upload.office_password_protected&&isEncryptedOfficeFormat(upload.format)?upload.format:undefined
         const passwordChange=upload.office_password_change
         if(passwordChange&&(principal.job||principal.dshEdit||file.format!=='docx'))throw authError(404)
         await files.assertOfficeWritable(file,passwordChange?(file.office_password_protected?'docx':undefined):protectedFormat)

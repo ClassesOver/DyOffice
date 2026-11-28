@@ -1,6 +1,6 @@
 import type {WebFile} from './web-home-bridge'
+import {isEncryptedOfficeFormat,type EncryptedOfficeFormat} from '../../../../packages/web-contracts/src/api'
 export type SessionEndReason='expired'|'logout_failed'
-type EncryptedOfficeFormat='docx'|'xlsx'
 export class IncorrectOfficeUploadPassword extends Error {}
 /** Local mode only: HttpOnly session cookies, ephemeral CSRF, no bearer/JSON fallback. */
 export function createLocalShellClient(send:typeof fetch=fetch) {
@@ -136,7 +136,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    if(!expectedProof)throw stale()
    if(file.size>32*1024*1024)throw new Error('文件超过 32 MiB 限制')
    const extension=file.name.split('.').pop()?.toLowerCase()
-   const encryptedFormat=password!==undefined&&(extension==='docx'||extension==='xlsx')?extension:undefined
+   const encryptedFormat=password!==undefined&&extension&&isEncryptedOfficeFormat(extension)?extension:undefined
    if(password!==undefined&&(!encryptedFormat||!password.length||password.length>255))throw new Error('请输入有效的打开密码。')
    const bound=await bindSession(expectedProof)
    // Files dragged onto a native editor are created in the iframe's realm.

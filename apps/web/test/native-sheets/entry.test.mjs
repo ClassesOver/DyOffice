@@ -14,6 +14,7 @@ import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
 import officeCrypto from 'officecrypto-tool'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
+import { macroWorkbook, vbaFixture } from '../helpers/xlsm.mjs'
 import { password } from '../helpers/identity.mjs'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
@@ -148,9 +149,10 @@ test('workspace locates a linked workbook and picks a source range across tabs',
  assert.deepEqual(externalRequests,[])
 })
 
-test('workspace imports and opens a local encrypted XLSX after one correct password',{timeout:150000},async t=>{
+for(const format of ['xlsx','xlsm'])test(`workspace imports and opens a local encrypted ${format.toUpperCase()} after one correct password`,{timeout:180000},async t=>{
  const f=await fixture(t,{nodeEngine:true,workspaceShell:true}),{page}=f
- const name='local-encrypted.xlsx',secret='  表格🔑 ',encrypted=Buffer.from(officeCrypto.encrypt(f.original,{password:secret}))
+ const plain=format==='xlsm'?await macroWorkbook(f.original):f.original
+ const name=`local-encrypted.${format}`,secret='  表格🔑 ',encrypted=Buffer.from(officeCrypto.encrypt(plain,{password:secret}))
  await f.preferences.update(f.alice.token,{language:'zh'})
  await page.goto(f.origin)
  await page.getByRole('button',{name:/^打开本地文件/}).click()
@@ -176,10 +178,31 @@ test('workspace imports and opens a local encrypted XLSX after one correct passw
  await expect(native.locator('.encrypted-workbook-password-dialog')).toHaveCount(0)
  assert.equal((await countImported()).length,1)
  const [{id}]=await countImported(),opened=await f.files.openFile(f.alice.token,id)
+ assert.equal(opened.format,format)
  assert.equal(opened.workbookPasswordProtected,true)
  assert.deepEqual(await f.files.readFile(f.alice.token,id,opened.file.revision),encrypted)
+ if(format==='xlsm'){
+  await native.locator('html').evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(73))
+  await page.getByRole('tab',{name,exact:true}).focus()
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect(native.locator('.app-toast')).toHaveText('已保存。',{timeout:45000})
+  const {file:saved}=await f.files.openFile(f.alice.token,id)
+  assert.notEqual(saved.revision,opened.file.revision)
+  const bytes=await f.files.readFile(f.alice.token,id,saved.revision)
+  assert.equal(bytes.subarray(0,8).toString('hex'),'d0cf11e0a1b11ae1')
+  const zip=await JSZip.loadAsync(await officeCrypto.decrypt(bytes,{password:secret}))
+  assert.deepEqual(await zip.file('xl/vbaProject.bin').async('nodebuffer'),vbaFixture)
+  assert.match(await zip.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="A2"[^>]*>\s*<v>73<\/v>/)
+ }
  await native.locator('html').evaluate(element=>{element.ownerDocument.defaultView.location.reload()})
- await expect(native.locator('.encrypted-workbook-password-dialog')).toBeVisible({timeout:30000})
+ const reopen=native.locator('.encrypted-workbook-password-dialog')
+ await expect(reopen).toBeVisible({timeout:30000})
+ if(format==='xlsm'){
+  const input=reopen.locator('input[type=password]')
+  await input.fill(secret)
+  await input.press('Enter')
+  await expect.poll(()=>native.locator('html').evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:30000}).toBe(73)
+ }
 })
 
 test('Web XLSX prompts for a password and saves edits as a protected revision',{timeout:120000},async t=>{

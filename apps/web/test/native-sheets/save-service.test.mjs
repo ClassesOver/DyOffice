@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto'
 import JSZip from 'jszip'
 import officeCrypto from 'officecrypto-tool'
 import {fileFixture,importFile} from '../helpers/files.mjs'
+import {macroWorkbook,vbaFixture} from '../helpers/xlsm.mjs'
 import {sandboxFixture} from '../helpers/native-sandbox.mjs'
 import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
@@ -21,12 +22,13 @@ async function fixture(t){
  const editorId=randomUUID(),lease=await leases.acquireLease(f.alice.token,initial.fileId,{editorId})
  return {...f,bytes,initial,leases,revisions,input:{baseRevision:initial.revision,leaseEpoch:lease.leaseEpoch,editorId}}
 }
-test('protected XLSX saves require unlock and only publish password-protected revisions',async t=>{
+for(const format of ['xlsx','xlsm'])test(`protected ${format.toUpperCase()} saves require unlock and only publish password-protected revisions`,async t=>{
  const f=await fileFixture(t,{buildApp:false}),token=f.alice.token,password='Protected workbook fixture'
- const plain=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+ const workbook=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+ const plain=format==='xlsm'?await macroWorkbook(workbook):workbook
  const original=Buffer.from(officeCrypto.encrypt(plain,{password}))
- const staged=await f.files.stageUpload(token,{name:'locked.xlsx',size:original.length})
- await f.files.receiveUpload(token,staged.uploadId,original,{password})
+ const staged=await f.files.stageUpload(token,{name:`locked.${format}`,size:original.length})
+ await f.files.receiveUpload(token,staged.uploadId,original,{password,format})
  const {file}=await f.files.finishUpload(token,staged.uploadId),fileId=file.fileId
  const leases=createLeaseService({transactions:f.transactions,assertOfficeWritable:f.files.assertOfficeLeaseAllowed})
  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
@@ -47,24 +49,27 @@ test('protected XLSX saves require unlock and only publish password-protected re
  })
  const input={baseRevision:file.revision,leaseEpoch,editorId,request:{}}
  await assert.rejects(revisions.stageUpload(token,fileId,{baseRevision:file.revision,leaseEpoch,editorId,size:plain.length}),{statusCode:423})
- const blocked=await revisions.stageProtectedWorkbookUpload(token,fileId,{baseRevision:file.revision,leaseEpoch,editorId,size:plain.length})
+ const blocked=await revisions.stageProtectedWorkbookUpload(token,fileId,{baseRevision:file.revision,leaseEpoch,editorId,size:plain.length},format)
  await assert.rejects(f.files.receiveUpload(token,blocked.uploadId,plain),{statusCode:423})
  await f.files.cancelUpload(token,blocked.uploadId)
  await assert.rejects(service.prepare(token,fileId,input),{statusCode:423})
  const {unlockId}=await sheets.unlockWorkbook(token,fileId,file.revision,password)
  await assert.rejects(service.prepare(token,fileId,{...input,unlockId:randomUUID()}),{statusCode:423})
- const copyInput={baseRevision:file.revision,leaseEpoch,editorId,name:'Protected copy.xlsx',phases:[{}]}
+ const copyInput={baseRevision:file.revision,leaseEpoch,editorId,name:`Protected copy.${format}`,phases:[{}]}
  await assert.rejects(service.prepareProtectedCopy(token,fileId,copyInput),{statusCode:423})
  await assert.rejects(service.prepareProtectedCopy(token,fileId,{...copyInput,unlockId:randomUUID()}),{statusCode:423})
  await assert.rejects(service.prepareProtectedCopy(token,fileId,{...copyInput,unlockId,name:'Protected copy.docx'}),{statusCode:415})
+ await assert.rejects(service.prepareProtectedCopy(token,fileId,{...copyInput,unlockId,name:`Protected copy.${format==='xlsm'?'xlsx':'xlsm'}`}),{statusCode:415})
  assert.equal((await f.files.listFiles(token)).files.length,1)
  const copyDraft=await service.prepareProtectedCopy(token,fileId,{...copyInput,unlockId})
  assert.equal((await f.files.listFiles(token)).files.length,1)
  const copy=await f.files.finishUpload(token,copyDraft.uploadId)
+ assert.equal(copy.format,format)
  assert.equal(copy.workbookPasswordProtected,true)
  assert.notEqual(copy.file.fileId,fileId)
  const copyBytes=await f.files.readFile(token,copy.file.fileId,copy.file.revision)
  const copyZip=await JSZip.loadAsync(await officeCrypto.decrypt(copyBytes,{password}))
+ if(format==='xlsm')assert.deepEqual(await copyZip.file('xl/vbaProject.bin').async('nodebuffer'),vbaFixture)
  assert.match(await copyZip.file('xl/worksheets/sheet1.xml').async('string'),/<v>73<\/v>/)
  assert.equal((await f.files.openFile(token,fileId)).file.revision,file.revision)
  assert.deepEqual(await f.files.readFile(token,fileId,file.revision),original)
@@ -77,18 +82,25 @@ test('protected XLSX saves require unlock and only publish password-protected re
  const stored=await f.files.readFile(token,fileId,saved.revision)
  assert.equal(stored.subarray(0,8).toString('hex'),'d0cf11e0a1b11ae1')
  const decrypted=await officeCrypto.decrypt(stored,{password})
+ if(format==='xlsm')assert.deepEqual(await (await JSZip.loadAsync(decrypted)).file('xl/vbaProject.bin').async('nodebuffer'),vbaFixture)
  const expected=await native.inspect(decrypted)
  assert.match(expected,/<v>73<\/v>/)
  await assert.rejects(sheets.inspect(token,fileId,saved.revision),{statusCode:423})
  assert.equal(await sheets.inspect(token,fileId,saved.revision,undefined,false,unlockId),expected)
  assert.deepEqual(await f.files.readFile(token,fileId,file.revision),original)
+ const duplicated=await f.files.prepareDuplicate(token,fileId)
+ const duplicate=await f.files.finishDuplicate(token,fileId,duplicated.uploadId,duplicated.revision,'en')
+ assert.equal(duplicate.format,format)
+ assert.equal(duplicate.workbookPasswordProtected,true)
+ assert.deepEqual(await f.files.readFile(token,duplicate.file.fileId,duplicate.file.revision),stored)
 })
-test('changing the XLSX password publishes an encrypted revision and advances only its unlock grant',async t=>{
+for(const format of ['xlsx','xlsm'])test(`changing the ${format.toUpperCase()} password publishes an encrypted revision and advances only its unlock grant`,async t=>{
  const f=await fileFixture(t,{buildApp:false}),token=f.alice.token,password='Original password',next='  新密码🔑 '
- const plain=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+ const workbook=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+ const plain=format==='xlsm'?await macroWorkbook(workbook):workbook
  const original=Buffer.from(officeCrypto.encrypt(plain,{password}))
- const staged=await f.files.stageUpload(token,{name:'locked.xlsx',size:original.length})
- await f.files.receiveUpload(token,staged.uploadId,original,{password})
+ const staged=await f.files.stageUpload(token,{name:`locked.${format}`,size:original.length})
+ await f.files.receiveUpload(token,staged.uploadId,original,{password,format})
  const {file}=await f.files.finishUpload(token,staged.uploadId),fileId=file.fileId
  const leases=createLeaseService({transactions:f.transactions,assertOfficeWritable:f.files.assertOfficeLeaseAllowed})
  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})

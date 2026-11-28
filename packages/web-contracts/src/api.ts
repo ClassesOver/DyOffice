@@ -3,9 +3,14 @@ import type { CsvImportLimitMb } from '../../xlsx-gateway/src/gateway/csv-limits
 
 export type OfficeFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf'
 export type WorkspaceFileFormat = OfficeFormat | 'csv' | 'xlsm'
+export type SpreadsheetArchiveFormat = 'xlsx' | 'xlsm'
+export type EncryptedOfficeFormat = 'docx' | SpreadsheetArchiveFormat
 
-export function isSpreadsheetArchive(format: string): format is 'xlsx' | 'xlsm' {
+export function isSpreadsheetArchive(format: string): format is SpreadsheetArchiveFormat {
   return format === 'xlsx' || format === 'xlsm'
+}
+export function isEncryptedOfficeFormat(format: string): format is EncryptedOfficeFormat {
+  return format === 'docx' || isSpreadsheetArchive(format)
 }
 export type Principal = Readonly<{ userId: string; sessionId: string; deploymentId: string; roles: readonly string[]; scopes: readonly string[] }>
 /** Stable job identity only; endpoint-specific status DTOs belong to T08. */

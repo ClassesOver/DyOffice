@@ -64,7 +64,7 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
     signal?.throwIfAborted()
     const draft={size:output.length,baseRevision:input.baseRevision,leaseEpoch:input.leaseEpoch,editorId:input.editorId}
     // The lease and base are checked again after encryption, then atomically at commit.
-    const {uploadId}=sealed?await revisions.stageProtectedWorkbookUpload(token,fileId,draft):await revisions.stageUpload(token,fileId,draft)
+    const {uploadId}=sealed?await revisions.stageProtectedWorkbookUpload(token,fileId,draft,sealed.file.format):await revisions.stageUpload(token,fileId,draft)
     try{
       if(sealed)await files.receiveProtectedOfficeRevision(token,uploadId,sealed)
       else await files.receiveUpload(token,uploadId,output)
@@ -114,12 +114,14 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
     async prepareProtectedCopy(token: string, fileId: string, input: SheetsCopyInput, signal?: AbortSignal) {
       if (token.startsWith('dsh-edit:')) throw authError(404)
       if (!protectedWorkbooks || !input.unlockId) throw authError(423)
-      if (validateFileName(input.name) !== 'xlsx') throw authError(415)
+      const format = validateFileName(input.name)
+      if (!isSpreadsheetArchive(format)) throw authError(415)
       if (active >= maxConcurrent) throw Object.assign(authError(429), {retryAfter:1})
       active++
       try {
         signal?.throwIfAborted()
         const head = await assertSource(token, fileId, input)
+        if (head.format !== format) throw authError(415)
         if (!head.workbookPasswordProtected || head.officeSignatureProtected) throw authError(423)
         const protection = await protectedWorkbooks.openForProtectedSave(token,fileId,input.baseRevision,input.unlockId,signal)
         const bytes = await materializeDraft(protection.bytes,input.phases,signal)

@@ -1,7 +1,7 @@
 import { isCsvImportLimitMb } from '../../xlsx-gateway/src/gateway/csv-limits.ts'
 import { HostError, hostError } from '../../web-contracts/src/errors.ts'
 import type { RevisionRef, SaveInput } from '../../web-contracts/src/api.ts'
-import { isRevisionRef, isSaveInput } from '../../web-contracts/src/api.ts'
+import { isRevisionRef, isSaveInput, isSpreadsheetArchive } from '../../web-contracts/src/api.ts'
 import { UNSUPPORTED_CAPABILITIES } from '../../web-contracts/src/host.ts'
 import type { BrowserHost, CapabilityCatalog } from '../../web-contracts/src/host.ts'
 import { ASSISTANT_PREFERENCES_FIELDS, DOCUMENT_THEME_MODES, isAssistantPreferences } from '../../web-contracts/src/preferences.ts'
@@ -62,7 +62,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
         ...(result.format !== 'pdf' && result.autoNamePending === true ? { autoNamePending: true as const } : {}),
         ...(result.format === 'pdf' && result.pdfAutoNamePending === true ? { pdfAutoNamePending: true as const } : {}),
         ...(result.format !== 'pdf' && result.officeSignatureProtected === true ? { officeSignatureProtected: true as const } : {}),
-        ...(result.format === 'xlsx' && result.workbookPasswordProtected === true ? { workbookPasswordProtected: true as const } : {}),
+        ...(isSpreadsheetArchive(result.format) && result.workbookPasswordProtected === true ? { workbookPasswordProtected: true as const } : {}),
         ...(result.format === 'docx' && result.documentPasswordProtected === true ? { documentPasswordProtected: true as const } : {}),
         file: publicRevision(result.file),
         format: result.format,

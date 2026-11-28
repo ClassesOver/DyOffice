@@ -2,6 +2,7 @@ import { createDecipheriv, createHash, createHmac, timingSafeEqual } from 'node:
 import * as CFB from 'cfb'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
 import officeCrypto from 'officecrypto-tool'
+import type { EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
 import { validateUploadInternal } from './validation-core.ts'
 
@@ -120,8 +121,6 @@ async function openContainer(bytes: Buffer, password: string): Promise<Buffer> {
     throw invalid()
   }
 }
-
-export type EncryptedOfficeFormat = 'docx' | 'xlsx'
 
 export async function transformProtectedWorkbook(operation: 'open' | 'seal', input: Buffer, password: string, format:EncryptedOfficeFormat='xlsx') {
   const plain = operation === 'open' ? await openContainer(input, password) : input

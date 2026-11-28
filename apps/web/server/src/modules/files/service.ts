@@ -13,7 +13,7 @@ import { assertLiveLease } from '../leases/queries.ts'
 import { authError, tokenHash } from '../auth/sessions.ts'
 import { reclaimAbandonedUploads } from './reclamation.ts'
 import { createWorkbookPasswordCodec } from './workbook-password.ts'
-import type { EncryptedOfficeFormat } from './workbook-password-core.ts'
+import { isEncryptedOfficeFormat, isSpreadsheetArchive, type EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
 import {createDocumentEditGrants} from './document-edit-grants.ts'
 
 const workbookPasswords = createWorkbookPasswordCodec()
@@ -314,7 +314,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       const {uploadId} = await service.stageUpload(token,{name:source.row.name,size:source.row.size})
       try {
         const format=source.row.format
-        const protectedCopy = source.row.office_password_protected && (format==='docx'||format==='xlsx') ? {
+        const protectedCopy = source.row.office_password_protected && isEncryptedOfficeFormat(format) ? {
           [verifiedOfficeCopy]: {
             format, sha256: source.row.sha256, size: source.row.size,
             officeSignatureProtected: await signatureProtected(source.row),
@@ -508,7 +508,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (maxBytes !== undefined && reference.size > maxBytes) throw authError(413)
       signal?.throwIfAborted()
       const bytes = await objects.readVerified({ key: reference.object_key, size: reference.size, sha256: reference.sha256 }, signal)
-      return { bytes, name: file.name, format: file.format, ...(reference.office_password_protected && file.format==='xlsx' ? {workbookPasswordProtected:true as const} : {}) }
+      return { bytes, name: file.name, format: file.format, ...(reference.office_password_protected && isSpreadsheetArchive(file.format) ? {workbookPasswordProtected:true as const} : {}) }
     }),
     async readFile(token: FileCredential, fileId: string, revision: string, signal?: AbortSignal): Promise<Buffer> { return (await service.download(token,fileId,revision,undefined,signal)).bytes },
     listFiles: async (token: FileCredential, { trash = false, cursor, limit = 50 }: { trash?: boolean; cursor?: string; limit?: number } = {}) => {

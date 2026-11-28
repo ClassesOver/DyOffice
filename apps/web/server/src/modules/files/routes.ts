@@ -14,9 +14,10 @@ import type { RevisionService } from '../revisions/service.ts'
 import type { LeaseService } from '../leases/service.ts'
 import { createAiCsvDocument, createAiXlsxDocument, type AiXlsxInput } from '../sheets/create-document.ts'
 import { withDisconnect } from '../request-signal.ts'
-import type { EncryptedOfficeFormat } from './workbook-password-core.ts'
+import type { EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
 
 const encryptedWorkbookMime = 'application/vnd.dyoffice.encrypted-xlsx'
+const encryptedMacroWorkbookMime = 'application/vnd.dyoffice.encrypted-xlsm'
 const encryptedDocumentMime = 'application/vnd.dyoffice.encrypted-docx'
 const documentPasswordChangeMime = 'application/vnd.dyoffice.docx-password-change'
 const maxPasswordBytes = 255 * 4
@@ -24,6 +25,7 @@ const passwordPrefixBytes = 2
 const contentType = (header: string | undefined) => header?.split(';')[0].trim().toLowerCase()
 function encryptedFormat(type: string | undefined):EncryptedOfficeFormat|undefined {
   if(type===encryptedWorkbookMime)return 'xlsx'
+  if(type===encryptedMacroWorkbookMime)return 'xlsm'
   if(type===encryptedDocumentMime)return 'docx'
 }
 
@@ -85,8 +87,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.addHook('onError', async request => admission.error(request))
     if (saves) registerRevisionRoutes(api,{ ...saves, transfer })
     api.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_OBJECT_BYTES }, (_request, body, done) => done(null, body))
-    api.addContentTypeParser(encryptedWorkbookMime, { parseAs: 'buffer' }, (_request, body, done) => done(null, body))
-    api.addContentTypeParser([encryptedDocumentMime,documentPasswordChangeMime], { parseAs: 'buffer' }, (_request, body, done) => done(null, body))
+    api.addContentTypeParser([encryptedWorkbookMime,encryptedMacroWorkbookMime,encryptedDocumentMime,documentPasswordChangeMime], { parseAs: 'buffer' }, (_request, body, done) => done(null, body))
     api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => ({
       ...files.capabilities,
       ...(editableCsv && {csvImport:'editable'}),

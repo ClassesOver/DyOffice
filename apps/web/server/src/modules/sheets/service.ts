@@ -1,4 +1,4 @@
-import { isSpreadsheetArchive } from '../../../../../../packages/web-contracts/src/api.ts'
+import { isSpreadsheetArchive, type SpreadsheetArchiveFormat } from '../../../../../../packages/web-contracts/src/api.ts'
 import {fetchRemoteTable} from '@genoffice/electron-utils/remote-table'
 import type {LeaseService} from '../leases/service.ts'
 import type {BoundWorkbookSource,FindInput,FormulaIndexSheet,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
@@ -72,7 +72,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
   const maxMergeBytes=50*1024*1024,maxMergeSessionBytes=100*1024*1024,maxMergeSessions=8,mergeSessionTtlMs=10*60_000
   const mergeBytes=()=>[...mergeSessions.values()].reduce((total,session)=>total+session.bytes.length,0)
   const tokenDigest=(token:string)=>createHash('sha256').update(token).digest('hex')
-  type Unlock = { tokenDigest:string; fileId:string; revision:string; sha256:string; bytes:Buffer; password:string; preparedPasswords:Map<string,string>; expiresAt:number; timer:NodeJS.Timeout }
+  type Unlock = { tokenDigest:string; fileId:string; format:SpreadsheetArchiveFormat; revision:string; sha256:string; bytes:Buffer; password:string; preparedPasswords:Map<string,string>; expiresAt:number; timer:NodeJS.Timeout }
   const unlocks = new Map<string, Unlock>()
   const unlockIdleMs = 10 * 60_000, maxUnlockBytes = 64 * 1024 * 1024, maxUnlocks = 8
   function disposeUnlock(id: string) {
@@ -101,7 +101,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
     const current=await files.openFile(token,fileId)
     if(!isSpreadsheetArchive(current.format))throw authError(415)
     if(current.file.revision!==revision)throw authError(409)
-    return current
+    return {...current,format:current.format}
   }
   async function openUnlockedRevision(token:string,fileId:string,revision:string,id:string,signal?:AbortSignal) {
     const current=await assertMergeContext(token,fileId,revision)
@@ -113,7 +113,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
       const password=grant.preparedPasswords.get(current.file.sha256)
       if(password===undefined)throw authError(423)
       const source=await files.download(token,fileId,revision,undefined,signal)
-      const opened=await workbookPasswords.open(source.bytes,password,signal)
+      const opened=await workbookPasswords.open(source.bytes,password,signal,grant.format)
       await assertMergeContext(token,fileId,revision)
       signal?.throwIfAborted()
       if(ownedUnlock(token,fileId,id)!==grant||opened.file.sha256!==current.file.sha256)throw authError(423)
@@ -166,7 +166,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
         const current=await assertMergeContext(token,fileId,revision)
         if(!current.workbookPasswordProtected)throw authError(400)
         const source=await files.download(token,fileId,revision,undefined,signal)
-        const opened=await workbookPasswords.open(source.bytes,password,signal)
+        const opened=await workbookPasswords.open(source.bytes,password,signal,current.format)
         if(opened.file.sha256!==current.file.sha256||opened.file.size!==current.file.size)throw authError(409)
         await assertMergeContext(token,fileId,revision)
         signal?.throwIfAborted()
@@ -174,7 +174,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
         if(unlocks.size>=maxUnlocks||used+opened.bytes.length>maxUnlockBytes)throw Object.assign(authError(429),{retryAfter:1})
         const unlockId=randomUUID(),timer=setTimeout(()=>disposeUnlock(unlockId),unlockIdleMs)
         timer.unref()
-        unlocks.set(unlockId,{tokenDigest:tokenDigest(token),fileId,revision,sha256:opened.file.sha256,bytes:opened.bytes,password,preparedPasswords:new Map(),expiresAt:Date.now()+unlockIdleMs,timer})
+        unlocks.set(unlockId,{tokenDigest:tokenDigest(token),fileId,format:current.format,revision,sha256:opened.file.sha256,bytes:opened.bytes,password,preparedPasswords:new Map(),expiresAt:Date.now()+unlockIdleMs,timer})
         return {unlockId}
       }finally{active--}
     },
@@ -190,7 +190,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
       }
       return {bytes:grant.bytes,check,async seal(bytes:Buffer,password=grant.password){
         check()
-        const sealed=await workbookPasswords.seal(bytes,password,signal)
+        const sealed=await workbookPasswords.seal(bytes,password,signal,grant.format)
         check()
         return {...sealed,rememberSave(){
           check()
@@ -258,6 +258,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
         signal?.throwIfAborted()
         const source=await files.download(token,binding.fileId,binding.revision,remaining)
         if(!isSpreadsheetArchive(source.format))throw authError(415)
+        if(source.workbookPasswordProtected)throw authError(423)
         remaining-=source.bytes.length
         sources.push({index:binding.index,bytes:source.bytes})
       }

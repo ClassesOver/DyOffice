@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
-import type { EncryptedOfficeFormat, transformProtectedWorkbook } from './workbook-password-core.ts'
+import type { EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
+import type { transformProtectedWorkbook } from './workbook-password-core.ts'
 
 type Result = Awaited<ReturnType<typeof transformProtectedWorkbook>>
 type Operation = 'open' | 'seal' | 'verify'

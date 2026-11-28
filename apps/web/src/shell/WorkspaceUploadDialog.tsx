@@ -23,7 +23,7 @@ const sizeLabel=(size:number)=>size<1024?`${size} B`:size<1024*1024?`${(size/102
 const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,xlsm:FileExcelOutlined,csv:FileExcelOutlined,tsv:FileExcelOutlined,xls:FileExcelOutlined,ods:FileExcelOutlined,ots:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
 const compoundFileHeader=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]
 async function needsOfficePassword(file:File){
- if(!/\.(docx|xlsx)$/i.test(file.name)||file.size<compoundFileHeader.length)return false
+ if(!/\.(docx|xlsx|xlsm)$/i.test(file.name)||file.size<compoundFileHeader.length)return false
  const header=new Uint8Array(await file.slice(0,compoundFileHeader.length).arrayBuffer())
  return compoundFileHeader.every((byte,index)=>header[index]===byte)
 }
