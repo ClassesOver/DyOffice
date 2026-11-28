@@ -401,7 +401,7 @@ export function AiChatPanel({
           AI 助手
         </span>
         <div className="ai-panel-header-actions">
-          {!modelPicker && <AiPanelSideButton
+          {typeof window.desktopApi?.setAiPanelPrefs === 'function' && <AiPanelSideButton
             lang={lang}
             onMove={(side) => window.desktopApi.setAiPanelPrefs({ side })}
           />}

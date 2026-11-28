@@ -1663,7 +1663,7 @@ export function AiPanel({
           {t('aiPanelTitle')}
         </span>
         <div className="ai-panel-header-actions">
-          {!activityOnly && !transport && <AiPanelSideButton
+          {!activityOnly && typeof window.desktop?.setAiPanelPrefs === 'function' && <AiPanelSideButton
             lang={lang}
             onMove={(side) => window.desktop.setAiPanelPrefs({ side })}
           />}

@@ -109,8 +109,16 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await expect(rail).toBeVisible()
    await rail.click()
    await expect(composer(file)).toHaveJSProperty('spellcheck',false)
+   const movePanel=frame(file).locator('.ai-panel-side-button')
+   await expect(movePanel).toBeVisible()
+   if(format==='xlsx'){
+    await movePanel.click()
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','right')
+    await movePanel.click()
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
+   }
    if(format==='pptx'){
-    await frame(file).locator('.ai-panel-side-button').click()
+    await movePanel.click()
     await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','right')
     await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','large')
     await expect(composer(file)).toHaveJSProperty('spellcheck',false)
@@ -118,34 +126,46 @@ test('four real Office editors share assistant chrome and retain drafts across c
   }
   await composer(appearanceFiles.pdf).fill('Draft before preference change')
   await page.getByRole('tab',{name:'首页',exact:true}).click()
-  async function saveAppearance(font,spellcheck,custom){
+  async function saveAppearance(font,spellcheck,custom,side){
    await accountAction(page,'个人设置')
    const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
    await settingsTab(settings,'通用偏好')
    await settings.getByLabel('AI 助手字号',{exact:true}).selectOption(font)
    if(custom!==undefined)await settings.getByLabel('自定义助手字号',{exact:true}).selectOption(String(custom))
+   if(side!==undefined)await settings.getByLabel('AI 助手位置',{exact:true}).selectOption(side)
    await settings.getByRole('switch',{name:'AI 助手拼写检查',exact:true}).setChecked(spellcheck)
    await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
    await expect(settings).toContainText('个人偏好已保存')
    await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
   }
   await saveAppearance('custom',true,21)
-  for(const file of Object.values(appearanceFiles)){
+  for(const [format,file] of Object.entries(appearanceFiles)){
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','right')
+   await expect(frame(file).locator(format==='xlsx'?'.sheet-body > .copilot':'.ai-dock').first()).toHaveCSS('order','1')
    await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','custom')
    await expect(frame(file).locator('.ai-composer').first()).toHaveCSS('zoom','1.5')
    await expect(composer(file)).toHaveJSProperty('spellcheck',true)
    assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
   }
-  await expect(editorHtml(appearanceFiles.pptx)).toHaveAttribute('data-ai-panel-side','right')
   await expect(composer(appearanceFiles.pdf)).toHaveValue('Draft before preference change')
   const reopened=await context.newPage()
   try{
    await reopened.goto(origin+'/native-pdf/?fileId='+appearanceFiles.pdf.fileId,{waitUntil:'commit'})
    await expect(reopened.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
    await expect(reopened.locator('html')).toHaveAttribute('data-ai-font-size','custom')
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','right')
+   await reopened.locator('.ai-rail').first().click()
+   await reopened.locator('.ai-panel-side-button').click()
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','left')
+   assert.equal((await f.preferences.get(f.alice.token)).aiPanelSide,'left')
+   await reopened.locator('.ai-panel-side-button').click()
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','right')
   }finally{await reopened.close()}
-  await saveAppearance('default',true)
-  for(const file of Object.values(appearanceFiles))await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
+  await saveAppearance('default',true,undefined,'left')
+  for(const file of Object.values(appearanceFiles)){
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
+   await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
+  }
   async function setStartup(enabled){
    await accountAction(page,'个人设置')
    const settings=page.getByRole('dialog',{name:'个人设置',exact:true})

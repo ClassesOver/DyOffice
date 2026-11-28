@@ -69,6 +69,12 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-autosave`}>自动保存</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-autosave`} aria-label="自动保存" aria-checked={!!draft?.autoSave} checked={!!draft?.autoSave} onChange={event=>edit({autoSave:event.target.checked})}/></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" aria-checked={!!draft?.showAssistant} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/></div>
    <div className="personal-page-preference-row">
+    <label htmlFor={`${preferenceId}-assistant-side`}>AI 助手位置</label>
+    <select id={`${preferenceId}-assistant-side`} value={draft?.aiPanelSide??DEFAULT_AI_PANEL_PREFS.side} onChange={event=>edit({aiPanelSide:event.target.value==='right'?'right':'left'})}>
+     <option value="left">左侧</option><option value="right">右侧</option>
+    </select>
+   </div>
+   <div className="personal-page-preference-row">
     <label htmlFor={`${preferenceId}-assistant-font`}>AI 助手字号</label>
     <select id={`${preferenceId}-assistant-font`} value={assistantFontSize} onChange={event=>{
      const aiFontSize=event.target.value as AiFontSize

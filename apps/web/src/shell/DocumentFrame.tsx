@@ -9,7 +9,7 @@ import {isWorkspaceFileName} from './workspace-file-formats'
 
 type EditorWindow=Omit<Window,'dyofficeEditorCanClose'>&{dyofficeEditorCanClose?:()=>boolean|Promise<boolean>;dyofficeEditorDispose?:()=>boolean|Promise<boolean>;dyofficeEditorCanSleep?:()=>boolean}
 export type DocumentMenuCommand={id:string;command:BrowserDocumentCommand;claim:()=>boolean;complete:(handled:boolean)=>void}
-export function DocumentFrame({file,registerGuard,registerSleepGuard,sessionActive=()=>false,onAutoFileName,documentShortcutsActive=false,onOpenShortcut,onOpenWorkspaceFile,takeOfficeImportUnlock,menuCommand,onPaneInteraction,onDropWorkspaceFiles}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void;registerSleepGuard?:(id:string,guard:DocumentCloseGuard|null)=>void;sessionActive?:()=>boolean;onAutoFileName?:(id:string,previous:string,name:string)=>void;documentShortcutsActive?:boolean;onOpenShortcut?:(event:KeyboardEvent)=>void;onOpenWorkspaceFile?:()=>boolean;takeOfficeImportUnlock?:(fileId:string,revision:string)=>string|undefined;menuCommand?:DocumentMenuCommand|null;onPaneInteraction?:()=>void;onDropWorkspaceFiles?:(files:File[])=>void}){
+export function DocumentFrame({file,registerGuard,registerSleepGuard,sessionActive=()=>false,onAutoFileName,documentShortcutsActive=false,onOpenShortcut,onOpenWorkspaceFile,onSaveAssistantSide,takeOfficeImportUnlock,menuCommand,onPaneInteraction,onDropWorkspaceFiles}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void;registerSleepGuard?:(id:string,guard:DocumentCloseGuard|null)=>void;sessionActive?:()=>boolean;onAutoFileName?:(id:string,previous:string,name:string)=>void;documentShortcutsActive?:boolean;onOpenShortcut?:(event:KeyboardEvent)=>void;onOpenWorkspaceFile?:()=>boolean;onSaveAssistantSide?:WorkspaceOpenFrame['dyofficeSaveAssistantSide'];takeOfficeImportUnlock?:(fileId:string,revision:string)=>string|undefined;menuCommand?:DocumentMenuCommand|null;onPaneInteraction?:()=>void;onDropWorkspaceFiles?:(files:File[])=>void}){
  const embedded=window.parent!==window&&new URLSearchParams(location.search).get('dshEmbed')==='1'
  const source=embedded?file.src+'&dshEmbed=1':file.src
  const frame=useRef<HTMLIFrameElement>(null)
@@ -26,6 +26,10 @@ export function DocumentFrame({file,registerGuard,registerSleepGuard,sessionActi
   element.dyofficeTakeOfficeImportUnlock=(file.format==='xlsx'||file.format==='docx')&&takeOfficeImportUnlock
    ? revision=>live.current&&frame.current===element&&element.isConnected&&session.current()?takeOfficeImportUnlock(file.id,revision):undefined
    : undefined
+  element.dyofficeSaveAssistantSide=onSaveAssistantSide&&((side,proof)=>{
+   if(!live.current||frame.current!==element||!element.isConnected||!session.current())return Promise.reject(new Error('Workspace session ended'))
+   return onSaveAssistantSide(side,proof)
+  })
   element.dyofficeOpenWorkspaceFile=onOpenWorkspaceFile&&(()=>{
    if(!live.current||frame.current!==element||!element.isConnected||!session.current()||
       (!documentShortcutsActive&&!onPaneInteraction)||failed||loadingState!=='ready')return false

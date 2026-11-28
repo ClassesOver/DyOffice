@@ -1,4 +1,8 @@
+import type {AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
+import type {AssistantPreferences} from '../../../../packages/web-contracts/src/preferences'
+
 export type WorkspaceOpenFrame = HTMLIFrameElement & {
+  dyofficeSaveAssistantSide?: (side: AiPanelSide, proof: string) => Promise<AssistantPreferences>
   dyofficeOpenWorkspaceFile?: () => boolean
   dyofficeTakeOfficeImportUnlock?: (revision: string) => string | undefined
 }

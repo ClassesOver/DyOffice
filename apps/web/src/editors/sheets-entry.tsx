@@ -82,7 +82,9 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   const appearance=await installBrowserAssistantPreferences(prefs,panelPrefs)
-  Object.defineProperty(window,'desktopApi',{value:{...documentApi,...assistant?.api,...(workbookImages?{generateImage:workbookImages.generateImage,fetchImage:workbookImages.fetchImage}:{}),getAiPanelPrefs:async()=>appearance.withAppearance(panelPrefs)} as unknown as DesktopApi,configurable:true})
+  Object.defineProperty(window,'desktopApi',{value:{...documentApi,...assistant?.api,...(workbookImages?{generateImage:workbookImages.generateImage,fetchImage:workbookImages.fetchImage}:{}),getAiPanelPrefs:async()=>appearance.withAppearance(),
+    setAiPanelPrefs:async(patch:Parameters<DesktopApi['setAiPanelPrefs']>[0])=>
+      patch.side ? appearance.movePanel(patch.side,assistant?.sessionProof) : appearance.updatePanelPrefs(patch)} as unknown as DesktopApi,configurable:true})
   installScreenTips(); installCanvasFontFallback()
   const loads: Promise<unknown>[] = [registerTextDingbatsFace()]
   for (const variant of ['', 'bold ', 'italic ', 'italic bold ']) for (const family of ['Calibri','Aptos',"'Aptos Narrow'",'Carlito']) loads.push(document.fonts.load(`${variant}16px ${family}`).catch(()=>{}))

@@ -64,7 +64,7 @@ async function mount(){
   grant.getPreferences().catch(()=>undefined),
   params.get('guest')==='1'?undefined:grant.accountIdentity(browserActions.signal).catch(()=>undefined),
  ])
- await installBrowserAssistantPreferences(prefs)
+ const appearance=await installBrowserAssistantPreferences(prefs)
  const lastZoomStorage={
   getItem:(key:string)=>account?localStorage.getItem(`${key}:${account.join(':')}`):null,
   setItem(key:string,value:string){
@@ -858,7 +858,7 @@ async function mount(){
    const page=parsePdfNavHref(href)
    return page!==null&&Number.isSafeInteger(page)&&page>=1&&page<=value.pages.length?page:null
   }
-  return assistant?.available?<SharedEditorAssistant assistant={assistant} lang={prefs?.language??'zh'} dock={value} widthKey="dyoffice:native-pdf:ai-panel-width" imageAttachmentReferences onLocalEditDone={()=>{void autoSaveBlank()}} assistantNav={{
+  return assistant?.available?<SharedEditorAssistant assistant={assistant} lang={prefs?.language??'zh'} dock={value} onMovePanel={side=>appearance.movePanel(side,assistant?.sessionProof)} widthKey="dyoffice:native-pdf:ai-panel-width" imageAttachmentReferences onLocalEditDone={()=>{void autoSaveBlank()}} assistantNav={{
    scheme:PDF_NAV_SCHEME,accepts:href=>!!value.doc&&citationPage(href)!==null,
    onNavigate:href=>{const page=citationPage(href);if(value.doc&&page!==null)value.gotoPage(page)},
   }}/>:null

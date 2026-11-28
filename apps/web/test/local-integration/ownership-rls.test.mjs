@@ -40,7 +40,7 @@ test('A/B/Admin preference HTTP aliases derive ownership from cookies and reject
   const f = await restrictedFixture(t)
   const csrf = createCsrfService({ db: f.db, deploymentId: f.deploymentId, origin: restrictedOrigin, key: f.csrfKey })
   const headers = signed => ({ origin: restrictedOrigin, cookie: '__Host-dyoffice-session=' + signed.token, 'x-csrf-token': csrf.sessionToken(signed.token) })
-  assert.equal((await f.app.inject({ method: 'PUT', url: '/api/preferences', headers: headers(f.alice), payload: { theme: 'dark', documentTheme: 'light', authorName: 'Alice', restoreSession: false, pdfDefaultZoom: 'last', aiFontSize: 'custom', aiCustomFontSize: 21, aiSpellcheck: false, aiOpenInNewDocs: true } })).statusCode, 200)
+  assert.equal((await f.app.inject({ method: 'PUT', url: '/api/preferences', headers: headers(f.alice), payload: { theme: 'dark', documentTheme: 'light', authorName: 'Alice', restoreSession: false, pdfDefaultZoom: 'last', aiFontSize: 'custom', aiCustomFontSize: 21, aiSpellcheck: false, aiOpenInNewDocs: true, aiPanelSide: 'right' } })).statusCode, 200)
   assert.equal((await f.app.inject({ method: 'PUT', url: '/api/v1/preferences', headers: headers(f.bob), payload: { theme: 'light', authorName: 'Bob' } })).statusCode, 200)
   const a = (await f.app.inject({ method: 'GET', url: '/api/v1/preferences', headers: headers(f.alice) })).json()
   const b = (await f.app.inject({ method: 'GET', url: '/api/preferences', headers: headers(f.bob) })).json()
@@ -50,7 +50,8 @@ test('A/B/Admin preference HTTP aliases derive ownership from cookies and reject
   assert.deepEqual([a.aiFontSize,a.aiCustomFontSize,a.aiSpellcheck], ['custom',21,false])
   assert.deepEqual([b.aiFontSize,b.aiCustomFontSize,b.aiSpellcheck], ['default',14,true])
   assert.equal(a.aiOpenInNewDocs,true); assert.equal(b.aiOpenInNewDocs,false)
-  for(const payload of [{aiOpenInNewDocs:null},{aiFontSize:'huge'},{aiCustomFontSize:9},{aiCustomFontSize:32.5},{aiSpellcheck:null}]){
+  assert.equal(a.aiPanelSide,'right'); assert.equal(b.aiPanelSide,'left')
+  for(const payload of [{aiPanelSide:'bottom'},{aiOpenInNewDocs:null},{aiFontSize:'huge'},{aiCustomFontSize:9},{aiCustomFontSize:32.5},{aiSpellcheck:null}]){
     assert.equal((await f.app.inject({method:'PUT',url:'/api/v1/preferences',headers:headers(f.alice),payload})).statusCode,400)
   }
   assert.equal(a.documentTheme, 'light'); assert.equal(b.documentTheme, 'follow')

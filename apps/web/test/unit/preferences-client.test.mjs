@@ -132,3 +132,17 @@ test('assistant startup preference persists both choices and rejects a non-boole
  response={...response,aiOpenInNewDocs:'false'}
  await assert.rejects(client.getPreferences(),/无法确认/)
 })
+
+test('assistant panel side round trips as a strict left or right preference',async()=>{
+ let response=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')response={...response,...patch}
+  return response
+ })
+ for(const aiPanelSide of ['right','left']){
+  assert.equal((await client.updatePreferences({aiPanelSide})).aiPanelSide,aiPanelSide)
+  assert.equal((await client.getPreferences()).aiPanelSide,aiPanelSide)
+ }
+ response={...response,aiPanelSide:'bottom'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})

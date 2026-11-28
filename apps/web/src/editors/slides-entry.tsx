@@ -100,7 +100,8 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   const appearance=await installBrowserAssistantPreferences(prefs,{...await bridge.api.getAiPanelPrefs(),showAiSidebar:!guest&&prefs.showAssistant!==false})
   Object.defineProperty(window, 'slidesApi', {value: {...bridge.api,...audience.api,...fullscreen,
     getAiPanelPrefs:async()=>appearance.withAppearance(),
-    setAiPanelPrefs:async(patch:Parameters<SlidesApi['setAiPanelPrefs']>[0])=>appearance.updatePanelPrefs(patch),
+    setAiPanelPrefs:async(patch:Parameters<SlidesApi['setAiPanelPrefs']>[0])=>
+      patch.side ? appearance.movePanel(patch.side,sharedAssistant?.sessionProof) : appearance.updatePanelPrefs(patch),
   } as unknown as SlidesApi, configurable: true})
   installScreenTips(); installCanvasKerning()
   // Canvas fillText never triggers @font-face downloads: the bundled document fonts

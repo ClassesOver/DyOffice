@@ -17,7 +17,8 @@
 }
 
 @media (max-width: 760px) {
-  .shared-assistant-dock .ai-panel-width-handle {
+  .shared-assistant-dock .ai-panel-width-handle,
+  .shared-assistant-dock .ai-panel-side-button {
     display: none;
   }
   .app-main:has(> .shared-assistant-dock) {

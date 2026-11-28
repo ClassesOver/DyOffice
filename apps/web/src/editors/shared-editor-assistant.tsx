@@ -1,7 +1,8 @@
 import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT_IMAGE_EXTS,type AgentImage,type AttachedSkill} from '@genoffice/agent-core'
 import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
-import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAssistantFileHistory,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
+import type {AiPanelPrefs,AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
+import {AiComposer,AiPanelSideButton,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAssistantFileHistory,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
 import {GensparkMark,IconNewChat} from '../../../docs/src/renderer/components/icons'
 import {ToolChipList,type ToolActivity} from '../../../pdf/src/renderer/ai/AiPanel'
 import type {createEditorAssistant} from './assistant'
@@ -19,7 +20,7 @@ export function resolveTurnImageAttachment(reference:string,signal?:AbortSignal)
  return signal&&!signal.aborted?toolImageAttachments.get(signal)?.get(reference)?.image:undefined
 }
 
-export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,onLocalEditDone,assistantNav,imageAttachmentReferences=false}:{assistant:Assistant;lang:'zh'|'en';context?:string;dock?:{collapsed:boolean;setCollapsed(value:boolean):void};widthKey?:string;onLocalEditDone?:()=>void;assistantNav?:MarkdownNav;imageAttachmentReferences?:boolean}){
+export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,onMovePanel,onLocalEditDone,assistantNav,imageAttachmentReferences=false}:{assistant:Assistant;lang:'zh'|'en';context?:string;dock?:{collapsed:boolean;setCollapsed(value:boolean):void};widthKey?:string;onMovePanel?:(side:AiPanelSide)=>Promise<AiPanelPrefs>;onLocalEditDone?:()=>void;assistantNav?:MarkdownNav;imageAttachmentReferences?:boolean}){
  const [items,setItems]=useState<ChatItem[]>([]),[draft,setDraft]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('')
  const [files,setFiles]=useState<DraftFile[]>([]),[attaching,setAttaching]=useState(false)
  const [skills,setSkills]=useState<string[]>([]),[readingSkills,setReadingSkills]=useState(false)
@@ -321,6 +322,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   <button ref={railRef} type="button" className="ai-rail" hidden={!collapsed} aria-label={lang==='zh'?'展开 AI 助手':'Expand AI assistant'} onClick={()=>changeCollapsed(false)}><GensparkMark size={22}/></button>
   <section hidden={collapsed} className="shared-editor-assistant ai-panel" aria-label={lang==='zh'?'Office 助手':'Office assistant'}>
   <header className="shared-editor-assistant-head ai-panel-header"><span className="ai-panel-title"><GensparkMark size={22}/>{lang==='zh'?'AI 助手':'AI Assistant'}</span><div className="ai-panel-header-actions">
+   {onMovePanel&&<AiPanelSideButton lang={lang} onMove={onMovePanel}/>}
    {(items.length>0||hasFileHistory)&&<button type="button" className="ai-header-btn" onClick={newChat} data-tip={newChatLabel} aria-label={newChatLabel}><IconNewChat size={16}/></button>}
    <button type="button" className="ai-header-btn ai-panel-collapse" aria-label={lang==='zh'?'收起 AI 助手':'Collapse AI assistant'} onClick={()=>changeCollapsed(true)}><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14m6-10-3 3 3 3"/></svg></button></div></header>
   {assistant.workspace.panel}

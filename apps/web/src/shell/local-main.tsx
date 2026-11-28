@@ -1,6 +1,7 @@
 import {WorkspaceLoading} from './WorkspaceLoading'
 import {applyBrowserEditorTheme} from '../editors/browser-editor-theme'
 import {publishBrowserAssistantPreferences} from '../editors/browser-assistant-appearance'
+import type {AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
 import {ASSISTANT_PREFERENCES_FIELDS} from '../../../../packages/web-contracts/src/preferences'
 import {HomeHero} from './HomeHero'
 import type {PreparedAiDocumentCreator} from './pdf-create-document-skill'
@@ -145,6 +146,11 @@ function saveWorkspaceEntries(tabs:ReturnType<typeof documentTabs.list>){
  const layout=split&&[split.left,split.right].every(id=>id==='home'||entries.some(file=>file.id===id&&canOpenWorkspaceFileDirectly(file)))?split:null
  entryRecovery.save(restorable,active,tabs.filter(tab=>tab.pinned).map(tab=>tab.id),layout)
 }
+async function saveWorkspaceAssistantSide(side:AiPanelSide,proof:string){
+ if(!sourceWorkspace||sourceWorkspace.bound.proof!==proof)throw new Error('登录状态已改变，请重新加载当前工作区。')
+ return saveWorkspacePreferences({aiPanelSide:side})
+}
+
 async function saveWorkspacePreferences(patch:Parameters<typeof preferences.updatePreferences>[0]){
  const saved=await preferences.updatePreferences(patch)
  const updateTheme=patch.documentTheme!==undefined||patch.theme!==undefined
@@ -787,7 +793,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
      data-workspace-pane={pane} onPointerDown={selectPane} onFocusCapture={selectPane}>
     {file.format==='pdf'||file.src.startsWith('/native-')
      ?<DocumentFrame key={`${file.src}:${documentTabs.renderGeneration(file.id)}`} file={file} documentShortcutsActive={workspaceShortcutsActive&&active} menuCommand={menuCommand?.id===file.id?menuCommand:null}
-       onOpenShortcut={openShortcut} onOpenWorkspaceFile={openWorkspaceFile} takeOfficeImportUnlock={takeOfficeImportUnlock} onPaneInteraction={selectPane} onDropWorkspaceFiles={openWorkspaceFile}
+       onOpenShortcut={openShortcut} onOpenWorkspaceFile={openWorkspaceFile} onSaveAssistantSide={saveWorkspaceAssistantSide} takeOfficeImportUnlock={takeOfficeImportUnlock} onPaneInteraction={selectPane} onDropWorkspaceFiles={openWorkspaceFile}
        registerGuard={documentTabs.setGuard} registerSleepGuard={documentTabs.setSleepGuard} onAutoFileName={updateAutoFileTab} sessionActive={()=>!recoveryBlocked.current}/>
      :<DocumentPreview key={file.src} fileId={file.id} name={file.name} format={file.format} sourceRevision={file.sourceRevision} request={sourceWorkspace?.bound.request??client.request}/>}
    </div>

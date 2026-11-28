@@ -330,7 +330,9 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     },
   } : {}
   const appearance=await installBrowserAssistantPreferences(prefs,panelPrefs)
-  window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => appearance.withAppearance({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
+  window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => appearance.withAppearance(),
+    setAiPanelPrefs: async (patch:Parameters<DesktopApi['setAiPanelPrefs']>[0]) =>
+      patch.side ? appearance.movePanel(patch.side,assistant?.sessionProof) : appearance.updatePanelPrefs(patch)} as unknown as DesktopApi
   installScreenTips()
   let initialLease = canEdit()
   if(initialLease)try { await host.acquireLease(fileId) } catch { initialLease = false }
