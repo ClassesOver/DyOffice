@@ -61,7 +61,8 @@ test('four real Office editors share assistant chrome and retain drafts across c
  for(const [format,bytes] of [['docx',await docxBytes()],['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))],['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',Buffer.from(await pdf.save())]])files[format]=(await importFile(f,f.alice.token,bytes,'dock.'+format)).file
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner,sheetsPackageReader,slidesHost})
  browser=await launchTestBrowser()
- const page=await browser.newPage({ignoreHTTPSErrors:true,viewport:{width:1440,height:1000}}),errors=[],turns=[]
+ const context=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:1440,height:1000}})
+ const page=await context.newPage(),errors=[],turns=[]
  await stubHomeHero(page)
  page.on('pageerror',error=>{errors.push(error.message);t.diagnostic(error.stack??error.message)})
  page.on('response',async response=>{
@@ -133,7 +134,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
   }
   await expect(editorHtml(files.pptx)).toHaveAttribute('data-ai-panel-side','right')
   await expect(composer(files.pdf)).toHaveValue('Draft before preference change')
-  const reopened=await page.context().newPage()
+  const reopened=await context.newPage()
   try{
    await reopened.goto(origin+'/native-pdf/?fileId='+files.pdf.fileId,{waitUntil:'commit'})
    await expect(reopened.locator('html')).toHaveAttribute('data-ai-font-size','custom',{timeout:45000})
