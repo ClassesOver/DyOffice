@@ -118,8 +118,8 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       if(files.capabilities.pdfEditor!=='editable')throw authError(415)
       return reply.code(201).send(await files.createBlankPdf(token(request)))
     }))
-    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 0, maximum: MAX_OBJECT_BYTES }, autoName:{type:'boolean'} } } } }, (request, reply) => transfer(request, reply, async () => {
-      const staged = await files.stageUpload(token(request), request.body as { name: string; size: number; autoName?:boolean })
+    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 0, maximum: MAX_OBJECT_BYTES }, autoName:{type:'boolean'}, folderId:id } } } }, (request, reply) => transfer(request, reply, async () => {
+      const staged = await files.stageUpload(token(request), request.body as { name: string; size: number; autoName?:boolean;folderId?:string })
       return reply.code(201).send(staged)
     }))
     api.post<{Params:{id:string}}>('/api/v1/files/:id/duplicate/uploads', {bodyLimit:4096,schema:{params,querystring:emptyQuery}}, (request,reply)=>transfer(request,reply,async()=>{

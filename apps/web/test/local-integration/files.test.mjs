@@ -14,6 +14,41 @@ import { password } from '../helpers/identity.mjs'
 const credential = token => ({ kind: 'session', token })
 const own = (f, callback) => f.transactions.withPrincipalTransaction(credential(f.alice.token), callback)
 
+test('upload publication files a copy in the selected folder without overwriting an existing file', async t => {
+  const f=await fileFixture(t),bytes=await docxBytes(),token=f.alice.token
+  const {createWorkspaceService}=await import('../../server/src/modules/workspace/service.ts')
+  const workspace=createWorkspaceService(f.transactions)
+  const folder=await workspace.createFolder(token,{name:'Converted',parentId:null})
+  const foreign=await workspace.createFolder(f.bob.token,{name:'Private',parentId:null})
+  const original=(await importFile(f,token,bytes,'report.docx')).file
+  await workspace.moveFile(token,original.fileId,{folderId:folder.id})
+  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+  const headers={origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+token,'x-csrf-token':csrf.sessionToken(token)}
+  const stage=folderId=>f.app.inject({method:'POST',url:'/api/v1/files/uploads',headers,payload:{name:'report.docx',size:bytes.length,folderId}})
+  assert.equal((await stage(foreign.id)).statusCode,404)
+  const staged=await stage(folder.id)
+  assert.equal(staged.statusCode,201,staged.body)
+  const pending=staged.json()
+  await f.files.receiveUpload(token,pending.uploadId,bytes)
+  const finish=()=>f.app.inject({method:'POST',url:`/api/v1/uploads/${pending.uploadId}/finish`,headers})
+  const saved=await finish()
+  assert.equal(saved.statusCode,200,saved.body)
+  const copy=saved.json().file
+  assert.notEqual(copy.fileId,original.fileId)
+  assert.deepEqual((await finish()).json(),saved.json())
+  const listing=await workspace.listFiles(token,{folderId:folder.id})
+  assert.deepEqual(new Set(listing.files.map(file=>file.id)),new Set([original.fileId,copy.fileId]))
+  assert.ok(listing.files.every(file=>file.name==='report.docx'))
+  assert.deepEqual((await workspace.listFiles(token,{folderId:'root'})).files,[])
+  assert.deepEqual((await f.files.openFile(token,original.fileId)).file,original)
+  const removed=await workspace.createFolder(token,{name:'Removed',parentId:null})
+  const orphan=(await stage(removed.id)).json()
+  await f.files.receiveUpload(token,orphan.uploadId,bytes)
+  await workspace.deleteFolder(token,removed.id)
+  await assert.rejects(f.files.finishUpload(token,orphan.uploadId),{statusCode:404})
+  await assert.rejects(f.files.openFile(token,orphan.fileId),{statusCode:404})
+})
+
 test('duplicate publishes exactly one independent copy in the source folder and can recover the finish receipt', async t => {
   const f=await fileFixture(t),bytes=await docxBytes()
   const source=await importFile(f,f.alice.token,bytes,'report.docx')

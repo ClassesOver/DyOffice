@@ -2,11 +2,12 @@ import {Alert,Button,Input,Modal,Space,Tag,Typography,Upload} from 'antd'
 import {CheckCircleFilled,CloseCircleFilled,CloudUploadOutlined,DeleteOutlined,FileExcelOutlined,FileOutlined,FilePdfOutlined,FilePptOutlined,FileWordOutlined,LoadingOutlined} from '@ant-design/icons'
 import {useEffect,useRef,useState} from 'react'
 import type {RecentEntry} from '../../../shell/src/shared/home-api'
-import {hancomConversionTargets,importPromptField,odfConversionTargets,skipsImportPrompt,workspaceConversionTarget,type ImportPromptField,type ImportPromptPreferences} from '../../../../packages/web-contracts/src/file-imports'
+import {hancomConversionTargets,importPromptField,odfConversionTargets,skipsImportPrompt,workspaceConversionTarget,type ConvertedCopyDestination,type ImportPromptField,type ImportPromptPreferences} from '../../../../packages/web-contracts/src/file-imports'
+import type {WorkspaceFolder} from '../../../../packages/web-contracts/src/workspace'
 import {IncorrectOfficeUploadPassword} from './local-client'
 import {isWorkspaceFileName,type WorkspaceImportFormat,workspaceFileAccept} from './workspace-file-formats'
 import './workspace-upload.css'
-type UploadItem={id:number;file:File;state:'queued'|'processing'|'success'|'password-required'|'skipped'|'error'|'rejected';error?:string}
+type UploadItem={id:number;file:File;state:'queued'|'processing'|'success'|'password-required'|'skipped'|'error'|'rejected';error?:string;destination?:ConvertedCopyDestination}
 type RecentDocument=Pick<RecentEntry,'path'|'name'|'locationLabel'>
 type WorkspaceUploadDialogProps={
  open:boolean
@@ -14,7 +15,8 @@ type WorkspaceUploadDialogProps={
  fileImports?:readonly WorkspaceImportFormat[]
  readImportPromptPreferences?:()=>Promise<ImportPromptPreferences>
  rememberImportPrompt?:(field:ImportPromptField)=>Promise<void>
- upload:(file:File,password?:string)=>Promise<void|'password-required'>
+ upload:(file:File,password?:string,destination?:ConvertedCopyDestination)=>Promise<void|'password-required'>
+ loadDestinationFolders?:()=>Promise<WorkspaceFolder[]>
  onClose:()=>void
  loadRecent?:()=>Promise<RecentDocument[]>
  openRecent?:(id:string)=>Promise<void>
@@ -28,12 +30,25 @@ const conversionDetails={
  pptx:'幻灯片、文本和图片会转换，部分版式、对象和动画可能丢失。',
 }
 const compoundFileHeader=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]
+function folderChoices(folders:WorkspaceFolder[]){
+ const byId=new Map(folders.map(folder=>[folder.id,folder]))
+ return folders.flatMap(folder=>{
+  const names:string[]=[],seen=new Set<string>()
+  let current:WorkspaceFolder|undefined=folder
+  while(current&&!seen.has(current.id)){
+   names.unshift(current.name);seen.add(current.id)
+   if(current.parentId===null)return [{id:folder.id,name:names.join(' / ')}]
+   current=byId.get(current.parentId)
+  }
+  return []
+ }).sort((a,b)=>a.name.localeCompare(b.name))
+}
 async function needsOfficePassword(file:File){
  if(!/\.(docx|xlsx|xlsm)$/i.test(file.name)||file.size<compoundFileHeader.length)return false
  const header=new Uint8Array(await file.slice(0,compoundFileHeader.length).arrayBuffer())
  return compoundFileHeader.every((byte,index)=>header[index]===byte)
 }
-export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readImportPromptPreferences,rememberImportPrompt,upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
+export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readImportPromptPreferences,rememberImportPrompt,upload,loadDestinationFolders,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
  const sequence=useRef(0),locked=useRef(false)
  const mounted=useRef(false),answerPassword=useRef<((password:string|null)=>void)|null>(null)
  const answerConversion=useRef<((remember:boolean|null)=>void)|null>(null)
@@ -48,6 +63,18 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readI
  useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(locked.current){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
  function item(file:File):UploadItem{const error=!isWorkspaceFileName(file.name,fileImports)?'不支持此格式':file.size>maxFileSize?'文件超过 32 MiB 限制':undefined;return {id:sequence.current++,file,state:error?'rejected':'queued',error}}
  const [items,setItems]=useState<UploadItem[]>(()=>initialFiles.map(item)),[busy,setBusy]=useState(false)
+ const [folders,setFolders]=useState<ReturnType<typeof folderChoices>|null>(null),[folderError,setFolderError]=useState(false)
+ const loadingFolders=useRef(false)
+ async function loadCopyFolders(){
+  if(!loadDestinationFolders||folders!==null||loadingFolders.current)return
+  loadingFolders.current=true;setFolderError(false)
+  try{const choices=folderChoices(await loadDestinationFolders());if(mounted.current)setFolders(choices)}
+  catch{if(mounted.current)setFolderError(true)}
+  finally{loadingFolders.current=false}
+ }
+ function setDestination(id:number,patch:ConvertedCopyDestination){
+  setItems(current=>current.map(entry=>entry.id===id?{...entry,destination:{...entry.destination,...patch}}:entry))
+ }
  const [showRecent,setShowRecent]=useState(false)
  const [recent,setRecent]=useState<RecentDocument[]|null>(null)
  const [recentError,setRecentError]=useState('')
@@ -92,10 +119,14 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readI
   setRememberConversion(false)
   answer?.(value)
  }
- async function uploadFile(file:File){
+ async function uploadFile(file:File,destination?:ConvertedCopyDestination){
   const protectedOffice=await needsOfficePassword(file)
   if(!mounted.current)return 'skipped'
-  if(!protectedOffice){await upload(file);return 'success'}
+  if(!protectedOffice){
+   if(destination)await upload(file,undefined,destination)
+   else await upload(file)
+   return 'success'
+  }
   let incorrect=false
   while(mounted.current){
    const value=await requestPassword(file,incorrect)
@@ -131,7 +162,7 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readI
       }
      }
     }
-    const state=await uploadFile(entry.file);if(mounted.current)update(entry.id,state)
+    const state=await uploadFile(entry.file,entry.destination);if(mounted.current)update(entry.id,state)
    }
    catch(error){if(mounted.current)update(entry.id,'error',error instanceof Error?error.message:'导入未完成。请核对工作区中的文件。')}
   }}finally{locked.current=false;if(mounted.current)setBusy(false)}
@@ -184,8 +215,19 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readI
   </div>
   {items.length>0&&<><div className="workspace-upload-list-heading"><Typography.Text strong>文件列表</Typography.Text><Typography.Text type="secondary">{items.length} 个文件</Typography.Text></div><ul className="workspace-upload-list" aria-label="待上传文件">{items.map(entry=>{
    const extension=entry.file.name.split('.').pop()?.toLowerCase()??''
-   const format=(workspaceConversionTarget(extension)??extension) as keyof typeof formatIcons,Icon=formatIcons[format]??FileOutlined
-   return <li key={entry.id} className={`workspace-upload-item is-${entry.state}`}><span className={`workspace-upload-file-icon format-${format}`}><Icon/></span><div className="workspace-upload-file-detail"><span className="workspace-upload-file-name" title={entry.file.name}>{entry.file.name}</span><span className="workspace-upload-file-meta">{sizeLabel(entry.file.size)}<span className="workspace-upload-item-state">{entry.state==='queued'?'等待上传':entry.state==='processing'?passwordPrompt?.file===entry.file?'等待密码':<><LoadingOutlined/> 正在上传并打开…</>:entry.state==='success'?<><CheckCircleFilled/> 已上传并打开</>:entry.state==='password-required'?'已上传，请在编辑器中解锁':entry.state==='skipped'?'已跳过':entry.state==='rejected'?'无法上传':<><CloseCircleFilled/> 导入未完成</>}</span></span>{entry.error&&<span className="workspace-upload-file-error">{entry.error}</span>}</div>{!busy&&(entry.state==='queued'||entry.state==='rejected')&&<Button type="text" icon={<DeleteOutlined/>} aria-label={`移除 ${entry.file.name}`} onClick={()=>setItems(current=>current.filter(value=>value.id!==entry.id))}/>}</li>
+   const target=workspaceConversionTarget(extension)
+   const format=(target??extension) as keyof typeof formatIcons,Icon=formatIcons[format]??FileOutlined
+   return <li key={entry.id} className={`workspace-upload-item is-${entry.state}`}><span className={`workspace-upload-file-icon format-${format}`}><Icon/></span><div className="workspace-upload-file-detail"><span className="workspace-upload-file-name" title={entry.file.name}>{entry.file.name}</span><span className="workspace-upload-file-meta">{sizeLabel(entry.file.size)}<span className="workspace-upload-item-state">{entry.state==='queued'?'等待上传':entry.state==='processing'?passwordPrompt?.file===entry.file?'等待密码':<><LoadingOutlined/> 正在上传并打开…</>:entry.state==='success'?<><CheckCircleFilled/> 已上传并打开</>:entry.state==='password-required'?'已上传，请在编辑器中解锁':entry.state==='skipped'?'已跳过':entry.state==='rejected'?'无法上传':<><CloseCircleFilled/> 导入未完成</>}</span></span>{entry.error&&<span className="workspace-upload-file-error">{entry.error}</span>}
+    {target&&entry.state==='queued'&&<details className="workspace-upload-destination" onToggle={event=>{if(event.currentTarget.open)void loadCopyFolders()}}>
+     <summary>保存转换副本</summary>
+     <label>副本名称<Input aria-label="副本名称" disabled={busy} suffix={`.${target}`} value={entry.destination?.stem??entry.file.name.slice(0,-extension.length-1)} onChange={event=>setDestination(entry.id,{stem:event.target.value})}/></label>
+     {loadDestinationFolders&&<label>保存位置<select aria-label="保存位置" disabled={busy||folders===null} value={entry.destination?.folderId??''} onChange={event=>setDestination(entry.id,{folderId:event.target.value||undefined})}>
+      <option value="">个人文件</option>
+      {folders?.map(folder=><option key={folder.id} value={folder.id}>{folder.name}</option>)}
+     </select></label>}
+     {folderError&&<span role="status" className="workspace-upload-file-error">无法读取保存位置。重新展开可重试。</span>}
+    </details>}
+   </div>{!busy&&(entry.state==='queued'||entry.state==='rejected')&&<Button type="text" icon={<DeleteOutlined/>} aria-label={`移除 ${entry.file.name}`} onClick={()=>setItems(current=>current.filter(value=>value.id!==entry.id))}/>}</li>
   })}</ul></>}
   {!!failed&&<Alert className="workspace-upload-warning" type="warning" showIcon title="部分文件未完成导入" description="请先核对工作区，确认文件是否已上传，再决定后续操作。"/>}
   <p className="workspace-upload-note">文件按顺序处理。上传期间请保持此窗口打开。</p>

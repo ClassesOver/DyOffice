@@ -30,6 +30,10 @@
 .workspace-upload-file-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:21px;font-size:13px;font-weight:500}
 .workspace-upload-file-meta{display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--text-secondary);font-size:12px;line-height:20px}
 .workspace-upload-item-state{font-size:12px}
+.workspace-upload-destination{margin-top:4px;font-size:12px}
+.workspace-upload-destination summary{color:var(--accent);cursor:pointer}
+.workspace-upload-destination label{display:grid;gap:4px;margin-top:8px}
+.workspace-upload-destination select{width:100%;min-height:30px;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text-primary)}
 .workspace-upload-item.is-success .workspace-upload-item-state{color:var(--success,#32845b)}
 .workspace-upload-item.is-error .workspace-upload-item-state,.workspace-upload-item.is-rejected .workspace-upload-item-state,.workspace-upload-file-error{color:var(--danger)}
 .workspace-upload-item.is-processing .workspace-upload-item-state{color:var(--accent)}

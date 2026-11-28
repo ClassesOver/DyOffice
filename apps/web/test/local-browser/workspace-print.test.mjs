@@ -516,6 +516,9 @@ for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace co
   sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer:await zip.generateAsync({type:'nodebuffer'})})
  }
  const token=f.alice.token,csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
+ const workspace=createWorkspaceService(f.transactions)
+ const parent=hancom?await workspace.createFolder(token,{name:'Reports',parentId:null}):null
+ const destination=parent?await workspace.createFolder(token,{name:'Converted',parentId:parent.id}):null
  const convert=(buffer,headers={})=>app.inject({method:'POST',url:`/api/v1/files/convert-${docs[0][1]}`,payload:buffer,
   headers:{origin,'content-type':'application/octet-stream',...headers}})
  assert.equal((await convert(sources[0].buffer)).statusCode,401)
@@ -530,6 +533,12 @@ for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace co
  const accept=(await picker.getAttribute('accept')).split(',')
  for(const [,ext] of docs)assert.ok(accept.includes('.'+ext))
  await picker.setInputFiles(sources)
+ if(destination){
+  const row=dialog.getByRole('listitem').filter({hasText:'Report.hwp'})
+  await row.getByText('保存转换副本', {exact:true}).click()
+  await row.getByLabel('副本名称', {exact:true}).fill('Filed report')
+  await row.getByLabel('保存位置', {exact:true}).selectOption({label:'Reports / Converted'})
+ }
  await dialog.getByRole('button',{name:`开始上传（${docs.length}）`,exact:true}).click()
  const prompt=dialog.getByRole('group',{name:hancom?'Hancom 转换':legacy?'旧版 Office 转换':'OpenDocument 转换',exact:true})
  for(const [index,[name,ext,format]] of docs.entries()){
@@ -543,9 +552,11 @@ for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace co
  await expect(dialog).toContainText(`已完成 ${docs.length}`,{timeout:60000})
  await dialog.getByRole('button',{name:'完成',exact:true}).click()
  const stored=await workspaceFiles()
- assert.deepEqual(stored.map(item=>item.name).sort(),docs.map(([name,,format])=>`${name}.${format}`).sort())
+ const savedName=(name,format)=>`${hancom&&name==='Report'?'Filed report':name}.${format}`
+ assert.deepEqual(stored.map(item=>item.name).sort(),docs.map(([name,,format])=>savedName(name,format)).sort())
+ if(destination)assert.deepEqual((await workspace.listFiles(token,{folderId:destination.id})).files.map(file=>file.name),['Filed report.docx'])
  for(const [name,,format,,content,part] of docs){
-  const file=stored.find(item=>item.name===`${name}.${format}`)
+  const file=stored.find(item=>item.name===savedName(name,format))
   assert.equal(file.format,format)
   await page.getByRole('tab',{name:file.name,exact:true}).click()
   const native=page.frameLocator(`iframe[data-document-id="${file.id}"]`)

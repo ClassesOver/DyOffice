@@ -27,6 +27,11 @@ function assertProtectedOfficeImport(row: Upload, principal: BusinessPrincipal, 
   if (row.kind !== 'import' || row.format !== format) throw authError(415)
 }
 
+async function lockImportFolder(connection: PoolClient, principal: BusinessPrincipal, workspaceId: string, folderId: string) {
+  const folder = await connection.query('SELECT id FROM workspace_folders WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND id=$4 FOR KEY SHARE', [...scope(principal),workspaceId,folderId])
+  if (!folder.rowCount) throw authError(404)
+}
+
 export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
 
 export function fitFileStem(stem: string, ending: string) {
@@ -165,9 +170,10 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (!canReclaim) return { reclaimedBytes: 0, reclaimedUploads: 0 }
       return personal(token, 'files:write', (connection,principal) => reclaimAbandonedUploads(connection,principal,objects))
     },
-    async stageUpload(token: FileCredential, metadata: { name: string; size: number; autoName?:boolean }) {
-      if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size','autoName'].includes(key))) throw authError(400)
+    async stageUpload(token: FileCredential, metadata: { name: string; size: number; autoName?:boolean; folderId?:string }) {
+      if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size','autoName','folderId'].includes(key))) throw authError(400)
       const name = metadata.name, format = validateFileName(name), size = metadata.size
+      const folderId = metadata.folderId === undefined ? null : uuid(metadata.folderId)
       if(metadata.autoName!==undefined&&(typeof metadata.autoName!=='boolean'||(metadata.autoName&&(format==='pdf'||format==='csv'||name!=='未命名.'+format))))throw authError(400)
       if (!Number.isSafeInteger(size) || size < (format === 'csv' ? 0 : 1)) throw authError(400)
       if (size > MAX_OBJECT_BYTES) throw authError(413)
@@ -175,11 +181,12 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       await service.reclaimAbandonedUploads(token)
       return personal(token, 'files:write', async (connection, principal) => {
         const account = await lockAccount(connection, principal)
+        if (folderId) await lockImportFolder(connection, principal, account.workspaceId, folderId)
         if (account.reservedBytes + account.storedBytes + size > quotaBytes) throw authError(413)
         const pending = await connection.query("SELECT 1 FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND state IN ('staged','receiving','ready')", scope(principal))
         if (pending.rowCount! >= maxUploads) throw Object.assign(authError(429), { retryAfter: 60 })
         const id = randomUUID(), fileId = randomUUID(), revisionId = randomUUID()
-        const result = await connection.query("INSERT INTO uploads(id,deployment_id,owner_id,workspace_id,file_id,revision_id,name,format,expected_size,auth_version,state,expires_at,auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'staged',clock_timestamp()+$11*interval '1 millisecond',$12) RETURNING expires_at", [id,...scope(principal),account.workspaceId,fileId,revisionId,name,format,size,principal.authVersion,uploadTtlMs,metadata.autoName===true])
+        const result = await connection.query("INSERT INTO uploads(id,deployment_id,owner_id,workspace_id,file_id,revision_id,name,format,expected_size,auth_version,state,expires_at,auto_name_pending,import_folder_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'staged',clock_timestamp()+$11*interval '1 millisecond',$12,$13) RETURNING expires_at", [id,...scope(principal),account.workspaceId,fileId,revisionId,name,format,size,principal.authVersion,uploadTtlMs,metadata.autoName===true,folderId])
         await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),size])
         return { uploadId: id, fileId, expiresAt: (result.rows[0].expires_at as Date).toISOString() }
       })
@@ -343,7 +350,8 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
           return openResult({ ...file, current_revision: row.revision_id, object_key:objectKey(principal,row.revision_id), sha256: row.sha256!, size: row.expected_size, office_signature_protected:row.office_signature_protected, office_password_protected:row.office_password_protected })
         }
         if (row.state !== 'ready' || !row.sha256) throw authError(409)
-        let name = row.name, folderId: string | null = null
+        let name = row.name, folderId = row.import_folder_id
+        if (folderId) await lockImportFolder(connection, principal, row.workspace_id, folderId)
         if (options.copy) {
           const {id:sourceId,revision,suffix} = options.copy
           const source = await loadFile(connection,principal,sourceId)
@@ -383,9 +391,9 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         }
         await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
         await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision,pdf_auto_name_pending,auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [row.file_id,...scope(principal),row.workspace_id,name,row.format,row.revision_id,options.blankPdf===true,row.auto_name_pending])
-        if (options.copy) await connection.query(
-          'INSERT INTO workspace_file_state(deployment_id,owner_id,workspace_id,file_id,folder_id,last_opened_at) VALUES($1,$2,$3,$4,$5,clock_timestamp())',
-          [...scope(principal),row.workspace_id,row.file_id,folderId],
+        if (options.copy || folderId) await connection.query(
+          'INSERT INTO workspace_file_state(deployment_id,owner_id,workspace_id,file_id,folder_id,last_opened_at) VALUES($1,$2,$3,$4,$5,CASE WHEN $6::boolean THEN clock_timestamp() END)',
+          [...scope(principal),row.workspace_id,row.file_id,folderId,!!options.copy],
         )
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,office_signature_protected,office_password_protected) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size,row.office_signature_protected,row.office_password_protected])
         await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])

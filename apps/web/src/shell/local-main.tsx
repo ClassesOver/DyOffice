@@ -4,7 +4,8 @@ import {publishBrowserAssistantPreferences} from '../editors/browser-assistant-a
 import {createAssistantPreferenceSync} from '../editors/assistant-preference-sync'
 import type {AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
 import {ASSISTANT_PREFERENCES_FIELDS} from '../../../../packages/web-contracts/src/preferences'
-import type {ImportPromptPreferences} from '../../../../packages/web-contracts/src/file-imports'
+import type {ConvertedCopyDestination,ImportPromptPreferences} from '../../../../packages/web-contracts/src/file-imports'
+import type {WorkspaceFolderList} from '../../../../packages/web-contracts/src/workspace'
 import {HomeHero} from './HomeHero'
 import type {PreparedAiDocumentCreator} from './pdf-create-document-skill'
 import {createAiDocCreationQueue,type AiDocCreationResult} from './ai-doc-creation'
@@ -212,14 +213,14 @@ function takeOfficeImportUnlock(fileId:string,revision:string){
  officeImportUnlocks.delete(fileId)
  return grant.unlockId
 }
-async function upload(file:File,expectedProof:string|undefined,autoName=false,password?:string){
+async function upload(file:File,expectedProof:string|undefined,autoName=false,password?:string,destination?:ConvertedCopyDestination){
  if(busy)throw new Error('正在导入，请稍候')
  const imports=workspaceFileImports(capabilities)
  if(!isWorkspaceFileName(file.name,imports))throw new Error(`请选择 ${['DOCX','XLSX','PPTX','PDF',...imports.map(format=>format.toUpperCase())].join('、')} 文件。`)
  if(!expectedProof)throw new Error('登录状态未核验，请重新加载当前工作区。')
  busy=true
  try{
-  const {file:{fileId,revision},unlockId:docxUnlockId}=await client.upload(file,expectedProof,autoName,password)
+  const {file:{fileId,revision},unlockId:docxUnlockId}=await client.upload(file,expectedProof,autoName,password,destination)
   const workspace=sourceWorkspace
   const endpoint=`/api/v1/files/${encodeURIComponent(fileId)}`
   let releaseDocx=docxUnlockId&&workspace?.bound.proof===expectedProof
@@ -854,7 +855,8 @@ function Shell({recovery=false}:{recovery?:boolean}){
   {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} fileImports={fileImports}
     readImportPromptPreferences={uploadSession&&(()=>uploadSession.request<ImportPromptPreferences>('/api/v1/preferences'))}
     rememberImportPrompt={uploadSession&&(async field=>{await uploadSession.request('/api/v1/preferences','PUT',{[field]:true})})}
-    upload={(file,password)=>upload(file,uploadProof,false,password)} loadRecent={loadRecentWorkspaceFiles} openRecent={open} onClose={()=>setUploadFiles(null)}/>}
+    loadDestinationFolders={uploadSession&&(async()=>(await uploadSession.request<WorkspaceFolderList>('/api/v1/workspace/folders')).folders)}
+    upload={(file,password,destination)=>upload(file,uploadProof,false,password,destination)} loadRecent={loadRecentWorkspaceFiles} openRecent={open} onClose={()=>setUploadFiles(null)}/>}
   {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?tabMenuItems:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='documentResults'&&target.id){setResultFileId(target.id);setPage('documentResults')}else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&(key==='save'||key==='save-as'||key==='print'))queueMenuCommand(target.id,key);else if(target.kind==='tab'&&target.id&&(key==='copyName'||key==='copyWorkspaceLink'))void copyTabIdentity(target.id,key).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='downloadSavedFile')void downloadSavedTab(target.id).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='splitBeside'&&!recoveryBlocked.current)documentTabs.splitBeside(target.id);else if(target.kind==='tab'&&key==='swapSplit'&&!recoveryBlocked.current)documentTabs.swapSplit();else if(target.kind==='tab'&&key==='endSplit')documentTabs.endSplit();else if(target.kind==='tab'&&target.id&&key==='moveWindow')void moveTabToWindow(target.id);else if(target.kind==='tab'&&target.id&&key==='returnWindow')void returnTabToWorkspace(target.id);else if(target.kind==='tab'&&target.id&&key==='pin'&&!recoveryBlocked.current)documentTabs.setPinned(target.id,!documentTabs.list().some(tab=>tab.id===target.id&&tab.pinned));else if(target.kind==='tab'&&target.id&&(key==='moveLeft'||key==='moveRight')&&!recoveryBlocked.current)moveTabMenuSelection(target.id,key);else if(target.kind==='tab'&&target.id&&(key==='closeOthers'||key==='closeRight'||key==='closeAll'))closeTabMenuSelection(target.id,key);else if(target.kind==='tab'&&key==='reopen'&&!recoveryBlocked.current)void documentTabs.reopenClosed(resolveOpenDocument).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='reveal'&&!recoveryBlocked.current)void revealTab(target.id);else if(target.kind==='tab'&&target.id&&key==='rename'&&!recoveryBlocked.current)tabRenameListeners.forEach(listener=>listener(target.id!));else if(target.kind==='tab'&&target.id&&key==='duplicate'&&!recoveryBlocked.current)void window.aiOffice.duplicateFile(target.id).then(()=>setMessage(current=>current===message?'':current)).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
   {message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}
  </>

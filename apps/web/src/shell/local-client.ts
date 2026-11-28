@@ -1,6 +1,6 @@
 import type {WebFile} from './web-home-bridge'
 import {isEncryptedOfficeFormat,type EncryptedOfficeFormat} from '../../../../packages/web-contracts/src/api'
-import {workspaceConversionTarget} from '../../../../packages/web-contracts/src/file-imports'
+import {workspaceConversionTarget,type ConvertedCopyDestination} from '../../../../packages/web-contracts/src/file-imports'
 export type SessionEndReason='expired'|'logout_failed'
 export class IncorrectOfficeUploadPassword extends Error {}
 /** Local mode only: HttpOnly session cookies, ephemeral CSRF, no bearer/JSON fallback. */
@@ -133,7 +133,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    do{const page:{files:WebFile[];nextCursor:string|null}=await request<{files:WebFile[];nextCursor:string|null}>(`/api/v1/files?limit=100${cursor?'&cursor='+encodeURIComponent(cursor):''}`);files.push(...page.files);cursor=page.nextCursor;if(cursor){if(seen.has(cursor))throw new Error('Invalid file pagination');seen.add(cursor)}}while(cursor)
    return files
   },
-  async upload(file:File,expectedProof:string,autoName=false,password?:string){
+  async upload(file:File,expectedProof:string,autoName=false,password?:string,destination?:ConvertedCopyDestination){
    if(!expectedProof)throw stale()
    if(file.size>32*1024*1024)throw new Error('文件超过 32 MiB 限制')
    const dot=file.name.lastIndexOf('.')
@@ -144,8 +144,10 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    // Files dragged onto a native editor are created in the iframe's realm.
    let content=file instanceof Blob?file:new Blob([file])
    const target=workspaceConversionTarget(extension)
+   const stem=destination?.stem?.trim()??file.name.slice(0,dot)
+   if(target&&!stem)throw new Error('请输入副本名称。')
    if(target)content=await bound.download(`/api/v1/files/convert-${extension}`,{body:content})
-   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:target?file.name.slice(0,dot+1)+target:file.name,size:target?content.size:file.size,...(autoName?{autoName:true}:{})})
+   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:target?`${stem}.${target}`:file.name,size:target?content.size:file.size,...(autoName?{autoName:true}:{}),...(target&&destination?.folderId?{folderId:destination.folderId}:{})})
    const path=`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}`
    if(password!==undefined){
     const encoded=new TextEncoder().encode(password)

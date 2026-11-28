@@ -7,6 +7,7 @@ export type OfficeDocumentConversionFormat = keyof typeof officeDocumentConversi
 
 export const workspaceConversionTargets = { tsv: 'xlsx', xls: 'xlsx', ...odfConversionTargets, ...legacyOfficeConversionTargets, ...hancomConversionTargets } as const
 export type WorkspaceConversionFormat = keyof typeof workspaceConversionTargets
+export type ConvertedCopyDestination = { stem?: string; folderId?: string }
 
 export function workspaceConversionTarget(format: string) {
   return Object.hasOwn(workspaceConversionTargets, format)
