@@ -9466,6 +9466,7 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
       {doc && showPrintDialog && (
         <PrintDialog
           browserOnly={desktopActionsAvailable === false}
+          documentName={doc.fileName}
           internalLinkBlocks={doc.parsed.blocks}
           onClose={closePrintDialog}
           setStatus={setStatus}

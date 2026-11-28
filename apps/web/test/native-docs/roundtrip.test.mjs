@@ -823,7 +823,7 @@ test('workspace print shortcut follows the focused document tab', { timeout: 90_
   await expect(page.locator('.file-search input')).toBeFocused()
 })
 
-test('native Word prints mixed paper and keeps bookmark links inside the selected range', { timeout: 90_000 }, async t => {
+test('native Word exports a named PDF with mixed paper and bookmark links inside the selected range', { timeout: 90_000 }, async t => {
   const f = await fixture(t), {page} = f
   const zip = await JSZip.loadAsync(f.original)
   const portrait='<w:sectPr><w:type w:val="nextPage"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>'
@@ -837,19 +837,34 @@ test('native Word prints mixed paper and keeps bookmark links inside the selecte
     </w:p>
     <w:p><w:bookmarkStart w:id="2" w:name="LandscapeBookmark"/><w:r><w:t>Landscape section</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>${landscape}
   </w:body></w:document>`)
-  const {file}=await importFile(f,f.alice.token,await zip.generateAsync({type:'nodebuffer'}),'mixed-paper.docx')
+  const original=await zip.generateAsync({type:'nodebuffer'})
+  const {file}=await importFile(f,f.alice.token,original,'mixed-paper.docx')
   await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
   await expect(page.locator('.tiptap.ProseMirror').first()).toContainText('Landscape section')
   await expect(page.getByRole('complementary',{name:'Document notifications'}).getByText(/No model is available/)).toBeVisible()
-  await page.evaluate(()=>{window.print=()=>window.dispatchEvent(new Event('beforeprint'))})
+  const originalTitle=await page.title()
+  await page.evaluate(()=>{
+    window.print=()=>{
+      document.documentElement.dataset.printTitle=document.title
+      window.dispatchEvent(new Event('beforeprint'))
+    }
+  })
   await page.keyboard.press('ControlOrMeta+p')
   const dialog=page.locator('.modal.print-dialog')
   await expect(dialog).toBeVisible()
   await expect(page.locator('.pagination-preview .pv-page')).toHaveCount(3)
   await dialog.getByRole('radio',{name:'Custom range',exact:true}).check()
   await dialog.getByPlaceholder('e.g. 1,3,5-8').fill('2-3')
-  await dialog.getByRole('button',{name:'Print',exact:true}).click()
+  const fileName=dialog.getByRole('textbox',{name:'File name',exact:true})
+  const exportPdf=dialog.getByRole('button',{name:'Export PDF',exact:true})
+  await expect(fileName).toHaveValue('mixed-paper')
+  await fileName.fill('   ')
+  await expect(exportPdf).toBeDisabled()
+  await expect(dialog.getByRole('button',{name:'Print',exact:true})).toBeEnabled()
+  await fileName.fill('Binding proof.pdf')
+  await exportPdf.click()
   await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(1)
+  await expect(page.locator('html')).toHaveAttribute('data-print-title','Binding proof')
   try {
     const bytes=await page.pdf({preferCSSPageSize:true,printBackground:true})
     const printed=await PDFDocument.load(bytes)
@@ -860,6 +875,7 @@ test('native Word prints mixed paper and keeps bookmark links inside the selecte
       const doc=await task.promise
       const text=async n=>(await (await doc.getPage(n)).getTextContent()).items.map(item=>item.str??'').join(' ')
       assert.match(await text(1),/Portrait section/)
+      assert.doesNotMatch(await text(1),/Excluded section/)
       assert.match(await text(2),/Landscape section/)
       const links=(await (await doc.getPage(1)).getAnnotations()).filter(annotation=>annotation.subtype==='Link')
       assert.equal(links.length,1,'Only the bookmark whose destination is printed should be linked')
@@ -874,6 +890,16 @@ test('native Word prints mixed paper and keeps bookmark links inside the selecte
   }
   await expect(dialog).toBeHidden()
   await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(0)
+  await expect.poll(()=>page.title()).toBe(originalTitle)
+  await page.keyboard.press('ControlOrMeta+p')
+  await dialog.getByRole('textbox',{name:'File name',exact:true}).fill('Ignored by ordinary printing')
+  await dialog.getByRole('button',{name:'Print',exact:true}).click()
+  try {
+    await expect(page.locator('html')).toHaveAttribute('data-print-title',originalTitle)
+  } finally {
+    await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')))
+  }
+  await expect(dialog).toBeHidden()
   await page.getByRole('button',{name:'Convert',exact:true}).click()
   await page.getByRole('button',{name:'Convert to PDF…',exact:true}).click()
   await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(1,{timeout:25000})
@@ -883,6 +909,7 @@ test('native Word prints mixed paper and keeps bookmark links inside the selecte
   }finally{await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')))}
   await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(0)
   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 })
 
 test('native Word shares live draft text only after consent and stops after saving', { timeout: 90_000 }, async t => {
