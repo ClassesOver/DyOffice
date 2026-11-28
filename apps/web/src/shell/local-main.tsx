@@ -1,6 +1,7 @@
 import {WorkspaceLoading} from './WorkspaceLoading'
 import {applyBrowserEditorTheme} from '../editors/browser-editor-theme'
 import {publishBrowserAssistantPreferences} from '../editors/browser-assistant-appearance'
+import {createAssistantPreferenceSync} from '../editors/assistant-preference-sync'
 import type {AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
 import {ASSISTANT_PREFERENCES_FIELDS} from '../../../../packages/web-contracts/src/preferences'
 import {HomeHero} from './HomeHero'
@@ -85,6 +86,7 @@ const sessionsClient=createLocalSessionsClient(workspaceSession.sessionFetch,()=
 const historyClient=createLoginHistoryClient(fetch,()=>client.endSession('expired'))
 const preferenceSession=createLocalPreferencesSession(client)
 const preferences=preferenceSession.preferences
+let assistantPreferenceSync: ReturnType<typeof createAssistantPreferenceSync<Awaited<ReturnType<typeof preferences.getPreferences>>>>
 const globalSettingsSession=createLocalGlobalSettingsSession(client)
 const globalSettings=globalSettingsSession.settings
 let userSkills: ReturnType<typeof createUserSkillsClient> | undefined
@@ -146,6 +148,13 @@ function saveWorkspaceEntries(tabs:ReturnType<typeof documentTabs.list>){
  const layout=split&&[split.left,split.right].every(id=>id==='home'||entries.some(file=>file.id===id&&canOpenWorkspaceFileDirectly(file)))?split:null
  entryRecovery.save(restorable,active,tabs.filter(tab=>tab.pinned).map(tab=>tab.id),layout)
 }
+function applyWorkspaceAssistantPreferences(saved:Awaited<ReturnType<typeof preferences.getPreferences>>){
+ for(const tab of documentTabs.renderedDocuments()){
+  const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement
+  if(root)publishBrowserAssistantPreferences(root,saved)
+ }
+}
+
 async function saveWorkspaceAssistantSide(side:AiPanelSide,proof:string){
  if(!sourceWorkspace||sourceWorkspace.bound.proof!==proof)throw new Error('登录状态已改变，请重新加载当前工作区。')
  return saveWorkspacePreferences({aiPanelSide:side})
@@ -155,13 +164,16 @@ async function saveWorkspacePreferences(patch:Parameters<typeof preferences.upda
  const saved=await preferences.updatePreferences(patch)
  const updateTheme=patch.documentTheme!==undefined||patch.theme!==undefined
  const updateAssistantPreferences=ASSISTANT_PREFERENCES_FIELDS.some(field=>patch[field]!==undefined)
- if(updateTheme||updateAssistantPreferences){
+ if(updateTheme){
   for(const tab of documentTabs.renderedDocuments()){
    const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement
    if(!root)continue
-   if(updateTheme&&(tab.format==='docx'||tab.format==='xlsx'))applyBrowserEditorTheme(root,saved)
-   if(updateAssistantPreferences)publishBrowserAssistantPreferences(root,saved)
+   if(tab.format==='docx'||tab.format==='xlsx')applyBrowserEditorTheme(root,saved)
   }
+ }
+ if(updateAssistantPreferences){
+  assistantPreferenceSync?.saved()
+  applyWorkspaceAssistantPreferences(saved)
  }
  sleepInactiveTabs=saved.sleepInactiveTabs!==false
  restoreSession=saved.restoreSession!==false
@@ -251,7 +263,12 @@ async function loadRecentWorkspaceFiles(){
 }
 
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
-function installBridge(){
+function installBridge(deploymentId?:string){
+ assistantPreferenceSync?.close()
+ if(deploymentId&&user){
+  assistantPreferenceSync=createAssistantPreferenceSync([deploymentId,user.id],preferences.getPreferences,applyWorkspaceAssistantPreferences)
+  client.onSessionEnded(()=>assistantPreferenceSync?.close())
+ }
  window.dyofficeRegisterWorkbookPicker=createWorkspaceWorkbookPicker(window,id=>documentTabs.activate(id))
  window.dyofficeOpenKnowledgeSource=async (id,revision)=>{
   try{await open(id,revision)}catch(error){
@@ -386,7 +403,7 @@ async function restore(){
    history.replaceState(null,'',entryUrl)
   }
  }
- installBridge()
+ installBridge(identity.deploymentId)
 }
 let logoutPending=false
 async function logout(){

@@ -158,10 +158,14 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await reopened.locator('.ai-panel-side-button').click()
    await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','left')
    assert.equal((await f.preferences.get(f.alice.token)).aiPanelSide,'left')
+   for(const file of Object.values(appearanceFiles))await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
    await reopened.locator('.ai-panel-side-button').click()
    await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','right')
+   await page.bringToFront()
+   await saveAppearance('default',true,undefined,'left')
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','left')
+   await expect(reopened.locator('html')).not.toHaveAttribute('data-ai-font-size',/./)
   }finally{await reopened.close()}
-  await saveAppearance('default',true,undefined,'left')
   for(const file of Object.values(appearanceFiles)){
    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
    await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
