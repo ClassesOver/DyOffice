@@ -127,7 +127,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
     touchUnlock(id,grant)
     return grant
   }
-  async function read(token: string, fileId: string, revision: string, operation: (bytes: Buffer) => Promise<unknown>, signal?: AbortSignal, unlockId?: string) {
+  async function read(token: string, fileId: string, revision: string, operation: (bytes: Buffer, emptyCsv?: boolean) => Promise<unknown>, signal?: AbortSignal, unlockId?: string) {
     // Admission precedes object downloads, bounding captured input memory too.
     if (active >= maxConcurrent) throw Object.assign(authError(429), { retryAfter: 1 })
     active++
@@ -147,7 +147,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
       if (source.workbookPasswordProtected) throw authError(423)
       signal?.throwIfAborted()
       const bytes = source.format === 'csv' ? await csvView(revision, source.bytes, signal) : source.bytes
-      const result = await operation(bytes)
+      const result = await operation(bytes, source.format === 'csv' && source.bytes.length === 0)
       signal?.throwIfAborted()
       // Native work runs outside the database transaction. Reauthenticate and
       // check that the file is still visible before releasing its result.
@@ -269,7 +269,10 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
       return report
     },signal),
     readPackage: (token: string, fileId: string, revision: string, signal?: AbortSignal, unlockId?:string) => read(token,fileId,revision,bytes => { if (!readPackage) throw authError(501); return readPackage(bytes,signal) },signal,unlockId),
-    inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal, openingViewport=false, unlockId?:string) => read(token, fileId, revision, bytes => native.inspect(bytes, signal, openingViewport), signal,unlockId),
+    inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal, openingViewport=false, unlockId?:string) => read(token, fileId, revision, async (bytes, emptyCsv) => {
+      const result = await native.inspect(bytes, signal, openingViewport)
+      return emptyCsv ? { ...result as object, emptyCsv:true } : result
+    }, signal,unlockId),
     readRange: (token: string, fileId: string, revision: string, sheetName: string, range: SheetRange, signal?: AbortSignal, unlockId?:string) => read(token, fileId, revision, bytes => native.readRange(bytes, sheetName, range, signal), signal,unlockId),
     async openMergeWorkbook(token:string,fileId:string,revision:string,input:Uint8Array,name:string,signal?:AbortSignal){
       pruneMergeSessions()

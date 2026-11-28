@@ -348,7 +348,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         if (!isRevisionRef(fetched) || fetched.fileId !== id || fetched.revision !== rev) throw hostError('INVALID_RESPONSE','revision metadata')
         ref = fetched; remember(ref)
       }
-      if (ref.size < 1 || ref.size > 32 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','read')
+      if (ref.size > 32 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','read')
       const reply = await request(`/api/v1/files/${id}/content?revision=${rev}`)
       const bytes=await readBoundedBytes(reply,ref.size)
       if (bytes.byteLength !== ref.size || await digest(bytes) !== ref.sha256) throw hostError('INVALID_RESPONSE','integrity')

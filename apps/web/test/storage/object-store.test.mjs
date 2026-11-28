@@ -83,6 +83,17 @@ for (const kind of ['local','s3']) {
     input.fill(0)
     assert.deepEqual(await store.readVerified(await pending), hello)
   })
+  test(`${kind} stores and verifies explicitly validated zero-byte objects`, async t => {
+    const { store } = await fixture(t, kind)
+    const objectKey = key(), empty = Buffer.alloc(0)
+    const sha256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    await assert.rejects(() => store.putImmutable(objectKey, empty, { size: 0, sha256: hash }), { statusCode: 400 })
+    const ref = await store.putImmutable(objectKey, empty, { size: 0, sha256 })
+    assert.deepEqual(ref, { key:objectKey, size:0, sha256 })
+    assert.deepEqual(await store.readVerified(ref), empty)
+    await store.verifyObject(ref)
+    await assert.rejects(() => store.putImmutable(objectKey, hello), { statusCode: 409 })
+  })
   test(`${kind} object names and sizes cannot escape the trusted namespace or allocation bound`, async t => {
     const { store } = await fixture(t, kind)
     for (const unsafe of ['../outside','/etc/passwd',key() + '/../outside','objects/' + randomUUID(),key().replace('/objects/', '/%2e%2e/')]) {

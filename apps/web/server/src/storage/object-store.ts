@@ -24,7 +24,7 @@ export function assertObjectKey(key: string) {
 }
 function assertObjectBytes(key: string, bytes: Buffer) {
   assertObjectKey(key)
-  if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > MAX_OBJECT_BYTES) throw storageError(400)
+  if (!Buffer.isBuffer(bytes) || bytes.length > MAX_OBJECT_BYTES) throw storageError(400)
 }
 export function objectReference(key: string, bytes: Buffer): ObjectRef {
   assertObjectBytes(key, bytes)
@@ -33,6 +33,8 @@ export function objectReference(key: string, bytes: Buffer): ObjectRef {
 export function snapshotObject(key: string, input: Buffer, expected?: { size: number; sha256: string }) {
   // Bound before allocating and hash the same owned bytes handed to storage.
   assertObjectBytes(key, input)
+  // Empty objects require explicit size and digest metadata from the file validator.
+  if (input.length === 0 && expected?.size !== 0) throw storageError(400)
   const bytes = Buffer.from(input), reference = objectReference(key, bytes)
   if (expected !== undefined) {
     assertObjectReference({ key, size: expected?.size, sha256: expected?.sha256 })
@@ -43,7 +45,7 @@ export function snapshotObject(key: string, input: Buffer, expected?: { size: nu
 export function assertObjectReference(ref: ObjectRef) {
   if (!ref || typeof ref !== 'object') throw storageError(400)
   assertObjectKey(ref.key)
-  if (!Number.isSafeInteger(ref.size) || ref.size < 1 || ref.size > MAX_OBJECT_BYTES || typeof ref.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ref.sha256)) throw storageError(400)
+  if (!Number.isSafeInteger(ref.size) || ref.size < 0 || ref.size > MAX_OBJECT_BYTES || typeof ref.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ref.sha256)) throw storageError(400)
 }
 export async function collectVerified(source: AsyncIterable<Uint8Array>, reference: ObjectRef): Promise<Buffer> {
   const chunks: Buffer[] = []

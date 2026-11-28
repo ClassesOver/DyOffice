@@ -9,8 +9,8 @@ export function createFileValidator({ timeoutMs = 5000, maxConcurrent = 2 }: { t
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw storageError(400)
   let active = 0
   return async function validate(bytes: Buffer, name: string, policy: Partial<FileValidationPolicy> = {}): ReturnType<typeof validateUploadInternal> {
-    validateFileName(name)
-    if (!Buffer.isBuffer(bytes) || !bytes.length) throw storageError(400)
+    const format = validateFileName(name)
+    if (!Buffer.isBuffer(bytes) || (bytes.length === 0 && format !== 'csv')) throw storageError(400)
     if (bytes.length > MAX_OBJECT_BYTES || bytes.length > (policy.maxBytes ?? MAX_OBJECT_BYTES)) throw storageError(413)
     if (active >= maxConcurrent) throw Object.assign(storageError(503), { retryAfter: 1 })
     active++

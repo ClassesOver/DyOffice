@@ -31,7 +31,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
   }
   async function reserve(token: FileCredential, fileId: string, input: DraftInput, restoredFrom: string | null = null, autoPdfName?: string, protectedFormat?:EncryptedOfficeFormat,passwordChange=false) {
     const id = uuid(fileId), base = uuid(input.baseRevision), editor = uuid(input.editorId), epoch = leaseEpoch(input.leaseEpoch), size = input.size
-    if (!Number.isSafeInteger(size) || size < 1) throw authError(400)
+    if (!Number.isSafeInteger(size) || size < (restoredFrom ? 0 : 1)) throw authError(400)
     if (size > MAX_OBJECT_BYTES) throw authError(413)
     // Browser owners may reclaim their abandoned drafts; job capabilities must
     // never gain account-wide reclamation authority.
@@ -40,6 +40,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
       if (principal.job && (id!==principal.job.fileId || base!==principal.job.baseRevision || editor!==principal.job.id || restoredFrom)) throw authError(404)
       const account = await lockAccount(connection,principal)
       const file = await loadFile(connection,principal,id,false,'UPDATE')
+      if (size === 0 && file.format !== 'csv') throw authError(400)
       await assertLiveLease(connection,principal,id,epoch,editor)
       if (file.current_revision !== base) throw authError(409)
       if (protectedFormat && (principal.job || principal.dshEdit || file.format!==protectedFormat)) throw authError(404)

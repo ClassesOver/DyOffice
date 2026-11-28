@@ -107,7 +107,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       if(files.capabilities.pdfEditor!=='editable')throw authError(415)
       return reply.code(201).send(await files.createBlankPdf(token(request)))
     }))
-    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES }, autoName:{type:'boolean'} } } } }, (request, reply) => transfer(request, reply, async () => {
+    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 0, maximum: MAX_OBJECT_BYTES }, autoName:{type:'boolean'} } } } }, (request, reply) => transfer(request, reply, async () => {
       const staged = await files.stageUpload(token(request), request.body as { name: string; size: number; autoName?:boolean })
       return reply.code(201).send(staged)
     }))
@@ -134,7 +134,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
         })
       }
       if (type !== 'application/octet-stream') throw authError(415)
-      return files.receiveUpload(token(request), id, request.body as Buffer)
+      return files.receiveUpload(token(request), id, (request.body as Buffer | undefined) ?? Buffer.alloc(0))
     })))
     api.post('/api/v1/uploads/:id/finish', { bodyLimit: 4096, schema: { params, querystring: emptyQuery } }, (request, reply) => transfer(request, reply, async () => {
       if (request.body !== undefined) throw authError(400)

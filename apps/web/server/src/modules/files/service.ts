@@ -169,7 +169,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size','autoName'].includes(key))) throw authError(400)
       const name = metadata.name, format = validateFileName(name), size = metadata.size
       if(metadata.autoName!==undefined&&(typeof metadata.autoName!=='boolean'||(metadata.autoName&&(format==='pdf'||format==='csv'||name!=='未命名.'+format))))throw authError(400)
-      if (!Number.isSafeInteger(size) || size < 1) throw authError(400)
+      if (!Number.isSafeInteger(size) || size < (format === 'csv' ? 0 : 1)) throw authError(400)
       if (size > MAX_OBJECT_BYTES) throw authError(413)
       // Separate commit: quota reclamation survives a subsequent quota rejection.
       await service.reclaimAbandonedUploads(token)

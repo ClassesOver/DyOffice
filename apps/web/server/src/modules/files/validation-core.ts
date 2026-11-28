@@ -120,7 +120,7 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
 export async function validateUploadInternal(bytes: Buffer, name: string, policy: Partial<Limits> = {}) {
   const format = validateFileName(name), limits = { ...uploadLimits,...policy }
   if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw storageError(400)
-  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw storageError(400)
+  if (!Buffer.isBuffer(bytes) || (bytes.length === 0 && format !== 'csv')) throw storageError(400)
   if (bytes.length > limits.maxBytes || bytes.length > MAX_OBJECT_BYTES) throw storageError(413)
   let officeSignatureProtected = false
   try {

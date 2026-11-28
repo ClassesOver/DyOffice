@@ -111,7 +111,7 @@ test('workspace Sheets imports text into a selection with undo and save',{skip:!
  await expect.poll(()=>values(['J18','K18'])).toEqual(['A, B, C, D, E',57])
 })
 
-test('workspace opens and saves CSV with its original name and supports making an XLSX copy',{skip:!built,timeout:180000},async t=>{
+test('workspace opens and saves CSV with its original name and supports making an XLSX copy',{skip:!built,timeout:210000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+11
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'en',autoSave:true,showAssistant:false})
@@ -184,6 +184,27 @@ test('workspace opens and saves CSV with its original name and supports making a
  await page.reload()
  await expect(workbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
  await expect.poll(values).toEqual(['Name','Beta','007'])
+
+ await page.getByRole('tab',{name:'首页',exact:true}).click()
+ await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+ await picker.setInputFiles({name:'Blank.csv',mimeType:'text/csv',buffer:Buffer.alloc(0)})
+ await upload.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+ await expect(upload).toContainText('已完成 1',{timeout:60000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ const blank=(await f.files.listFiles(token)).files.find(item=>item.name==='Blank.csv')
+ assert.equal(blank.size,0)
+ const blankFrame=page.frameLocator(`iframe[data-document-id="${blank.id}"]`)
+ const emptyWorkbook=blankFrame.locator('html')
+ await expect(emptyWorkbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect(blankFrame.locator('.csv-empty-notice')).toBeVisible()
+ await emptyWorkbook.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A1').setValue('First row'))
+ await page.getByRole('tab',{name:'Blank.csv',exact:true}).focus()
+ await page.keyboard.press('ControlOrMeta+s')
+ await blankFrame.getByRole('button',{name:'Continue as CSV',exact:true}).click()
+ const blankHead=async()=>(await f.files.openFile(token,blank.id)).file.revision
+ await expect.poll(blankHead,{timeout:30000}).not.toBe(blank.revision)
+ assert.deepEqual(await f.files.readFile(token,blank.id,blank.revision),Buffer.alloc(0))
+ assert.deepEqual(await f.files.readFile(token,blank.id,await blankHead()),Buffer.from('\ufeffFirst row\r\n'))
 })
 
 test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} uploads as editable XLSX copies`,{skip:!built,timeout:workbookImportWasi?240000:120000},async t=>{
