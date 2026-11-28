@@ -8,8 +8,8 @@ import './web-ai-naming.css'
 
 export type WorkspaceCopyDestination = { name: string; folderId?: string; downloadFormat?: 'pdf' | 'html' | 'md'; download?: true }
 
-export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports,batchPdf,offerPdfDownload}:{
- locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean;batchPdf?:boolean;offerPdfDownload?:boolean
+export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports,batchPdf,downloadLabel}:{
+ locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean;batchPdf?:boolean;downloadLabel?:string
 }):Promise<WorkspaceCopyDestination|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
@@ -91,9 +91,9 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
   const abort=()=>finish(null)
   cancel.onclick=abort
   dialog.oncancel=event=>{event.preventDefault();abort()}
-  if(offerPdfDownload){
+  if(downloadLabel){
    const download=doc.createElement('button')
-   download.type='button';download.textContent=en?'Download PDF':'下载 PDF'
+   download.type='button';download.textContent=downloadLabel
    download.onclick=()=>{
     const name=input.value.trim()
     if(name)finish({name,download:true})

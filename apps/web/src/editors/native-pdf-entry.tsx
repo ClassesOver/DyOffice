@@ -184,12 +184,54 @@ async function mount(){
    finally{choosingAttachment=false}
   },
   async exportAttachment(path:string,name:string,data:string){
+   const signal=browserActions.signal
+   const zh=prefs?.language!=='en'
+   const unavailable=zh?'当前无法导出附件。':'The attachment is unavailable.'
    try{
-    browserActions.signal.throwIfAborted()
-    if(path!==grant.path||data.length>64*1024*1024)throw Error('PDF attachment is unavailable or too large.')
-    const targetPath=browserFileName(name,'attachment')
-    downloadBrowserFile(new Blob([decodeBrowserBase64(data)],{type:'application/octet-stream'}),targetPath)
-    return {ok:true as const,targetPath}
+    signal.throwIfAborted()
+    if(disposed||path!==grant.path||data.length>64*1024*1024)throw Error(unavailable)
+    const bytes=decodeBrowserBase64(data)
+    const download=(targetPath:string)=>{
+     downloadBrowserFile(new Blob([bytes],{type:'application/octet-stream'}),targetPath)
+     return {ok:true as const,targetPath}
+    }
+    const format=(['pdf','docx','xlsx','xlsm','pptx','csv'] as const).find(extension=>name.toLowerCase().endsWith('.'+extension))
+    const publisher=workspaceCopies
+    if(!publisher||!format||bytes.byteLength>MAX_WORKSPACE_COPY_BYTES||(!bytes.byteLength&&format!=='csv')){
+     return download(browserFileName(name,'attachment'))
+    }
+    if(ribbonBusy||ribbonPending||redacting||publisher.hasPending()){
+     throw Error(zh?'请先完成待处理的 PDF 操作。':'Finish the pending PDF operation first.')
+    }
+    const base=grant.current()
+    const active=()=>!disposed&&base===grant.current()
+    const suggested=copyName(name,'attachment',format)
+    ribbonBusy=true;ribbonError='';saveCopyNotice=''
+    try{
+     const destination=await confirmWorkspaceCopy(suggested,{
+      locale:zh?'zh':'en',signal,request:grant.workspaceRequest,fileId,
+      downloadLabel:zh?'下载附件':'Download attachment',
+     })
+     if(!destination||signal.aborted)return {ok:false as const,cancelled:true as const}
+     if(!active())throw Error(unavailable)
+     const targetPath=copyName(destination.name,'attachment',format)
+     if(destination.download)return download(targetPath)
+     if(!await publisher.publish(bytes,{name:targetPath,folderId:destination.folderId,format},active,signal,'save')){
+      throw Error(unavailable)
+     }
+     saveCopyNotice=zh?`已保存副本：${targetPath}`:`Saved copy: ${targetPath}`
+     return {ok:true as const,targetPath}
+    }catch(error){
+     ribbonPending=publisher.hasPending()
+     ribbonError=error instanceof Error?error.message:String(error)
+     if(signal.aborted)return {ok:false as const,cancelled:true as const}
+     throw Error(ribbonPending
+      ?(zh?'请确认附件的保存结果。':'Confirm the attachment’s save result.')
+      :(zh?'无法保存附件。可以再次导出并选择下载附件。':'Could not save the attachment. Export it again and choose Download attachment.'))
+    }finally{
+     ribbonBusy=false
+     if(!disposed)render()
+    }
    }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
   },
   async mergePdf(

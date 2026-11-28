@@ -2198,6 +2198,92 @@ test('native Web PDF compares local files and downloads page images and an embed
  assert.deepEqual(await f.files.readFile(f.alice.token,protectedFile.fileId,protectedFile.revision),protectedBytes)
 })
 
+test('native Web PDF saves exported attachments to a workspace folder and recovers a lost receipt',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const workspace=createWorkspaceService(f.transactions)
+ const sourceFolder=await workspace.createFolder(f.alice.token,{name:'Reports',parentId:null})
+ const destination=await workspace.createFolder(f.alice.token,{name:'Exported attachments',parentId:null})
+ const evidence=await docxBytes()
+ const pdf=await PDFDocument.create()
+ pdf.addPage().drawText('Attachment export fixture')
+ await pdf.attach(evidence,'evidence.docx')
+ await pdf.attach(Buffer.alloc(0),'blank.csv')
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'attachments-source.pdf')
+ await workspace.moveFile(f.alice.token,file.fileId,{folderId:sourceFolder.id})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({acceptDownloads:true})
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+ await expect(frame.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await frame.getByRole('button',{name:'View',exact:true}).click()
+ await frame.getByRole('button',{name:'Attachments',exact:true}).click()
+ const exportButton=name=>frame.locator('.pdf-attachment').filter({has:frame.getByText(name,{exact:true})}).getByRole('button',{name:'Export',exact:true})
+ const dialog=frame.getByRole('dialog',{name:'Save a copy to your workspace',exact:true})
+ const name=dialog.getByRole('textbox',{name:'File name',exact:true})
+ const folder=dialog.getByRole('combobox',{name:'Folder',exact:true})
+ await exportButton('evidence.docx').click()
+ await expect(name).toHaveValue('evidence.docx',{timeout:5000})
+ await expect(folder).toHaveValue(sourceFolder.id)
+ await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ await exportButton('evidence.docx').click()
+ const [download]=await Promise.all([page.waitForEvent('download'),dialog.getByRole('button',{name:'Download attachment',exact:true}).click()])
+ assert.equal(download.suggestedFilename(),'evidence.docx')
+ assert.deepEqual(await readFile(await download.path()),evidence)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(finishes.length===1){
+   const response=await route.fetch()
+   assert.equal(response.status(),200)
+   return route.abort()
+  }
+  return route.continue()
+ })
+ await exportButton('evidence.docx').click()
+ await name.fill('Audit evidence')
+ await folder.selectOption(destination.id)
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=frame.getByRole('button',{name:'确认副本保存结果',exact:true})
+ await expect(confirm).toBeVisible({timeout:20000})
+ await confirm.click()
+ await expect(confirm).toHaveCount(0)
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ const saved=(await workspace.listFiles(f.alice.token,{folderId:destination.id})).files
+ assert.deepEqual(saved.map(item=>item.name),['Audit evidence.docx'])
+ const auditCopy=(await f.files.openFile(f.alice.token,saved[0].id)).file
+ assert.deepEqual(await f.files.readFile(f.alice.token,auditCopy.fileId,auditCopy.revision),evidence)
+ await expect(page).toHaveURL(origin+'/#/file/'+file.fileId)
+
+ await exportButton('blank.csv').click()
+ await expect(name).toHaveValue('blank.csv')
+ await folder.selectOption(destination.id)
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(frame.getByText('Saved copy: blank.csv',{exact:true})).toBeVisible({timeout:20000})
+ const copies=(await workspace.listFiles(f.alice.token,{folderId:destination.id})).files
+ assert.deepEqual(copies.map(item=>item.name).sort(),['Audit evidence.docx','blank.csv'])
+ const emptyId=copies.find(item=>item.name==='blank.csv').id
+ const emptyCopy=(await f.files.openFile(f.alice.token,emptyId)).file
+ assert.deepEqual(await f.files.readFile(f.alice.token,emptyCopy.fileId,emptyCopy.revision),Buffer.alloc(0))
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
+
 test('native Web PDF publishes and opens merged workspace PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))

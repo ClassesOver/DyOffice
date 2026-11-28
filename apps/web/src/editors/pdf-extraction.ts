@@ -1,5 +1,5 @@
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
-import {isRevisionRef,type OfficeFormat,type RevisionRef} from '../../../../packages/web-contracts/src/api'
+import {isRevisionRef,type WorkspaceFileFormat,type RevisionRef} from '../../../../packages/web-contracts/src/api'
 import type {RedactionInput} from '../../../pdf/src/shared/ipc'
 
 export type PdfRedactedCopy={patterns:readonly string[];ids:readonly string[]}|{regions:readonly RedactionInput[]}
@@ -7,10 +7,10 @@ export type PdfPageLayout={kind:'split';perPage:2|4|9}|{kind:'merge';perSheet:nu
 
 export const MAX_WORKSPACE_COPY_BYTES=32*1024*1024
 export type PdfCopyDestination={name:string;folderId?:string}
-type PublicationDestination=PdfCopyDestination&{format?:OfficeFormat}
+type PublicationDestination=PdfCopyDestination&{format?:WorkspaceFileFormat}
 type Prepared={uploadId:string;fileId:string;sha256:string;size:number;receipt?:RevisionRef;delivered?:boolean;expired?:boolean}
 type PresentCopy=(receipt:RevisionRef,signal?:AbortSignal)=>Promise<void>
-type PendingCopies={files:Prepared[];revealBatch?:PresentCopy;delivery?:'open'|'save';format?:OfficeFormat}
+type PendingCopies={files:Prepared[];revealBatch?:PresentCopy;delivery?:'open'|'save';format?:WorkspaceFileFormat}
 /** Recovery resumes the same ordered uploads without regenerating the PDFs. */
 export function createPdfExtraction({fileId,name,request,getRevision,onCreated,onSaved,onBatchPublished}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated:PresentCopy;onSaved?:PresentCopy;onBatchPublished?:PresentCopy}){
  let busy=false,stageUnknown=false,pending:PendingCopies|undefined
@@ -116,7 +116,7 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated,o
    }
    check()
    if(busy||pending||stageUnknown)return false
-   if(!bytes.byteLength||bytes.byteLength>MAX_WORKSPACE_COPY_BYTES)throw Error('Invalid copy size.')
+   if((!bytes.byteLength&&format!=='csv')||bytes.byteLength>MAX_WORKSPACE_COPY_BYTES)throw Error('Invalid copy size.')
    busy=true;progress={created:0,total:0};receipts=[]
    let uploadId:string|undefined,finishStarted=false
    try{

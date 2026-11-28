@@ -243,7 +243,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       if(source.status==='unauthorized')throw expired()
       const publisher=pdfCopies&&request&&active()?pdfCopies:undefined
       const destination=publisher&&request
-        ? await confirmWorkspaceCopy(suggested,{locale,signal,request,fileId,document:stage.document,offerPdfDownload:true})
+        ? await confirmWorkspaceCopy(suggested,{locale,signal,request,fileId,document:stage.document,downloadLabel:chinese?'下载 PDF':'Download PDF'})
         : undefined
       if(publisher&&!destination)return null
       if(publisher&&(!active()||!await copyAuthority?.verify()))throw expired()
