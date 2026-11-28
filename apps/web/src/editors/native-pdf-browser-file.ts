@@ -22,6 +22,8 @@ function hasSignatureMarker(bytes:Uint8Array){
 }
 
 /** Session-bound file grant for the desktop PDF renderer in a browser. */
+export type PresentWorkspaceCopy=(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
+
 export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedRevision,editorId}:{fileId:string;editorId?:string|undefined;fetchImpl?:typeof fetch;expectedRevision?:string|undefined}){
  const client=createLocalShellClient(fetchImpl),session=await client.bindSession()
  const host=createSessionFileHost({fetchImpl,expectedRevision,...(editorId?{editorId}:{})})
@@ -190,13 +192,15 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
    if(!autoNamePending)return false
    const details=await refreshAutoName()
    return autoNamePending&&details.file.revision===current.revision
-  },pageCopies(open:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>){
+  },pageCopies(open:PresentWorkspaceCopy,reveal?:PresentWorkspaceCopy){
+   const present=(deliver:PresentWorkspaceCopy)=>async(receipt:RevisionRef,signal?:AbortSignal)=>{
+    assertActive()
+    await deliver(receipt,session.proof,signal)
+   }
    return createPdfExtraction({
     fileId,name,request:session.request,getRevision:()=>current.revision,
-    onCreated:async(receipt,signal)=>{
-     assertActive()
-     await open(receipt,session.proof,signal)
-    },
+    onCreated:present(open),
+    onBatchPublished:reveal&&present(reveal),
    })
   },async queryRedactions(patterns:readonly string[],signal?:AbortSignal){
    const base=current

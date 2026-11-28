@@ -126,6 +126,7 @@ declare global {
   dyofficeConsumeAiDocContent?:(fileId:string)=>Promise<{title:string;html:string}|null>
   dyofficePrepareAiDoc?:(signal?:AbortSignal,expectedProof?:string)=>Promise<PreparedAiDocumentCreator>
   dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
+  dyofficeRevealPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
   dyofficeOpenKnowledgeSource?:(id:string,revision:string)=>Promise<void>
   dyofficeCreateAiDoc?:(request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<RevisionRef>
   dyofficeCreateAiCsv?:(request:{title:string;content:string})=>Promise<string>
@@ -301,6 +302,11 @@ function installBridge(deploymentId?:string){
   signal?.throwIfAborted()
   notifyFilesChanged()
   await openCreatedDocument(documentTabs,capabilities,receipt.fileId,bound.request)
+ }
+ window.dyofficeRevealPdfCopy=async(receipt,proof,signal)=>{
+  await client.bindSession(proof,signal)
+  signal?.throwIfAborted()
+  await window.aiOffice.revealPath(receipt.fileId,signal)
  }
  window.dyofficePrepareAiDoc=async(signal,expectedProof)=>{
   const proof=expectedProof??sourceWorkspace?.bound.proof

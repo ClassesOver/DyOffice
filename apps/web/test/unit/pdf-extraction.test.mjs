@@ -115,10 +115,10 @@ for(const status of [401,403,404,409])test(`PDF extraction recovery ${status} ke
  assert.deepEqual(f.opened,[receipt])
 })
 
-function splitFixture({finish,onCreated,stage}={}){
+function splitFixture({finish,onCreated,onBatchPublished,stage}={}){
  const files=[1,2,3].map(n=>({...prepared,uploadId:`upload-${n}`,fileId:`created-${n}`})),calls=[],opened=[]
- const receipts=files.map(file=>({...receipt,fileId:file.fileId}))
- const client=createPdfExtraction({fileId:'source',name:'Report.pdf',getRevision:()=> 'source-revision',onCreated:async value=>{opened.push(value);await onCreated?.(value)},request:async(path,method,body,signal)=>{
+ const receipts=files.map(file=>({...receipt,fileId:file.fileId})),revealed=[]
+ const client=createPdfExtraction({fileId:'source',name:'Report.pdf',getRevision:()=> 'source-revision',onCreated:async value=>{opened.push(value);await onCreated?.(value)},...(onBatchPublished?{onBatchPublished:async value=>{revealed.push(value);await onBatchPublished(value)}}:{}),request:async(path,method,body,signal)=>{
   calls.push({path,method,body,signal})
   if(path.endsWith('/lease')&&method==='POST')return {leaseEpoch:7}
   if(path.endsWith('/split/uploads')){await stage?.();return {files}}
@@ -126,7 +126,7 @@ function splitFixture({finish,onCreated,stage}={}){
   if(path.endsWith('/finish')){await finish?.(index);return {format:'pdf',file:receipts[index]}}
   if(path.includes('/revisions/'))return receipts.find(value=>path.includes(value.fileId))
  }})
- return {client,files,calls,opened,receipts}
+ return {client,files,calls,opened,receipts,revealed}
 }
 test('split recovers a lost second finish using its original upload, without duplicating the first file',async()=>{
  let lost=true
@@ -140,6 +140,26 @@ test('split recovers a lost second finish using its original upload, without dup
  assert.equal(f.calls.filter(call=>call.path.endsWith('/split/uploads')).length,1)
  assert.deepEqual(f.calls.filter(call=>call.path.endsWith('/finish')).map(call=>call.path),['/api/v1/uploads/upload-1/finish','/api/v1/uploads/upload-2/finish','/api/v1/uploads/upload-2/finish','/api/v1/uploads/upload-3/finish'])
  assert.deepEqual(f.calls.find(call=>call.path.endsWith('/split/uploads')).body.pagesPerFile,2)
+})
+test('manual PDF split reveals the completed batch once and retries a failed reveal using the verified receipts',async()=>{
+ let failFinish=true,failReveal=true
+ const f=splitFixture({
+  finish:async index=>{if(index===1&&failFinish){failFinish=false;throw Error('response lost')}},
+  onBatchPublished:async()=>{if(failReveal){failReveal=false;throw Error('folder view failed')}},
+ })
+ await assert.rejects(f.client.split(2,undefined,{name:'Report.pdf',folderId:'project'}),/response lost/)
+ assert.deepEqual(f.opened,[])
+ assert.deepEqual(f.revealed,[])
+ await assert.rejects(f.client.confirm(),/定位/)
+ assert.deepEqual(f.opened,[])
+ assert.deepEqual(f.revealed,[f.receipts[0]])
+ assert.deepEqual(f.client.getReceipts(),f.receipts)
+ assert.equal(f.client.hasPending(),true)
+ const callCount=f.calls.length
+ assert.equal(await f.client.confirm(),true)
+ assert.equal(f.calls.length,callCount)
+ assert.deepEqual(f.revealed,[f.receipts[0],f.receipts[0]])
+ assert.equal(f.client.hasPending(),false)
 })
 test('split opening failure retains its receipt and stops later creation until confirmation',async()=>{
  let fail=true

@@ -22,7 +22,7 @@ import {inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
 import {normalizePdfGeneratedImage} from './pdf-generated-image'
 import {LocaleProvider} from '../../../pdf/src/renderer/i18n/locale'
 import {EDIT_FONTS,type PdfApi,type PdfBrowserPrintPage,type PdfConvertFormat,type PdfPageGeometryOperation} from '../../../pdf/src/shared/ipc'
-import {openNativePdfBrowserFile} from './native-pdf-browser-file'
+import {openNativePdfBrowserFile,type PresentWorkspaceCopy} from './native-pdf-browser-file'
 import {MAX_PDF_DRAFT_BLANK_PAGES,MAX_PDF_EDIT_PAGES} from '../../shared/pdf-edit-structure.mjs'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import {resolveTurnImageAttachment,SharedEditorAssistant} from './shared-editor-assistant'
@@ -238,8 +238,11 @@ async function mount(){
  let realtime:ReturnType<typeof createEditorBridge>|undefined
  const copies=(()=>{
   try{
-   const open=(window.parent as Window&{dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>}).dyofficeOpenPdfCopy
-   return open?grant.pageCopies(open):undefined
+   const {dyofficeOpenPdfCopy:open,dyofficeRevealPdfCopy:reveal}=window.parent as Window&{
+    dyofficeOpenPdfCopy?:PresentWorkspaceCopy
+    dyofficeRevealPdfCopy?:PresentWorkspaceCopy
+   }
+   return open?grant.pageCopies(open,reveal):undefined
   }catch{return undefined}
  })()
  let ribbonBusy=false,ribbonPending=false,ribbonError=''
@@ -250,7 +253,7 @@ async function mount(){
   if(!run&&!ribbonPending)return fail('没有待确认的 PDF 副本。')
   ribbonBusy=true;ribbonError=''
   try{
-   const ok=run?await run(copies):await copies.confirm()
+   const ok=run?await run(copies):await copies.confirm(browserActions.signal)
    if(!ok)return fail('当前不能生成 PDF 副本。')
    ribbonPending=false
    return {ok:true as const,savedPath:copies.getReceipts().at(-1)!.fileId}

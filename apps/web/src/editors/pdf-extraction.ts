@@ -6,19 +6,21 @@ export type PdfRedactedCopy={patterns:readonly string[];ids:readonly string[]}|{
 export type PdfPageLayout={kind:'split';perPage:2|4|9}|{kind:'merge';perSheet:number;direction:'horizontal'|'vertical';separator:boolean}
 
 type PdfCopyDestination={name:string;folderId?:string}
-type Prepared={uploadId:string;fileId:string;sha256:string;size:number;receipt?:RevisionRef;opened?:boolean;expired?:boolean}
+type Prepared={uploadId:string;fileId:string;sha256:string;size:number;receipt?:RevisionRef;delivered?:boolean;expired?:boolean}
+type PresentCopy=(receipt:RevisionRef,signal?:AbortSignal)=>Promise<void>
+type PendingCopies={files:Prepared[];revealBatch?:PresentCopy}
 /** Recovery resumes the same ordered uploads; it never reruns extraction or splitting. */
-export function createPdfExtraction({fileId,name,request,getRevision,onCreated}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated:(receipt:RevisionRef,signal?:AbortSignal)=>Promise<void>}){
- let busy=false,stageUnknown=false,pending:Prepared[]|undefined
+export function createPdfExtraction({fileId,name,request,getRevision,onCreated,onBatchPublished}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated:PresentCopy;onBatchPublished?:PresentCopy}){
+ let busy=false,stageUnknown=false,pending:PendingCopies|undefined
  let progress={created:0,total:0}
  let receipts:RevisionRef[]=[]
  const remove=async(uploadId:string)=>{await request(`/api/v1/uploads/${encodeURIComponent(uploadId)}`,'DELETE').catch(()=>{})}
- const updateProgress=()=>{if(pending)progress={created:pending.filter(item=>!!item.receipt).length,total:pending.length}}
+ const updateProgress=()=>{if(pending)progress={created:pending.files.filter(item=>!!item.receipt).length,total:pending.files.length}}
  async function finish(signal?:AbortSignal){
-  const queue=pending!
+  const {files:queue,revealBatch}=pending!
   for(const current of queue){
    signal?.throwIfAborted()
-   if(current.opened||current.expired)continue
+   if(current.delivered||current.expired)continue
    if(!current.receipt){
     let result:{format:string;file:RevisionRef}
     try{result=await request(`/api/v1/uploads/${encodeURIComponent(current.uploadId)}/finish`,'POST',undefined,signal)}
@@ -38,13 +40,19 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated}:
    const confirmed=await request<RevisionRef>(`/api/v1/files/${encodeURIComponent(receipt.fileId)}/revisions/${encodeURIComponent(receipt.revision)}`,undefined,undefined,signal)
    if(!isRevisionRef(confirmed)||confirmed.fileId!==receipt.fileId||confirmed.revision!==receipt.revision||confirmed.sha256!==receipt.sha256||confirmed.size!==receipt.size)throw Error('无法核对新 PDF 的保存回执，请保留页面确认结果，不要重复生成。')
    signal?.throwIfAborted()
-   try{await onCreated(receipt,signal)}catch{throw Error('PDF 已创建，但打开失败。请从文件列表打开，或确认结果重试打开，不要重复生成。')}
-   current.opened=true
+   if(!revealBatch){
+    try{await onCreated(receipt,signal)}catch{throw Error('PDF 已创建，但打开失败。请从文件列表打开，或确认结果重试打开，不要重复生成。')}
+   }
+   current.delivered=true
    receipts.push({...receipt})
    signal?.throwIfAborted()
   }
+  const partial=queue.some(item=>item.expired)
+  if(!partial&&revealBatch){
+   try{await revealBatch(receipts[0]!,signal)}catch{throw Error('PDF 拆分文件已保存，但无法定位文件夹。请确认结果以重试定位。')}
+  }
   pending=undefined
-  if(queue.some(item=>item.expired))throw Error(`仅生成 ${progress.created}/${progress.total} 份 PDF，其余上传已过期，未全部完成。`)
+  if(partial)throw Error(`仅生成 ${progress.created}/${progress.total} 份 PDF，其余上传已过期，未全部完成。`)
   return true
  }
  async function prepare(kind:'extract'|'split'|'layout'|'redact',input:readonly number[]|number|PdfPageLayout|PdfRedactedCopy,signal?:AbortSignal,destination?:PdfCopyDestination){
@@ -70,13 +78,13 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated}:
    },signal)
    const files=kind==='split'?(result as {files:Prepared[]})?.files:[result as Prepared]
    if(!Array.isArray(files)||files.length<(kind==='split'?2:1)||files.length>100||files.some(item=>!item||typeof item.uploadId!=='string'||!item.uploadId||item.fileId===fileId||!isRevisionRef({...item,revision:'prepared'}))||new Set(files.map(item=>item.uploadId)).size!==files.length||new Set(files.map(item=>item.fileId)).size!==files.length)throw Error('Invalid PDF extraction preparation')
-   pending=files.map(({uploadId,fileId,sha256,size})=>({uploadId,fileId,sha256,size}));updateProgress()
+   pending={files:files.map(({uploadId,fileId,sha256,size})=>({uploadId,fileId,sha256,size})),revealBatch:kind==='split'&&destination?onBatchPublished:undefined};updateProgress()
    signal?.throwIfAborted()
    finishStarted=true
    return await finish(signal)
   }catch(error){
    if(!finishStarted){
-    if(pending){for(const item of pending)await remove(item.uploadId);pending=undefined}
+    if(pending){for(const item of pending.files)await remove(item.uploadId);pending=undefined}
     else if(stageStarted){const status=(error as {status?:number})?.status;stageUnknown=status===undefined||status>=500||[408,429].includes(status)}
    }
    throw error
