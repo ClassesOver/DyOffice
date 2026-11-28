@@ -2925,7 +2925,7 @@ export function App({
     const fxButtonDisposable = installFxButtonHook(runtime)
     // The picking side of the cross-workbook range picker (genoffice#2109): another
     // tab's dialog can arm a pick against this workbook's grid.
-    const pickRelayDisposable = installWorkbookPickRelay(runtime)
+    const pickRelayDisposable = installWorkbookPickRelay(runtime,hostRef.current!==undefined)
     // A file formula the engine re-computes into an error shows the file's
     // cached result instead; display-only.
     const cachedValueDisposable = installCachedValueFallbackInterceptor(runtime, lazyWorkbookRef)

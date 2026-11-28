@@ -125,12 +125,15 @@ export function FunctionArgumentsDialog({
   const armExternalPick = (target: ExternalPickTarget): void => {
     disposePickRef.current?.()
     setPickingName(target.name)
-    disposePickRef.current = host.pickExternalRange(target, (ref) => {
+    const finishPick = () => {
       disposePickRef.current?.()
       disposePickRef.current = null
       setPickingName(null)
+    }
+    disposePickRef.current = host.pickExternalRange(target, (ref) => {
+      finishPick()
       insertAtActive(ref)
-    })
+    },finishPick)
   }
 
   const insertTypedRange = (target: ExternalPickTarget): void => {

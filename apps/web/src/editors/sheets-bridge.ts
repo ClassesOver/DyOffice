@@ -5,6 +5,7 @@ import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
 import {printInBrowser} from './browser-print.ts'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
+import type {RegisterWorkbookPicker} from './workbook-tab-picker'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
   workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,externalLinksUpdateResultSchema,
@@ -20,6 +21,7 @@ import {
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
 type ParentAiWindow = Window & {
+  dyofficeRegisterWorkbookPicker?:RegisterWorkbookPicker
   dyofficeCreateAiXlsx?: (request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
   dyofficeCreateAiDoc?: (request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<void>
 }
@@ -41,6 +43,12 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   }
   let committed: import('../../../../packages/web-contracts/src/api').RevisionRef | null = null
   const sessions = new Map<string,Session>(), controllers = new Set<AbortController>()
+  const activeWorkbook = () => [...sessions.values()].find(current=>!current.attachment)
+  const picker = (()=>{
+    if (typeof window==='undefined' || window.parent===window) return
+    try { return (window.parent as ParentAiWindow).dyofficeRegisterWorkbookPicker?.(window,fileId,()=>!disposed&&!!activeWorkbook()) }
+    catch { return }
+  })()
   const renameListeners = new Set<(name:string)=>void>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
   let recovery: Recovery | null = null, confirming = false
@@ -334,7 +342,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     getAiPanelPrefs: async () => ({side:'left' as const,fontSize:'default' as const,customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:true}),
     getUserDisplayName: async () => prefs.authorName ?? '',
     onLanguageChanged:noEvent,onThemeChanged:noEvent,onDocumentThemeChanged:noEvent,onAutoSaveDefaultChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
-    onWorkbookPickArmed:noEvent,onWorkbookPickSelected:noEvent,onWorkbookPickCancelled:noEvent,
+    onWorkbookPickArmed:picker?.onArmed??noEvent,onWorkbookPickSelected:picker?.onSelected??noEvent,onWorkbookPickCancelled:picker?.onCancelled??noEvent,
     isCopyEmfAvailable:async()=>false,
     onChromePressed:noEvent,onCloseSaveRequest:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,
     onMenuAction(listener: Parameters<DesktopApi['onMenuAction']>[0]){
@@ -484,12 +492,12 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       const current=session(sessionId)
       if(current.attachment)throw hostError('INVALID_REVISION','external links')
       const result=await workspaceLinkMetadata(current)
-      if(!result.workspaceSources||!result.links.some(link=>workspaceSourceId(link.rawTarget)))return result
+      if(!result.links.some(link=>workspaceSourceId(link.rawTarget)))return result
       const names=new Map((await listWorkspaceWorkbooks()).map(file=>[file.id,file.name]))
       return {...result,links:result.links.map(link=>{
         const id=workspaceSourceId(link.rawTarget)
         const displayName=id?names.get(id):undefined
-        return displayName?{...link,displayName}:link
+        return displayName?{...link,source:link.rawTarget,displayName}:link
       })}
     },
     async refreshWorkbookConnection(input){
@@ -547,8 +555,18 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       return {sha256:file.sha256,fileBytes:file.fileBytes,passwordProtected:true as const}
     },
     readExternalLinkUsage:unavailable,
-    // Browser editors use the typed-range picker for external workbook links.
-    async listWorkbookTabs(){return {tabs:[]}},
+    async listWorkbookTabs(){
+      const current=activeWorkbook(),open=picker?.list()??[]
+      if (!current || !open.length) return {tabs:[]}
+      const {links}=await workspaceLinkMetadata(current)
+      return {tabs:links.flatMap(link=>{
+        const target=open.find(item=>item.id===workspaceSourceId(link.rawTarget))
+        return target?[{wcId:target.wcId,name:link.displayName??target.id,path:link.rawTarget}]:[]
+      })}
+    },
+    armWorkbookPick:picker?.arm??unavailable,
+    async sendWorkbookPickSelection(selection:Parameters<DesktopApi['sendWorkbookPickSelection']>[0]){await picker?.send(selection)},
+    async cancelWorkbookPick(pickId:string){await picker?.cancel(pickId)},
     browserPrintDialog:true,
     async listPrinters(){return []},
     async printWorkbook(input){
@@ -633,5 +651,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     supportedMergeExtensions: mergeExtensions,
-    api,workspaceLinks,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,prepareDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+    api,workspaceLinks,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,prepareDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;picker?.dispose();recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

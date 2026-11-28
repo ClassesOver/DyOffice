@@ -21,10 +21,10 @@
 | App | `browser-native` | `server-api` | `isolated-worker` | `unsupported` | `desktop-only` | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | docs | 23 | 49 | 8 | 15 | 23 | 118 |
-| sheets | 19 | 43 | 25 | 18 | 11 | 116 |
+| sheets | 25 | 43 | 26 | 11 | 11 | 116 |
 | slides | 160 | 46 | 1 | 7 | 12 | 226 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 212 | 170 | 60 | 50 | 54 | 546 |
+| **all** | 218 | 170 | 61 | 43 | 54 | 546 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -78,7 +78,8 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `xlsx-workbook-query-list` | `isolated-worker` | 1 | T09 | List refreshable Web queries from the saved workbook package | The authorized package reader extracts connection metadata from the revision. Encrypted workbooks require the current unlock. |
 | `xlsx-workbook-query-refresh` | `server-api` | 1 | T15 | Resolve a saved connection and fetch its public table using the egress policy | The server checks the revision, editor lease and any workbook unlock before returning bounded table rows to the editor. |
 | `xlsx-external-data` | `unsupported` | 3 | T15 | The Web host uses the workspace external-links panel | The panel binds readable workspace files by ID and revision. Its save planner handles break operations and source changes. |
-| `xlsx-cross-window-pick` | `unsupported` | 7 | T09 | None in first release | Picking a range in another open workbook relies on shell-managed sibling tabs. |
+| `xlsx-workbook-pick-targets` | `isolated-worker` | 1 | T09 | Match saved external-link metadata to live workbook tabs | The browser compares the authorized revision's link targets with workbooks currently open in the same workspace. |
+| `xlsx-cross-window-pick` | `browser-native` | 6 | T09 | Pick a range from a linked workbook tab in the same workspace | The workspace relays a validated grid selection from the designated live workbook to the original formula dialog. |
 | `slides-presenter` | `browser-native` | 10 | T10 | Second window + BroadcastChannel (Presentation API where available) | Presenter/audience windows are coordinated through main today; same-origin windows can coordinate directly. |
 | `slides-deck-session` | `browser-native` | 126 | T10 | Deck session in a browser worker reusing pptx-ops; open/save through T06 | The deck model and journaled ops live in the Electron main process today. @genoffice/pptx-ops has no Node imports in src; @genoffice/pptx-engine has 3 Node-importing files that must be isolated before relocation. |
 | `pdf-signing` | `unsupported` | 5 | T11 | None; signature validity is displayed only | Signing uses OS certificate stores (system-certificates.ts execs platform tools) and node-forge private keys on the client machine. |
@@ -248,13 +249,13 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.updateExternalLinks` | request | invoke `$IPC_CHANNELS.updateExternalLinks` | 1 | `unsupported` | `xlsx-external-data` |
 | `desktopApi.readExternalLinkUsage` | request | invoke `$IPC_CHANNELS.readExternalLinkUsage` | 1 | `unsupported` | `xlsx-external-data` |
 | `desktopApi.selectExternalLinkSource` | request | invoke `$IPC_CHANNELS.selectExternalLinkSource` | 1 | `unsupported` | `xlsx-external-data` |
-| `desktopApi.listWorkbookTabs` | request | invoke `$IPC_CHANNELS.listWorkbookTabs` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.armWorkbookPick` | request | invoke `$IPC_CHANNELS.armWorkbookPick` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.sendWorkbookPickSelection` | request | invoke `$IPC_CHANNELS.sendWorkbookPickSelection` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.cancelWorkbookPick` | request | invoke `$IPC_CHANNELS.cancelWorkbookPick` | 3 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.onWorkbookPickArmed` | subscription | on `$IPC_CHANNELS.workbookPickArmed` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.onWorkbookPickSelected` | subscription | on `$IPC_CHANNELS.workbookPickSelected` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.onWorkbookPickCancelled` | subscription | on `$IPC_CHANNELS.workbookPickCancelled` | 1 | `unsupported` | `xlsx-cross-window-pick` |
+| `desktopApi.listWorkbookTabs` | request | invoke `$IPC_CHANNELS.listWorkbookTabs` | 1 | `isolated-worker` | `xlsx-workbook-pick-targets` |
+| `desktopApi.armWorkbookPick` | request | invoke `$IPC_CHANNELS.armWorkbookPick` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.sendWorkbookPickSelection` | request | invoke `$IPC_CHANNELS.sendWorkbookPickSelection` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.cancelWorkbookPick` | request | invoke `$IPC_CHANNELS.cancelWorkbookPick` | 3 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.onWorkbookPickArmed` | subscription | on `$IPC_CHANNELS.workbookPickArmed` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.onWorkbookPickSelected` | subscription | on `$IPC_CHANNELS.workbookPickSelected` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.onWorkbookPickCancelled` | subscription | on `$IPC_CHANNELS.workbookPickCancelled` | 2 | `browser-native` | `xlsx-cross-window-pick` |
 | `desktopApi.revealLinkSource` | notify | send `$IPC_CHANNELS.revealLinkSource` | 1 | `desktop-only` | `shell-chrome` |
 | `desktopApi.readWorkbookMedia` | request | invoke `$IPC_CHANNELS.readWorkbookMedia` | 5 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.readLocalImage` | request | invoke `$IPC_CHANNELS.readLocalImage` | 1 | `desktop-only` | `os-paths` |

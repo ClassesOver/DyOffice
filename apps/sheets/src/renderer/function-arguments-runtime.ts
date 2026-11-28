@@ -47,7 +47,7 @@ export interface FunctionArgumentsHost {
   /** Arms a cross-workbook pick against one open linked workbook; the next
       range selected on that workbook's grid arrives through onPick as the
       stored `'[n]Sheet'!A1:B2` spelling. */
-  pickExternalRange(target: ExternalPickTarget, onPick: (ref: string) => void): () => void
+  pickExternalRange(target: ExternalPickTarget, onPick: (ref: string) => void, onCancel?: () => void): () => void
   cancel(target: FunctionTarget): void
 }
 
@@ -226,11 +226,12 @@ export function createFunctionArgumentsHost(
         }
       })
     },
-    pickExternalRange(target, onPick) {
+    pickExternalRange(target, onPick, onCancel) {
       if (target.wcId === null) return () => undefined
       const wcId = target.wcId
       let disposed = false
       let offSelected: (() => void) | null = null
+      let offCancelled: (() => void) | null = null
       let pickId: string | null = null
       void (async () => {
         const armed = await window.desktopApi.armWorkbookPick(wcId)
@@ -245,10 +246,14 @@ export function createFunctionArgumentsHost(
           // the pick is consumed; release the other tabs
           void window.desktopApi.cancelWorkbookPick(pickId!)
         })
-      })()
+        offCancelled = window.desktopApi.onWorkbookPickCancelled(value => {
+          if (!disposed && value.pickId === pickId) onCancel?.()
+        })
+      })().catch(() => { if (!disposed) onCancel?.() })
       return () => {
         disposed = true
         offSelected?.()
+        offCancelled?.()
         offSelected = null
         if (pickId !== null) void window.desktopApi.cancelWorkbookPick(pickId)
       }
@@ -292,10 +297,16 @@ export function registerFxButtonOpener(open: () => void): () => void {
  * workbook's grid is relayed to it through the main process, which then
  * re-activates the editing tab.
  */
-export function installWorkbookPickRelay(runtime: UniverRuntime): { dispose(): void } {
+export function installWorkbookPickRelay(runtime: UniverRuntime, requirePointer=false): { dispose(): void } {
   let armed: string | null = null
+  let pointerPick = false
+  const markPointer = (event:PointerEvent) => {
+    if (armed && event.target instanceof Element && event.target.closest('#univer-container')) pointerPick=true
+  }
+  if (requirePointer) document.addEventListener('pointerdown',markPointer,true)
   const offArmed = window.desktopApi.onWorkbookPickArmed(({ pickId }) => {
     armed = pickId
+    pointerPick = false
   })
   const offCancelled = window.desktopApi.onWorkbookPickCancelled(({ pickId }) => {
     if (armed === pickId) armed = null
@@ -303,7 +314,7 @@ export function installWorkbookPickRelay(runtime: UniverRuntime): { dispose(): v
   const disposable = runtime.univerAPI.addEvent(
     runtime.univerAPI.Event.SelectionMoveEnd,
     (params) => {
-      if (armed === null) return
+      if (armed === null || (requirePointer&&!pointerPick)) return
       const range = params.selections[0]
       if (!range) return
       const pickId = armed
@@ -323,6 +334,7 @@ export function installWorkbookPickRelay(runtime: UniverRuntime): { dispose(): v
     dispose: () => {
       offArmed()
       offCancelled()
+      if (requirePointer) document.removeEventListener('pointerdown',markPointer,true)
       disposable.dispose()
     },
   }

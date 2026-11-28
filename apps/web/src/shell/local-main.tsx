@@ -63,6 +63,7 @@ import {CitedRevisionChanged} from '../../../../packages/browser-host/src/sessio
 import {createEntryNavigator} from './workspace-entry-navigation'
 import {createEntryRecovery,entryHash,parseEntryHash,resolveEntrySnapshot,workspaceFileLink} from './workspace-entry-recovery'
 import {DocumentFrame,type DocumentMenuCommand} from './DocumentFrame'
+import {createWorkspaceWorkbookPicker} from '../editors/workbook-tab-picker'
 import {downloadBrowserFile} from '../editors/browser-download'
 import type {BrowserDocumentCommand} from '../editors/browser-document-command'
 import {DocumentPreview} from './DocumentPreview'
@@ -232,6 +233,7 @@ async function loadRecentWorkspaceFiles(){
 
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
 function installBridge(){
+ window.dyofficeRegisterWorkbookPicker=createWorkspaceWorkbookPicker(window,id=>documentTabs.activate(id))
  window.dyofficeOpenKnowledgeSource=async (id,revision)=>{
   try{await open(id,revision)}catch(error){
    if(error instanceof CitationTabUnverified){
