@@ -58,7 +58,8 @@ test('four real Office editors share assistant chrome and retain drafts across c
  const slidesHost={openSession(input){return openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,unsafeTestOnly:true})}}
  const pdf=await PDFDocument.create();pdf.addPage([400,300]).drawText('Office assistant layout')
  const files={}
- for(const [format,bytes] of [['docx',await docxBytes()],['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))],['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',Buffer.from(await pdf.save())]])files[format]=(await importFile(f,f.alice.token,bytes,'dock.'+format)).file
+ const fixtures=[['docx',await docxBytes()],['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))],['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',Buffer.from(await pdf.save())]]
+ for(const [format,bytes] of fixtures)files[format]=(await importFile(f,f.alice.token,bytes,'dock.'+format)).file
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner,sheetsPackageReader,slidesHost})
  browser=await launchTestBrowser()
  const context=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:1440,height:1000}})
@@ -91,13 +92,15 @@ test('four real Office editors share assistant chrome and retain drafts across c
   return route.continue()
  })
  await t.test('account assistant appearance updates all mounted editors and survives reopen',async()=>{
+  const appearanceFiles={}
+  for(const [format,bytes] of fixtures)appearanceFiles[format]=(await importFile(f,f.alice.token,bytes,'appearance.'+format)).file
   await f.preferences.update(f.alice.token,{aiFontSize:'large',aiSpellcheck:false})
   await page.goto(origin)
   await expect(page.locator('.home')).toBeVisible()
   const frame=file=>page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
   const editorHtml=file=>frame(file).locator('html')
   const composer=file=>frame(file).locator('.ai-composer textarea').first()
-  for(const [format,file] of Object.entries(files)){
+  for(const [format,file] of Object.entries(appearanceFiles)){
    await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
    await expect(editorHtml(file)).toHaveAttribute('data-document-loading','ready',{timeout:45000})
    await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','large')
@@ -112,7 +115,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
     await expect(composer(file)).toHaveJSProperty('spellcheck',false)
    }
   }
-  await composer(files.pdf).fill('Draft before preference change')
+  await composer(appearanceFiles.pdf).fill('Draft before preference change')
   await page.getByRole('tab',{name:'首页',exact:true}).click()
   async function saveAppearance(font,spellcheck,custom){
    await accountAction(page,'个人设置')
@@ -126,22 +129,22 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
   }
   await saveAppearance('custom',true,21)
-  for(const file of Object.values(files)){
+  for(const file of Object.values(appearanceFiles)){
    await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','custom')
    await expect(frame(file).locator('.ai-composer').first()).toHaveCSS('zoom','1.5')
    await expect(composer(file)).toHaveJSProperty('spellcheck',true)
    assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
   }
-  await expect(editorHtml(files.pptx)).toHaveAttribute('data-ai-panel-side','right')
-  await expect(composer(files.pdf)).toHaveValue('Draft before preference change')
+  await expect(editorHtml(appearanceFiles.pptx)).toHaveAttribute('data-ai-panel-side','right')
+  await expect(composer(appearanceFiles.pdf)).toHaveValue('Draft before preference change')
   const reopened=await context.newPage()
   try{
-   await reopened.goto(origin+'/native-pdf/?fileId='+files.pdf.fileId,{waitUntil:'commit'})
-   await expect(reopened.locator('html')).toHaveAttribute('data-ai-font-size','custom',{timeout:45000})
-   await expect(reopened.locator('html')).toHaveAttribute('data-document-loading','ready')
+   await reopened.goto(origin+'/native-pdf/?fileId='+appearanceFiles.pdf.fileId,{waitUntil:'commit'})
+   await expect(reopened.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-font-size','custom')
   }finally{await reopened.close()}
   await saveAppearance('default',true)
-  for(const file of Object.values(files))await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
+  for(const file of Object.values(appearanceFiles))await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
  })
  for(const format of ['docx','xlsx','pptx','pdf']){
   if(format==='pdf')await f.preferences.update(f.alice.token,{theme:'dark'})
