@@ -800,7 +800,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     browserPrintDialog: true,
     listPrinters: async () => [],
     printerOptions: async () => [],
-    async printSlides({pngsBase64,widthPx,heightPx,layout='full',notes,orientation,order,frame}) {
+    async printSlides({pngsBase64,widthPx,heightPx,layout='full',notes,orientation,order,frame,pdfName}) {
       const state = host.getState(fileId)
       if (disposed || state.status === 'unauthorized') return {ok:false,error:text.unavailable}
       try {
@@ -808,7 +808,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
           srcs:pngsBase64.map(data=>`data:image/png;base64,${data}`),
           ratio:widthPx/heightPx,layout,notes,orientation,order,frame,
         })
-        await printInBrowser(html,browserFileName(state.name.replace(/\.pptx$/i,''),'Presentation'))
+        const name=pdfName?.replace(/\.pdf$/i,'') ?? state.name.replace(/\.pptx$/i,'')
+        await printInBrowser(html,browserFileName(name,'Presentation'))
         return {ok:true}
       } catch {
         return {ok:false,error:text.unavailable}

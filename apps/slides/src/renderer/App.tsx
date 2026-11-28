@@ -5125,6 +5125,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
           slides={slides}
           images={images}
           current={current}
+          documentName={fileActions.exportBaseName(ctxRef.current)}
           onClose={() => setPrintDlgOpen(false)}
           setStatus={setStatus}
         />

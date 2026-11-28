@@ -1307,6 +1307,8 @@ export interface PrintSlidesOp {
   order?: 'horizontal' | 'vertical'
   /** Border around full-page slides */
   frame?: boolean
+  /** Suggested PDF name when the browser print dialog is used. */
+  pdfName?: string
   /** A printer the dialog picked: present = print silently with these job
    *  options (macOS routes through lp); absent = the system print dialog. */
   job?: PrintJobOptions

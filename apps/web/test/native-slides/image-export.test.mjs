@@ -577,6 +577,77 @@ test('Web PowerPoint pastes a native clipboard picture when async clipboard read
   await expect.poll(async()=> (await nodes()).slice(count).map(node=>node.type)).toEqual(['picture'])
 })
 
+test('PPTX prints named PDF notes for a selected hidden slide',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f
+  const archive=await JSZip.loadAsync(await readFile(deckFixture))
+  const slide='ppt/slides/slide2.xml'
+  archive.file(slide,(await archive.file(slide).async('string')).replace(/<p:sld(?=\s)/,'<p:sld show="0"'))
+  const source=await archive.generateAsync({type:'nodebuffer'})
+  const {file}=await importFile(f,f.alice.token,source,'Review deck.pptx')
+  await f.preferences.update(f.alice.token,{theme:'light'})
+  await openDeck(f,file.fileId,'light')
+  await page.evaluate(async()=>{
+    await window.slidesApi.setNotes({slideIndex:0,text:'Excluded notes'})
+    await window.slidesApi.setNotes({slideIndex:1,text:'Review comments for the hidden slide'})
+    const append=document.body.append
+    document.body.append=function(...children){
+      for(const frame of children){
+        if(!(frame instanceof HTMLIFrameElement)||!frame.sandbox.contains('allow-modals'))continue
+        frame.addEventListener('load',()=>{
+          const target=frame.contentWindow
+          target.print=()=>{window.printedNotes={title:target.document.title,html:frame.srcdoc}}
+        },{capture:true,once:true})
+      }
+      return append.apply(this,children)
+    }
+  })
+  await page.locator('.ribbon-tab-file').click()
+  await page.getByRole('button',{name:/^Print…/}).click()
+  const dialog=page.getByRole('dialog',{name:'Print',exact:true})
+  await dialog.getByRole('radio',{name:'Notes Pages',exact:true}).check()
+  await dialog.getByRole('radio',{name:'Landscape',exact:true}).check()
+  await dialog.getByRole('radio',{name:'Custom range',exact:true}).check()
+  await dialog.getByPlaceholder('e.g. 1,3,5-8').fill('2')
+  const exportPdf=dialog.getByRole('button',{name:'Export as PDF…',exact:true})
+  const name=dialog.getByRole('textbox',{name:'File name',exact:true})
+  await expect(name).toHaveValue('Review deck')
+  await expect(exportPdf).toBeDisabled()
+  await dialog.getByRole('checkbox',{name:'Print hidden slides',exact:true}).check()
+  await name.fill('   ')
+  await expect(exportPdf).toBeDisabled()
+  await expect(dialog.getByRole('button',{name:'Print',exact:true})).toBeEnabled()
+  await name.fill('Board review notes.pdf')
+  await exportPdf.click()
+  await expect.poll(()=>page.evaluate(()=>window.printedNotes?.title)).toBe('Board review notes')
+  const printed=await page.evaluate(()=>window.printedNotes)
+  const pdfPage=await page.context().newPage()
+  try{
+    await pdfPage.setContent(printed.html)
+    const bytes=await pdfPage.pdf({preferCSSPageSize:true,printBackground:true})
+    const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const task=getDocument({data:Uint8Array.from(bytes)})
+    try{
+      const pdf=await task.promise
+      assert.equal(pdf.numPages,1)
+      const first=await pdf.getPage(1)
+      assert.ok(Math.abs(first.view[2]-842)<2)
+      assert.ok(Math.abs(first.view[3]-595)<2)
+      const text=(await first.getTextContent()).items.map(item=>item.str??'').join(' ')
+      assert.match(text,/Review comments for the hidden slide/)
+      assert.doesNotMatch(text,/Excluded notes/)
+    }finally{await task.destroy()}
+  }finally{await pdfPage.close()}
+  await expect(dialog).toBeHidden()
+  await page.locator('.ribbon-tab-file').click()
+  await page.getByRole('button',{name:/^Print…/}).click()
+  await name.fill('Custom name for export only')
+  await dialog.getByRole('button',{name:'Print',exact:true}).click()
+  await expect.poll(()=>page.evaluate(()=>window.printedNotes?.title)).toBe('Review deck')
+  await expect(dialog).toBeHidden()
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),source)
+})
+
 test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{timeout:120000},async t=>{
   const f=await fixture(t),{page,origin}=f
   const archive=await JSZip.loadAsync(await readFile(deckFixture))
