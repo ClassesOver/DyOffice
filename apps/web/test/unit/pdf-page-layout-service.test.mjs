@@ -18,8 +18,9 @@ async function fixture(){
 }
 test('PDF layout stages a distinct import with real split or merge bytes, not a source revision',async()=>{
  for(const operation of [{kind:'split',perPage:2},{kind:'merge',perSheet:2,direction:'vertical',separator:false}]){
-  const f=await fixture(),result=await f.service.stagePageLayout('session',f.fileId,{...f.input,operation})
+  const f=await fixture(),result=await f.service.stagePageLayout('session',f.fileId,{...f.input,operation,name:'Selected pages.pdf'})
   assert.deepEqual(f.calls.map(call=>call[0]),['stage','receive']);assert.notEqual(result.fileId,f.fileId);assert.equal(result.sha256,hash(f.calls[1][1]));assert.equal(result.size,f.calls[1][1].length)
+  assert.equal(f.calls[0][1].name,'Selected pages.pdf')
   assert.equal((await PDFDocument.load(f.calls[1][1])).getPageCount(),operation.kind==='split'?4:1)
  }
 })

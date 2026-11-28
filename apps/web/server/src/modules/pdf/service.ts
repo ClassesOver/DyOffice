@@ -38,6 +38,7 @@ import type { createFileService } from '../files/service.ts'
 import type { createLeaseService } from '../leases/service.ts'
 import type { createRevisionService } from '../revisions/service.ts'
 import { authError } from '../auth/sessions.ts'
+import { validateFileName } from '../files/validation-core.ts'
 import {createPdfOcr} from '../../pdf/ocr.ts'
 import { inspectPdf } from '../../pdf/capabilities.mjs'
 import {createIsolatedPdfSignaturesQueryJob,pdfSignatureSafetyCodes} from '../../pdf/signatures-query.mjs'
@@ -117,15 +118,23 @@ export interface PdfExtractPagesInput extends Omit<PdfUploadInput,'operations'|'
   name?:string
 }
 
-export interface PdfSplitInput extends Omit<PdfExtractPagesInput,'pages'|'name'> {pagesPerFile:number}
+export interface PdfSplitInput extends Omit<PdfExtractPagesInput,'pages'> {pagesPerFile:number;folderId?:string}
 
-export interface PdfPageLayoutInput extends Omit<PdfExtractPagesInput,'pages'|'name'> {operation:PdfPageLayoutOperation}
+export interface PdfPageLayoutInput extends Omit<PdfExtractPagesInput,'pages'> {operation:PdfPageLayoutOperation}
 
 export interface PdfApplyOpsUploadInput {baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string;snapshot:unknown}
 export interface PdfDraftInsertsUploadInput {baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string;operation:PdfDraftInserts}
 export type PdfRedactedCopyInput={baseRevision:string;editorId:string;leaseEpoch:number;name?:string}&
  ({patterns?:PdfRedactPattern[];ids:string[];regions?:never}|{regions:unknown;ids?:never;patterns?:never})
 export interface PdfReplacePagesInput {baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string;pages?:number[];afterPageIndex?:number}
+function validatePdfCopyName(name:string|undefined) {
+  if(name!==undefined&&validateFileName(name)!=='pdf')throw authError(400)
+}
+function appendPdfCopySuffix(name:string,suffix:string) {
+  const stem=Array.from(name.replace(/\.pdf$/i,''))
+  while(Buffer.byteLength(stem.join('')+suffix)>255)stem.pop()
+  return stem.join('')+suffix
+}
 /** HTTP errors pass through; known job safety codes become 400 with that detail; anything else is a 500. */
 function mapJobError(error:unknown,safetyCodes:ReadonlySet<string>,failDetail:string):never{
   if((error as {statusCode?:number})?.statusCode)throw error
@@ -200,6 +209,7 @@ export function createPdfService({
 
   return {
     async stageSplit(token:string,fileId:string,input:PdfSplitInput,signal?:AbortSignal){
+      validatePdfCopyName(input.name)
       let pagesPerFile:number
       try{pagesPerFile=validatePdfSplitSize(input.pagesPerFile)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
@@ -227,9 +237,9 @@ export function createPdfService({
         if(after.file.sha256!==inputSha256)throw authError(409)
         const prepared=[]
         for(let index=0;index<result.files.length;index++){
-          const output=result.files[index]!,name=`${source.name.replace(/\.pdf$/i,'').slice(0,230)}-part-${index+1}.pdf`
+          const output=result.files[index]!,name=appendPdfCopySuffix(input.name??source.name,`-${input.name===undefined?'part-':''}${index+1}.pdf`)
           check()
-          const upload=await files.stageUpload(token,{name,size:output.size});uploads.push(upload);check()
+          const upload=await files.stageUpload(token,{name,size:output.size,...(input.folderId===undefined?{}:{folderId:input.folderId})});uploads.push(upload);check()
           await files.receiveUpload(token,upload.uploadId,output.bytes);check()
           prepared.push({uploadId:upload.uploadId,fileId:upload.fileId,sha256:output.sha256,size:output.size})
         }
@@ -246,6 +256,7 @@ export function createPdfService({
       }
     },
     async stagePageLayout(token:string,fileId:string,input:PdfPageLayoutInput,signal?:AbortSignal){
+      validatePdfCopyName(input.name)
       let operation:PdfPageLayoutOperation
       try{operation=validatePdfPageLayout(input.operation)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
@@ -271,7 +282,7 @@ export function createPdfService({
         if(!Buffer.isBuffer(result.bytes)||result.bytes.length<1||result.bytes.length>64*1024*1024||result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw new Error('PDF_OUTPUT_BINDING')
         const after=await authorize()
         if(after.file.sha256!==inputSha256)throw authError(409)
-        const name=`${source.name.replace(/\.pdf$/i,'').slice(0,230)}-${operation.kind==='split'?'split-pages':'merged-pages'}.pdf`
+        const name=input.name??appendPdfCopySuffix(source.name,operation.kind==='split'?'-split-pages.pdf':'-merged-pages.pdf')
         upload=await files.stageUpload(token,{name,size:result.size});check()
         await files.receiveUpload(token,upload.uploadId,result.bytes);check()
         const final=await authorize()
@@ -289,7 +300,7 @@ export function createPdfService({
     async stageExtractPages(token:string,fileId:string,input:PdfExtractPagesInput,signal?:AbortSignal){
       let pages:readonly number[]
       try{pages=validatePdfExtractPages(input.pages)}catch{throw authError(400)}
-      if(input.name!==undefined&&(typeof input.name!=='string'||!input.name.trim()||input.name.length>255||!input.name.toLowerCase().endsWith('.pdf')))throw authError(400)
+      validatePdfCopyName(input.name)
       const check=()=>signal?.throwIfAborted()
       const authorize=async()=>{
         check()
@@ -313,7 +324,7 @@ export function createPdfService({
         if(!Buffer.isBuffer(result.bytes)||result.bytes.length<1||result.bytes.length>64*1024*1024||result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw new Error('PDF_OUTPUT_BINDING')
         const after=await authorize()
         if(after.file.sha256!==inputSha256)throw authError(409)
-        const name=input.name?.trim()||`${source.name.replace(/\.pdf$/i,'').slice(0,240)}-pages.pdf`
+        const name=input.name??appendPdfCopySuffix(source.name,'-pages.pdf')
         upload=await files.stageUpload(token,{name,size:result.size});check()
         await files.receiveUpload(token,upload.uploadId,result.bytes);check()
         const final=await authorize()

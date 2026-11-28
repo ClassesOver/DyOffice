@@ -5,6 +5,7 @@ import type {RedactionInput} from '../../../pdf/src/shared/ipc'
 export type PdfRedactedCopy={patterns:readonly string[];ids:readonly string[]}|{regions:readonly RedactionInput[]}
 export type PdfPageLayout={kind:'split';perPage:2|4|9}|{kind:'merge';perSheet:number;direction:'horizontal'|'vertical';separator:boolean}
 
+type PdfCopyDestination={name:string;folderId?:string}
 type Prepared={uploadId:string;fileId:string;sha256:string;size:number;receipt?:RevisionRef;opened?:boolean;expired?:boolean}
 /** Recovery resumes the same ordered uploads; it never reruns extraction or splitting. */
 export function createPdfExtraction({fileId,name,request,getRevision,onCreated}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated:(receipt:RevisionRef,signal?:AbortSignal)=>Promise<void>}){
@@ -46,7 +47,7 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated}:
   if(queue.some(item=>item.expired))throw Error(`仅生成 ${progress.created}/${progress.total} 份 PDF，其余上传已过期，未全部完成。`)
   return true
  }
- async function prepare(kind:'extract'|'split'|'layout'|'redact',input:readonly number[]|number|PdfPageLayout|PdfRedactedCopy,signal?:AbortSignal){
+ async function prepare(kind:'extract'|'split'|'layout'|'redact',input:readonly number[]|number|PdfPageLayout|PdfRedactedCopy,signal?:AbortSignal,destination?:PdfCopyDestination){
   signal?.throwIfAborted()
   if(busy||pending||!getRevision())return false
   if(stageUnknown)throw Error('上次 PDF 副本准备结果未确认，尚未发布新文件。请重新加载工作区后核对，不要自动重复生成。')
@@ -58,7 +59,15 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated}:
    const lease=await request<{leaseEpoch:number}>(`/api/v1/files/${fileId}/lease`,'POST',{editorId},signal)
    leaseEpoch=lease.leaseEpoch;signal?.throwIfAborted()
    stageStarted=true
-   const result=await request<Prepared|{files:Prepared[]}>(`/api/v1/files/${fileId}/pdf/${kind==='split'?'split':kind==='layout'?'page-layout':kind==='redact'?'redacted-copy':'extract-pages'}/uploads`,'POST',{baseRevision,editorId,leaseEpoch,...(kind==='redact'?{...(input as PdfRedactedCopy),name:`${name.replace(/\.pdf$/i,'').slice(0,100)}-涂黑副本.pdf`}:kind==='layout'?{operation:input}:kind==='split'?{pagesPerFile:input}:{pages:input,name:`${name.replace(/\.pdf$/i,'').slice(0,100)}-提取.pdf`})},signal)
+   const operation=kind==='redact'
+    ?{...(input as PdfRedactedCopy),name:`${name.replace(/\.pdf$/i,'').slice(0,100)}-涂黑副本.pdf`}
+    :kind==='layout'?{operation:input}
+    :kind==='split'?{pagesPerFile:input}
+    :{pages:input,name:`${name.replace(/\.pdf$/i,'').slice(0,100)}-提取.pdf`}
+   const endpoint=kind==='split'?'split':kind==='layout'?'page-layout':kind==='redact'?'redacted-copy':'extract-pages'
+   const result=await request<Prepared|{files:Prepared[]}>(`/api/v1/files/${fileId}/pdf/${endpoint}/uploads`,'POST',{
+    baseRevision,editorId,leaseEpoch,...operation,...destination,
+   },signal)
    const files=kind==='split'?(result as {files:Prepared[]})?.files:[result as Prepared]
    if(!Array.isArray(files)||files.length<(kind==='split'?2:1)||files.length>100||files.some(item=>!item||typeof item.uploadId!=='string'||!item.uploadId||item.fileId===fileId||!isRevisionRef({...item,revision:'prepared'}))||new Set(files.map(item=>item.uploadId)).size!==files.length||new Set(files.map(item=>item.fileId)).size!==files.length)throw Error('Invalid PDF extraction preparation')
    pending=files.map(({uploadId,fileId,sha256,size})=>({uploadId,fileId,sha256,size}));updateProgress()
@@ -86,8 +95,8 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated}:
    try{return await finish(signal)}finally{busy=false}
   },
   redact:(input:PdfRedactedCopy,signal?:AbortSignal)=>prepare('redact',input,signal),
-  extract:(pages:readonly number[],signal?:AbortSignal)=>prepare('extract',pages,signal),
-  split:(pagesPerFile:number,signal?:AbortSignal)=>prepare('split',pagesPerFile,signal),
-  layout:(operation:PdfPageLayout,signal?:AbortSignal)=>prepare('layout',operation,signal),
+  extract:(pages:readonly number[],signal?:AbortSignal,name?:string)=>prepare('extract',pages,signal,name?{name}:undefined),
+  split:(pagesPerFile:number,signal?:AbortSignal,destination?:PdfCopyDestination)=>prepare('split',pagesPerFile,signal,destination),
+  layout:(operation:PdfPageLayout,signal?:AbortSignal,name?:string)=>prepare('layout',operation,signal,name?{name}:undefined),
  }
 }

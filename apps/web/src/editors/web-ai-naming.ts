@@ -8,16 +8,16 @@ import './web-ai-naming.css'
 
 export type WorkspaceCopyDestination = { name: string; folderId?: string; downloadFormat?: 'html' | 'md' }
 
-export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports}:{
- locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean
+export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports,batchPdf}:{
+ locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean;batchPdf?:boolean
 }):Promise<WorkspaceCopyDestination|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
  dialog.className='web-ai-naming-dialog'
  const title=doc.createElement('h2'),label=doc.createElement('label'),input=doc.createElement('input')
  const actions=doc.createElement('div'),cancel=doc.createElement('button'),save=doc.createElement('button')
- const workspaceTitle=en?'Save a copy to your workspace':'保存副本到工作区'
- label.textContent=en?'File name':'文件名';input.value=proposed;input.required=true;label.append(input)
+ const workspaceTitle=batchPdf?(en?'Save PDF parts':'保存拆分后的 PDF'):(en?'Save a copy to your workspace':'保存副本到工作区')
+ label.textContent=batchPdf?(en?'File name prefix':'文件名前缀'):(en?'File name':'文件名');input.value=proposed;input.required=true;label.append(input)
  actions.className='web-ai-naming-actions'
  cancel.type='button';cancel.textContent=en?'Cancel':'取消'
  save.type='submit'
@@ -75,7 +75,7 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
   save.disabled=!external&&loading
   title.textContent=external?(en?'Download a copy':'下载副本'):workspaceTitle
   dialog.setAttribute('aria-label',title.textContent)
-  save.textContent=external?(en?'Download copy':'下载副本'):(en?'Save copy':'保存副本')
+  save.textContent=external?(en?'Download copy':'下载副本'):batchPdf?(en?'Save parts':'保存拆分文件'):(en?'Save copy':'保存副本')
  }
  folder.append(rootOption);folderLabel.append(folder)
  actions.append(cancel,save);form.append(folderLabel,folderStatus,actions);dialog.append(form)

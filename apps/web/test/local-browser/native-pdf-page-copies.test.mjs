@@ -8,6 +8,7 @@ import {PDFDocument,PDFHexString,PDFName} from 'pdf-lib'
 import {PNG} from 'pngjs'
 import {expect} from '@playwright/test'
 import {buildLocalApp} from '../../server/src/app.ts'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
@@ -24,7 +25,7 @@ async function addStaticFills(doc,fills){
  doc.catalog.set(fillKey,PDFHexString.fromText(JSON.stringify(fills)))
 }
 const staticFills=doc=>JSON.parse(doc.catalog.lookup(fillKey)?.decodeText()??'[]')
-test('native PDF ribbon extracts and reopens a fillable form copy',{skip:!nativePdfDirectory,timeout:90000},async t=>{
+test('native PDF ribbon names extracted pages and saves numbered PDF parts to a selected folder',{skip:!nativePdfDirectory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -66,6 +67,7 @@ test('native PDF ribbon extracts and reopens a fillable form copy',{skip:!native
  assert.ok(response.ok(),await response.text())
  const {fileId:copyId}=await response.json()
  await expect(page).toHaveURL(origin+'/#/file/'+copyId)
+ assert.ok((await f.files.listFiles(f.alice.token)).files.some(file=>file.id===copyId&&file.name==='fillable-p2.pdf'))
  const copy=frame(copyId)
  await expect(copy.locator('html')).toHaveAttribute('data-document-loading','ready')
  const field=copy.locator('.pdf-form-layer input[title="customer"]')
@@ -98,6 +100,25 @@ test('native PDF ribbon extracts and reopens a fillable form copy',{skip:!native
  const savedDelivery=saved.getForm().getRadioGroup('delivery')
  assert.deepEqual(savedDelivery.getOptions(),['Courier'])
  assert.equal(savedDelivery.getSelected(),'Courier')
+ const workspace=createWorkspaceService(f.transactions)
+ const folder=await workspace.createFolder(f.alice.token,{name:'PDF batches',parentId:null})
+ await page.getByRole('tab',{name:'fillable.pdf',exact:true}).click()
+ const splitButton=source.getByRole('button',{name:'拆分 PDF',exact:true})
+ if(!await splitButton.isVisible())await source.getByRole('button',{name:'页面',exact:true}).click()
+ const split=async()=>{
+  await splitButton.click()
+  await source.getByPlaceholder(/每 N 页拆分/).press('Enter')
+ }
+ await split()
+ const destination=source.getByRole('dialog',{name:'保存拆分后的 PDF'})
+ await destination.getByRole('button',{name:'取消',exact:true}).click()
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+ await split()
+ await destination.getByRole('textbox',{name:'文件名前缀'}).fill('Packet')
+ await destination.getByRole('combobox',{name:'保存位置'}).selectOption(folder.id)
+ await destination.getByRole('button',{name:'保存拆分文件',exact:true}).click()
+ const parts=async()=>(await workspace.listFiles(f.alice.token,{folderId:folder.id})).files.map(file=>file.name).sort()
+ await expect.poll(parts,{timeout:25000}).toEqual(['Packet-1.pdf','Packet-2.pdf'])
  assert.equal(await head(file.fileId),file.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 })
@@ -265,6 +286,7 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
   ['拆分 PDF',[1,2],async modal=>{
    await modal.getByPlaceholder(/每 N 页/).fill('2')
    await modal.getByPlaceholder(/每 N 页/).press('Enter')
+   await frame.getByRole('dialog',{name:'保存拆分后的 PDF'}).getByRole('button',{name:'保存拆分文件',exact:true}).click()
   }],
   ['拆分页面',[6],modal=>modal.getByRole('button',{name:'1 分 2',exact:true}).click()],
   ['合并页面',[1],async modal=>{

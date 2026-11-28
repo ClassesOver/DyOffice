@@ -88,6 +88,12 @@ async function mount(){
   path:grant.path,signal:browserActions.signal,current:grant.current,readPdf:grant.api.readFile,
   canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length,
  })
+ const pageCopyName=(value:string|undefined,fallback:string)=>{
+  const points=Array.from(browserFileName(value?.replace(/\.pdf$/i,'')??'',fallback).replace(/[\p{Cs}\u202a-\u202e\u2066-\u2069]/gu,'_'))
+  const encoder=new TextEncoder()
+  while(encoder.encode(points.join('')+'.pdf').length>255)points.pop()
+  return points.join('')+'.pdf'
+ }
  const api={
   ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.accountIdentity,browserActions.signal),
   getUsername:grant.username,getDefaultZoom:async()=>prefs?.pdfDefaultZoom??'width',
@@ -197,13 +203,25 @@ async function mount(){
    }
   },
   setDirty(){},
-  extractPages:({path,pages}:Parameters<PdfApi['extractPages']>[0])=>ribbonCopy(path,client=>client.extract(pages.map(page=>page+1))),
-  splitPdf:async({path,chunkSize}:Parameters<PdfApi['splitPdf']>[0])=>{
-   const result=await ribbonCopy(path,client=>client.split(chunkSize))
+  extractPages:({path,pages,suggestedName}:Parameters<PdfApi['extractPages']>[0])=>
+   ribbonCopy(path,client=>client.extract(pages.map(page=>page+1),browserActions.signal,pageCopyName(suggestedName,'pages'))),
+  splitPdf:async({path,chunkSize,baseName}:Parameters<PdfApi['splitPdf']>[0])=>{
+   const signal=browserActions.signal,base=grant.current()
+   const locale=prefs?.language==='en'?'en':'zh'
+   let canceled=false
+   const result=await ribbonCopy(path,async client=>{
+    const chosen=await confirmWorkspaceCopy(baseName,{locale,signal,request:grant.workspaceRequest,fileId,batchPdf:true})
+    if(!chosen){canceled=true;return false}
+    if(disposed||base!==grant.current())throw Error('PDF copy authorization changed.')
+    return client.split(chunkSize,signal,{name:pageCopyName(chosen.name,'split'),folderId:chosen.folderId})
+   })
+   if(canceled)return {ok:true as const,canceled:true as const}
    return result.ok?{ok:true as const,savedDir:'',count:copies!.getReceipts().length}:result
   },
-  splitPages:({path,perPage}:Parameters<PdfApi['splitPages']>[0])=>ribbonCopy(path,client=>client.layout({kind:'split',perPage})),
-  mergePages:({path,perSheet,direction,separator}:Parameters<PdfApi['mergePages']>[0])=>ribbonCopy(path,client=>client.layout({kind:'merge',perSheet,direction,separator})),
+  splitPages:({path,perPage,suggestedName}:Parameters<PdfApi['splitPages']>[0])=>
+   ribbonCopy(path,client=>client.layout({kind:'split',perPage},browserActions.signal,pageCopyName(suggestedName,'split-pages'))),
+  mergePages:({path,perSheet,direction,separator,suggestedName}:Parameters<PdfApi['mergePages']>[0])=>
+   ribbonCopy(path,client=>client.layout({kind:'merge',perSheet,direction,separator},browserActions.signal,pageCopyName(suggestedName,'merged-pages'))),
  } satisfies Partial<PdfApi>
  const unavailable=async()=>{throw Error('PDF action is unavailable in this Web preview')}
  window.pdfApi=new Proxy<Partial<PdfApi>>(api,{get(target,key,receiver){
