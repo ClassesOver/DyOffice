@@ -12,7 +12,7 @@ type Prepared={uploadId:string;fileId:string;sha256:string;size:number;receipt?:
 type PresentCopy=(receipt:RevisionRef,signal?:AbortSignal)=>Promise<void>
 type PendingCopies={files:Prepared[];revealBatch?:PresentCopy;delivery?:'open'|'save';format?:WorkspaceFileFormat}
 /** Recovery resumes the same ordered uploads without regenerating the PDFs. */
-export function createPdfExtraction({fileId,name,request,getRevision,onCreated,onSaved,onBatchPublished}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated:PresentCopy;onSaved?:PresentCopy;onBatchPublished?:PresentCopy}){
+export function createPdfExtraction({fileId,name,request,getRevision,onCreated,onSaved,onBatchPublished}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated?:PresentCopy;onSaved?:PresentCopy;onBatchPublished?:PresentCopy}){
  let busy=false,stageUnknown=false,pending:PendingCopies|undefined
  let progress={created:0,total:0}
  let receipts:RevisionRef[]=[]

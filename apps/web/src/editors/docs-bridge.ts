@@ -63,7 +63,7 @@ type ParentTabsWindow = Window & {
 
 /** A narrow compatibility bridge for the existing renderer. Opaque paths are
  * aliases only; they never become filesystem paths or server authorization. */
-export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;fetchClipboardRemoteImage?:ClipboardImageFetcher;wordCheckpoint?:()=>Promise<number|undefined>;onSourceOpenFailed?:()=>void;takeUnlockedBytes?:()=>Uint8Array|undefined;setOpenPassword?:(password:string|null)=>boolean;workspaceSources?:WorkspaceSourceAccess}={}) {
+export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;fetchClipboardRemoteImage?:ClipboardImageFetcher;wordCheckpoint?:()=>Promise<number|undefined>;onSourceOpenFailed?:()=>void;takeUnlockedBytes?:()=>Uint8Array|undefined;setOpenPassword?:(password:string|null)=>boolean;workspaceSources?:WorkspaceSourceAccess;writeMergeOutput?:DesktopApi['writeMergeOutput']}={}) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
   const lifetime = new AbortController()
@@ -365,6 +365,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     },
     async writeMergeOutput(request){
       if(disposed||!host.getState(fileId).lease)return {ok:false,canceled:true}
+      if(options.writeMergeOutput)return options.writeMergeOutput(request)
       const {downloadMailMerge}=await import('./docs-mail-merge')
       return downloadMailMerge(request,host.getState(fileId).name,lifetime.signal)
     },

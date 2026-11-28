@@ -8,8 +8,8 @@ import './web-ai-naming.css'
 
 export type WorkspaceCopyDestination = { name: string; folderId?: string; downloadFormat?: 'pdf' | 'html' | 'md'; download?: true }
 
-export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports,batchPdf,downloadLabel}:{
- locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean;batchPdf?:boolean;downloadLabel?:string
+export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports,batchPdf,downloadLabel,folderOnly}:{
+ locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean;batchPdf?:boolean;downloadLabel?:string;folderOnly?:boolean
 }):Promise<WorkspaceCopyDestination|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
@@ -21,7 +21,8 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
  actions.className='web-ai-naming-actions'
  cancel.type='button';cancel.textContent=en?'Cancel':'取消'
  save.type='submit'
- form.append(title,label)
+ form.append(title)
+ if(!folderOnly)form.append(label)
  let format:HTMLSelectElement|undefined
  const downloadFormat=()=>{
   const value=format?.value
@@ -76,7 +77,7 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
   save.disabled=!external&&loading
   title.textContent=target==='pdf'?(en?'Save as PDF':'另存为 PDF'):external?(en?'Download a copy':'下载副本'):workspaceTitle
   dialog.setAttribute('aria-label',title.textContent)
-  save.textContent=target==='pdf'?(en?'Open print dialog':'打开打印对话框'):external?(en?'Download copy':'下载副本'):batchPdf?(en?'Save parts':'保存拆分文件'):(en?'Save copy':'保存副本')
+  save.textContent=target==='pdf'?(en?'Open print dialog':'打开打印对话框'):external?(en?'Download copy':'下载副本'):batchPdf?(en?'Save parts':'保存拆分文件'):folderOnly?(en?'Save copies':'保存副本'):(en?'Save copy':'保存副本')
  }
  folder.append(rootOption);folderLabel.append(folder)
  actions.append(cancel,save);form.append(folderLabel,folderStatus,actions);dialog.append(form)
@@ -114,7 +115,7 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
    })
   }
   doc.body.append(dialog)
-  try{dialog.showModal();input.focus();input.select()}
+  try{dialog.showModal();if(!folderOnly){input.focus();input.select()}}
   catch(error){dialog.remove();reject(error);return}
   signal.addEventListener('abort',abort,{once:true})
   if(signal.aborted){abort();return}

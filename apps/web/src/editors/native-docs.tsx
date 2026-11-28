@@ -23,12 +23,14 @@ import { AssistantAvatar, installScreenTips } from '@genoffice/ui'
 import type { SessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { createDocsBridge } from './docs-bridge.ts'
 import type { DocsEditorHandle, OfficeHandoffRunner } from '../../../docs/src/renderer/file-actions'
-import type { DesktopApi } from '../../../docs/src/shared/ipc'
+import type { DesktopApi, MergeOutputRequest, MergeOutputResponse } from '../../../docs/src/shared/ipc'
 import {AGENT_TOOLS as DOCS_AGENT_TOOLS} from '../../../docs/src/renderer/ai/tools'
 import { messages } from './messages.ts'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import { mountEditorRealtime } from './editor-realtime.ts'
 import { confirmWorkspaceCopy, suggestWebFileName, type WorkspaceCopyDestination } from './web-ai-naming'
+import {MAX_WORKSPACE_COPY_BYTES} from './pdf-extraction'
+import type {createMailMergeWorkspaceOutput} from './docs-mail-merge'
 import { createImageAttachmentReferences } from './web-ai-media-api'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -166,9 +168,10 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       }
     },
     knowledgeRequest:assistant?.request,
-    ...(!guest&&!citationMode&&draftAuthority.request?{workspaceSources:{
-      request:draftAuthority.request,verify:()=>draftAuthority.verify(),readBytes:(id,revision)=>host.readBytes(id,revision),
-    }}:{}),
+    ...(!guest&&!citationMode&&draftAuthority.request?{
+      workspaceSources:{request:draftAuthority.request,verify:()=>draftAuthority.verify(),readBytes:(id,revision)=>host.readBytes(id,revision)},
+      writeMergeOutput:saveMailMergeOutput,
+    }:{}),
     fetchClipboardRemoteImage:assistant?.mediaApi?.fetchImage,
     wordCheckpoint:async()=>wordSync?.checkpoint(),
     onSourceOpenFailed:()=>{
@@ -228,6 +231,62 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   const copyLifetime = new AbortController()
   let copying = false, copyNotice: {message:string;failed:boolean} | undefined
   let pendingCopy: {upload:string;name:string}|undefined
+  let mailMergeOutput: ReturnType<typeof createMailMergeWorkspaceOutput> | undefined
+  let mailMergeNotice: {message:string;failed:boolean} | undefined
+  const confirmMergeMessage=locale==='en'
+    ? 'Confirm the original mail merge save. Close the mail merge panel to use the confirmation button.'
+    : '请关闭邮件合并面板，再确认原保存请求。'
+  function reportMailMerge(result:{ok:boolean;count:number}):MergeOutputResponse {
+    const en=locale==='en'
+    if(result.ok){
+      mailMergeNotice={failed:false,message:en?`Saved ${result.count} merged documents.`:`已保存 ${result.count} 份合并文档。`}
+      return result
+    }
+    const error=mailMergeOutput?.hasPending()?confirmMergeMessage
+      :en?`The mail merge stopped after saving ${result.count} documents.`:`邮件合并保存已停止，已保存 ${result.count} 份文档。`
+    mailMergeNotice={failed:true,message:error}
+    return {...result,error}
+  }
+  async function saveMailMergeOutput(input:MergeOutputRequest):Promise<MergeOutputResponse> {
+    const request=draftAuthority.request,signal=copyLifetime.signal
+    const source=host.getState(fileId),lease=source.lease
+    const active=()=>{
+      const current=host.getState(fileId)
+      return !signal.aborted&&!disposed&&!closing&&canEdit()&&draftAuthority.current()&&!!lease&&
+        current.lease?.editorId===lease.editorId&&current.lease.leaseEpoch===lease.leaseEpoch&&
+        !['conflict','unknown','unauthorized'].includes(current.status)
+    }
+    if(mailMergeOutput?.hasPending())return {ok:false,error:confirmMergeMessage}
+    if(!request||copying||!active())return {ok:false,canceled:true}
+    copying=true;mailMergeNotice=undefined;changed()
+    try{
+      const {createMailMergeWorkspaceOutput,downloadMailMerge,mailMergeDocxName,namedMailMergeFiles}=await import('./docs-mail-merge')
+      const files=namedMailMergeFiles(input)
+      if(!files.length)return {ok:false}
+      if(files.some(file=>file.data.byteLength>MAX_WORKSPACE_COPY_BYTES)){
+        return active()?await downloadMailMerge(input,source.name,signal):{ok:false,canceled:true}
+      }
+      const folderOnly=input.mode==='perRecord'||input.mode==='envelopes'
+      const destination=await confirmWorkspaceCopy(files[0]!.name,{
+        locale,signal,request,fileId,folderOnly,downloadLabel:locale==='en'?'Download merge output':'下载合并结果',
+      })
+      if(!destination||!active())return {ok:false,canceled:true}
+      if(!folderOnly)files[0]={...files[0]!,name:mailMergeDocxName(destination.name)}
+      if(destination.download)return await downloadMailMerge({...input,files},source.name,signal)
+      if(!await draftAuthority.verify()||!active())return reportMailMerge({ok:false,count:0})
+      mailMergeOutput??=createMailMergeWorkspaceOutput({fileId,name:source.name,request,getRevision:()=>host.getState(fileId).revision.revision})
+      return reportMailMerge(await mailMergeOutput.publish(files,destination.folderId,active,signal))
+    }catch{
+      return signal.aborted?{ok:false,canceled:true}:reportMailMerge({ok:false,count:0})
+    }finally{copying=false;if(!disposed)changed()}
+  }
+  async function confirmMailMergeSave(){
+    if(copying||disposed||closing||!mailMergeOutput?.hasPending())return
+    copying=true;changed()
+    try{
+      if(await draftAuthority.verify())reportMailMerge(await mailMergeOutput.confirm(copyLifetime.signal))
+    }finally{copying=false;if(!disposed)changed()}
+  }
   const canSaveCopy = () => documentLoaded && !guest && canEdit() && !closing &&
     !disposed && !!draftEditor && !!draftAuthority.request && draftAuthority.current() &&
     !!host.getState(fileId).lease && host.getState(fileId).status === 'idle' &&
@@ -625,6 +684,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       </>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:copyNotice.failed?'error' as const:'info' as const,title:locale==='zh'?'另存副本':'Save a copy',message:copyNotice.message,actions:pendingCopy&&<button type="button" onClick={()=>void saveCopy()}>{en?'Confirm copy save':'确认副本保存结果'}</button>}] : []),
+        ...(mailMergeNotice ? [{id:'mail-merge-output',level:mailMergeNotice.failed?'error' as const:'info' as const,title:en?'Mail merge':'邮件合并',message:mailMergeNotice.message,actions:mailMergeOutput?.hasPending()&&<button type="button" disabled={copying} onClick={()=>void confirmMailMergeSave()}>{en?'Confirm mail merge save':'确认邮件合并保存'}</button>}] : []),
       ]} />
       {unlockDialog}
       <App host={{ embeddedDocument,fileActions,saveStatus,setImageAttachments,desktopActionsAvailable:false,openPasswordAvailable:!guest&&canEdit()&&!!draftAuthority.proof&&!!state.lease,mailMergeMaxBytes:BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES,openWorkspaceFile,getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,resolveKnowledgeCitation:bridge.resolveKnowledgeCitation,saveAsCopy,canSaveAsCopy:loaded&&!failed&&!copying&&!pendingCopy&&canSaveCopy(),namedCopy:!privateView&&loaded&&!failed&&!copying&&!pendingCopy&&assistant?.available&&canSaveCopy()?nameCopy:undefined,onCollabEditor,syncBody,bodyCollaboration:bodyFollower,readOnly: !loaded || failed || !state.lease || !canEdit() || local.takingOver || !['active','unavailable'].includes(syncState),assistantAvailable:!citationMode&&!noAssistant&&(assistantAvailable||!!(job&&assistant?.available)),assistant:noAssistant?undefined:assistant,recoveryRevision:continuationRevision(),externalAssistant:noAssistant?undefined:externalAssistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,onHandoffReady:registerOfficeHandoff,lifecycle: { ...bridge.lifecycle,canStartSave:()=>!copying||!host.hasDocxPasswordChange(fileId),afterSave(ok,reasons){bridge.lifecycle.afterSave(ok,reasons);if(resumeCollab)queueMicrotask(resumeWordAfterPasswordRemoval)},wordSyncActive:()=>syncState==='active',documentOpened() { bridge.lifecycle.documentOpened(); documentLoaded=true; setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => {documentLoaded=false; setFailed(true); reportDocumentLoading('error')} }} />
@@ -633,7 +693,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   reportDocumentLoading(initiallyUnlocked?'rendering':'ready')
   const root = createRoot(element)
   root.render(<LocaleProvider initial={locale}><NativeDocument /></LocaleProvider>)
-  const closeState=()=>({dirty:!host.getState(fileId).lease&&syncState==='active'&&wordSync ? wordSync.pending() : !!editorHandle?.isDirty()||bridge.getState().dirty,blocked:unlocking||downloading||copying||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||!!bridge.waitForSave()})
+  const closeState=()=>({dirty:!host.getState(fileId).lease&&syncState==='active'&&wordSync ? wordSync.pending() : !!editorHandle?.isDirty()||bridge.getState().dirty,blocked:unlocking||downloading||copying||mailMergeOutput?.hasPending()===true||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||!!bridge.waitForSave()})
   registerDisplayedRevision(()=>{
     const state=closeState(),current=host.getState(fileId)
     const revision=current.revision.revision

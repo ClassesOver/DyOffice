@@ -540,7 +540,7 @@ test('workspace imports encrypted DOCX with one password, saves encrypted edits 
  assert.deepEqual(await f.files.readFile(f.alice.token,entry.id,saved.file.revision),bytes)
 })
 
-test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{timeout:120000},async t=>{
+test('Web Word merges CSV and XLSX recipients into workspace and downloadable DOCX files',{timeout:150000},async t=>{
   const f=await fixture(t),{page}=f,file=f.opened.file
   await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
   const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
@@ -563,9 +563,16 @@ test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{tim
     await chooser.setFiles({name,mimeType,buffer})
     await expect(panel.locator('.mailmerge-source-name')).toHaveText(name)
   }
-  async function merge(){
-    const download=page.waitForEvent('download')
+  const output=page.getByRole('dialog',{name:'Save a copy to your workspace',exact:true})
+  const outputFolder=output.getByRole('combobox',{name:'Folder',exact:true})
+  async function chooseOutput(){
     await panel.getByRole('button',{name:'Finish & Merge',exact:true}).click()
+    await expect(output).toBeVisible({timeout:15000})
+  }
+  async function merge(name){
+    await chooseOutput()
+    if(name)await output.getByRole('textbox',{name:'File name',exact:true}).fill(name)
+    const [download]=await Promise.all([page.waitForEvent('download'),output.getByRole('button',{name:'Download merge output',exact:true}).click()])
     return download
   }
   async function documentXml(bytes){
@@ -609,7 +616,8 @@ test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{tim
   await files.selectOption(csvSource.fileId)
   await picker.getByRole('button',{name:'Use selected file',exact:true}).click()
   await expect(panel.locator('.mailmerge-preview')).toContainText('Riley')
-  const online=await merge()
+  const online=await merge('Online recipients')
+  assert.equal(online.suggestedFilename(),'Online recipients.docx')
   assert.match(await documentXml(await readFile(await online.path())),/<w:t[^>]*>[^<]*Riley/)
   await panel.getByRole('button',{name:/Select Recipient List/}).click()
   await files.selectOption(recipient.fileId)
@@ -644,12 +652,64 @@ test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{tim
   assert.match(envelopeXml,/<w:t[^>]*>[^<]*Lee/)
   expectPaper(envelopeXml,13680,5940)
 
+  await workspace.moveFile(f.alice.token,file.fileId,{folderId:folder.id})
+  const archive=await workspace.createFolder(f.alice.token,{name:'Mail merge results',parentId:null})
+  await chooseOutput()
+  await expect(outputFolder).toHaveValue(folder.id)
+  await output.getByRole('button',{name:'Cancel',exact:true}).click()
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,3)
+  const listCopies=async()=>(await workspace.listFiles(f.alice.token,{folderId:archive.id})).files
+  const verifyCopy=async name=>{
+    const item=(await listCopies()).find(candidate=>candidate.name===name)
+    assert.ok(item,name)
+    const {file:copy}=await f.files.openFile(f.alice.token,item.id)
+    return documentXml(await f.files.readFile(f.alice.token,copy.fileId,copy.revision))
+  }
+  const finishes=[]
+  await page.route('**/api/v1/uploads/*/finish',async route=>{
+    finishes.push(route.request().url())
+    if(finishes.length===1){
+      const response=await route.fetch()
+      assert.equal(response.status(),200)
+      return route.abort()
+    }
+    return route.continue()
+  })
+  await chooseOutput()
+  await outputFolder.selectOption(archive.id)
+  await output.getByRole('button',{name:'Save copies',exact:true}).click()
+  await expect(panel.getByText(/Confirm the original mail merge save/)).toBeVisible({timeout:20000})
+  await panel.getByRole('button',{name:'Close',exact:true}).click()
+  const confirm=page.getByRole('button',{name:'Confirm mail merge save',exact:true})
+  await confirm.click()
+  await expect(confirm).toHaveCount(0,{timeout:20000})
+  assert.deepEqual((await listCopies()).map(item=>item.name).sort(),['Lee-2.docx','Lee.docx'])
+  assert.equal(finishes.length,3)
+  assert.equal(finishes[0],finishes[1])
+  assert.notEqual(finishes[2],finishes[0])
+  for(const name of ['Lee.docx','Lee-2.docx']){
+    const xml=await verifyCopy(name)
+    assert.match(xml,/<w:t[^>]*>[^<]*Lee/)
+    expectPaper(xml,13680,5940)
+  }
+  await page.getByRole('button',{name:'Start Mail Merge',exact:true}).click()
+  await panel.getByRole('radio',{name:'Label sheet',exact:true}).check()
+  await chooseOutput()
+  await output.getByRole('textbox',{name:'File name',exact:true}).fill('Address labels')
+  await outputFolder.selectOption(archive.id)
+  await output.getByRole('button',{name:'Save copy',exact:true}).click()
+  await expect.poll(async()=>(await listCopies()).map(item=>item.name)).toContain('Address labels.docx')
+  const savedLabels=await verifyCopy('Address labels.docx')
+  assert.match(savedLabels,/<w:tbl[ >]/)
+  assert.match(savedLabels,/<w:t[^>]*>[^<]*Lee/)
+  expectPaper(savedLabels,12240,15840)
   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),f.original)
   assert.equal((await f.files.openFile(f.alice.token,recipient.fileId)).file.revision,recipient.revision)
   assert.deepEqual(await f.files.readFile(f.alice.token,recipient.fileId,recipient.revision),xlsx)
   assert.equal((await f.files.openFile(f.alice.token,csvSource.fileId)).file.revision,csvSource.revision)
   assert.deepEqual(await f.files.readFile(f.alice.token,csvSource.fileId,csvSource.revision),savedCsv)
-  assert.equal((await f.files.listFiles(f.alice.token)).files.length,3)
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,6)
 })
 
 test('Web Word compares an unsaved draft with a local DOCX without changing either file',{timeout:120000},async t=>{

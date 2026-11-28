@@ -2,6 +2,7 @@ import type { MergeDataSource, MergeOutputRequest, MergeOutputResponse } from '.
 import { BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES, mergeSourceFromRows } from '../../../docs/src/shared/merge-data'
 import { csvRows, decodeCsvBuffer, sniffDelimiter } from '@genoffice/xlsx-gateway/gateway/csv-import'
 import { browserFileName, downloadBrowserFile } from './browser-download'
+import { createPdfExtraction } from './pdf-extraction'
 
 export const MAIL_MERGE_SOURCE_MAX_BYTES = 16 * 1024 * 1024
 const ROW_LIMIT = 1001
@@ -52,36 +53,89 @@ export async function readMailMergeSource(file: File, language: string, signal: 
   return mergeSourceFromRows(crypto.randomUUID(), file.name, rows)
 }
 
+export function mailMergeDocxName(value: string): string {
+  const stem = browserFileName(value.replace(/\.docx$/i, ''), 'document').replace(/[\p{Cs}\u202a-\u202e\u2066-\u2069]/gu, '_')
+  const encoder = new TextEncoder()
+  const characters = Array.from(stem)
+  // Reserve space for the extension and a collision suffix.
+  while (encoder.encode(characters.join('')).length > 245) characters.pop()
+  return characters.join('') + '.docx'
+}
+
+export function namedMailMergeFiles({mode, files}: MergeOutputRequest): MergeOutputRequest['files'] {
+  if (!files.length || files.length > ROW_LIMIT - 1 || files.some(file => !file.data.byteLength) ||
+      ((mode === 'single' || mode === 'labels') && files.length !== 1) ||
+      files.reduce((sum, file) => sum + file.data.byteLength, 0) > BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES) return []
+  const used = new Set<string>()
+  return files.map(file => {
+    const name = mailMergeDocxName(file.name), stem = name.slice(0, -5)
+    let entry = name
+    for (let i = 2; used.has(entry.toLowerCase()); i++) entry = `${stem}-${i}.docx`
+    used.add(entry.toLowerCase())
+    return {...file, name: entry}
+  })
+}
+
+export function createMailMergeWorkspaceOutput(options: Parameters<typeof createPdfExtraction>[0]) {
+  const publisher = createPdfExtraction(options)
+  type Batch = {
+    files: MergeOutputRequest['files']
+    folderId?: string
+    active: () => boolean
+    written: number
+  }
+  let batch: Batch | undefined
+  async function write(current: Batch, signal: AbortSignal) {
+    try {
+      if (publisher.hasPending()) {
+        if (!await publisher.confirm(signal)) throw Error('The upload could not be confirmed')
+        current.written++
+      }
+      for (const file of current.files.slice(current.written)) {
+        if (!await publisher.publish(new Uint8Array(file.data), {
+          name: file.name, folderId: current.folderId, format: 'docx',
+        }, current.active, signal, 'save')) throw Error('The document could not be published')
+        current.written++
+      }
+      batch = undefined
+      return {ok: true, count: current.written}
+    } catch {
+      if (!publisher.hasPending()) batch = undefined
+      return {ok: false, count: current.written}
+    }
+  }
+  return {
+    hasPending: () => !!batch && publisher.hasPending(),
+    async publish(files: Batch['files'], folderId: string | undefined, active: Batch['active'], signal: AbortSignal) {
+      if (batch) return {ok: false, count: batch.written}
+      batch = {files, folderId, active, written: 0}
+      return write(batch, signal)
+    },
+    async confirm(signal: AbortSignal) {
+      if (!batch || !publisher.hasPending()) return {ok: false, count: 0}
+      return write(batch, signal)
+    },
+  }
+}
+
 export async function downloadMailMerge(
-  { mode, files }: MergeOutputRequest,
+  request: MergeOutputRequest,
   templateName: string,
   signal: AbortSignal,
 ): Promise<MergeOutputResponse> {
   signal.throwIfAborted()
-  if (!files.length || files.length > ROW_LIMIT - 1 || files.some(file => !file.data.byteLength) ||
-      files.reduce((sum, file) => sum + file.data.byteLength, 0) > BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES) {
-    return { ok:false }
-  }
-  const asDocx = (name: string) => browserFileName(name.replace(/\.docx$/i, ''), 'document') + '.docx'
-  if (mode === 'single' || mode === 'labels') {
-    if (files.length !== 1) return { ok:false }
+  const files = namedMailMergeFiles(request)
+  if (!files.length) return { ok:false }
+  if (request.mode === 'single' || request.mode === 'labels') {
     const file = files[0]!
-    const name = asDocx(file.name)
+    const name = file.name
     downloadBrowserFile(new Blob([file.data], {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}), name)
     return { ok:true, path:name, count:1 }
   }
 
   const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
-  const used = new Set<string>()
-  for (const file of files) {
-    const name = asDocx(file.name)
-    const stem = name.slice(0, -5)
-    let entry = name
-    for (let i = 2; used.has(entry.toLowerCase()); i++) entry = `${stem}-${i}.docx`
-    used.add(entry.toLowerCase())
-    zip.file(entry, file.data)
-  }
+  for (const file of files) zip.file(file.name, file.data)
   const archive = await zip.generateAsync({type:'blob',compression:'STORE'})
   signal.throwIfAborted()
   const name = browserFileName(templateName.replace(/\.docx$/i, ''), 'document') + '-merged.zip'
