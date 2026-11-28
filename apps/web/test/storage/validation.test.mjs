@@ -134,3 +134,17 @@ test('OPC metadata children must resolve to the package namespace, including loc
   })
   assert.equal((await validate(prefixed, 'prefixed.docx')).format, 'docx')
 })
+
+test('zero-byte CSV validation does not depend on the workbook worker deadline', async () => {
+  const { createFileValidator } = await import('../../server/src/modules/files/validation.ts')
+  const validate = createFileValidator({ timeoutMs: 1 })
+  const empty = Buffer.alloc(0)
+  assert.deepEqual(await validate(empty, 'empty.CSV'), {
+    format: 'csv',
+    mime: 'text/csv',
+    size: 0,
+    sha256: createHash('sha256').update(empty).digest('hex'),
+    officeSignatureProtected: false,
+  })
+  await assert.rejects(() => validate(empty, 'empty.xlsx'), { statusCode: 400 })
+})

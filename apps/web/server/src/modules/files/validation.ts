@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
-import { validateFileName, type FileValidationPolicy, type validateUploadInternal } from './validation-core.ts'
+import { validateFileName, validateUploadInternal, type FileValidationPolicy } from './validation-core.ts'
 export { validateFileName, uploadLimits } from './validation-core.ts'
 
 // Workers bound parser CPU/wall time and JS heap; this is not the future OS
@@ -12,6 +12,8 @@ export function createFileValidator({ timeoutMs = 5000, maxConcurrent = 2 }: { t
     const format = validateFileName(name)
     if (!Buffer.isBuffer(bytes) || (bytes.length === 0 && format !== 'csv')) throw storageError(400)
     if (bytes.length > MAX_OBJECT_BYTES || bytes.length > (policy.maxBytes ?? MAX_OBJECT_BYTES)) throw storageError(413)
+    // A validated empty CSV has no untrusted contents to parse in a worker.
+    if (bytes.length === 0) return validateUploadInternal(bytes, name, policy)
     if (active >= maxConcurrent) throw Object.assign(storageError(503), { retryAfter: 1 })
     active++
     let worker: Worker | undefined, deadline: ReturnType<typeof setTimeout> | undefined
