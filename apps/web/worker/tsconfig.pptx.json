@@ -85,7 +85,7 @@
         "./node_modules/@types/pngjs/index.d.ts"
       ],
       "opentype.js": [
-        "./node_modules/opentype.js"
+        "./node_modules/@types/opentype.js/index.d.ts"
       ],
       "bidi-js": [
         "./node_modules/bidi-js"
