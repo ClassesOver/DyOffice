@@ -1,5 +1,5 @@
 import { deflateSync, inflateSync } from 'node:zlib'
-import { PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef } from 'pdf-lib'
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef } from 'pdf-lib'
 
 /**
  * Reduce File Size, the parts that are safe without re-rendering anything:
@@ -37,13 +37,9 @@ function downsampleCandidate(
   dict: PDFDict,
   maxDimension: number,
 ): DownsampleCandidate | null {
-  if (Math.max(asInt(dict.get(PDFName.of('Width'))), asInt(dict.get(PDFName.of('Height')))) === 0)
-    return null
-  if (
-    Math.max(asInt(dict.get(PDFName.of('Width'))), asInt(dict.get(PDFName.of('Height')))) <=
-    maxDimension
-  )
-    return null
+  const width = asInt(dict.get(PDFName.of('Width')))
+  const height = asInt(dict.get(PDFName.of('Height')))
+  if (width <= 0 || height <= 0 || Math.max(width, height) <= maxDimension) return null
   if (asInt(dict.get(PDFName.of('BitsPerComponent')) ?? 8) !== 8) return null
   // lookupMaybe throws when the object resolves to another type, and array
   // colour spaces (most photo scans) do exactly that — lookup and test instead
@@ -52,11 +48,7 @@ function downsampleCandidate(
   if (channels === 0) return null
   if (String(dict.get(PDFName.of('Filter'))) !== '/FlateDecode') return null
   if (dict.get(PDFName.of('Matte')) !== undefined) return null
-  return {
-    width: asInt(dict.get(PDFName.of('Width'))),
-    height: asInt(dict.get(PDFName.of('Height'))),
-    channels,
-  }
+  return { width, height, channels }
 }
 
 /** bilinear-free nearest-column/row resample: fast, and for scans visually identical at print size */
@@ -83,14 +75,14 @@ export function resamplePixels(
 
 function asInt(value: unknown): number {
   const n = Number(String(value ?? '').replace(/^\//, ''))
-  return Number.isFinite(n) ? n : 0
+  return Number.isSafeInteger(n) ? n : 0
 }
 
-function decodeFlate(contents: Uint8Array, dict: PDFDict): Uint8Array | null {
+function decodeFlate(contents: Uint8Array, dict: PDFDict, maxOutputLength?: number): Uint8Array | null {
   // /DecodeParms (predictors) change byte semantics — those streams stay as they are
   if (dict.get(PDFName.of('DecodeParms')) !== undefined) return null
   try {
-    return new Uint8Array(inflateSync(Buffer.from(contents)))
+    return inflateSync(contents, maxOutputLength === undefined ? undefined : { maxOutputLength })
   } catch {
     return null
   }
@@ -119,78 +111,81 @@ function channelCount(name: PDFName | undefined): 1 | 3 | 4 | 0 {
 export function shrinkDocument(
   doc: PDFDocument,
   maxDimension = DEFAULT_MAX_DIMENSION,
+  maxInflatedStreamBytes?: number,
 ): ShrinkResult {
   let streamsRecompressed = 0
   let imagesDownsampled = 0
 
-  // /SMask pairs: the mask's dimensions must keep matching its base image's,
-  // so the two may only shrink together — never one without the other. Record
-  // the pairing first; enumeration order cannot decide it.
-  const refKey = (ref: PDFRef): string => `${ref.objectNumber}:${ref.generationNumber}`
-  const baseOfMask = new Map<string, PDFRawStream>()
-  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+  const objects = doc.context.enumerateIndirectObjects()
+  const softMaskUses = new Map<PDFRef, number>()
+  const hardMasks = new Set<PDFRef>()
+  for (const [, obj] of objects) {
     if (!(obj instanceof PDFRawStream)) continue
     if (String(obj.dict.get(PDFName.of('Subtype')) ?? '') !== '/Image') continue
     const mask = obj.dict.get(PDFName.of('SMask'))
-    if (mask instanceof PDFRef) {
-      const resolved = doc.context.lookup(mask)
-      if (resolved instanceof PDFRawStream) baseOfMask.set(refKey(mask), obj)
+    if (mask instanceof PDFRef) softMaskUses.set(mask, (softMaskUses.get(mask) ?? 0) + 1)
+    const hardMask = obj.dict.get(PDFName.of('Mask'))
+    if (hardMask instanceof PDFRef && doc.context.lookup(hardMask) instanceof PDFRawStream) {
+      hardMasks.add(hardMask)
     }
   }
-  /** the other side of an /SMask pair, when it is an image that shrinks the same way */
-  const pairShrinksToo = (other: PDFRawStream, mine: DownsampleCandidate): boolean => {
-    const cand = downsampleCandidate(doc, other.dict, maxDimension)
-    return cand !== null && cand.width === mine.width && cand.height === mine.height
+  const downsample = (obj: PDFRawStream, { width, height, channels }: DownsampleCandidate) => {
+    const expected = width * height * channels
+    if (!Number.isSafeInteger(expected) || expected > (maxInflatedStreamBytes ?? Infinity)) return null
+    const decoded = decodeFlate(obj.contents, obj.dict, maxInflatedStreamBytes)
+    if (decoded?.length !== expected) return null
+    const scale = maxDimension / Math.max(width, height)
+    const newWidth = Math.max(1, Math.floor(width * scale))
+    const newHeight = Math.max(1, Math.floor(height * scale))
+    const pixels = resamplePixels(decoded, width, height, channels, newWidth, newHeight)
+    const dict = obj.dict.clone()
+    dict.set(PDFName.of('Width'), PDFNumber.of(newWidth))
+    dict.set(PDFName.of('Height'), PDFNumber.of(newHeight))
+    const packed = deflateSync(pixels, { level: 9 })
+    dict.set(PDFName.of('Length'), PDFNumber.of(packed.length))
+    return PDFRawStream.of(dict, packed)
   }
 
-  for (const [ref, obj] of doc.context.enumerateIndirectObjects()) {
+  for (const [ref, obj] of objects) {
     if (!(obj instanceof PDFRawStream)) continue
     const dict: PDFDict = obj.dict
     const filter = String(dict.get(PDFName.of('Filter')) ?? '')
     const isImage = String(dict.get(PDFName.of('Subtype')) ?? '') === '/Image'
 
     if (isImage) {
+      const hardMask = dict.get(PDFName.of('Mask'))
+      if (softMaskUses.has(ref) || hardMasks.has(ref) ||
+          (hardMask !== undefined && !(doc.context.lookup(hardMask) instanceof PDFArray))) continue
       const cand = downsampleCandidate(doc, dict, maxDimension)
       if (!cand) continue
-      // a base shrinks only when its mask shrinks with it, and a mask only
-      // when its base does — a DCT base with a Flate mask must keep both
       const mask = dict.get(PDFName.of('SMask'))
+      // Prepare both streams before replacing either one. Shared masks and
+      // masks with their own masks retain their original geometry.
       if (mask !== undefined) {
-        const resolved = mask instanceof PDFRef ? doc.context.lookup(mask) : null
-        if (!(resolved instanceof PDFRawStream) || !pairShrinksToo(resolved, cand)) continue
+        if (!(mask instanceof PDFRef) || softMaskUses.get(mask) !== 1 || hardMasks.has(mask)) continue
+        const resolved = doc.context.lookup(mask)
+        if (!(resolved instanceof PDFRawStream) || resolved.dict.has(PDFName.of('SMask')) ||
+            resolved.dict.has(PDFName.of('Mask'))) continue
+        const maskCandidate = downsampleCandidate(doc, resolved.dict, maxDimension)
+        if (!maskCandidate || maskCandidate.width !== cand.width || maskCandidate.height !== cand.height) continue
+        const scaledMask = downsample(resolved, maskCandidate)
+        if (!scaledMask) continue
+        const scaled = downsample(obj, cand)
+        if (!scaled) continue
+        doc.context.assign(mask, scaledMask)
+        doc.context.assign(ref, scaled)
+        imagesDownsampled += 2
+      } else {
+        const scaled = downsample(obj, cand)
+        if (!scaled) continue
+        doc.context.assign(ref, scaled)
+        imagesDownsampled++
       }
-      const base = baseOfMask.get(refKey(ref))
-      if (base && !pairShrinksToo(base, cand)) continue
-      const decoded = decodeFlate(obj.contents, dict)
-      if (!decoded || decoded.length < cand.width * cand.height * cand.channels) continue
-      const scale = maxDimension / Math.max(cand.width, cand.height)
-      const newWidth = Math.max(1, Math.floor(cand.width * scale))
-      const newHeight = Math.max(1, Math.floor(cand.height * scale))
-      const pixels = resamplePixels(
-        decoded,
-        cand.width,
-        cand.height,
-        cand.channels,
-        newWidth,
-        newHeight,
-      )
-      // Clone the producer's dict and retitle only the geometry: a fresh
-      // five-key dict dropped /SMask, /Mask, /Decode, /Interpolate, /Intent,
-      // /OC, /StructParent and /Metadata — transparency turned opaque and
-      // inverted CMYK/gray flipped. The color space is untouched: only bare
-      // device names qualify, so the channels already describe this dict.
-      const freshDict = dict.clone()
-      freshDict.set(PDFName.of('Width'), PDFNumber.of(newWidth))
-      freshDict.set(PDFName.of('Height'), PDFNumber.of(newHeight))
-      const packed = deflateSync(pixels, { level: 9 })
-      freshDict.set(PDFName.of('Length'), PDFNumber.of(packed.length))
-      doc.context.assign(ref, PDFRawStream.of(freshDict, packed))
-      imagesDownsampled++
       continue
     }
 
     if (filter === '/FlateDecode') {
-      const decoded = decodeFlate(obj.contents, dict)
+      const decoded = decodeFlate(obj.contents, dict, maxInflatedStreamBytes)
       if (!decoded) continue
       const packed = deflateSync(decoded, { level: 9 })
       if (packed.length >= obj.contents.length) continue

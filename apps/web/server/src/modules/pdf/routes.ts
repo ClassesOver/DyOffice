@@ -6,7 +6,9 @@ import { uuidSchema, fileParamsSchema, emptyQuerySchema } from '../files/http-sc
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import { withDisconnect } from '../request-signal.ts'
 import {MAX_OCR_BASE64} from '../../pdf/ocr.ts'
+import {pdfConversionFormats} from '../../pdf/convert-office-job.mjs'
 import {MAX_PDF_OCR_INSERTS,MAX_PDF_TEXT_INSERTS} from '../../../../../../packages/web-contracts/src/pdf-ocr-bake.ts'
+import {MAX_PDF_ATTACHMENT_ADDITIONS,MAX_PDF_ATTACHMENT_BASE64} from '../../../../../../packages/web-contracts/src/pdf-attachment-limits.ts'
 import type { createPdfService, PdfUploadInput, PdfTextUploadInput, PdfAnnotationUploadInput, PdfAnnotationDeleteUploadInput, PdfNoteUpdateUploadInput, PdfPageOpsUploadInput, PdfExtractPagesInput, PdfSplitInput, PdfPageLayoutInput, PdfFormValuesUploadInput, PdfFormFieldsUploadInput, PdfTextInsertsUploadInput, PdfBlockEditsUploadInput, PdfBlockMovesUploadInput, PdfImageEditsUploadInput, PdfImageContentUploadInput, PdfImageBakesUploadInput, PdfStampsUploadInput, PdfReplacePagesInput, PdfRedactedCopyInput, PdfDraftInsertsUploadInput, PdfApplyOpsUploadInput } from './service.ts'
 
 type PdfService = ReturnType<typeof createPdfService>
@@ -26,6 +28,8 @@ const operationsSchema = {
   },
 }
 
+const pdfCopyName = {type:'string',minLength:1,maxLength:255,pattern:'\\.[pP][dD][fF]$'}
+
 const mutationProperties = {
   baseRevision: uuidSchema,
   editorId: uuidSchema,
@@ -41,9 +45,10 @@ const applyOpsSnapshotSchema={type:'object',additionalProperties:false,required:
             textInserts:{type:'array',maxItems:MAX_PDF_OCR_INSERTS+MAX_PDF_TEXT_INSERTS,items:{type:'object'}},
             stampOperations:{type:'array',maxItems:2,items:{type:'object'}},
             savedImageEdits:{type:'array',maxItems:20,items:{type:'object'}},
+            staticFormFills:{type:'array',maxItems:1000,items:{type:'object'}},
             attachments:{type:'object',additionalProperties:false,properties:{
-              add:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['name','bytesBase64'],properties:{
-                name:{type:'string',minLength:1,maxLength:255},bytesBase64:{type:'string',minLength:4,maxLength:6990508},
+              add:{type:'array',maxItems:MAX_PDF_ATTACHMENT_ADDITIONS,items:{type:'object',additionalProperties:false,required:['name','bytesBase64'],properties:{
+                name:{type:'string',minLength:1,maxLength:255},bytesBase64:{type:'string',maxLength:MAX_PDF_ATTACHMENT_BASE64},
                 description:{type:'string',maxLength:1000},
               }}},
               remove:{type:'array',maxItems:100,uniqueItems:true,items:{type:'string',minLength:1,maxLength:1024}},
@@ -69,15 +74,50 @@ export function registerPdfRoutes(
   const admission = objectTransferAdmission(app)
   const binaryUpload = (url: string | undefined) => /\/pdf\/(?:replace|insert)-pages\/uploads$/.test(url ?? '')
   const signaturesQuery='/api/v1/files/:id/pdf/signatures/query'
+  const officeConversion='/api/v1/files/:id/pdf/convert-office'
+  const reduceSize='/api/v1/files/:id/pdf/reduce-size'
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
       await authenticateEditorFile(request,sessions,csrf,true,403)
       if (binaryUpload(request.routeOptions.url)) await admission.admit(request, reply, { waitMs: 10_000 })
-      if (request.routeOptions.url===signaturesQuery) await admission.admit(request,reply)
+      if (request.routeOptions.url===signaturesQuery||request.routeOptions.url===officeConversion||request.routeOptions.url===reduceSize) await admission.admit(request,reply)
     })
     api.addHook('onResponse', async request => admission.close(request))
     api.addHook('onError', async request => admission.error(request))
+
+    api.post(reduceSize,{
+      bodyLimit:4096,
+      schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
+        type:'object',additionalProperties:false,required:['revision'],properties:{revision:uuidSchema},
+      }},
+    },async(request,reply)=>withDisconnect(request,reply,signal=>admission.transfer(request,reply,async()=>{
+      const {revision}=request.body as {revision:string}
+      const bytes=await pdf.reduceSize(editorFileToken(request),(request.params as {id:string}).id,revision,signal)
+      return reply.type('application/octet-stream').send(bytes)
+    })))
+
+    api.post(officeConversion,{
+      bodyLimit:32*1024*1024,
+      schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
+        type:'object',additionalProperties:false,required:['revision','format'],
+        properties:{revision:uuidSchema,format:{type:'string',enum:pdfConversionFormats},password:{type:'string',maxLength:127},snapshot:applyOpsSnapshotSchema},
+      }},
+    },async(request,reply)=>withDisconnect(request,reply,signal=>admission.transfer(request,reply,async()=>{
+      const input=request.body as Parameters<PdfService['convertOffice']>[2]
+      try {
+        const bytes=await pdf.convertOffice(editorFileToken(request),(request.params as {id:string}).id,input,signal)
+        return reply.type('application/octet-stream').send(bytes)
+      } catch(error) {
+        const code=(error as {detail?:string})?.detail
+        if(code==='PDF_COPY_RESTRICTED')return reply.code(403).send({error:'PDF copy is restricted',code})
+        if(code==='PASSWORD'||code==='PDF_CONVERSION_NEEDS_OCR'||code==='PDF_CONVERSION_NO_TEXT'||
+            code==='PDF_CONVERSION_LIMIT'||code==='OUTPUT_LIMIT'){
+          return reply.code(400).send({error:'PDF conversion unavailable',code})
+        }
+        throw error
+      }
+    })))
 
     api.post(signaturesQuery,{
       bodyLimit:4096,
@@ -150,6 +190,7 @@ export function registerPdfRoutes(
       bodyLimit:4096,
       schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
         type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','operation'],properties:{
+          name:pdfCopyName,folderId:uuidSchema,
           baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER},
           operation:{oneOf:[
             {type:'object',additionalProperties:false,required:['kind','perPage'],properties:{kind:{const:'split'},perPage:{enum:[2,4,9]}}},
@@ -163,6 +204,7 @@ export function registerPdfRoutes(
       bodyLimit:4096,
       schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
         type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','pagesPerFile'],properties:{
+          name:pdfCopyName,folderId:uuidSchema,
           baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER},
           pagesPerFile:{type:'integer',minimum:1,maximum:100},
         },
@@ -175,7 +217,7 @@ export function registerPdfRoutes(
         type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','pages'],properties:{
           baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER},
           pages:{type:'array',minItems:1,maxItems:100,uniqueItems:true,items:{type:'integer',minimum:1,maximum:100}},
-          name:{type:'string',minLength:1,maxLength:255,pattern:'\\.[pP][dD][fF]$'},
+          name:pdfCopyName,folderId:uuidSchema,
         },
       }},
     },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageExtractPages(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfExtractPagesInput,signal)))

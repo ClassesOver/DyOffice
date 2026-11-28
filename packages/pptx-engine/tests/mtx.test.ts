@@ -61,6 +61,8 @@ describe('MTX LZCOMP decoder', () => {
     expect([...a]).toEqual([1, 2, 3])
     expect([...b]).toEqual([4, 5])
     expect([...c]).toEqual([6])
+    expect(() => unpackMtx(mtx, 5)).toThrow('MTX output limit')
+    expect(unpackMtx(mtx, 6)).toEqual([a, b, c])
   })
 })
 

@@ -32,6 +32,19 @@ describe('expandHeaderFooterCodes', () => {
     expect(expandHeaderFooterCodes('&P-1 of &N', fields)).toBe('1 of 9')
   })
 
+  it('offsets the total page count in stored and named fields', () => {
+    expect(expandHeaderFooterCodes('Page &P of &N+2', fields)).toBe('Page 2 of 11')
+    expect(expandHeaderFooterCodes('&[Page]+5 of &[Pages]-2', fields)).toBe('7 of 7')
+    expect(expandHeaderFooterCodes('&N+12345', fields)).toBe('12354')
+    expect(expandHeaderFooterCodes('&N+ copies / &&N+2', fields)).toBe('9+ copies / &N+2')
+  })
+
+  it('keeps offsets that exceed the integer range as literal text', () => {
+    expect(expandHeaderFooterCodes('&N+99999999999999999999', fields)).toBe(
+      '9+99999999999999999999',
+    )
+  })
+
   it('keeps literal ampersands and unknown codes', () => {
     expect(expandHeaderFooterCodes('Profit && Loss', fields)).toBe('Profit & Loss')
     expect(expandHeaderFooterCodes('R&Q', fields)).toBe('R&Q')

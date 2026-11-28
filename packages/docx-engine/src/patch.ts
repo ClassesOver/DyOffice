@@ -1100,7 +1100,7 @@ export async function saveDocx(
 
   // ---- header / footer: overwrite the existing default part or create one ----
   const sectBlock = parsed.blocks.find((b) => b.hidden && b.originalXml?.includes('<w:sectPr'))
-  const trailingSectPr = sectBlock?.originalXml ?? ''
+  const trailingSectPr = sectBlock?.originalXml ?? (options.section ? '<w:sectPr/>' : '')
   const relTargets = new Map<string, string>()
   if (relsXml) {
     for (const tag of relsXml.match(RELATIONSHIP_TAG) ?? []) {
@@ -1903,6 +1903,19 @@ export async function saveDocx(
     }
     parts.push(xml)
   }
+  const rewriteTrailingSection = (original: string) => {
+    let xml = options.trailingSectPr || original
+    if (options.trailingSectPrChange)
+      xml = resolvePropChangeXml(xml, 'w:sectPrChange', options.trailingSectPrChange)
+    if (options.section) xml = applySectionSettings(xml, options.section)
+    if (options.sectionStartType) xml = applySectionStartType(xml, options.sectionStartType)
+    if (options.pgNumType)
+      xml = applyPageNumType(xml, options.pgNumType.fmt, options.pgNumType.start)
+    if (options.titlePg !== undefined) xml = applyTitlePg(xml, options.titlePg)
+    // headerReference/footerReference must be the first sectPr children.
+    if (hfRefTags.length > 0) xml = injectIntoSectPr(xml, hfRefTags.join(''))
+    return xml
+  }
   // Trailing hidden elements (w:sectPr) always keep their original bytes and position,
   // unless the editor changed the page setup.
   for (const block of parsed.blocks) {
@@ -1910,19 +1923,7 @@ export async function saveDocx(
       const el = elements[block.docxIndex]
       let xml = documentXml.slice(el.start, el.end)
       if (xml.includes('<w:sectPr')) {
-        if (options.trailingSectPr) xml = options.trailingSectPr
-        if (options.trailingSectPrChange)
-          xml = resolvePropChangeXml(xml, 'w:sectPrChange', options.trailingSectPrChange)
-        if (options.section) xml = applySectionSettings(xml, options.section)
-        if (options.sectionStartType) xml = applySectionStartType(xml, options.sectionStartType)
-        if (options.pgNumType)
-          xml = applyPageNumType(xml, options.pgNumType.fmt, options.pgNumType.start)
-        if (options.titlePg !== undefined) xml = applyTitlePg(xml, options.titlePg)
-        // headerReference/footerReference must be the first sectPr children
-        if (hfRefTags.length > 0) {
-          xml = injectIntoSectPr(xml, hfRefTags.join(''))
-        }
-        xml = unlinkSectionHf(xml, block.docxIndex)
+        xml = unlinkSectionHf(rewriteTrailingSection(xml), block.docxIndex)
       }
       const index = block.docxIndex
       if (index !== null) {
@@ -1933,6 +1934,7 @@ export async function saveDocx(
       parts.push(xml)
     }
   }
+  if (!sectBlock && options.section) parts.push(rewriteTrailingSection(trailingSectPr))
 
   let newDocumentXml =
     documentXml.slice(0, bodyContentStart) +

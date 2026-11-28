@@ -1,4 +1,4 @@
-import { EncryptedPDFError, PDFArray, PDFDict, PDFDocument, PDFName, degrees } from 'pdf-lib'
+import { EncryptedPDFError, PDFArray, PDFDict, PDFDocument, PDFName, degrees } from '../../../../pdf/src/shared/pdf-lib.ts'
 
 function reject(code) { throw Object.assign(new Error(code), { code, status: 400 }) }
 

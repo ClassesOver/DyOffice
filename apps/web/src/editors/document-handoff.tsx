@@ -28,7 +28,7 @@ export function DocumentHandoffMessages({fileId}:{fileId:string}) {
 export function mountDocumentHandoff(o:{
  fileId:string;format:Format
  assistant:()=>{available:boolean;transport:AgentTransport}|null|undefined
- prepare?:()=>Promise<void>;activate:()=>void;ready:()=>boolean;clean:()=>boolean;revision:()=>string;save:(check:()=>boolean)=>Promise<boolean>;pdfTools?:readonly string[]
+ prepare?:()=>Promise<void>;activate?:()=>void;ready:()=>boolean;clean:()=>boolean;revision:()=>string;save:(check:()=>boolean)=>Promise<boolean>;pdfTools?:readonly string[]
 }) {
  const handoff=documentHandoffPeer()
  if(!handoff)return ()=>{}
@@ -112,7 +112,7 @@ export function mountDocumentHandoff(o:{
    if(!grant?.write||!uuid(request?.id)||!uuid(request.baseRevision)||typeof request.topic!=='string'||!request.topic.trim()||request.topic.length>255||signal.aborted){
      return
    }
-   if(!activated){activated=true;o.activate()}
+   if(!activated){activated=true;o.activate?.()}
    if(!job){job={id:request.id,state:'planning'};publish({fileId:o.fileId,rows:[],generation:0})}
    if(job.id!==request.id)return
    const a=o.assistant(),runner=a&&documentHandoffEditor(a.transport)

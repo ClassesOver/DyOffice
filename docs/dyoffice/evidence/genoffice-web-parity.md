@@ -5,7 +5,7 @@
 | 条目 | Web 验收 | 成品核验与差异 |
 | --- | --- | --- |
 | F01 DOCX | 原生段落、表格、样式、批注，撤销、租约与回执恢复 | 下载后核对实际 OOXML、历史原件和 Web 重开；逐项记录复杂布局与字体的结果 |
-| F02 XLSX | 使用 Univer 和原 XLSX 写入链验证公式、格式、定义名称、图表、透视表与批量撤销 | 核对公式、缓存、原始数值和未编辑部件。默认 Node/WASI、Rust 及混合部署均已验证查看、换源、刷新和断开外链。工作簿密码仍待验 |
+| F02 XLSX | 使用 Univer 和原 XLSX 写入链验证公式、格式、定义名称、图表、透视表与批量撤销 | 核对公式、缓存、原始数值和未编辑部件。默认 Node/WASI、Rust 及混合部署均已验证查看、换源、刷新和断开外链。加密工作簿已验证导入、保存、密码轮换及重开 |
 | F03 PPTX | 原生文本、形状、图片、图表、页序、撤销与保存 | 复开后继续编辑原生对象并核对母版关系。Web 已接母版和版式编辑；部分导出仍不可用 |
 | F04 PDF | 原文编辑、批注、页面、表单、扫描页和受保护文档 | 独立提取与渲染核对内容、像素和历史原件。实际签名验证与特殊样本单独记结果 |
 | 四格式助手 | 工具按可执行能力注册；真实工具写回、保存、重开，核对委派后的恢复 | 分别记录测试替身、真实模型、本机或外接 Harness、正式隔离环境的结果 |
@@ -91,9 +91,13 @@ Web Word 知识库把文件名保留为来源标签，模型收到的引用路�
 
 本机通过锁文件安装依赖，使用 Node `22.23.5`、Playwright Chromium `151.0.7922.34`、隔离 PostgreSQL 夹具及主机 OCR，不使用 Docker。本轮确认助手工具清单的 159 个定义与分类一致，兼容输入基线 84 个文件无漂移。四格式后台读取和回答等基础测试 23 项通过，跳过的真实 OCR 项在安装 Tesseract 及 `eng`、`chi_sim` 数据后单独复跑，OCR 套件 3 项通过。
 
-固定候选 `d90ea092` 的上传校验 9 项全部通过，覆盖上游四格式样本、文件签名和内部类型校验、损坏归档及解析限额。另用 GenOffice 桌面端的 Agile 加密函数生成真实的打开密码 XLSX 对照件。同一工作簿的普通字节通过 Web 上传校验，加密字节在校验层返回 400，输入哈希保持一致，桌面加密模块解密后恢复完全相同的工作簿字节。Web 打开密码工作簿及修改密码仍待对齐。[上传校验用例](../../../apps/web/test/storage/validation.test.mjs)
+固定候选 `d90ea092` 的上传校验 9 项全部通过，覆盖上游四格式样本、文件签名和内部类型校验、损坏归档及解析限额。另用 GenOffice 桌面端的 Agile 加密函数生成真实的打开密码 XLSX 对照件。同一工作簿的普通字节通过 Web 上传校验，加密字节在校验层返回 400，输入哈希保持一致，桌面加密模块解密后恢复完全相同的工作簿字节。该候选尚未接入加密工作簿打开与密码轮换。[上传校验用例](../../../apps/web/test/storage/validation.test.mjs)
 
 在 `d8392ce2` 的上传校验上，对浏览器验收包的 DOCX、XLSX、PPTX 成品分别重跑了打开密码对照。三个普通成品均获正确识别。用原 GenOffice Agile 加密模块生成的三个真实打开密码副本均返回 400，输入 SHA-256 保持一致，解密回来的字节与对应成品完全相同。该结果记录三种 OOXML 打开密码文件的当前 Web 上传限制。
+
+基于 `5647d1ea` 重建 XLSX 和工作区后，Chromium 与 PostgreSQL 定向复验通过 3 项打开密码流程。从工作区打开本地加密文件，错误密码不会发布文件，输入正确密码后直接进入工作表，导入修订的密文字节与本地原件一致。同一工作簿连续保存两次，两个成品均保持加密，重开后可读回编辑。密码轮换期间丢失提交响应后，编辑器用同一提交参数恢复回执并继续保存。新密码可解密并重开最新成品，旧密码被拒绝，历史原件保持原字节。[XLSX 浏览器用例](../../../apps/web/test/native-sheets/entry.test.mjs)
+
+`375bcbd0` 的 XLSX“另存为”复验通过普通和加密工作簿。用原密码重开加密副本后读回源标签页中的未保存单元格。源标签页保持可编辑，源文件的修订和字节保持不变。服务端拒绝缺少有效解锁凭据的复制请求，副本通过独立上传回执发布。[XLSX 浏览器用例](../../../apps/web/test/native-sheets/entry.test.mjs) [保存服务用例](../../../apps/web/test/native-sheets/save-service.test.mjs)
 
 F14 的 OOXML 包签名存在保存缺口。在 `e5719120` 上使用 Apache POI 的三个签名样本，分别核对 DOCX 正文、XLSX 工作表和 PPTX 幻灯片的签名摘要。原始部件摘要与签名包清单一致，清单摘要也与 `SignedInfo` 一致，样本自带的公钥可验证 `SignatureValue`。修改被签名的部件并保留签名声明后，三个部件摘要均失配，保存服务仍会接受并切为当前修订。三个历史原件的下载字节保持一致。[Microsoft OPC 签名说明](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/digital-signatures-overview) [Apache POI 原始签名样本](https://github.com/apache/poi/tree/c94ee8ad9096bdb8cf8e5e59d8d12432e950dbf3/test-data/xmldsign)
 
@@ -103,7 +107,7 @@ F14 的 OOXML 包签名存在保存缺口。在 `e5719120` 上使用 Apache POI 
 
 后续修复默认 Node 工作簿执行路径的保护元数据。实际 Node 与 Rust 对照覆盖已有文稿的结构锁、有密码的工作表、允许的格式操作、工作表可编辑区域、锁定单元格及继承的公式隐藏标记。原生读取三项、网关工作表保护十一项均通过。此项覆盖 OOXML 编辑保护。[Node 与 Rust 对照用例](../../../apps/web/test/native-sheets/read.test.mjs)
 
-Chromium 使用隔离 Node 执行路径打开同一工作表中的四类单元格。旧编辑器能修改带密码的允许编辑区域，复用的原生防护现仅豁免无需解锁的区域。新构建中默认锁定格和需密码的区域均拒绝写入，单元格样式明确解锁的单元格和无密码编辑区域可保存。下载与对应新修订字节相同，保护标签和历史原件保持原样，重开后四个数值符合预期。工作表保护单测 8 项及 Web Sheets 类型检查通过。[Chromium 保存重开用例](../../../apps/web/test/native-sheets/entry.test.mjs)
+Chromium 使用隔离 Node 执行路径打开同一工作表中的四类单元格。旧编辑器能修改带密码的允许编辑区域，复用的原生防护现仅豁免无需解锁的区域。新构建中默认锁定格和需密码的区域均拒绝写入，单元格样式明确解锁的单元格和无密码编辑区域可保存。下载与对应新修订字节相同，保护标签和历史原件保持原样，重开后四个数值符合预期。工作表保护单测 8 项及 Web Sheets 类型检查通过。`5647d1ea` 的同一 Chromium 用例复跑通过。[Chromium 保存重开用例](../../../apps/web/test/native-sheets/entry.test.mjs)
 
 固定候选 `ab22f217` 的无 Docker 宿主隔离专项通过 5 项。真实 Node 工作簿网关在 systemd 隔离中完成解析与保存规划，原生 Rust 打开、保存并重开 XLSX。隔离检查核对动态非 root 身份、私有根目录、能力移除、控制进程凭据不继承及原生输出文件边界。用例见 [网关隔离](../../../apps/web/test/host-native/gateway.test.mjs)和 [Rust 进程隔离](../../../apps/web/test/host-native/process.test.mjs)。
 
@@ -118,6 +122,8 @@ Chromium 使用隔离 Node 执行路径打开同一工作表中的四类单元�
 固定候选 `d90ea092` 的 DOCX 核心套件扩展至 14 项后全通过，包含样式批注和明暗主题保存。初次跑批中的入口用例在 30 秒总时限达到后取消。该用例包括数据库准备、实际服务启动及两次无效配置启动；同一构建的单独复跑约 23 秒通过。将用例的总时限调整为 60 秒后，完整跑批和启动拒绝断言全部通过。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
 
 同一 DOCX 构建的 F14 修改密码浏览器用例通过。错误密码提示后可只读打开，键入被阻止，下载仍为原始字节且修订不变。输入正确密码后可编辑并保存新修订，写保护字段及历史原件保持不变。重开仍提示修改密码，只读查看时可读回授权修改。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
+
+基于 `99fc6d7e` 构建的 Word Chromium 定向复验通过打开密码设置、轮换、移除以及修改密码解锁。两个密码选项同时显示时，只填写修改密码即可保存带 `w:writeProtection` 的新修订，文件仍可直接按普通 DOCX 解包。加密导入后一次性打开回执也通过了独立 PostgreSQL 集成复验。[Word 浏览器用例](../../../apps/web/test/native-docs/roundtrip.test.mjs) [导入回执集成用例](../../../apps/web/test/local-integration/files-protected-workbook.test.mjs)
 
 F12 使用 `d8392ce2` 的构建产物通过 Chromium 定向复验。断网时实际上传请求失败，当前页草稿保持未保存，服务端修订不变。恢复联网后手动保存成功，历史原件字节一致。下载响应发送头部后取消，重试取得同一修订的完整字节且没有重复提交。刷新后读回已保存正文。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
 
@@ -167,6 +173,8 @@ XLSX 的大型多附件合并保留用户当前工作表，避免 Univer 在导�
 
 XLSX 外链保真用例从 Web 编辑普通单元格后保存、下载并重开。成品保留未修改的外链公式及缓存、工作簿中的引用、外链工作表缓存和目标关系部件。独立比较确认原始修订保持原字节。测试中的外部源监听器收到 0 次请求。 Web 的“公式 → 外部链接”复用原面板和工作簿子进程。Chromium 通过了显示链接地址与缓存工作表名称、拒绝跨账户读取和拒绝客户端传入路径，以及保存重开后再次显示同一链接的场景。
 
+从保存的 XLSX 刷新网页查询时，服务端从指定修订读取连接定义并按既有外网访问规则获取表格。Chromium 定向复验通过普通和已解锁工作簿的查询结果保存与重开，并核对连接定义和历史原件字节。PostgreSQL 集成复验确认借用其他会话的解锁凭据无法发起查询，刷新途中重新锁定时结果也无法返回。[工作簿查询用例](../../../apps/web/test/native-sheets/entry.test.mjs) [解锁授权用例](../../../apps/web/test/native-sheets/service.test.mjs)
+
 断开外链复用工作簿保存与修订链。确认后使用已保存版本的公式缓存写入字面值，并以新版本重开网格。保存、编辑准入及面板定向单测共 51 项通过，包含只读面板仍显示外链信息。网关外链操作回归 8 项通过，覆盖保留其他外链及拒绝会留下悬空引用的断开操作。保存期间新完成的编辑仍留在当前会话中，待单独保存。
 
 Chromium 专项通过 Web 功能区断开外链。确认前文件版本保持不变，确认后只生成一个修订。保存的 `G3` 由外链公式变为数值 `84`，对应关系和缓存部件从新版本移除，其他编辑在重开后仍存在。旧修订保持原字节，外部源监听器收到 0 次请求。真实 PostgreSQL 下，Node 子进程夹具以及 systemd 隔离的宿主 Rust 与工作簿网关分别通过同一用例。
@@ -191,9 +199,11 @@ PPTX 文件菜单已支持 PNG/JPG 导出。Web 使用同一套 GenOffice 画布
 
 固定候选 `d90ea092` 的 F15 PPTX 两项用例通过。浅色和深色 UI 导出的同格式可见页图片逐字节一致，隐藏页均被排除，导出没有生成文件修订。在两种主题下插入同一填充色的矩形，经原生链路保存并下载。下载成品的 OOXML 均包含真实矩形和色值 `A14173`，未编辑幻灯片、文稿主题及历史原件的字节保持一致。重开后两个矩形都可继续修改填充色。[PPTX 保存与图片导出回归](../../../apps/web/test/native-slides/image-export.test.mjs)
 
-PPTX 的 F14 修改密码保护通过原生会话复验。对照候选 `d8392ce2` 会保留 `p:modifyVerifier` 字段并提交修改后的正文。修复后识别到验证器的演示文稿可渲染和浏览，原生编辑及保存请求返回 403，原件与修订保持一致。原生会话及保存专项 32 项全部通过。Chromium 三项通过，覆盖只读提示、保存按钮禁用、原件下载，以及普通 PPTX 图片导出和原生对象编辑保存。Web 通过修改密码解锁仍待适配。[Microsoft PresentationML 修改保护说明](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.modificationverifier?view=openxml-3.0.1) [PPTX 原生保存与下载用例](../../../apps/web/test/native-slides/image-export.test.mjs)
+PPTX 的 F14 修改密码保护通过原生会话复验。对照候选 `d8392ce2` 会保留 `p:modifyVerifier` 字段并提交修改后的正文。修复后识别到验证器的演示文稿可渲染和浏览，原生编辑及保存请求返回 403，原件与修订保持一致。原生会话及保存专项 32 项全部通过。Chromium 三项通过，覆盖只读提示、保存按钮禁用、原件下载，以及普通 PPTX 图片导出和原生对象编辑保存。该候选的 Web 界面尚未接入修改密码解锁。[Microsoft PresentationML 修改保护说明](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.modificationverifier?view=openxml-3.0.1) [PPTX 原生保存与下载用例](../../../apps/web/test/native-slides/image-export.test.mjs)
 
 在 Node `24.22.3` 上复跑制品、IPC 协议和启动边界，共 43 项通过。使用实际构建的 PPTX 子进程打开带修改密码的合成样本，严格校验后的大纲仅包含 `writeProtected: true`，编辑和导出均返回 `PPTX_WRITE_PROTECTED`。旧格式大纲仍能通过校验。制品清单保留 `runtimeApproved: false`。[PPTX 制品 IPC 用例](../../../apps/web/test/runtime-artifacts/pptx-candidate-ipc.test.mjs) [IPC 协议用例](../../../apps/web/test/sandbox/document-contract.test.mjs)
+
+`99fc6d7e` 的 Chromium 定向复验通过 PPTX 修改密码流程。解锁前只能下载原件，下载字节和原修订未变。错误密码保持只读，正确密码允许修改备注并保存新修订。新修订保留原修改密码验证器，刷新后再次显示只读状态，备注可从原生编辑器读回。独立验证器测试也通过 ISO、PowerPoint 旧格式及不支持参数的拒绝用例。[PPTX 浏览器复验](../../../apps/web/test/native-slides/image-export.test.mjs) [修改密码验证器用例](../../../apps/web/test/native-slides/modify-password.test.mjs)
 
 合入上游 `6e92710c` 后，PPTX 功能区可以选择 TIFF。Web 原生会话复用 GenOffice 解码器生成 PNG 预览，限制解码为 16,777,216 像素、单张 PNG 输出为 8 MiB。Chromium 通过功能区插入 TIFF，核对预览尺寸和像素、下载包中的 TIFF 原始字节和重开结果。同次 Chromium 复跑通过 TIFF 原生往返和 PNG/JPG 导出两项。PPTX 原生会话、解码和识别共 42 项，独立 PPTX CI 夹具本地运行 56 项，Web 桥接及测试子进程共 66 项全部通过。完整 SaaS 构建、服务端及 Web PPTX 类型检查也通过。
 

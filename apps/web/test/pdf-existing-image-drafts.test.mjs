@@ -77,9 +77,11 @@ test('draft routes accept bounded existing operations with the same query and si
  t.after(()=>app.close())
  registerPdfRoutes(app,{async queryDraftInserts(_token,_id,input){received.push(input);return {revision:input.revision,pages:[]}},async stageDraftInserts(_token,_id,input){received.push(input);return {uploadId:'only-one'}}},{async authenticate(){}},{originCheck(){},requireSession(){}})
  const fileId=randomUUID(),revision=randomUUID(),editorId=randomUUID(),operation={texts:[],images:[],imageEdits:[{op:'delete_image',page:1,image_number:1},{op:'replace_image',page:2,image_number:2,image:image([10,20,30,255])},{op:'crop_image',page:1,image_number:3,left:.2}]}
- const query=await app.inject({method:'POST',url:`/api/v1/files/${fileId}/pdf/draft-inserts/query`,payload:{revision,operation}});assert.equal(query.statusCode,200,query.body);assert.deepEqual(received[0].operation,operation)
- const save=await app.inject({method:'POST',url:`/api/v1/files/${fileId}/pdf/draft-inserts/uploads`,payload:{baseRevision:revision,editorId,leaseEpoch:1,operation}});assert.equal(save.statusCode,200,save.body);assert.deepEqual(received[1].operation,operation)
- for(const imageEdits of [Array(21).fill(operation.imageEdits[0]),[{op:'delete_image',page:1,image_number:1,extra:true}],[{op:'set_image_opacity',page:1,image_number:1,opacity:2}]]){const invalid=await app.inject({method:'POST',url:`/api/v1/files/${fileId}/pdf/draft-inserts/query`,payload:{revision,operation:{...operation,imageEdits}}});assert.equal(invalid.statusCode,400,invalid.body)}
+ const {SESSION_COOKIE}=await import('../server/src/modules/auth/csrf.ts')
+ const headers={cookie:SESSION_COOKIE+'='+'a'.repeat(43)}
+ const query=await app.inject({method:'POST',headers,url:`/api/v1/files/${fileId}/pdf/draft-inserts/query`,payload:{revision,operation}});assert.equal(query.statusCode,200,query.body);assert.deepEqual(received[0].operation,operation)
+ const save=await app.inject({method:'POST',headers,url:`/api/v1/files/${fileId}/pdf/draft-inserts/uploads`,payload:{baseRevision:revision,editorId,leaseEpoch:1,operation}});assert.equal(save.statusCode,200,save.body);assert.deepEqual(received[1].operation,operation)
+ for(const imageEdits of [Array(21).fill(operation.imageEdits[0]),[{op:'delete_image',page:1,image_number:1,extra:true}],[{op:'set_image_opacity',page:1,image_number:1,opacity:2}]]){const invalid=await app.inject({method:'POST',headers,url:`/api/v1/files/${fileId}/pdf/draft-inserts/query`,payload:{revision,operation:{...operation,imageEdits}}});assert.equal(invalid.statusCode,400,invalid.body)}
  assert.equal(received.length,2)
 })
 

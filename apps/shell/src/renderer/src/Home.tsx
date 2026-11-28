@@ -1573,18 +1573,20 @@ function DropToOpenOverlay(): ReactElement | null {
 // ── Main component ──────────────────────────────────────
 
 export interface HomeProps {
+  active?: boolean
   renderHero?: (fallback:{greeting:string;guidance:string;language:string})=>ReactNode
   /** Web hosts retain the native layout while exposing only supported formats. */
   supportedFormats?: readonly string[]
   supportedNewFormats?: readonly string[]
   accountEntry?: ReactNode
+  copyWorkspaceFileLink?: (id: string) => Promise<void>
   /** Omitted flags preserve desktop actions; Web hosts disable unavailable capabilities. */
   capabilities?: {localFolders?: boolean; copyPath?: boolean; duplicateFile?: boolean; starredGroups?: boolean; cloudProjects?: boolean; semanticRanking?: boolean; serverFileSort?: boolean}
   /** A host with empty-only directory deletion supplies its own accurate description. */
   folderDeleteDescription?: (name: string) => string
 }
 
-export function Home({supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription, capabilities, renderHero}:HomeProps = {}) {
+export function Home({active = true, supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription, capabilities, renderHero, copyWorkspaceFileLink}:HomeProps = {}) {
   const i18n = useI18n()
   const { t, lang } = i18n
   const [actionError, setActionError] = useState('')
@@ -2033,6 +2035,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }, [q, filter, rerankKey, rerankSettingsTick, reportError, capabilities?.semanticRanking])
 
   useEffect(() => {
+    if (!active) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
       if (event.key !== 'f' && event.key !== 'p') return
@@ -2044,7 +2047,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [active])
 
   useEffect(() => {
     const onFocus = () => refreshRef.current()
@@ -3182,6 +3185,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   }}
                 >
                   {t('copyPath')}
+                </button>}
+                {copyWorkspaceFileLink && !entry.missing && <button
+                  role="menuitem"
+                  onClick={() => {
+                    setRowMenu(null)
+                    void copyWorkspaceFileLink(entry.path).catch(reportError)
+                  }}
+                >
+                  {lang === 'zh' ? '复制工作区链接' : 'Copy workspace link'}
                 </button>}
                 {canMove && editable && !entry.missing && (
                   <>

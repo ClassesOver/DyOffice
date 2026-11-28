@@ -1,6 +1,8 @@
 import type { Editor } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
 import type { Node as PmNode } from '@tiptap/pm/model'
+import { bytesBase64 } from '../../../../../packages/browser-host/src/analysis-image'
+import { imageSize } from '../../../../../packages/cli/src/formats/image-size'
 import { insertImageFromDataUrl } from '../components/ribbon-tabs'
 import { t } from '../i18n/locale'
 import { pendingDocumentOperation } from './pending-document-operation'
@@ -14,9 +16,13 @@ const IMAGE_MIME: Record<string, string> = {
 }
 const ACCEPTED = new Set(Object.values(IMAGE_MIME))
 
+function hasUnknownType(type: string): boolean {
+  return type === '' || type === 'application/octet-stream'
+}
+
 export function droppedImageMime(file: { name: string; type: string }): string | null {
   if (ACCEPTED.has(file.type)) return file.type
-  if (file.type) return null
+  if (!hasUnknownType(file.type)) return null
   const ext = /\.([a-z0-9]+)$/i.exec(file.name)?.[1]?.toLowerCase()
   return ext ? (IMAGE_MIME[ext] ?? null) : null
 }
@@ -29,7 +35,9 @@ export function imageFilesFromDataTransfer(dt: DataTransfer | null | undefined):
 /** dragover sees no File objects yet — only the item kinds and types */
 export function isImageFileDrag(dt: DataTransfer | null | undefined): boolean {
   if (!dt) return false
-  return [...dt.items].some((item) => item.kind === 'file' && ACCEPTED.has(item.type))
+  return [...dt.items].some((item) =>
+    item.kind === 'file' && (ACCEPTED.has(item.type) || hasUnknownType(item.type)),
+  )
 }
 
 export function nearestTextSelection(doc: PmNode, pos: number): TextSelection | null {
@@ -80,6 +88,7 @@ export function insertImageFilesAtCoords(
 }
 
 function readImageDataUrl(file: File, mime: string): Promise<string | null> {
+  if (hasUnknownType(file.type)) return readUntypedImageDataUrl(file)
   return new Promise((resolve) => {
     const reader = new FileReader()
     reader.onload = () => {
@@ -89,4 +98,14 @@ function readImageDataUrl(file: File, mime: string): Promise<string | null> {
     reader.onerror = () => resolve(null)
     reader.readAsDataURL(file)
   })
+}
+
+async function readUntypedImageDataUrl(file: File): Promise<string | null> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const image = imageSize(bytes)
+    return image ? `data:${image.mime};base64,${bytesBase64(bytes)}` : null
+  } catch {
+    return null
+  }
 }

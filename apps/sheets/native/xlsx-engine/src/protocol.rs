@@ -92,6 +92,16 @@ pub enum Command {
         target_path: PathBuf,
     },
     #[serde(rename_all = "camelCase")]
+    ConvertLegacyXls {
+        path: PathBuf,
+        target_path: PathBuf,
+    },
+    #[serde(rename_all = "camelCase")]
+    ConvertOdfSpreadsheet {
+        path: PathBuf,
+        target_path: PathBuf,
+    },
+    #[serde(rename_all = "camelCase")]
     SaveArchive {
         source_path: PathBuf,
         target_path: PathBuf,
@@ -611,6 +621,12 @@ pub fn handle_request(
                 }))
             })
         }
+        Command::ConvertLegacyXls { path, target_path } => {
+            convert_workspace_workbook(path, target_path, crate::convert::WorkbookImport::Xls)
+        }
+        Command::ConvertOdfSpreadsheet { path, target_path } => {
+            convert_workspace_workbook(path, target_path, crate::convert::WorkbookImport::OpenDocument)
+        }
         Command::ArchiveManifest { path } => archive_manifest(&path)
             .and_then(|entries| to_json_value(serde_json::json!({ "entries": entries }))),
         Command::ReadEntries {
@@ -680,6 +696,18 @@ pub fn handle_request(
         Ok(value) => Response::success(request_id, value),
         Err(error) => Response::from_error(request_id, error),
     })
+}
+
+fn convert_workspace_workbook(
+    path: PathBuf,
+    target: PathBuf,
+    format: crate::convert::WorkbookImport,
+) -> Result<Value, SidecarError> {
+    match crate::convert::convert_workspace_workbook(&path, &target, format) {
+        Ok(_) => to_json_value(serde_json::json!({ "written": true })),
+        Err(SidecarError::Workbook(_)) => to_json_value(serde_json::json!({ "invalidInput": true })),
+        Err(error) => Err(error),
+    }
 }
 
 fn to_json_value<T: Serialize>(value: T) -> Result<Value, SidecarError> {

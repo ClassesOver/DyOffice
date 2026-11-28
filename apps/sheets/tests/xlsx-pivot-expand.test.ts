@@ -12,7 +12,7 @@ import {
   planCellEditsToXlsx,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import type { PivotRefreshUpdate } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
-import { parsePivotDefinition } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
+import { parsePivotDefinition, setPivotRefreshOnLoad } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
 import { recomputePivotData } from '@genoffice/xlsx-gateway/domain/pivot-engine'
 
 // ─── Minimal workbook fixture with one pivot table ───────────────────────────
@@ -256,6 +256,17 @@ function relayoutUpdate(): PivotRefreshUpdate {
 }
 
 describe('applyPivotLayoutExpansions', () => {
+  it('sets refreshOnLoad on the actual cache root without touching comments or extension attributes', () => {
+    const comment = '<!-- <pivotCacheDefinition refreshOnLoad="0"/> -->'
+    const prefix = '<p:pivotCacheDefinition xmlns:p="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+    const suffix = ' xmlns:e="urn:example" e:refreshOnLoad="0" e:label=\'x > y\'/>'
+    const xml = `${comment}${prefix}refreshOnLoad='false'${suffix}`
+    const expected = `${comment}${prefix}refreshOnLoad="1"${suffix}`
+    expect(setPivotRefreshOnLoad(xml)).toBe(expected)
+    expect(setPivotRefreshOnLoad(expected)).toBe(expected)
+    expect(() => setPivotRefreshOnLoad(`${comment}<other/>`)).toThrow('no root element')
+  })
+
   it('no-op when newOutputRef matches current location ref', async () => {
     const buf = await buildPivotFixture()
     const update: PivotRefreshUpdate = {
@@ -285,6 +296,38 @@ describe('applyPivotLayoutExpansions', () => {
     expect(updatedTable).not.toContain('ref="F1:G4"')
   })
 
+  it('expands the actual pivot location and preserves lookalikes in comments', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const tablePath = 'xl/pivotTables/pivotTable1.xml'
+    const comment = '<!-- <location ref="F1:G4"/> -->'
+    const table = await zip.file(tablePath)!.async('text')
+    zip.file(tablePath, table.replace('<location ref="F1:G4"',
+      `${comment}<location ref='F1:G&#52;'`))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])
+    expect(plan.replaced.get(tablePath)).toContain(`${comment}<location ref="F1:G5"`)
+  })
+
+  it('finds the linked pivot table when its cache relationship uses single quotes', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const relsPath = 'xl/pivotTables/_rels/pivotTable1.xml.rels'
+    const rels = await zip.file(relsPath)!.async('text')
+    const type = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition'
+    const external = `<Relationship Id="ext" Type="${type}" Target="pivotCacheDefinition9.xml" TargetMode="External"/>`
+    zip.file(relsPath, rels.replace('<Relationship Id="rId1"',
+      external + "<Relationship Id='rId1'").replace(`Type="${type}" Target="../pivotCache/pivotCacheDefinition1.xml"`,
+      `Type='${type}' Target='../pivotCache/pivotCacheDefinition&#49;.xml'`))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])
+    expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('ref="F1:G5"')
+  })
+
   it('expands two extra rows correctly', async () => {
     const buf = await buildPivotFixture()
     const update: PivotRefreshUpdate = {
@@ -294,6 +337,58 @@ describe('applyPivotLayoutExpansions', () => {
     }
     const plan = await planWithRefreshUpdate(buf, [update])
     expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('ref="F1:G6"')
+  })
+
+  it.each(['part path', 'output origin'])('refreshes two pivots sharing a cache by %s', async (identity) => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const first = 'xl/pivotTables/pivotTable1.xml'
+    const second = 'xl/pivotTables/pivotTable2.xml'
+    const firstRels = 'xl/pivotTables/_rels/pivotTable1.xml.rels'
+    const secondRels = 'xl/pivotTables/_rels/pivotTable2.xml.rels'
+    const sheetRels = 'xl/worksheets/_rels/sheet1.xml.rels'
+    zip.file(second, (await zip.file(first)!.async('text'))
+      .replace('name="PivotData"', 'name="SecondPivot"').replace('ref="F1:G4"', 'ref="J1:K4"'))
+    zip.file(secondRels, await zip.file(firstRels)!.async('text'))
+    const rels = await zip.file(sheetRels)!.async('text')
+    const firstRelationship = rels.match(/<Relationship Id="rId1"[^>]+\/>/)![0]
+    zip.file(sheetRels, rels.replace('</Relationships>',
+      firstRelationship.replace('rId1', 'rId2').replace('pivotTable1.xml', 'pivotTable2.xml') +
+      '</Relationships>'))
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    zip.file(workbookPath, workbook.replace('</workbook>',
+      '<pivotCaches><pivotCache cacheId="1" r:id="rId3"/></pivotCaches></workbook>'))
+    const workbookRelsPath = 'xl/_rels/workbook.xml.rels'
+    const workbookRels = await zip.file(workbookRelsPath)!.async('text')
+    zip.file(workbookRelsPath, workbookRels.replace('</Relationships>',
+      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/></Relationships>'))
+    const shared = { cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml', sheetName: 'Data' }
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    const plan = await planWithRefreshUpdate(bytes, [
+      { ...shared, ...(identity === 'part path' ? { pivotPath: second } : {}), newOutputRef: 'J1:K6' },
+      { ...shared, ...(identity === 'part path' ? { pivotPath: first } : {}), newOutputRef: 'F1:G5' },
+    ])
+    expect(plan.replaced.get(first)).toContain('ref="F1:G5"')
+    expect(plan.replaced.get(second)).toContain('ref="J1:K6"')
+    if (identity === 'part path') {
+      const layout = await planWithRefreshUpdate(bytes, [{ ...relayoutUpdate(), pivotPath: first }])
+      const originalRecords = 'xl/pivotCache/pivotCacheRecords1.xml'
+      const newCache = 'xl/pivotCache/pivotCacheDefinition2.xml'
+      expect(layout.replaced.get(first)).toContain('cacheId="2"')
+      expect(layout.replaced.get(firstRels)).toContain('Target="../pivotCache/pivotCacheDefinition2.xml"')
+      expect(layout.replaced.get(workbookPath)).toMatch(/<pivotCache cacheId="1" r:id="rId3"\/><pivotCache cacheId="2" r:id="rId\d+"\/>/)
+      expect(layout.replaced.get(workbookRelsPath)).toContain('Target="pivotCache/pivotCacheDefinition2.xml"')
+      expect(layout.replaced.has(second)).toBe(false)
+      expect(layout.replaced.has(secondRels)).toBe(false)
+      expect(layout.replaced.has(originalRecords)).toBe(false)
+      expect(layout.replaced.get(shared.cachePath)?.replace(' refreshOnLoad="1"', ''))
+        .toBe(await zip.file(shared.cachePath)!.async('text'))
+      expect(layout.added.get(newCache)).toContain('refreshOnLoad="1"')
+      expect(layout.added.get('xl/pivotCache/pivotCacheRecords2.xml')).toContain('count="0"')
+      await expect(planWithRefreshUpdate(bytes, [{
+        ...shared, pivotPath: 'xl/pivotTables/unrelated.xml', newOutputRef: 'F1:G5',
+      }])).rejects.toThrow(/does not match the worksheet and cache relationships/)
+    }
   })
 
   it('fails closed when new rows conflict with existing non-pivot content', async () => {
@@ -306,6 +401,38 @@ describe('applyPivotLayoutExpansions', () => {
     }
     await expect(planWithRefreshUpdate(buf, [update])).rejects.toThrow(PivotExpandError)
     await expect(planWithRefreshUpdate(buf, [update])).rejects.toThrow(/conflict/)
+  })
+
+  it.each([
+    ['a formula without a cached value', '<row r="5"><c r="G5"><f>SUM(C2:C4)</f></c></row>'],
+    ['a shared formula follower', '<row r="5"><c r="G5"><f t="shared" si="0"/></c></row>'],
+    ['a value with single-quoted addresses', "<row r='5'><c r='G5'><v>999</v></c></row>"],
+    ['a value at an implicit address', '<row><c r="F5"/><c><v>999</v></c></row>'],
+  ])('rejects expansion over %s', async (_label, row) => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace('</sheetData>', `${row}</sheetData>`))
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(planWithRefreshUpdate(bytes, [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])).rejects.toThrow(/conflicts with existing worksheet content/)
+  })
+
+  it('allows expansion over style-only cells and ignores commented data', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    const row = '<row r="5"><c r="F5" s="0"/><c r="G5" s="0"><!-- <v>999</v> --></c></row>'
+    zip.file(path, sheet.replace('</sheetData>', `${row}</sheetData>`))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [{
+      cachePath: 'xl/pivotCache/pivotCacheDefinition1.xml',
+      sheetName: 'Data',
+      newOutputRef: 'F1:G5',
+    }])
+    expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('ref="F1:G5"')
   })
 
   it('does not fail when conflict is outside the new area', async () => {
@@ -446,6 +573,52 @@ describe('pivot layout edits (relayout)', () => {
     })
     const plan = await planWithRefreshUpdate(buf, [relayoutUpdate()])
     expect(plan.replaced.get('xl/pivotTables/pivotTable1.xml')).toContain('name="PivotData"')
+  })
+
+  it.each([false, true])('clears only the linked records with aliased XML: %s', async (aliased) => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const cachePath = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const relsPath = 'xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels'
+    const recordsPath = 'xl/pivotCache/pivotCacheRecords1.xml'
+    const orphan = 'xl/pivotCache/pivotCacheRecords2.xml'
+    const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const relationships = await zip.file(relsPath)!.async('text')
+    const stale = `<Relationship Id="old" Type="${office}/pivotCacheRecords" Target="pivotCacheRecords2.xml"/>`
+    zip.file(orphan, await zip.file(recordsPath)!.async('text'))
+    const withStaleRelationship = relationships.replace(
+      '<Relationship Id="rId1"', stale + '<Relationship Id="rId1"',
+    )
+    zip.file(relsPath, aliased ? withStaleRelationship.replaceAll('"', "'") : withStaleRelationship)
+    if (aliased) {
+      const cache = await zip.file(cachePath)!.async('text')
+      zip.file(cachePath, cache.replace('<pivotCacheDefinition ', '<!-- <unknown/> --><pivotCacheDefinition ')
+        .replace('r:id="rId1"', `xmlns:link="${office}" link:id='rId&#49;'`))
+    }
+
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [relayoutUpdate()])
+    expect(plan.replaced.get(cachePath)).toContain('r:id="rId1"')
+    expect(plan.replaced.get(recordsPath)).toContain('count="0"')
+    expect(plan.replaced.has(orphan)).toBe(false)
+    expect(plan.replaced.has(relsPath)).toBe(false)
+  })
+
+  it('rejects layout edits when the linked records part is missing', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    zip.remove('xl/pivotCache/pivotCacheRecords1.xml')
+    const bytes = await zip.generateAsync({ type: 'nodebuffer' })
+    await expect(planWithRefreshUpdate(bytes, [relayoutUpdate()]))
+      .rejects.toThrow('The pivot cache records relationship points to a missing part.')
+  })
+
+  it('preserves a table-backed source when rebuilding the pivot layout', async () => {
+    const zip = await JSZip.loadAsync(await buildPivotFixture())
+    const path = 'xl/pivotCache/pivotCacheDefinition1.xml'
+    const cache = await zip.file(path)!.async('string')
+    const source = '<worksheetSource name="DataTable"/>'
+    zip.file(path, cache.replace(/<worksheetSource\b[^>]*\/>/, source))
+    const plan = await planWithRefreshUpdate(await zip.generateAsync({ type: 'nodebuffer' }), [relayoutUpdate()])
+    expect(plan.replaced.get(path)).toContain(source)
+    expect(plan.replaced.get(path)).toContain('refreshOnLoad="1"')
   })
 
   it.each([

@@ -1075,14 +1075,22 @@ export function Ribbon({
   autoSave,
   onAutoSaveChange,
   onOpen,
+  openAvailable = true,
   onSave,
   onUndo,
   onRedo,
   onSaveAs,
   saveDownload,
+  saveAsAvailable = !saveDownload,
   onNameWithAi,
   desktopMediaAvailable = true,
+  fileMediaAvailable = desktopMediaAvailable,
+  model3dAvailable = desktopMediaAvailable,
+  screenRecordingAvailable = desktopMediaAvailable,
+  printAvailable = desktopMediaAvailable,
+  videoExportAvailable = desktopMediaAvailable,
   onExportPdf,
+  searchablePdf,
   onPrint,
   onExportImages,
   onExportImagesJpg,
@@ -1642,6 +1650,9 @@ export function Ribbon({
     onInsertIcon,
     onInsertImage,
     desktopMediaAvailable,
+    fileMediaAvailable,
+    model3dAvailable,
+    screenRecordingAvailable,
     onInsertMedia,
     onInsertModel3d,
     onInsertSmartArt,
@@ -1746,6 +1757,7 @@ export function Ribbon({
             {fileOpen && (
               <div className="file-menu" role="group" aria-label={t('ribbonTabFile')} onMouseDown={(event) => event.stopPropagation()}>
                 <button
+                  disabled={!openAvailable}
                   onClick={() => {
                     setFileOpen(false)
                     onOpen()
@@ -1762,15 +1774,16 @@ export function Ribbon({
                 >
                   {t('ribbonFileSave')} <span className="file-menu-key">Ctrl+S</span>
                 </button>
-                {saveDownload ? <div onClick={() => setFileOpen(false)}>{saveDownload}</div> : <button
-                  disabled={!hasDoc}
+                {saveDownload && <div onClick={() => setFileOpen(false)}>{saveDownload}</div>}
+                <button
+                  disabled={!hasDoc || !saveAsAvailable}
                   onClick={() => {
                     setFileOpen(false)
                     onSaveAs()
                   }}
                 >
                   {t('ribbonFileSaveAs')} <span className="file-menu-key">Ctrl+Shift+S</span>
-                </button>}
+                </button>
                 <button
                   disabled={!hasDoc || aiAvailable === false}
                   onClick={() => {
@@ -1789,8 +1802,13 @@ export function Ribbon({
                 >
                   {t('ribbonFileExportPdf')}
                 </button>
+                {searchablePdf && (
+                  <button disabled={!hasDoc} onClick={() => { setFileOpen(false); searchablePdf.run() }}>
+                    {searchablePdf.label}
+                  </button>
+                )}
                 <button
-                  disabled={!hasDoc || !desktopMediaAvailable}
+                  disabled={!hasDoc || !printAvailable}
                   onClick={() => {
                     setFileOpen(false)
                     onPrint()
@@ -1817,7 +1835,7 @@ export function Ribbon({
                   {t('ribbonFileExportImagesJpg')}
                 </button>
                 <button
-                  disabled={!hasDoc || !desktopMediaAvailable}
+                  disabled={!hasDoc || !videoExportAvailable}
                   onClick={() => {
                     setFileOpen(false)
                     onExportVideo()

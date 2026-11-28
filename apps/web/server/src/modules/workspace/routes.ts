@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import type { CreateWorkspaceFolder, UpdateWorkspaceFolder, WorkspaceFileQuery } from '../../../../../../packages/web-contracts/src/workspace.ts'
+import type { CreateWorkspaceFolder, UpdateWorkspaceFolder, UpdateWorkspaceStarredGroup, WorkspaceFileQuery } from '../../../../../../packages/web-contracts/src/workspace.ts'
 import type { SessionService } from '../auth/sessions.ts'
 import { authError } from '../auth/sessions.ts'
 import type { createCsrfService } from '../auth/csrf.ts'
@@ -8,6 +8,7 @@ import { uuidSchema as id, fileParamsSchema as params, emptyQuerySchema as empty
 import type { WorkspaceService } from './service.ts'
 
 const nullableId = { anyOf: [id, { type: 'null' }] }
+const groupName = { type: 'string', maxLength: 200 }
 const folderProperties = { name: { type: 'string', minLength: 1, maxLength: 255 }, parentId: nullableId }
 const token = (request: FastifyRequest) => cookies(request).session ?? ''
 const fileId = (request: FastifyRequest) => (request.params as { id: string }).id
@@ -25,8 +26,10 @@ export function registerWorkspaceRoutes(app: FastifyInstance, workspace: Workspa
       await sessions.authenticate(credential)
     })
     api.get('/api/v1/workspace/files', { schema: { querystring: { type: 'object', additionalProperties: false, properties: {
-      ext: { type: 'string', enum: ['docx','xlsx','pptx','pdf'] },
+      ext: { type: 'string', enum: ['docx','xlsx','pptx','pdf','csv','xlsm'] },
+      family: { type: 'string', const: 'spreadsheet' },
       q: { type: 'string', maxLength: 200 },
+      group: groupName,
       id,
       view: { type: 'string', enum: ['all','recent','starred','trash'] },
       sort: { type: 'string', enum: ['modified-asc','modified-desc'] },
@@ -34,8 +37,17 @@ export function registerWorkspaceRoutes(app: FastifyInstance, workspace: Workspa
       limit: { type: 'string', pattern: '^(?:0|[1-9][0-9]?|100)$' },
       offset: { type: 'string', pattern: '^(?:0|[1-9][0-9]{0,5}|1000000)$' },
     } } } }, request => {
-      const query = request.query as { ext?: WorkspaceFileQuery['ext']; q?: string; id?: string; view?: WorkspaceFileQuery['view']; sort?: WorkspaceFileQuery['sort']; folderId?: string; limit?: string; offset?: string }
-      return workspace.listFiles(token(request), { ext: query.ext, q: query.q, id: query.id, view: query.view, sort: query.sort, folderId: query.folderId, limit: query.limit === undefined ? undefined : Number(query.limit), offset: query.offset === undefined ? undefined : Number(query.offset) })
+      const {limit,offset,...query} = request.query as Omit<WorkspaceFileQuery,'limit'|'offset'> & {limit?:string;offset?:string}
+      return workspace.listFiles(token(request), { ...query, limit: limit === undefined ? undefined : Number(limit), offset: offset === undefined ? undefined : Number(offset) })
+    })
+    api.get('/api/v1/workspace/starred-groups', { schema: { querystring: emptyQuery } }, request => workspace.listStarredGroups(token(request)))
+    api.put('/api/v1/workspace/starred-groups', { bodyLimit: 65536, schema: { querystring: emptyQuery, body: {
+      type: 'object', additionalProperties: false, required: ['ids','group'], properties: {
+        ids: { type: 'array', minItems: 1, maxItems: 1000, items: id }, group: { anyOf: [groupName, {type:'null'}] },
+      },
+    } } }, async (request, reply) => {
+      await workspace.setStarredGroup(token(request), request.body as UpdateWorkspaceStarredGroup)
+      return reply.code(204).send()
     })
     api.get('/api/v1/workspace/folders', { schema: { querystring: emptyQuery } }, request => workspace.listFolders(token(request)))
     api.post('/api/v1/workspace/folders', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','parentId'], properties: folderProperties } } }, async (request, reply) => reply.code(201).send(await workspace.createFolder(token(request), request.body as CreateWorkspaceFolder)))

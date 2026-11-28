@@ -5,10 +5,15 @@
 }
 .web-ai-naming-dialog::backdrop { background: rgb(0 0 0 / 27%); }
 .web-ai-naming-dialog h2 { margin: 0 0 16px; font-size: 17px; }
-.web-ai-naming-dialog label { display: grid; gap: 6px; }
-.web-ai-naming-dialog input, .web-ai-naming-actions button {
+.web-ai-naming-dialog label:not([hidden]) { display: grid; gap: 6px; }
+.web-ai-naming-format, .web-ai-naming-field { margin-top: 12px; }
+.web-ai-naming-dialog p { margin: 8px 0 0; font-size: 13px; }
+.web-ai-naming-dialog input, .web-ai-naming-dialog select, .web-ai-naming-actions button {
   min-width: 0; padding: 7px 10px; border: 1px solid var(--border-strong);
   border-radius: 6px; background: var(--surface); color: inherit; font: inherit;
 }
-.web-ai-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.web-ai-naming-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .web-ai-naming-actions button[type='submit'] { background: var(--accent, #2563eb); color: white; border-color: transparent; }
+.workspace-source-order { max-height: 9rem; overflow-y: auto; padding-inline-start: 1.5em; margin: 6px 0 0; }
+.workspace-source-order li { margin-block: 4px; overflow-wrap: anywhere; }
+.workspace-source-order button { margin-inline-start: 8px; }

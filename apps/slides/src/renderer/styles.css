@@ -9270,7 +9270,12 @@ body.show-curtain::after {
   opacity: 0.45;
   cursor: default;
 }
-.print-options .print-range-input {
+.print-options .print-file-name {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.print-options .print-text-input {
   display: block;
   width: 100%;
   box-sizing: border-box;
@@ -9283,10 +9288,10 @@ body.show-curtain::after {
   outline: none;
   background: var(--surface);
 }
-.print-options .print-range-input:focus {
+.print-options .print-text-input:focus {
   border-color: var(--accent);
 }
-.print-options .print-range-input.invalid {
+.print-options .print-text-input.invalid {
   border-color: var(--danger);
 }
 .print-options .print-select {
@@ -9318,7 +9323,7 @@ body.show-curtain::after {
   gap: 6px;
   flex: 1;
 }
-.print-options .print-copies-row .print-range-input {
+.print-options .print-copies-row .print-text-input {
   width: 64px;
 }
 .print-page-count {

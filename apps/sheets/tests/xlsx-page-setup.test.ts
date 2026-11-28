@@ -12,6 +12,16 @@ const WITH_VIEW =
   '<worksheet><sheetViews><sheetView workbookViewId="0"/></sheetViews>' + '<sheetData/></worksheet>'
 
 describe('applyPageSetupState', () => {
+  it('creates a fixed zoom chart sheet view before the drawing when no view exists', () => {
+    const xml = '<chartsheet><sheetPr/><drawing r:id="rId1"/></chartsheet>'
+    const updated = applyPageSetupState(xml, { sheetName: 'Chart', zoomScale: 125 })
+    expect(updated).toBe('<chartsheet><sheetPr/><sheetViews>' +
+      '<sheetView workbookViewId="0" zoomScale="125" zoomToFit="0"/>' +
+      '</sheetViews><drawing r:id="rId1"/></chartsheet>')
+    expect(applyPageSetupState(updated, { sheetName: 'Chart', zoomScale: 100 }))
+      .toBe(updated.replace(' zoomScale="125"', ''))
+  })
+
   it('creates pageSetup with orientation and paper size before </worksheet>', () => {
     const xml = applyPageSetupState(BARE, {
       sheetName: 'Sheet1',
@@ -27,9 +37,9 @@ describe('applyPageSetupState', () => {
     const xml =
       '<worksheet><sheetData/>' +
       '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>' +
-      '<pageSetup paperSize="1" orientation="portrait" r:id="rId1"/></worksheet>'
+      '<pageSetup paperSize="1" orientation="portrait" draft="1" firstPageNumber="4294967295" useFirstPageNumber="1" r:id="rId1"/></worksheet>'
     const patched = applyPageSetupState(xml, { sheetName: 'S', orientation: 'landscape' })
-    expect(patched).toContain('<pageSetup paperSize="1" orientation="landscape" r:id="rId1"/>')
+    expect(patched).toContain('<pageSetup paperSize="1" orientation="landscape" draft="1" firstPageNumber="4294967295" useFirstPageNumber="1" r:id="rId1"/>')
     expect(patched).toContain('<pageMargins left="0.7"')
   })
 
@@ -67,6 +77,13 @@ describe('applyPageSetupState', () => {
     const xml = '<worksheet><sheetData/><printOptions headings="1"/><printOptions/></worksheet>'
     const patched = applyPageSetupState(xml, { sheetName: 'S', printGridlines: true })
     expect(patched.match(/<printOptions gridLines="1"/g)).toHaveLength(2)
+  })
+
+  it('restores the gridLinesSet default when enabling print gridlines', () => {
+    const xml =
+      '<worksheet><sheetData/><printOptions gridLines="1" gridLinesSet="false" headings="1"/></worksheet>'
+    const patched = applyPageSetupState(xml, { sheetName: 'S', printGridlines: true })
+    expect(patched).toContain('<printOptions gridLines="1" headings="1"/>')
   })
 
   it('writes fit-to-page: pageSetUpPr plus fitToWidth/fitToHeight', () => {
@@ -301,6 +318,13 @@ const WORKBOOK =
   '</sheets></workbook>'
 
 describe('applyPrintAreas', () => {
+  it('writes each selected area as an absolute reference on the same sheet', () => {
+    const xml = applyPrintAreas(WORKBOOK, [{ sheetName: 'P&L', printArea: 'B2:D4,F9' }])
+    expect(xml).toContain("'P&amp;L'!$B$2:$D$4,'P&amp;L'!$F$9</definedName>")
+    expect(() => applyPrintAreas(WORKBOOK, [{ sheetName: 'P&L', printArea: 'B2:D4,F:F' }]))
+      .toThrow(PageSetupError)
+  })
+
   it('clears deleted title rows while retaining the existing title columns', () => {
     const original = applyPrintAreas(WORKBOOK, [{ sheetName: 'Sheet1', printTitles: 'A:B,2:3' }])
     const updated = applyPrintAreas(original, [{ sheetName: 'Sheet1', clearPrintTitleRows: true }])

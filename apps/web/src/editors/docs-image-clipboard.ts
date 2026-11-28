@@ -1,8 +1,11 @@
+import { imageSize } from '../../../../packages/cli/src/formats/image-size.ts'
 import { decodeBrowserBase64 } from './browser-download.ts'
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024
 const MAX_IMAGE_PIXELS = 16 * 1024 * 1024
 const IMAGE_TIMEOUT_MS = 10_000
+export type ClipboardImageFetcher = (url: string, signal: AbortSignal) => Promise<{ base64: string; mime: string } | null>
+
 const CLIPBOARD_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif'])
 const IMAGE_EXTENSIONS = new Map([
   ['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/gif', 'gif'],
@@ -10,7 +13,7 @@ const IMAGE_EXTENSIONS = new Map([
 ])
 
 async function readResponseImage(response: Response): Promise<Blob> {
-  const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? ''
+  const type = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? ''
   if (!response.ok || !response.body || !IMAGE_EXTENSIONS.has(type)
     || Number(response.headers.get('content-length')) > MAX_IMAGE_BYTES) {
     await response.body?.cancel()
@@ -67,15 +70,18 @@ async function readExternalImage(url: string): Promise<Blob> {
   }
 }
 
+function decodeImageBytes(type: string, encoded: string): Uint8Array<ArrayBuffer> {
+  if (!IMAGE_EXTENSIONS.has(type) || encoded.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) throw Error('Unsupported image.')
+  const bytes = decodeBrowserBase64(encoded)
+  if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw Error('Unsupported image size.')
+  return bytes
+}
+
 async function readImage(src: string): Promise<Blob> {
   const data = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(src)
-  if (data) {
+  if (data?.[1]) {
     const type = data[1].toLowerCase()
-    const encoded = src.slice(data[0].length)
-    if (!IMAGE_EXTENSIONS.has(type) || encoded.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) throw Error('Unsupported image.')
-    const bytes = decodeBrowserBase64(encoded)
-    if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw Error('Unsupported image size.')
-    return new Blob([bytes], { type })
+    return new Blob([decodeImageBytes(type, src.slice(data[0].length))], { type })
   }
 
   const url = new URL(src, window.location.href)
@@ -113,10 +119,35 @@ export async function readDocsImage(src: string): Promise<{ blob: Blob; extensio
   return { blob, extension }
 }
 
-export async function fetchDocsClipboardImage(src: string): Promise<{ base64: string; mime: string }> {
-  const blob = await readImage(src)
+async function readThroughImageService(src: string, fetchRemote: ClipboardImageFetcher, signal: AbortSignal) {
+  const url = new URL(src, window.location.href)
+  if (url.protocol !== 'https:' || url.origin === window.location.origin || url.username || url.password) return
+  const request = AbortSignal.any([signal, AbortSignal.timeout(IMAGE_TIMEOUT_MS)])
+  const fetched = await fetchRemote(url.href, request)
+  request.throwIfAborted()
+  if (!fetched) return
+  const bytes = decodeImageBytes(fetched.mime, fetched.base64)
+  if (!CLIPBOARD_TYPES.has(fetched.mime)) return new Blob([bytes], { type: fetched.mime })
+  const picture = imageSize(bytes)
+  if (!picture || picture.width * picture.height > MAX_IMAGE_PIXELS) return
+  return new Blob([bytes], { type: picture.mime })
+}
+
+export async function fetchClipboardImage(
+  src: string,
+  fetchRemote: ClipboardImageFetcher | undefined,
+  signal: AbortSignal,
+): Promise<{ base64: string; mime: string }> {
+  signal.throwIfAborted()
+  const downloaded = fetchRemote
+    ? await readThroughImageService(src, fetchRemote, signal).catch(() => undefined)
+    : undefined
+  signal.throwIfAborted()
+  const blob = downloaded ?? await readImage(src)
+  signal.throwIfAborted()
   const image = CLIPBOARD_TYPES.has(blob.type) ? blob : await pngBlob(blob)
   const bytes = new Uint8Array(await image.arrayBuffer())
+  signal.throwIfAborted()
   let binary = ''
   for (let offset = 0; offset < bytes.length; offset += 32768) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768))

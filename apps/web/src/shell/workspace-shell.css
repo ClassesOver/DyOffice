@@ -71,7 +71,31 @@
 @media(max-width:680px) { .workspace-settings-page { padding:20px 16px; } .workspace-settings-page .personal-account-actions { margin-left:0; } }
 .workspace-document { position:absolute; inset:40px 0 0; background:var(--surface); overflow:auto; }
 .workspace-document[hidden] { display:none; }
+.workspace-document[data-workspace-pane="left"] { right:calc(100% - var(--workspace-left-pane-width,50%)); border-right:1px solid var(--border); }
+.workspace-document[data-workspace-pane="right"] { left:var(--workspace-left-pane-width,50%); }
+.app-frame-content[data-workspace-pane] { height:100vh; box-sizing:border-box; overflow:auto; }
+.app-frame-content[data-workspace-pane="left"] { width:var(--workspace-left-pane-width,50%); border-right:1px solid var(--border); }
+.app-frame-content[data-workspace-pane="right"] { margin-left:var(--workspace-left-pane-width,50%); width:calc(100% - var(--workspace-left-pane-width,50%)); }
 .workspace-document-frame { display:block; border:0; width:100%; height:100%; }
+.workspace-split-divider {
+  position:absolute;
+  z-index:5;
+  inset:40px auto 0 var(--workspace-left-pane-width,50%);
+  width:16px;
+  transform:translateX(-50%);
+  cursor:col-resize;
+  outline:none;
+  touch-action:none;
+}
+.workspace-split-divider::after {
+  content:'';
+  position:absolute;
+  inset:0 calc(50% - 1px);
+}
+.workspace-split-divider:is(:hover,:focus-visible,[data-dragging])::after { background:var(--accent); }
+.workspace-split-divider[aria-disabled="true"] { pointer-events:none; }
+.app-frame:has(> .workspace-split-divider[data-dragging]) .workspace-document-frame { pointer-events:none; }
+
 
 .dy-login-signin {
   background: var(--surface-subtle);

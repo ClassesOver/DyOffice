@@ -103,7 +103,7 @@ test('bounded validation concurrency rejects excess work without an unbounded wa
   assert.equal(results.find(result => result.status === 'rejected').reason.statusCode, 503)
 })
 
-test('upstream Office/PDF fixtures are accepted unchanged and encrypted PDF is refused', async () => {
+test('upstream Office and plaintext PDF fixtures are accepted unchanged', async () => {
   const { readFile } = await import('node:fs/promises'), validate = await validator()
   for (const [path, name, expected] of [
     ['packages/docx-engine/tests/fixtures/truths/render-sectafter-no-blank/probe.docx','probe.docx','docx'],
@@ -114,8 +114,21 @@ test('upstream Office/PDF fixtures are accepted unchanged and encrypted PDF is r
     const bytes = await readFile(new URL('../../../../' + path, import.meta.url))
     assert.equal((await validate(bytes, name)).format, expected)
   }
-  const encrypted = await readFile(new URL('../../../../apps/pdf/tests/fixtures/enc128.pdf', import.meta.url))
-  await assert.rejects(() => validate(encrypted, 'encrypted.pdf'), { statusCode: 400 })
+})
+
+test('first imports accept standard encrypted PDFs without a password and verify the ciphertext digest', async () => {
+  const { readFile } = await import('node:fs/promises'), validate = await validator()
+  for (const name of ['enc-r3-rc4.pdf','enc-r4-aes128.pdf','enc-r5-aes256.pdf','enc-r5-owneronly.pdf','enc256.pdf']) {
+    const bytes = await readFile(new URL('../../../../apps/pdf/tests/fixtures/' + name, import.meta.url))
+    const result = await validate(bytes, name, { allowEncryptedPdf: true })
+    assert.equal(result.format, 'pdf', name)
+    assert.equal(result.pdfEncrypted, true, name)
+    assert.equal(result.size, bytes.length, name)
+    assert.equal(result.sha256, createHash('sha256').update(bytes).digest('hex'), name)
+    await assert.rejects(() => validate(bytes, name), { statusCode: 400 })
+  }
+  const malformed = Buffer.from('%PDF-1.7\ntrailer << /Encrypt 9 0 R >>\nstartxref\n9\n%%EOF')
+  await assert.rejects(() => validate(malformed, 'fake-encrypted.pdf', { allowEncryptedPdf: true }), { statusCode: 400 })
 })
 
 test('OPC metadata children must resolve to the package namespace, including local overrides', async () => {
@@ -133,4 +146,31 @@ test('OPC metadata children must resolve to the package namespace, including loc
     z.file('_rels/.rels', '<r:Relationships xmlns:r="http://schemas.openxmlformats.org/package/2006/relationships"><r:Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></r:Relationships>')
   })
   assert.equal((await validate(prefixed, 'prefixed.docx')).format, 'docx')
+})
+
+test('zero-byte CSV validation does not depend on the workbook worker deadline', async () => {
+  const { createFileValidator } = await import('../../server/src/modules/files/validation.ts')
+  const validate = createFileValidator({ timeoutMs: 1 })
+  const empty = Buffer.alloc(0)
+  assert.deepEqual(await validate(empty, 'empty.CSV'), {
+    format: 'csv',
+    mime: 'text/csv',
+    size: 0,
+    sha256: createHash('sha256').update(empty).digest('hex'),
+    officeSignatureProtected: false,
+  })
+  await assert.rejects(() => validate(empty, 'empty.xlsx'), { statusCode: 400 })
+})
+
+test('XLSM validates the macro-enabled workbook type and leaves VBA bytes opaque', async () => {
+  const { macroWorkbook } = await import('../helpers/xlsm.mjs')
+  const { readFile } = await import('node:fs/promises')
+  const xlsx = await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+  const bytes = await macroWorkbook(xlsx)
+  const validate = await validator()
+  const result = await validate(bytes, 'Ledger.XLSM')
+  assert.equal(result.format, 'xlsm')
+  assert.equal(result.sha256, createHash('sha256').update(bytes).digest('hex'))
+  await assert.rejects(() => validate(bytes, 'Ledger.xlsx'), {statusCode:400})
+  await assert.rejects(() => validate(xlsx, 'Ledger.xlsm'), {statusCode:400})
 })

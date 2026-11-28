@@ -11,17 +11,21 @@ import {PDFDocument} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
+import {backgroundDocumentBytes} from '../helpers/background-documents.mjs'
 import {password} from '../helpers/identity.mjs'
+import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
+import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {createXlsxNativeWorker} from '../../worker/src/native/xlsx.ts'
+import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {createSkillService} from '../../server/src/modules/skills/service.ts'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
-test('four real Office editors share assistant chrome and retain drafts across collapse and an early stream failure',{timeout:180000},async t=>{
+test('four real Office editors share assistant chrome and retain drafts across collapse and an early stream failure',{timeout:240000},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-dock-'))
  let app,browser,server
  t.after(async()=>{
@@ -37,15 +41,30 @@ test('four real Office editors share assistant chrome and retain drafts across c
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'test-key'}],defaults:{chat:'chat'}})
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false,showAssistant:true})
  await createSkillService(f.transactions).save(f.alice.token,'review-office',{description:'核对 Word、Excel、PowerPoint 和 PDF 内容与保存结果，保持修改可追溯。',body:'Review the current document and report the verified results.'})
- const gateway=await sheetsGateway(t),metadata=JSON.parse(await readFile(new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))
- const sheetsNative=createXlsxNativeWorker(createCrossPlatformProcess({deploymentId:f.deploymentId,binary:metadata.nativeBinary,sha256:metadata.nativeSha256,allowedCommands:['open','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive','close']}))
+ let sheetsNative,sheetsPlanner,sheetsPackageReader
+ if(process.env.DYOFFICE_TEST_HOST_MANIFEST){
+  const gateway=await sheetsGateway(t),metadata=JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST,'utf8'))
+  sheetsNative=createXlsxNativeWorker(createCrossPlatformProcess({deploymentId:f.deploymentId,binary:metadata.nativeBinary,sha256:metadata.nativeSha256,allowedCommands:['open','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive','close']}))
+  sheetsPlanner=gateway.planWorkbookSave
+  sheetsPackageReader=gateway.readWorkbookPackage
+ }else{
+  await buildSheetsGateway(join(directory,'gateway.mjs'))
+  const runtime=await configuredSheetsRuntime({
+   DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+   DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
+  },{enabled:true})
+  t.after(()=>runtime.close())
+  ;({sheetsNative,sheetsPlanner,sheetsPackageReader}=runtime)
+ }
  const slidesHost={openSession(input){return openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,unsafeTestOnly:true})}}
  const pdf=await PDFDocument.create();pdf.addPage([400,300]).drawText('Office assistant layout')
  const files={}
- for(const [format,bytes] of [['docx',await docxBytes()],['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))],['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',Buffer.from(await pdf.save())]])files[format]=(await importFile(f,f.alice.token,bytes,'dock.'+format)).file
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage,slidesHost})
+ const fixtures=[['docx',await docxBytes()],['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))],['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',Buffer.from(await pdf.save())]]
+ for(const [format,bytes] of fixtures)files[format]=(await importFile(f,f.alice.token,bytes,'dock.'+format)).file
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner,sheetsPackageReader,slidesHost})
  browser=await launchTestBrowser()
- const page=await browser.newPage({ignoreHTTPSErrors:true,viewport:{width:1440,height:1000}}),errors=[],turns=[]
+ const context=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:1440,height:1000}})
+ const page=await context.newPage(),errors=[],turns=[]
  await stubHomeHero(page)
  page.on('pageerror',error=>{errors.push(error.message);t.diagnostic(error.stack??error.message)})
  page.on('response',async response=>{
@@ -72,6 +91,208 @@ test('four real Office editors share assistant chrome and retain drafts across c
    return route.fulfill({contentType:'text/event-stream',body:'event: delta\ndata: {"text":"Partial model reply"}\n\nevent: error\ndata: {"reason":"AI_TURN_TIMED_OUT","message":"The model response timed out."}\n\nevent: done\ndata: {}\n\n'})
   }
   return route.continue()
+ })
+ await t.test('account assistant appearance updates all mounted editors and survives reopen',async()=>{
+  const appearanceFiles={}
+  for(const [format,bytes] of fixtures)appearanceFiles[format]=(await importFile(f,f.alice.token,format==='docx'?await backgroundDocumentBytes('docx','Select this sentence to ask AI.'):bytes,'appearance.'+format)).file
+  await f.preferences.update(f.alice.token,{aiFontSize:'large',aiSpellcheck:false})
+  await page.goto(origin)
+  await expect(page.locator('.home')).toBeVisible()
+  const frame=file=>page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+  const editorHtml=file=>frame(file).locator('html')
+  const composer=file=>frame(file).locator('.ai-composer textarea').first()
+  for(const [format,file] of Object.entries(appearanceFiles)){
+   await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+   await expect(editorHtml(file)).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','large')
+   const rail=frame(file).locator(format==='xlsx'?'.expand-copilot':'.ai-rail').first()
+   await expect.poll(async()=>await rail.isVisible()||await composer(file).isVisible(),{timeout:15000}).toBe(true)
+   await expect(rail).toBeVisible()
+   await rail.click()
+   await expect(composer(file)).toHaveJSProperty('spellcheck',false)
+   const movePanel=frame(file).locator('.ai-panel-side-button')
+   await expect(movePanel).toBeVisible()
+   if(format==='xlsx'){
+    await movePanel.click()
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','right')
+    await movePanel.click()
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
+   }
+   if(format==='pptx'){
+    await movePanel.click()
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','right')
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','large')
+    await expect(composer(file)).toHaveJSProperty('spellcheck',false)
+   }
+  }
+  await composer(appearanceFiles.pdf).fill('Draft before preference change')
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  async function saveAppearance(font,spellcheck,custom,side){
+   await accountAction(page,'个人设置')
+   const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+   await settingsTab(settings,'通用偏好')
+   await settings.getByLabel('AI 助手字号',{exact:true}).selectOption(font)
+   if(custom!==undefined)await settings.getByLabel('自定义助手字号',{exact:true}).selectOption(String(custom))
+   if(side!==undefined)await settings.getByLabel('AI 助手位置',{exact:true}).selectOption(side)
+   await settings.getByRole('switch',{name:'AI 助手拼写检查',exact:true}).setChecked(spellcheck)
+   await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+   await expect(settings).toContainText('个人偏好已保存')
+   await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+  }
+  await saveAppearance('custom',true,21)
+  for(const [format,file] of Object.entries(appearanceFiles)){
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','right')
+   await expect(frame(file).locator(format==='xlsx'?'.sheet-body > .copilot':'.ai-dock').first()).toHaveCSS('order','1')
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','custom')
+   await expect(frame(file).locator('.ai-composer').first()).toHaveCSS('zoom','1.5')
+   await expect(composer(file)).toHaveJSProperty('spellcheck',true)
+   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  }
+  await expect(composer(appearanceFiles.pdf)).toHaveValue('Draft before preference change')
+  const reopened=await context.newPage()
+  try{
+   await reopened.goto(origin+'/native-pdf/?fileId='+appearanceFiles.pdf.fileId,{waitUntil:'commit'})
+   await expect(reopened.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-font-size','custom')
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','right')
+   await reopened.locator('.ai-rail').first().click()
+   await reopened.locator('.ai-panel-side-button').click()
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','left')
+   assert.equal((await f.preferences.get(f.alice.token)).aiPanelSide,'left')
+   for(const file of Object.values(appearanceFiles))await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
+   await reopened.locator('.ai-panel-side-button').click()
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','right')
+   await page.bringToFront()
+   await saveAppearance('default',true,undefined,'left')
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-panel-side','left')
+   await expect(reopened.locator('html')).not.toHaveAttribute('data-ai-font-size',/./)
+  }finally{await reopened.close()}
+  for(const file of Object.values(appearanceFiles)){
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','left')
+   await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
+  }
+  async function setAssistantSwitch(name,enabled){
+   await accountAction(page,'个人设置')
+   const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+   await settingsTab(settings,'通用偏好')
+   await settings.getByRole('switch',{name,exact:true}).setChecked(enabled)
+   await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+   await expect(settings).toContainText('个人偏好已保存')
+   await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+  }
+  const setStartup=enabled=>setAssistantSwitch('在新文档中恢复 AI 助手',enabled)
+  let sheetSelection=0
+  async function selectContent(format){
+   const file=appearanceFiles[format], editor=frame(file)
+   await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+   if(format==='docx'){
+    const paragraph=editor.locator('.tiptap.doc-page p').filter({hasText:/\S/}).first()
+    await paragraph.click({position:{x:3,y:7}})
+    await page.keyboard.press('Home')
+    await page.keyboard.press('Shift+End')
+    await expect.poll(()=>paragraph.evaluate(node=>node.ownerDocument.getSelection()?.toString().trim())).toMatch(/\S/)
+   }else{
+    const target=editor.locator(format==='xlsx'?'#univer-container canvas':'.stage-rel').first()
+    await expect(target).toBeVisible()
+    const box=await target.boundingBox()
+    assert.ok(box,format+' editor selection surface')
+    if(format==='xlsx'){
+     // Drag across multiple real cells so the grid opens its selection chip.
+     await page.mouse.move(box.x+105,box.y+52)
+     await page.mouse.down()
+     await page.mouse.move(box.x+245,box.y+99+24*sheetSelection++,{steps:8})
+     await page.mouse.up()
+    }else{
+     // Clear the previous selection, then select the title on the acceptance slide.
+     await page.mouse.click(box.x+box.width*.85,box.y+box.height*.8)
+     await page.mouse.click(box.x+box.width*.12,box.y+box.height*.2)
+    }
+   }
+   return editor.locator('.ai-ask-trigger').first()
+  }
+  for(const format of ['docx','xlsx','pptx'])await expect(await selectContent(format),format+' selection Ask AI default').toBeVisible()
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await setAssistantSwitch('显示选区旁的「询问 AI」',false)
+  for(const format of ['docx','xlsx','pptx']){
+   const file=appearanceFiles[format]
+   await expect(editorHtml(file)).toHaveAttribute('data-web-ai-show-ask-trigger','false')
+   await expect(await selectContent(format),format+' selection Ask AI disabled').toHaveCount(0)
+  }
+  const wordFile=appearanceFiles.docx
+  await selectContent('docx')
+  await frame(wordFile).locator('.ai-panel-collapse').first().click()
+  await frame(wordFile).locator('.ai-rail').first().click()
+  await expect(composer(wordFile)).toBeVisible()
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await setAssistantSwitch('显示选区旁的「询问 AI」',true)
+  for(const format of ['docx','xlsx','pptx']){
+   const file=appearanceFiles[format]
+   await expect(editorHtml(file)).toHaveAttribute('data-web-ai-show-ask-trigger','true')
+   await expect(await selectContent(format),format+' selection Ask AI restored').toBeVisible()
+   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  }
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await setAssistantSwitch('显示 AI 助手',false)
+  const railFor=(format,file)=>frame(file).locator(format==='xlsx'?'.expand-copilot':'.ai-rail').first()
+  for(const [format,file] of Object.entries(appearanceFiles)){
+   await expect(editorHtml(file)).toHaveAttribute('data-web-ai-show-sidebar','false')
+   await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+   const editor=frame(file)
+   const entry=editor.locator('[data-ribbon-body]').getByRole('button',{name:'AI 助手',exact:true})
+   await expect(entry).toBeEnabled()
+   await expect(railFor(format,file)).toBeHidden()
+   await expect(composer(file)).toBeHidden()
+   await entry.click()
+   await expect(composer(file)).toBeVisible()
+   if(format==='pdf')await expect(composer(file)).toHaveValue('Draft before preference change')
+   await entry.click()
+   await expect(composer(file)).toBeHidden()
+   await expect(railFor(format,file)).toBeHidden()
+  }
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await setAssistantSwitch('显示 AI 助手',true)
+  for(const [format,file] of Object.entries(appearanceFiles)){
+   await expect(editorHtml(file)).toHaveAttribute('data-web-ai-show-sidebar','true')
+   await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+   await expect(railFor(format,file)).toBeVisible()
+   await expect(composer(file)).toBeHidden()
+   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  }
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await page.reload()
+  await expect(page.locator('.home')).toBeVisible()
+  await setStartup(true)
+  const fresh=await context.newPage()
+  let startupEnabled=true
+  const freshComposer=fresh.locator('.ai-composer textarea').first()
+  async function openFresh(format,bytes,name){
+   const {file}=await importFile(f,f.alice.token,bytes,name+'.'+format)
+   const response=await fresh.goto(origin+'/native-'+format+'/?fileId='+file.fileId,{waitUntil:'commit'})
+   assert.equal(response?.status(),200,format+' native editor response')
+   await expect(fresh.locator('html'),format+' native editor ready').toHaveAttribute('data-document-loading','ready',{timeout:45000})
+  }
+  try{
+   for(const [format,bytes] of fixtures){
+    await openFresh(format,bytes,'assistant-startup')
+    await expect(freshComposer).toBeVisible({timeout:15000})
+   }
+   const [word,wordBytes]=fixtures[0]
+   await openFresh(word,wordBytes,'assistant-collapse')
+   await fresh.locator('.ai-panel-collapse').first().click()
+   await openFresh(word,wordBytes,'assistant-remembered')
+   await expect(fresh.locator('.ai-rail').first()).toBeVisible({timeout:15000})
+   await fresh.locator('.ai-rail').first().click()
+   await expect(freshComposer).toBeVisible()
+   await setStartup(false)
+   startupEnabled=false
+   await expect(freshComposer).toBeVisible()
+   await openFresh(word,wordBytes,'assistant-disabled')
+   await expect(fresh.locator('.ai-rail').first()).toBeVisible({timeout:15000})
+  }finally{
+   await fresh.close()
+   await page.bringToFront()
+   if(startupEnabled)await f.preferences.update(f.alice.token,{aiOpenInNewDocs:false})
+  }
  })
  for(const format of ['docx','xlsx','pptx','pdf']){
   if(format==='pdf')await f.preferences.update(f.alice.token,{theme:'dark'})
@@ -242,7 +463,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
     const menu=page.getByRole('group',{name:'文件',exact:true})
     await expect(menu).toBeVisible()
     await page.keyboard.press('Tab')
-    await expect(menu.getByRole('button').first()).toBeFocused()
+    await expect(menu.getByRole('button').and(menu.locator('button:enabled')).first()).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
     await expect(fileButton).toBeFocused()
@@ -366,8 +587,12 @@ test('four real Office editors share assistant chrome and retain drafts across c
  }
  await f.preferences.update(f.alice.token,{showAssistant:false})
  await page.reload()
- await expect(page.locator('.native-pdf-assistant-status')).toContainText('个人设置中关闭')
- await expect(page.locator('.shared-assistant-dock')).toHaveCount(0)
+ const hiddenPdfEntry=page.locator('[data-ribbon-body]').getByRole('button',{name:'AI 助手',exact:true})
+ await expect(hiddenPdfEntry).toBeEnabled({timeout:15000})
+ await expect(page.locator('.shared-assistant-dock')).toHaveClass(/ai-dock-off/)
+ await expect(page.locator('.shared-assistant-dock .ai-rail')).toBeHidden()
+ await hiddenPdfEntry.click()
+ await expect(page.locator('.shared-assistant-dock textarea')).toBeVisible()
  assert.equal(turns.length,12,'only the three explicit sends in each editor reach the model')
  assert.deepEqual(errors,[])
  t.diagnostic(JSON.stringify(metrics))

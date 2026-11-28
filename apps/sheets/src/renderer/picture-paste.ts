@@ -6,6 +6,7 @@
  * window-capture listener claims image-only transfers before it runs.
  */
 import { isGridKeyTarget } from './clear-selection-keyboard'
+import { websitePictureSource } from '../../../../packages/ui/src/clipboard-picture'
 export const PICTURE_MAX_BYTES = 20 * 1024 * 1024
 const PICTURE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif'])
 
@@ -115,6 +116,7 @@ export interface PictureTransferHost {
   isCellEditing(): boolean
   cellAtPoint(clientX: number, clientY: number): PictureAnchor | null
   insert(file: File, anchor: PictureAnchor | null): void
+  insertRemote?(source: string): boolean
 }
 
 export function installPictureTransfer(
@@ -125,10 +127,13 @@ export function installPictureTransfer(
     if (event.defaultPrevented || !event.clipboardData) return
     if (host.isCellEditing() || !isGridKeyTarget(event.target)) return
     const file = pickTransferImage(event.clipboardData)
-    if (!file) return
+    if (!file) {
+      const source = host.insertRemote && websitePictureSource(event.clipboardData.getData('text/html'))
+      if (!source || !host.insertRemote?.(source)) return
+    }
     event.preventDefault()
     event.stopImmediatePropagation()
-    host.insert(file, null)
+    if (file) host.insert(file, null)
   }
   const onDragOver = (event: DragEvent): void => {
     if (host.isCellEditing()) return

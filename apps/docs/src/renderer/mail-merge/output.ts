@@ -62,52 +62,72 @@ export interface MailMergeResponse {
 export async function buildMailMergeFiles(
   ctx: FileActionContext,
   request: MailMergeRequest,
+  outputLimit?: { bytes: number; message: string },
 ): Promise<MailMergeFile[]> {
   const editor = ctx.editor
   if (!editor || request.records.length === 0) return []
   const template = editor.getJSON() as PmNode
+  const files: MailMergeFile[] = []
+  let outputBytes = 0
+  function include(name: string, bytes: Uint8Array) {
+    outputBytes += bytes.byteLength
+    if (outputLimit && outputBytes > outputLimit.bytes) throw new Error(outputLimit.message)
+    files.push({ name, bytes })
+  }
+  const newStructureCheck = () => outputLimit
+    ? makeStructureCheck(outputLimit.bytes / 4, outputLimit.message)
+    : undefined
+  const checkStructure = newStructureCheck()
   if (request.mode === 'labels' || request.mode === 'envelopes') {
     if (!request.layout) return []
     // the output prints on the layout's paper, not the template's
-    const layoutCtx: FileActionContext = {
-      ...ctx,
-      section: layoutSection(request.layout, ctx.section),
-      sectionDirty: true,
-    }
+    const section = layoutSection(request.layout, ctx.section)
     if (request.mode === 'labels') {
-      const cells = request.records.map((record) =>
-        cellContentOf(substituteMergeFields(template, record)),
-      )
-      const bytes = await buildDocBytes(layoutCtx, labelSheetDoc(cells, request.layout))
-      if (!bytes) return []
-      return [{ name: mergedDocumentName(ctx), bytes }]
-    }
-    const files: MailMergeFile[] = []
-    for (const record of request.records) {
-      const bytes = await buildDocBytes(layoutCtx, substituteMergeFields(template, record))
-      if (!bytes) continue
-      files.push({
-        name: `${mergeOutputFileName(request.namePattern, record, request.fields)}.docx`,
-        bytes,
+      const cells = request.records.map((record) => {
+        const content = cellContentOf(substituteMergeFields(template, record))
+        checkStructure?.(content)
+        return content
       })
+      const bytes = await buildDocBytes(ctx, labelSheetDoc(cells, request.layout), section)
+      if (bytes) include(mergedDocumentName(ctx), bytes)
+      return files
+    }
+    for (const record of request.records) {
+      const merged = substituteMergeFields(template, record)
+      newStructureCheck()?.(merged)
+      const bytes = await buildDocBytes(ctx, merged, section)
+      if (!bytes && outputLimit) return []
+      if (!bytes) continue
+      include(`${mergeOutputFileName(request.namePattern, record, request.fields)}.docx`, bytes)
     }
     return files
   }
   if (request.mode === 'perRecord') {
-    const files: MailMergeFile[] = []
     for (const record of request.records) {
-      const bytes = await buildDocBytes(ctx, substituteMergeFields(template, record))
+      const merged = substituteMergeFields(template, record)
+      newStructureCheck()?.(merged)
+      const bytes = await buildDocBytes(ctx, merged)
+      if (!bytes && outputLimit) return []
       if (!bytes) continue
-      files.push({
-        name: `${mergeOutputFileName(request.namePattern, record, request.fields)}.docx`,
-        bytes,
-      })
+      include(`${mergeOutputFileName(request.namePattern, record, request.fields)}.docx`, bytes)
     }
     return files
   }
-  const bytes = await buildDocBytes(ctx, mergeAllRecords(template, request.records))
-  if (!bytes) return []
-  return [{ name: mergedDocumentName(ctx), bytes }]
+  const bytes = await buildDocBytes(ctx, mergeAllRecords(template, request.records, checkStructure))
+  if (bytes) include(mergedDocumentName(ctx), bytes)
+  return files
+}
+
+/** Stop repeated letters before materializing a large XML document. */
+function makeStructureCheck(remaining: number, message: string) {
+  function visit(value: unknown) {
+    remaining -= typeof value === 'string' ? value.length + 2 : 8
+    if (remaining < 0) throw new Error(message)
+    if (value && typeof value === 'object') {
+      for (const child of Object.values(value)) visit(child)
+    }
+  }
+  return visit
 }
 
 /** the name of the document that holds every letter */

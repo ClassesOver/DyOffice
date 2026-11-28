@@ -1,14 +1,18 @@
 import './personal-settings-page.css'
 import {useCallback,useEffect,useId,useRef,useState} from 'react'
-import type {WebSettingsPreferences} from '../../../shell/src/renderer/src/SettingsModal'
+import type {PersonalPreferences} from '../../../../packages/browser-host/src/preferences'
+import {IMPORT_PROMPT_FIELDS,skipsImportPrompt} from '../../../../packages/web-contracts/src/file-imports'
+import {CSV_IMPORT_DEFAULT_LIMIT_MB,CSV_IMPORT_LIMIT_CHOICES_MB,isCsvImportLimitMb} from '@genoffice/xlsx-gateway/gateway/csv-limits'
+import {AI_CUSTOM_FONT_MAX_PX,AI_CUSTOM_FONT_MIN_PX,DEFAULT_AI_PANEL_PREFS,aiPanelFontPx,type AiFontSize} from '@genoffice/ui/ai-panel-prefs'
 import {LocalPasswordForm} from './LocalPasswordForm'
 import {LocalSessionsPanel} from './LocalSessionsPanel'
 import type {LocalSessionsClient} from './local-sessions-client'
 import type {LoginHistoryClient} from './local-login-history-client'
 import {LoginHistoryPanel} from './LoginHistoryPanel'
 import type {KeyboardEvent,ReactNode} from 'react'
+const customAssistantSizes=Array.from({length:AI_CUSTOM_FONT_MAX_PX-AI_CUSTOM_FONT_MIN_PX+1},(_,index)=>AI_CUSTOM_FONT_MIN_PX+index)
 export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClose,onCloseGuardChange,sessionsClient,historyClient,activeTab,onTabChange}:{
- user:{username:string;displayName:string;roles:string[]};load:()=>Promise<WebSettingsPreferences>;save:(patch:Partial<WebSettingsPreferences>)=>Promise<WebSettingsPreferences>
+ user:{username:string;displayName:string;roles:string[]};load:()=>Promise<PersonalPreferences>;save:(patch:Partial<PersonalPreferences>)=>Promise<PersonalPreferences>
  activeTab?:string;onTabChange?:(tab:string)=>void
  sessionsClient?:LocalSessionsClient;historyClient?:LoginHistoryClient
  security:{changePassword:(current:string,next:string)=>Promise<void>;onCurrentRevoked:()=>void};skills:ReactNode|((registerGuard:(guard:(()=>boolean)|null)=>void)=>ReactNode);onLogout:()=>void;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void
@@ -21,7 +25,7 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  const visitedTabs=useRef(new Set<string>())
  visitedTabs.current.add(selectedTab)
  const tabTitles:Record<string,[string,string]>={account:['资料与安全','查看账号资料，管理密码与登录状态。'],activity:['登录活动','查看有效会话与已保留的登录记录。'],general:['通用偏好','调整外观、语言与编辑习惯。'],skills:['个人技能','管理和扩展你的个人办公技能。']}
- const [baseline,setBaseline]=useState<WebSettingsPreferences|null>(null),[draft,setDraft]=useState<WebSettingsPreferences|null>(null)
+ const [baseline,setBaseline]=useState<PersonalPreferences|null>(null),[draft,setDraft]=useState<PersonalPreferences|null>(null)
  const [sessionVersion,setSessionVersion]=useState(0)
  const [operation,setOperation]=useState<'load'|'save'|null>('load')
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false)
@@ -35,9 +39,9 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  useEffect(()=>{onCloseGuardChange(guard);return()=>onCloseGuardChange(null)},[onCloseGuardChange,dirty])
  async function refresh(){if(lock.current)return;if(dirty&&!window.confirm('重新读取会放弃未保存的个人偏好，是否继续？'))return;lock.current=true;setBusy(true);setOperation('load');setError('');try{const next=await load();if(alive.current){setBaseline(next);setDraft(next);setSaved(false)}}catch(e){if(alive.current)setError((e as Error).message)}finally{lock.current=false;if(alive.current){setBusy(false);setOperation(null)}}}
  useEffect(()=>{alive.current=true;void refresh();return()=>{alive.current=false}},[])
- function edit(patch:Partial<WebSettingsPreferences>){setDraft(current=>current?{...current,...patch}:current);setSaved(false);setError('')}
+ function edit(patch:Partial<PersonalPreferences>){setDraft(current=>current?{...current,...patch}:current);setSaved(false);setError('')}
  function revert(){if(busy||!baseline)return;setDraft(baseline);setSaved(false);setError('')}
- async function commit(){if(lock.current||!draft||!baseline||!dirty)return;const patch=Object.fromEntries(Object.entries(draft).filter(([key,value])=>value!==baseline[key as keyof WebSettingsPreferences])) as Partial<WebSettingsPreferences>;lock.current=true;setBusy(true);setOperation('save');setError('');try{const next=await save(patch);if(!alive.current)return;setBaseline(next);setDraft(next);setSaved(true);if(next.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=next.theme}catch(e){if(alive.current)setError((e as Error).message)}finally{lock.current=false;if(alive.current){setBusy(false);setOperation(null)}}}
+ async function commit(){if(lock.current||!draft||!baseline||!dirty)return;const patch=Object.fromEntries(Object.entries(draft).filter(([key,value])=>value!==baseline[key as keyof PersonalPreferences])) as Partial<PersonalPreferences>;lock.current=true;setBusy(true);setOperation('save');setError('');try{const next=await save(patch);if(!alive.current)return;setBaseline(next);setDraft(next);setSaved(true);if(next.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=next.theme}catch(e){if(alive.current)setError((e as Error).message)}finally{lock.current=false;if(alive.current){setBusy(false);setOperation(null)}}}
  useEffect(()=>{if(!dirty)return;const prevent=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[dirty])
  const account=<div className="personal-page-account-grid">
   <div className="personal-page-account-summary">
@@ -50,16 +54,91 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
   <section className="personal-page-panel personal-page-sessions" aria-labelledby={`${preferenceId}-sessions`}><h3 id={`${preferenceId}-sessions`}>登录会话</h3><LocalSessionsPanel client={sessionsClient} refreshVersion={sessionVersion} onCloseGuardChange={sessionsGuard} onCurrentRevoked={security.onCurrentRevoked}/></section>
   <section className="personal-page-panel personal-page-history" aria-labelledby={`${preferenceId}-history`}><h3 id={`${preferenceId}-history`}>登录记录</h3><LoginHistoryPanel client={historyClient}/></section>
  </div>
+ const assistantFontSize=draft?.aiFontSize??DEFAULT_AI_PANEL_PREFS.fontSize
  const general=<form className="personal-page-general" onSubmit={event=>{event.preventDefault();void commit()}} aria-busy={busy}>
   <fieldset disabled={busy||!draft}>
    <h3 className="personal-page-group-title">外观与语言</h3>
-   <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-language`}>语言</label><select id={`${preferenceId}-language`} aria-label="语言" value={draft?.language??'zh'} onChange={event=>edit({language:event.target.value as WebSettingsPreferences['language']})}><option value="zh">简体中文</option><option value="en">English</option></select></div>
+   <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-language`}>语言</label><select id={`${preferenceId}-language`} aria-label="语言" value={draft?.language??'zh'} onChange={event=>edit({language:event.target.value as PersonalPreferences['language']})}><option value="zh">简体中文</option><option value="en">English</option></select></div>
    <fieldset className="personal-page-theme" aria-label="主题"><legend>主题</legend><div className="personal-page-theme-options">{([{value:'light',label:'浅色'},{value:'dark',label:'深色'},{value:'system',label:'跟随系统'}] as const).map(option=><label key={option.value} className={`personal-page-theme-choice theme-preview-${option.value}`}><input type="radio" name={`${preferenceId}-theme`} value={option.value} checked={draft?.theme===option.value} onChange={()=>edit({theme:option.value})}/><span className="personal-page-theme-preview" aria-hidden="true"><span className="theme-preview-nav"><b>D</b><i/><i/><i/></span><span className="theme-preview-content"><i/><i/><i/></span><span className="theme-preview-check">✓</span></span><span>{option.label}</span></label>)}</div></fieldset>
+   <div className="personal-page-preference-row">
+    <div><label htmlFor={`${preferenceId}-document-theme`}>文档主题</label><p id={`${preferenceId}-document-theme-hint`} className="personal-page-field-hint">设置 Word 页面和 Excel 工作表的显示外观。</p></div>
+    <select id={`${preferenceId}-document-theme`} aria-describedby={`${preferenceId}-document-theme-hint`} value={draft?.documentTheme??'follow'} onChange={event=>edit({documentTheme:event.target.value as NonNullable<PersonalPreferences['documentTheme']>})}>
+     <option value="follow">跟随应用主题</option><option value="light">浅色</option><option value="dark">深色</option>
+    </select>
+   </div>
    <h3 className="personal-page-group-title personal-page-group-divider">编辑偏好</h3>
    <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-author`}>文档作者</label><div><input id={`${preferenceId}-author`} aria-label="文档作者" aria-describedby={`${preferenceId}-author-hint`} value={draft?.authorName??''} maxLength={100} onChange={event=>edit({authorName:event.target.value})}/><p id={`${preferenceId}-author-hint`} className="personal-page-field-hint">作为文档批注与修订的作者名称。</p></div></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-autosave`}>自动保存</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-autosave`} aria-label="自动保存" aria-checked={!!draft?.autoSave} checked={!!draft?.autoSave} onChange={event=>edit({autoSave:event.target.checked})}/></div>
-   <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" aria-checked={!!draft?.showAssistant} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/></div>
-   <p className="personal-page-field-hint">语言与编辑器偏好保存后，在刷新页面或重新打开文档时生效。</p>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><p id={`${preferenceId}-assistant-hint`} className="personal-page-field-hint">关闭时会收起侧栏并隐藏入口栏。仍可从功能区打开助手。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-describedby={`${preferenceId}-assistant-hint`} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row">
+    <label htmlFor={`${preferenceId}-assistant-side`}>AI 助手位置</label>
+    <select id={`${preferenceId}-assistant-side`} value={draft?.aiPanelSide??DEFAULT_AI_PANEL_PREFS.side} onChange={event=>edit({aiPanelSide:event.target.value==='right'?'right':'left'})}>
+     <option value="left">左侧</option><option value="right">右侧</option>
+    </select>
+   </div>
+   <div className="personal-page-preference-row">
+    <label htmlFor={`${preferenceId}-assistant-font`}>AI 助手字号</label>
+    <select id={`${preferenceId}-assistant-font`} value={assistantFontSize} onChange={event=>{
+     const aiFontSize=event.target.value as AiFontSize
+     edit(aiFontSize==='custom'
+      ? {aiFontSize,aiCustomFontSize:aiPanelFontPx({...DEFAULT_AI_PANEL_PREFS,fontSize:assistantFontSize})}
+      : {aiFontSize})
+    }}>
+     <option value="default">默认</option><option value="large">大</option><option value="xlarge">特大</option><option value="custom">自定义</option>
+    </select>
+   </div>
+   {assistantFontSize==='custom'&&<div className="personal-page-preference-row">
+    <label htmlFor={`${preferenceId}-assistant-custom-font`}>自定义助手字号</label>
+    <select id={`${preferenceId}-assistant-custom-font`} value={draft?.aiCustomFontSize??DEFAULT_AI_PANEL_PREFS.customFontSize} onChange={event=>edit({aiCustomFontSize:Number(event.target.value)})}>
+     {customAssistantSizes.map(size=><option key={size} value={size}>{size} px</option>)}
+    </select>
+   </div>}
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant-spellcheck`}>AI 助手拼写检查</label><p id={`${preferenceId}-assistant-spellcheck-hint`} className="personal-page-field-hint">检查助手输入框中的拼写。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-spellcheck`} aria-describedby={`${preferenceId}-assistant-spellcheck-hint`} checked={draft?.aiSpellcheck!==false} onChange={event=>edit({aiSpellcheck:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant-selection`}>显示选区旁的「询问 AI」</label><p id={`${preferenceId}-assistant-selection-hint`} className="personal-page-field-hint">在 Word、Excel 和 PowerPoint 的选区旁显示浮动按钮。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-selection`} aria-describedby={`${preferenceId}-assistant-selection-hint`} checked={draft?.aiShowAskTrigger!==false} onChange={event=>edit({aiShowAskTrigger:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant-startup`}>在新文档中恢复 AI 助手</label><p id={`${preferenceId}-assistant-startup-hint`} className="personal-page-field-hint">开启后按编辑器记住上次的展开或收起状态。关闭后，新打开的文档会收起助手。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-startup`} aria-describedby={`${preferenceId}-assistant-startup-hint`} checked={draft?.aiOpenInNewDocs===true} onChange={event=>edit({aiOpenInNewDocs:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row">
+    <div><label htmlFor={`${preferenceId}-pdf-zoom`}>PDF 默认缩放</label><p id={`${preferenceId}-pdf-zoom-hint`} className="personal-page-field-hint">打开没有阅读记录的 PDF 时使用的缩放。</p></div>
+    <select id={`${preferenceId}-pdf-zoom`} aria-describedby={`${preferenceId}-pdf-zoom-hint`} value={draft?.pdfDefaultZoom??'width'} onChange={event=>edit({pdfDefaultZoom:event.target.value as NonNullable<PersonalPreferences['pdfDefaultZoom']>})}>
+     <option value="width">适应宽度</option><option value="page">适应页面</option><option value="last">上次使用的缩放</option>
+    </select>
+   </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-restore`}>重新打开上次的文档</label><p id={`${preferenceId}-restore-hint`} className="personal-page-field-hint">在此浏览器刷新或从首页重新进入工作区时，恢复上次退出时的文档页签和并排布局。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-restore`} aria-describedby={`${preferenceId}-restore-hint`} checked={draft?.restoreSession!==false} onChange={event=>edit({restoreSession:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-sleep`}>休眠不活跃的标签页</label><p id={`${preferenceId}-sleep-hint`} className="personal-page-field-hint">打开较多文档时，释放长时间未查看的后台编辑器。点击页签即可重新打开。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-sleep`} aria-describedby={`${preferenceId}-sleep-hint`} checked={draft?.sleepInactiveTabs!==false} onChange={event=>edit({sleepInactiveTabs:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-file-import`}>确认文件格式转换</label><p id={`${preferenceId}-file-import-hint`} className="personal-page-field-hint">开启后，导入旧版 Office、OpenDocument 或 Hancom 文件时会询问是否转换。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-file-import`} aria-describedby={`${preferenceId}-file-import-hint`} checked={IMPORT_PROMPT_FIELDS.every(field=>!skipsImportPrompt(draft??undefined,field))} onChange={event=>{
+     const skip=!event.target.checked
+     edit({skipOdfImportPrompt:skip,...Object.fromEntries(IMPORT_PROMPT_FIELDS.map(field=>[field,skip]))})
+    }}/>
+   </div>
+   <div className="personal-page-preference-row">
+    <div><label htmlFor={`${preferenceId}-csv-import-limit`}>CSV 导入上限</label><p id={`${preferenceId}-csv-import-limit-hint`} className="personal-page-field-hint">设置 Excel「从文本/CSV」导入的单个文件大小上限。</p></div>
+    <select id={`${preferenceId}-csv-import-limit`} aria-describedby={`${preferenceId}-csv-import-limit-hint`} value={draft?.csvImportLimitMb??CSV_IMPORT_DEFAULT_LIMIT_MB} onChange={event=>{
+     const limit=Number(event.target.value)
+     if(isCsvImportLimitMb(limit))edit({csvImportLimitMb:limit})
+    }}>
+     {CSV_IMPORT_LIMIT_CHOICES_MB.map(limit=><option key={limit} value={limit}>{limit} MiB</option>)}
+    </select>
+   </div>
+   <p className="personal-page-field-hint">更改语言后，请刷新页面或重新打开文档。</p>
   </fieldset>
  </form>
  const content={account,activity,general,skills:<div className="personal-page-skills">{typeof skills==='function'?skills(skillsGuard):skills}</div>}

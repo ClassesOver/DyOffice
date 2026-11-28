@@ -15,6 +15,13 @@ const ts = require('typescript')
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 export const EDITOR_APPS = Object.freeze(['docs', 'sheets', 'slides', 'pdf'])
+// These optional members belong to the Web adapters. Keep them visible in
+// the audit while requiring an exact declaration in the shared interface.
+const browserOnly = Object.freeze({
+  docs: { bridge: 'desktop', contract: 'DesktopApi', methods: ['pickComparisonDocx'] },
+  slides: { bridge: 'slidesApi', contract: 'SlidesApi', methods: ['browserPrintDialog', 'requestShowFullScreen'] },
+  pdf: { bridge: 'pdfApi', contract: 'PdfApi', methods: ['printBrowserPages'] },
+})
 const sourceExts = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'])
 const skipDirs = new Set(['node_modules', 'dist', 'out', 'build', 'assets', 'fonts'])
 const IPC_METHODS = new Set(['invoke', 'send', 'sendSync', 'on', 'once', 'removeListener', 'removeAllListeners', 'postMessage'])
@@ -351,6 +358,20 @@ export async function workspacePaths(base = root) {
   return paths
 }
 
+async function browserContractMembers(base, app) {
+  const entry = browserOnly[app]
+  if (!entry) return new Set()
+  const path = join(base, 'apps', app, 'src/shared/ipc.ts')
+  let source
+  try { source = await readFile(path, 'utf8') } catch (error) {
+    if (error.code === 'ENOENT') return new Set()
+    throw error
+  }
+  const contract = parse(path, source).statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === entry.contract)
+  const optional = new Set(contract?.members.filter(member => member.questionToken).map(member => propertyName(member.name)))
+  return new Set(entry.methods.filter(method => optional.has(method)).map(method => entry.bridge + '.' + method))
+}
+
 export async function auditWebHost(base = root) {
   const reports = {}
   const paths = await workspacePaths(base)
@@ -362,6 +383,8 @@ export async function auditWebHost(base = root) {
     if (names.size !== bridges.length) throw new Error(app + ': a bridge name is exposed twice')
     const used = new Map()
     const unknown = new Map()
+    const browserContract = await browserContractMembers(base, app)
+    const browserOnlyRendererMethods = []
     const rendererPaths = await sourceFiles(join(base, 'apps', app, 'src/renderer'))
     const { calls, opaque: opaqueReferences, programFiles } = analyzeRenderer(rendererPaths, names, base, paths)
     for (const { bridge, method, file } of calls) {
@@ -375,7 +398,9 @@ export async function auditWebHost(base = root) {
       const declared = new Set(bridge.members.map((m) => m.name))
       for (const [id, item] of used) {
         const [b, method] = [id.slice(0, id.indexOf('.')), id.slice(id.indexOf('.') + 1)]
-        if (b === bridge.name && !declared.has(method)) unknown.set(id, [...item.files].sort())
+        if (b !== bridge.name || declared.has(method)) continue
+        if (browserContract.has(id)) browserOnlyRendererMethods.push(id)
+        else unknown.set(id, [...item.files].sort())
       }
       for (const m of bridge.members) {
         const item = used.get(bridge.name + '.' + m.name)
@@ -391,6 +416,7 @@ export async function auditWebHost(base = root) {
       preloadSideEffects: sideEffects,
       declaredCount: bridges.reduce((n, b) => n + b.members.length, 0),
       unknownRendererMethods: [...unknown.keys()].sort(),
+      browserOnlyRendererMethods: browserOnlyRendererMethods.sort(),
       opaqueReferences,
     }
   }

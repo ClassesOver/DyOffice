@@ -35,6 +35,19 @@ function replay(trailing: string, ops: readonly StructuralOp[]): string {
 const INSERT_COLUMN: StructuralOp[] = [{ kind: 'insert-cols', index: 0, count: 1 }]
 const REMOVE_COLUMN: StructuralOp[] = [{ kind: 'remove-cols', index: 0, count: 1 }]
 
+it('creates or expands the real merge list and drops it after the last merge is removed', () => {
+  const view = '<customSheetViews><customSheetView/></customSheetViews>'
+  const section = '<mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells>'
+  const range = { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 }
+  const merge: StructuralOp = { kind: 'merge-cells', range }
+  const unmerge: StructuralOp = { kind: 'unmerge-cells', range }
+  for (const existing of ['', '<mergeCells count="0"/>']) {
+    const trailing = view + existing + PAIRED_CF
+    expect(replay(trailing, [merge, merge])).toContain(view + section + PAIRED_CF)
+    expect(replay(trailing, [merge, unmerge])).toContain(view + PAIRED_CF)
+  }
+})
+
 it('removes a link to a deleted local target and retains its source cell', () => {
   const xml = replay(
     '<hyperlinks><hyperlink ref="B1" location="Data!$A$2"/><hyperlink ref="B2" location="B1"/></hyperlinks>',

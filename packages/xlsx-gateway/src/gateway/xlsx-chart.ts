@@ -1,4 +1,6 @@
 import type { WorkbookChartEdit } from '../shared/edit-schemas.ts'
+import { childElements, type ChildElement } from './xlsx-style-entries.ts'
+import { withBody, withNamespaces } from './xlsx-worksheet-xml.ts'
 
 /// Surgical edits to a chart part (xl/charts/chartN.xml): title text, chart
 /// type conversion within the axis-based family, and series solid colors.
@@ -252,34 +254,18 @@ function spliceMatch(xml: string, match: RegExpExecArray, replacement: string): 
   return xml.slice(0, match.index) + replacement + xml.slice(match.index + match[0].length)
 }
 
-const GRIDLINES_PATTERN = /<c:majorGridlines\/>|<c:majorGridlines>[\s\S]*?<\/c:majorGridlines>/
+const AXIS_HEADER = ['c:axId', 'c:scaling', 'c:delete', 'c:axPos']
 
-const VAL_AXIS_PATTERN = /<c:valAx>([\s\S]*?)<\/c:valAx>/
-
-/// Major gridlines on the first value axis on/off. CT_ValAx order: axId,
+/// Major gridlines on the primary value axis on/off. CT_ValAx order: axId,
 /// scaling, delete, axPos, majorGridlines, minorGridlines, title, …
 function setGridlines(chartXml: string, on: boolean): string {
-  const axisMatch = VAL_AXIS_PATTERN.exec(chartXml)
-  if (!axisMatch || axisMatch[1] === undefined) {
-    throw new ChartEditError('Chart has no value axis.')
-  }
-  const inner = axisMatch[1]
-  if (!on) {
-    return spliceMatch(
-      chartXml,
-      axisMatch,
-      `<c:valAx>${inner.replace(GRIDLINES_PATTERN, '')}</c:valAx>`,
-    )
-  }
-  if (GRIDLINES_PATTERN.test(inner)) return chartXml
-  const anchor = /<c:axPos val="[^"]*"\/>/.exec(inner) ?? /<c:delete val="[^"]*"\/>/.exec(inner)
-  if (!anchor) throw new ChartEditError('Chart axis is missing its position element.')
-  const at = anchor.index + anchor[0].length
-  return spliceMatch(
-    chartXml,
-    axisMatch,
-    `<c:valAx>${inner.slice(0, at)}<c:majorGridlines/>${inner.slice(at)}</c:valAx>`,
-  )
+  return editChartAxis(chartXml, 'valAx', inner => {
+    const existing = childElements(inner).filter(child => child.name === 'c:majorGridlines')
+    if (on) {
+      return existing.length ? inner : insertAfterLastChild(inner, AXIS_HEADER, '<c:majorGridlines/>')
+    }
+    return existing.reverse().reduce((body, child) => replaceChildMarkup(body, child, ''), inner)
+  })
 }
 
 /// Bar/line/area `c:grouping`. 'clustered' maps to 'standard' for line/area
@@ -318,24 +304,19 @@ function setGrouping(
   return chartXml.replace(plotMatch[0], () => `<c:${plot}>${inner}</c:${plot}>`)
 }
 
-/// Value-axis min/max on the first value axis; null resets a bound to auto.
+/// Value-axis min/max on the primary value axis; null resets a bound to auto.
 function setValueAxisBounds(
   chartXml: string,
   bounds: NonNullable<WorkbookChartEdit['valueAxis']>,
 ): string {
-  const axisMatch = VAL_AXIS_PATTERN.exec(chartXml)
-  if (!axisMatch || axisMatch[1] === undefined) {
-    throw new ChartEditError('Chart has no value axis.')
-  }
-  const scalingMatch = /<c:scaling>([\s\S]*?)<\/c:scaling>/.exec(axisMatch[1])
-  if (!scalingMatch || scalingMatch[1] === undefined) {
-    throw new ChartEditError('Chart value axis has no scaling element.')
-  }
-  let scaling = scalingMatch[1]
-  if (bounds.max !== undefined) scaling = patchScalingBound(scaling, 'max', bounds.max)
-  if (bounds.min !== undefined) scaling = patchScalingBound(scaling, 'min', bounds.min)
-  const inner = spliceMatch(axisMatch[1], scalingMatch, `<c:scaling>${scaling}</c:scaling>`)
-  return spliceMatch(chartXml, axisMatch, `<c:valAx>${inner}</c:valAx>`)
+  return editChartAxis(chartXml, 'valAx', inner => {
+    const scaling = childElements(inner).find(child => child.name === 'c:scaling')
+    if (!scaling) throw new ChartEditError('Chart value axis has no scaling element.')
+    let body = scaling.inner
+    if (bounds.max !== undefined) body = patchScalingBound(body, 'max', bounds.max)
+    if (bounds.min !== undefined) body = patchScalingBound(body, 'min', bounds.min)
+    return body === scaling.inner ? inner : replaceChildMarkup(inner, scaling, withBody(scaling, body))
+  })
 }
 
 /// CT_Scaling order: logBase, orientation, max, min.
@@ -344,19 +325,12 @@ function patchScalingBound(
   bound: 'max' | 'min',
   value: number | null,
 ): string {
-  const pattern = new RegExp(`<c:${bound} val="[^"]*"/>`)
-  if (value === null) return scalingInner.replace(pattern, '')
+  const existing = childElements(scalingInner).find(child => child.name === `c:${bound}`)
+  if (value === null) return existing ? replaceChildMarkup(scalingInner, existing, '') : scalingInner
   const element = `<c:${bound} val="${value}"/>`
-  if (pattern.test(scalingInner)) return scalingInner.replace(pattern, () => element)
-  const anchors =
-    bound === 'max'
-      ? /<c:logBase val="[^"]*"\/>|<c:orientation val="[^"]*"\/>/g
-      : /<c:logBase val="[^"]*"\/>|<c:orientation val="[^"]*"\/>|<c:max val="[^"]*"\/>/g
-  let insertAt = 0
-  for (const found of scalingInner.matchAll(anchors)) {
-    insertAt = found.index + found[0].length
-  }
-  return scalingInner.slice(0, insertAt) + element + scalingInner.slice(insertAt)
+  if (existing) return replaceChildMarkup(scalingInner, existing, element)
+  const leading = bound === 'max' ? ['c:logBase', 'c:orientation'] : ['c:logBase', 'c:orientation', 'c:max']
+  return insertAfterLastChild(scalingInner, leading, element)
 }
 
 /// CT_BarChart order: …ser*, dLbls, gapWidth, overlap, axId.
@@ -459,26 +433,15 @@ function setPointExplosions(chartXml: string, points: Record<string, number>): s
 }
 
 function upsertPointExplosion(serXml: string, pointIndex: number, pct: number): string {
+  const [series] = childElements(serXml)
+  if (!series) throw new ChartEditError('Chart has no series to update.')
   const element = `<c:explosion val="${pct}"/>`
-  const dPts = [...serXml.matchAll(/<c:dPt>[\s\S]*?<\/c:dPt>/g)]
-  for (const dPt of dPts) {
-    const idx = Number(/<c:idx val="([0-9]+)"\/>/.exec(dPt[0])?.[1])
-    if (idx !== pointIndex) continue
-    const pattern = /<c:explosion val="[^"]*"\/>/
-    let patched: string
-    if (pattern.test(dPt[0])) {
-      patched = dPt[0].replace(pattern, () => element)
-    } else {
-      // CT_DPt order: idx, invertIfNegative, marker, bubble3D, explosion, spPr.
-      const anchor = /<c:spPr[\s/>]|<c:pictureOptions[\s/>]|<c:extLst[\s/>]/.exec(dPt[0])
-      const at = anchor ? anchor.index : dPt[0].lastIndexOf('</c:dPt>')
-      patched = dPt[0].slice(0, at) + element + dPt[0].slice(at)
-    }
-    return serXml.slice(0, dPt.index) + patched + serXml.slice(dPt.index + dPt[0].length)
-  }
-  const created = `<c:dPt><c:idx val="${pointIndex}"/><c:bubble3D val="0"/>${element}</c:dPt>`
-  const insertAt = dPtInsertionIndex(serXml, dPts, pointIndex)
-  return serXml.slice(0, insertAt) + created + serXml.slice(insertAt)
+  const body = upsertChartPoint(series.inner, pointIndex, element, inner => {
+    const existing = childElements(inner).find(child => child.name === 'c:explosion')
+    return existing ? replaceChildMarkup(inner, existing, element)
+      : insertAfterLastChild(inner, POINT_HEADER, element)
+  })
+  return withBody(series, body)
 }
 
 const REPLACEABLE_PLOTS: readonly string[] = [
@@ -752,16 +715,43 @@ const LEGEND_POSITIONS: Record<string, string> = {
   left: 'l',
 }
 
+function replaceChildMarkup(inner: string, child: ChildElement, replacement: string): string {
+  return inner.slice(0, child.start) + replacement + inner.slice(child.start + child.xml.length)
+}
+
+function insertAfterLastChild(inner: string, names: readonly string[], markup: string): string {
+  const anchor = childElements(inner).filter(child => names.includes(child.name)).at(-1)
+  return anchor ? replaceChildMarkup(inner, anchor, anchor.xml + markup) : markup + inner
+}
+
+function editChartContents(chartXml: string, edit: (inner: string) => string): string {
+  const root = childElements(chartXml)[0]
+  const chart = root?.name === 'c:chartSpace'
+    ? childElements(root.inner).find(child => child.name === 'c:chart')
+    : root?.name === 'c:chart' ? root : undefined
+  if (!chart) throw new ChartEditError('Chart part has no c:chart element.')
+  const newChart = withBody(chart, edit(chart.inner))
+  return root?.name === 'c:chartSpace'
+    ? replaceChildMarkup(chartXml, root, withBody(root, replaceChildMarkup(root.inner, chart, newChart)))
+    : replaceChildMarkup(chartXml, chart, newChart)
+}
+
 /// Removes the legend or moves/creates it at the given side.
 function setLegend(chartXml: string, legend: NonNullable<WorkbookChartEdit['legend']>): string {
-  const withoutLegend = chartXml.replace(/<c:legend>[\s\S]*?<\/c:legend>/, '')
-  if (legend === 'none') return withoutLegend
-  const position = LEGEND_POSITIONS[legend]
-  const element = `<c:legend><c:legendPos val="${position}"/><c:overlay val="0"/></c:legend>`
-  const plotAreaEnd = /<\/c:plotArea>/.exec(withoutLegend)
-  if (!plotAreaEnd) throw new ChartEditError('Chart part has no plot area.')
-  const insertAt = plotAreaEnd.index + plotAreaEnd[0].length
-  return withoutLegend.slice(0, insertAt) + element + withoutLegend.slice(insertAt)
+  return editChartContents(chartXml, inner => {
+    const children = childElements(inner)
+    const existing = children.find(child => child.name === 'c:legend')
+    if (legend === 'none') return existing ? replaceChildMarkup(inner, existing, '') : inner
+    const position = `<c:legendPos val="${LEGEND_POSITIONS[legend]}"/>`
+    if (existing) {
+      const previous = childElements(existing.inner).find(child => child.name === 'c:legendPos')
+      const body = previous ? replaceChildMarkup(existing.inner, previous, position) : position + existing.inner
+      return replaceChildMarkup(inner, existing, withBody(existing, body))
+    }
+    const plot = children.find(child => child.name === 'c:plotArea')
+    if (!plot) throw new ChartEditError('Chart part has no plot area.')
+    return replaceChildMarkup(inner, plot, plot.xml + `<c:legend>${position}<c:overlay val="0"/></c:legend>`)
+  })
 }
 
 /// Plot-level data labels: what every slice/bar/point shows. Excel's Quick
@@ -771,36 +761,44 @@ function setDataLabels(
   chartXml: string,
   mode: NonNullable<WorkbookChartEdit['dataLabels']>,
 ): string {
-  const plotPattern =
-    /<c:(barChart|lineChart|areaChart|pieChart|doughnutChart)>([\s\S]*?)(<\/c:\1>)/
-  const plotMatch = plotPattern.exec(chartXml)
-  if (!plotMatch?.[1] || plotMatch[2] === undefined) {
+  return rewritePlotLabels(chartXml, () => mode === 'none' ? '' : `<c:dLbls>${labelModeXml(mode)}</c:dLbls>`)
+}
+
+function labelModeXml(mode: NonNullable<WorkbookChartEdit['dataLabels']>): string {
+  return '<c:showLegendKey val="0"/>' +
+    `<c:showVal val="${mode === 'value' ? '1' : '0'}"/>` +
+    `<c:showCatName val="${mode === 'category-percent' ? '1' : '0'}"/>` +
+    '<c:showSerName val="0"/>' +
+    `<c:showPercent val="${mode === 'percent' || mode === 'category-percent' ? '1' : '0'}"/>` +
+    '<c:showBubbleSize val="0"/>'
+}
+
+function rewritePlotLabels(
+  chartXml: string,
+  rewrite: (existing: ChildElement | undefined) => string,
+): string {
+  const plot = /<c:(barChart|lineChart|areaChart|pieChart|doughnutChart)>([\s\S]*?)(<\/c:\1>)/.exec(chartXml)
+  if (!plot?.[1] || plot[2] === undefined) {
     throw new ChartEditError('This chart type does not support data labels.')
   }
-  const inner = plotMatch[2]
-  // The plot-level dLbls slot sits right after the last series.
-  const withoutLabels = inner.replace(/(<\/c:ser>)<c:dLbls>[\s\S]*?<\/c:dLbls>/, '$1')
-  let next = withoutLabels
-  if (mode !== 'none') {
-    const showValue = mode === 'value'
-    const showCategory = mode === 'category-percent'
-    const showPercent = mode === 'percent' || mode === 'category-percent'
-    const labels =
-      '<c:dLbls><c:showLegendKey val="0"/>' +
-      `<c:showVal val="${showValue ? '1' : '0'}"/>` +
-      `<c:showCatName val="${showCategory ? '1' : '0'}"/>` +
-      '<c:showSerName val="0"/>' +
-      `<c:showPercent val="${showPercent ? '1' : '0'}"/>` +
-      '<c:showBubbleSize val="0"/></c:dLbls>'
-    const lastSeriesEnd = withoutLabels.lastIndexOf('</c:ser>')
-    if (lastSeriesEnd === -1) throw new ChartEditError('This chart has no series to label.')
-    const insertAt = lastSeriesEnd + '</c:ser>'.length
-    next = withoutLabels.slice(0, insertAt) + labels + withoutLabels.slice(insertAt)
+  const inner = plot[2]
+  const children = childElements(inner)
+  const entries = children.filter(child => child.name === 'c:dLbls')
+  const existing = entries[0]
+  const replacement = rewrite(existing)
+  let next = inner
+  if (existing) {
+    // Remove stale duplicates from earlier saves, without touching series labels.
+    for (const entry of entries.reverse()) {
+      next = next.slice(0, entry.start) + (entry === existing ? replacement : '') + next.slice(entry.start + entry.xml.length)
+    }
+  } else if (replacement) {
+    const series = children.filter(child => child.name === 'c:ser').at(-1)
+    if (!series) throw new ChartEditError('This chart has no series to label.')
+    const at = series.start + series.xml.length
+    next = inner.slice(0, at) + replacement + inner.slice(at)
   }
-  return chartXml.replace(
-    plotPattern,
-    (_full, plot: string, _inner, close: string) => `<c:${plot}>${next}${close}`,
-  )
+  return spliceMatch(chartXml, plot, `<c:${plot[1]}>${next}${plot[3]}`)
 }
 
 const DLBL_POSITIONS: Record<NonNullable<WorkbookChartEdit['dataLabelPosition']>, string> = {
@@ -817,86 +815,68 @@ function setDataLabelDetail(
   position: WorkbookChartEdit['dataLabelPosition'],
   format: WorkbookChartEdit['dataLabelFormat'],
 ): string {
-  const plotPattern =
-    /<c:(barChart|lineChart|areaChart|pieChart|doughnutChart)>([\s\S]*?)(<\/c:\1>)/
-  const plotMatch = plotPattern.exec(chartXml)
-  if (!plotMatch?.[1] || plotMatch[2] === undefined) {
-    throw new ChartEditError('This chart type does not support data labels.')
-  }
-  const inner = plotMatch[2]
-  const numFmt =
-    format === undefined
-      ? ''
-      : `<c:numFmt formatCode="${escapeXmlAttribute(format)}" sourceLinked="0"/>`
-  const dLblPos = position === undefined ? '' : `<c:dLblPos val="${DLBL_POSITIONS[position]}"/>`
-  const existing = /<\/c:ser><c:dLbls>([\s\S]*?)<\/c:dLbls>/.exec(inner)
-  let next: string
-  if (existing && existing[1] !== undefined) {
-    let labels = existing[1]
-    if (numFmt !== '') {
-      const pattern = /<c:numFmt [^>]*\/>/
-      labels = pattern.test(labels) ? labels.replace(pattern, () => numFmt) : numFmt + labels
+  return rewritePlotLabels(chartXml, existing => {
+    let labels = existing?.inner ?? labelModeXml('value')
+    if (format !== undefined) {
+      labels = setPlotLabelChild(labels, 'c:numFmt',
+        `<c:numFmt formatCode="${escapeXmlAttribute(format)}" sourceLinked="0"/>`,
+        name => name !== 'c:dLbl' && name !== 'c:delete')
     }
-    if (dLblPos !== '') {
-      const pattern = /<c:dLblPos val="[^"]*"\/>/
-      if (pattern.test(labels)) {
-        labels = labels.replace(pattern, () => dLblPos)
-      } else {
-        const anchor = /<c:show|<c:separator[>/]/.exec(labels)
-        const at = anchor ? anchor.index : labels.length
-        labels = labels.slice(0, at) + dLblPos + labels.slice(at)
-      }
+    if (position !== undefined) {
+      labels = setPlotLabelChild(labels, 'c:dLblPos', `<c:dLblPos val="${DLBL_POSITIONS[position]}"/>`,
+        name => name.startsWith('c:show') || name === 'c:separator' || name === 'c:extLst')
     }
-    next = spliceMatch(inner, existing, `</c:ser><c:dLbls>${labels}</c:dLbls>`)
-  } else {
-    const lastSeriesEnd = inner.lastIndexOf('</c:ser>')
-    if (lastSeriesEnd === -1) throw new ChartEditError('This chart has no series to label.')
-    const at = lastSeriesEnd + '</c:ser>'.length
-    const created =
-      `<c:dLbls>${numFmt}${dLblPos}<c:showLegendKey val="0"/><c:showVal val="1"/>` +
-      '<c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/>' +
-      '<c:showBubbleSize val="0"/></c:dLbls>'
-    next = inner.slice(0, at) + created + inner.slice(at)
-  }
-  return spliceMatch(chartXml, plotMatch, `<c:${plotMatch[1]}>${next}${plotMatch[3]}`)
+    const opening = existing?.opening.replace(/\/>$/, '>') ?? '<c:dLbls>'
+    return `${opening}${labels}</c:dLbls>`
+  })
 }
 
-/// Sets or removes (null) the title of the first category/value axis.
+function setPlotLabelChild(
+  labels: string,
+  name: string,
+  replacement: string,
+  insertBefore: (name: string) => boolean,
+): string {
+  const children = childElements(labels)
+  const existing = children.find(child => child.name === name)
+  const start = existing?.start ?? children.find(child => insertBefore(child.name))?.start ?? labels.length
+  return labels.slice(0, start) + replacement + labels.slice(start + (existing?.xml.length ?? 0))
+}
+
+/// Sets or removes (null) the title of the category or primary value axis.
 function setAxisTitle(chartXml: string, axis: 'catAx' | 'valAx', title: string | null): string {
-  const axisPattern = new RegExp(`<c:${axis}>([\\s\\S]*?)</c:${axis}>`)
-  const axisMatch = axisPattern.exec(chartXml)
-  if (!axisMatch || axisMatch[1] === undefined) {
-    // Date axes stand in for category axes on time-series charts.
-    if (axis === 'catAx' && /<c:dateAx>/.test(chartXml)) {
-      return setDateAxisTitle(chartXml, title)
-    }
-    throw new ChartEditError(`Chart has no ${axis === 'catAx' ? 'category' : 'value'} axis.`)
-  }
-  return chartXml.replace(
-    axisPattern,
-    (_full, inner: string) => `<c:${axis}>${patchAxisInnerTitle(inner, title)}</c:${axis}>`,
-  )
+  return editChartAxis(chartXml, axis, inner => patchAxisInnerTitle(inner, title))
 }
 
-function setDateAxisTitle(chartXml: string, title: string | null): string {
-  return chartXml.replace(
-    /<c:dateAx>([\s\S]*?)<\/c:dateAx>/,
-    (_full, inner: string) => `<c:dateAx>${patchAxisInnerTitle(inner, title)}</c:dateAx>`,
-  )
+function editChartAxis(chartXml: string, axis: 'catAx' | 'valAx', edit: (inner: string) => string): string {
+  return editChartContents(chartXml, inner => {
+    const plot = childElements(inner).find(child => child.name === 'c:plotArea')
+    if (!plot) throw new ChartEditError('Chart part has no plot area.')
+    const axes = childElements(plot.inner)
+    const matching = axes.filter(child => child.name === `c:${axis}`)
+    const fallback = axis === 'catAx' ? axes.find(child => child.name === 'c:dateAx') : undefined
+    // Readers prefer the left value axis, regardless of XML order.
+    const left = axis === 'valAx' ? matching.find(candidate => {
+      const position = childElements(candidate.inner).find(child => child.name === 'c:axPos')
+      return position && withNamespaces(position, new Map()).attributes.get('val') === 'l'
+    }) : undefined
+    const existing = left ?? matching[0] ?? fallback
+    if (!existing) throw new ChartEditError(`Chart has no ${axis === 'catAx' ? 'category' : 'value'} axis.`)
+    const body = edit(existing.inner)
+    if (body === existing.inner) return inner
+    const updatedAxis = withBody(existing, body)
+    return replaceChildMarkup(inner, plot, withBody(plot, replaceChildMarkup(plot.inner, existing, updatedAxis)))
+  })
 }
 
 /// CT_*Ax order: the title slot follows axPos / gridlines.
 function patchAxisInnerTitle(axisInner: string, title: string | null): string {
-  const stripped = axisInner.replace(/<c:title>[\s\S]*?<\/c:title>/, '')
-  if (title === null) return stripped
-  const anchor =
-    /<c:minorGridlines\/>|<c:minorGridlines>[\s\S]*?<\/c:minorGridlines>|<c:majorGridlines\/>|<c:majorGridlines>[\s\S]*?<\/c:majorGridlines>|<c:axPos val="[^"]*"\/>/g
-  let insertAt = -1
-  for (const found of stripped.matchAll(anchor)) {
-    insertAt = found.index + found[0].length
-  }
-  if (insertAt === -1) throw new ChartEditError('Chart axis is missing its position element.')
-  return stripped.slice(0, insertAt) + builtTitle(escapeXmlText(title)) + stripped.slice(insertAt)
+  const children = childElements(axisInner)
+  const existing = children.find(child => child.name === 'c:title')
+  if (title === null) return existing ? replaceChildMarkup(axisInner, existing, '') : axisInner
+  const escaped = escapeXmlText(title)
+  if (existing) return replaceChildMarkup(axisInner, existing, rewriteTitleText(existing, escaped))
+  return insertAfterLastChild(axisInner, [...AXIS_HEADER, 'c:majorGridlines', 'c:minorGridlines'], builtTitle(escaped))
 }
 
 /// Rewrites a series' name and/or data (reference + cached values together).
@@ -986,58 +966,59 @@ function setSeriesData(
       }
       categories = undefined
     }
-    if (categories !== undefined) {
-      if (isScatter) {
-        next = setScatterXValues(next, categories, entry.categoriesRef)
+    if (isScatter && (entry.categories !== undefined || entry.categoriesRef !== undefined)) {
+      next = setScatterXValues(next, entry.categories, entry.categoriesRef)
+    } else if (categories !== undefined) {
+      // Numeric categories cached as numRef/numLit (dates) keep that
+      // shape and its formatCode; a strRef rewrite drops the format for good.
+      const numeric = categories.map((value) => Number(value))
+      const keepNumeric =
+        /<c:num(?:Ref|Lit)[\s>]/.test(previousCat) &&
+        categories.length > 0 &&
+        categories.every((value, idx) => value.trim() !== '' && Number.isFinite(numeric[idx]))
+      // A ref-less entry must not demote an existing reference to a
+      // literal: keep the previous c:f (already escaped) and only refresh
+      // the cache.
+      const catRefXml =
+        entry.categoriesRef !== undefined
+          ? escapeXmlText(entry.categoriesRef)
+          : /<c:f>([\s\S]*?)<\/c:f>/.exec(previousCat)?.[1]
+      let cat: string
+      if (keepNumeric) {
+        const formatCode =
+          /<c:formatCode>([^<]*)<\/c:formatCode>/.exec(previousCat)?.[1] ?? 'General'
+        const data =
+          `<c:formatCode>${formatCode}</c:formatCode>` +
+          `<c:ptCount val="${categories.length}"/>` +
+          numeric.map((value, idx) => `<c:pt idx="${idx}"><c:v>${value}</c:v></c:pt>`).join('')
+        // c:f is mandatory inside numRef, so ref-less data must be a literal.
+        cat =
+          catRefXml === undefined
+            ? `<c:cat><c:numLit>${data}</c:numLit></c:cat>`
+            : `<c:cat><c:numRef><c:f>${catRefXml}</c:f>` +
+              `<c:numCache>${data}</c:numCache></c:numRef></c:cat>`
       } else {
-        // Numeric categories cached as numRef/numLit (dates) keep that
-        // shape and its formatCode; a strRef rewrite drops the format for good.
-        const numeric = categories.map((value) => Number(value))
-        const keepNumeric =
-          /<c:num(?:Ref|Lit)[\s>]/.test(previousCat) &&
-          categories.length > 0 &&
-          categories.every((value, idx) => value.trim() !== '' && Number.isFinite(numeric[idx]))
-        // A ref-less entry must not demote an existing reference to a
-        // literal: keep the previous c:f (already escaped) and only refresh
-        // the cache.
-        const catRefXml =
-          entry.categoriesRef !== undefined
-            ? escapeXmlText(entry.categoriesRef)
-            : /<c:f>([\s\S]*?)<\/c:f>/.exec(previousCat)?.[1]
-        let cat: string
-        if (keepNumeric) {
-          const formatCode =
-            /<c:formatCode>([^<]*)<\/c:formatCode>/.exec(previousCat)?.[1] ?? 'General'
-          const data =
-            `<c:formatCode>${formatCode}</c:formatCode>` +
-            `<c:ptCount val="${categories.length}"/>` +
-            numeric.map((value, idx) => `<c:pt idx="${idx}"><c:v>${value}</c:v></c:pt>`).join('')
-          // c:f is mandatory inside numRef, so ref-less data must be a literal.
-          cat =
-            catRefXml === undefined
-              ? `<c:cat><c:numLit>${data}</c:numLit></c:cat>`
-              : `<c:cat><c:numRef><c:f>${catRefXml}</c:f>` +
-                `<c:numCache>${data}</c:numCache></c:numRef></c:cat>`
-        } else {
-          const points =
-            `<c:ptCount val="${categories.length}"/>` +
-            categories
-              .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
-              .join('')
-          // c:f is mandatory inside strRef, so ref-less data must be a literal.
-          cat =
-            catRefXml === undefined
-              ? `<c:cat><c:strLit>${points}</c:strLit></c:cat>`
-              : `<c:cat><c:strRef><c:f>${catRefXml}</c:f>` +
-                `<c:strCache>${points}</c:strCache></c:strRef></c:cat>`
-        }
-        if (previousCat !== '') {
-          next = next.replace(catPattern, () => cat)
-        } else {
-          const valElement = /<c:val\/>|<c:val>/.exec(next)
-          if (!valElement) throw new ChartEditError('Chart series has no value element.')
-          next = next.slice(0, valElement.index) + cat + next.slice(valElement.index)
-        }
+        const count = `<c:ptCount val="${categories.length}"/>`
+        const points = categories
+          .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
+          .join('')
+        const multilevel = sameCategoryRef
+          ? refreshMultiLevelCategoryCache(previousCat, count, points)
+          : undefined
+        // c:f is mandatory inside strRef, so ref-less data must be a literal.
+        cat = multilevel ?? (
+          catRefXml === undefined
+            ? `<c:cat><c:strLit>${count}${points}</c:strLit></c:cat>`
+            : `<c:cat><c:strRef><c:f>${catRefXml}</c:f>` +
+              `<c:strCache>${count}${points}</c:strCache></c:strRef></c:cat>`
+        )
+      }
+      if (previousCat !== '') {
+        next = next.replace(catPattern, () => cat)
+      } else {
+        const valElement = /<c:val\/>|<c:val>/.exec(next)
+        if (!valElement) throw new ChartEditError('Chart series has no value element.')
+        next = next.slice(0, valElement.index) + cat + next.slice(valElement.index)
       }
     }
     if (entry.values !== undefined) {
@@ -1094,39 +1075,58 @@ function setSeriesData(
   return result
 }
 
+/// A flat refresh for the current range supplies only the innermost labels.
+function refreshMultiLevelCategoryCache(catXml: string, count: string, points: string): string | undefined {
+  const [cat] = childElements(catXml)
+  if (!cat) return undefined
+  const ref = childElements(cat.inner).find(child => child.name === 'c:multiLvlStrRef')
+  if (!ref) return undefined
+  const cache = childElements(ref.inner).find(child => child.name === 'c:multiLvlStrCache')
+  if (!cache) return undefined
+  const detail = childElements(cache.inner).find(child => child.name === 'c:lvl')
+  const body = detail ? replaceChildMarkup(cache.inner, detail, withBody(detail, points))
+    : insertAfterLastChild(cache.inner, ['c:ptCount'], `<c:lvl>${points}</c:lvl>`)
+  const oldCount = childElements(body).find(child => child.name === 'c:ptCount')
+  const newCache = withBody(cache, oldCount ? replaceChildMarkup(body, oldCount, count) : count + body)
+  const newRef = withBody(ref, replaceChildMarkup(ref.inner, cache, newCache))
+  return withBody(cat, replaceChildMarkup(cat.inner, ref, newRef))
+}
+
 /// Scatter X data (c:xVal): categories numericized, a non-numeric entry
 /// falls back to its own index.
 function setScatterXValues(
   serXml: string,
-  categories: readonly string[],
+  categories: readonly string[] | undefined,
   categoriesRef: string | undefined,
 ): string {
-  const points =
-    `<c:formatCode>General</c:formatCode><c:ptCount val="${categories.length}"/>` +
-    categories
-      .map((value, idx) => {
-        const numeric = Number(value)
-        const x = value.trim() !== '' && Number.isFinite(numeric) ? numeric : idx
-        return `<c:pt idx="${idx}"><c:v>${x}</c:v></c:pt>`
-      })
-      .join('')
-  const xValPattern = /<c:xVal\/>|<c:xVal>[\s\S]*?<\/c:xVal>/
-  // Same demotion guard as c:cat/c:val: a ref-less rewrite keeps an
-  // existing c:f rather than baking the reference into a literal.
-  const refXml =
-    categoriesRef !== undefined
-      ? escapeXmlText(categoriesRef)
-      : /<c:f>([\s\S]*?)<\/c:f>/.exec(xValPattern.exec(serXml)?.[0] ?? '')?.[1]
-  const xVal =
-    refXml === undefined
-      ? `<c:xVal><c:numLit>${points}</c:numLit></c:xVal>`
-      : `<c:xVal><c:numRef><c:f>${refXml}</c:f>` +
-        `<c:numCache>${points}</c:numCache></c:numRef></c:xVal>`
-  if (xValPattern.test(serXml)) return serXml.replace(xValPattern, () => xVal)
-  // CT_ScatterSer: xVal precedes yVal and smooth.
-  const anchor = /<c:yVal[>/]|<c:smooth[\s/>]/.exec(serXml)
-  const at = anchor ? anchor.index : serXml.lastIndexOf('</c:ser>')
-  return serXml.slice(0, at) + xVal + serXml.slice(at)
+  const [series] = childElements(serXml)
+  if (!series) throw new ChartEditError('Chart has no series to update.')
+  const children = childElements(series.inner)
+  const previous = children.find(child => child.name === 'c:xVal')
+  const previousRef = /<c:f>([\s\S]*?)<\/c:f>/.exec(previous?.inner ?? '')?.[1]
+  const ref = categoriesRef === undefined ? previousRef : escapeXmlText(categoriesRef)
+  // A reference-only edit has no new points to cache.
+  if (!categories?.length && ref !== undefined && ref === previousRef) return serXml
+
+  let cache = ''
+  if (categories !== undefined && (categories.length > 0 || ref === undefined)) {
+    const formatCode = /<c:formatCode>([^<]*)<\/c:formatCode>/.exec(previous?.inner ?? '')?.[1] ?? 'General'
+    const points = categories.map((value, idx) => {
+      const numeric = Number(value)
+      const x = value.trim() !== '' && Number.isFinite(numeric) ? numeric : idx
+      return `<c:pt idx="${idx}"><c:v>${x}</c:v></c:pt>`
+    }).join('')
+    cache = `<c:formatCode>${formatCode}</c:formatCode><c:ptCount val="${categories.length}"/>${points}`
+  }
+  const source = ref === undefined ? `<c:numLit>${cache}</c:numLit>`
+    : `<c:numRef><c:f>${ref}</c:f>${cache ? `<c:numCache>${cache}</c:numCache>` : ''}</c:numRef>`
+  const xVal = `<c:xVal>${source}</c:xVal>`
+  if (previous) return withBody(series, replaceChildMarkup(series.inner, previous, xVal))
+  // CT_ScatterSer: xVal precedes yVal, smooth and extLst.
+  const following = children.find(child => ['c:yVal', 'c:smooth', 'c:extLst'].includes(child.name))
+  const body = following ? replaceChildMarkup(series.inner, following, xVal + following.xml)
+    : series.inner + xVal
+  return withBody(series, body)
 }
 
 /// Replaces the first title run's text (preserving its styling), blanks any
@@ -1135,39 +1135,59 @@ function setScatterXValues(
 /// inside the plot area, so the search stops there.
 function setChartTitle(chartXml: string, title: string): string {
   const escaped = escapeXmlText(title)
-  const xml = chartXml.replace(/<c:autoTitleDeleted val="1"\/>/, '<c:autoTitleDeleted val="0"/>')
-  const plotAreaAt = xml.search(/<c:plotArea[\s>]/)
-  const scope = plotAreaAt === -1 ? xml : xml.slice(0, plotAreaAt)
-  const titleElement = /<c:title>[\s\S]*?<\/c:title>/.exec(scope)
-  if (titleElement) {
-    let isFirstRun = true
-    const rewritten = titleElement[0].replace(
-      /(<a:t>)[\s\S]*?(<\/a:t>)|<a:t\/>/g,
-      (_full, open: string | undefined, close: string | undefined) => {
-        const text = isFirstRun ? escaped : ''
-        isFirstRun = false
-        return `${open ?? '<a:t>'}${text}${close ?? '</a:t>'}`
+  return editChartContents(chartXml, inner => {
+    const existing = childElements(inner).find(child => child.name === 'c:title')
+    const newTitle = existing ? rewriteTitleText(existing, escaped) : builtTitle(escaped)
+    let next = existing
+      ? replaceChildMarkup(inner, existing, newTitle)
+      : newTitle + inner
+    const autoTitle = childElements(next).find(child => child.name === 'c:autoTitleDeleted')
+    if (autoTitle) {
+      next = replaceChildMarkup(next, autoTitle, '<c:autoTitleDeleted val="0"/>')
+    } else if (!existing) {
+      next = newTitle + '<c:autoTitleDeleted val="0"/>' + inner
+    }
+    return next
+  })
+}
+
+function rewriteTitleText(title: ChildElement, escapedText: string): string {
+  const tx = childElements(title.inner).find(child => child.name === 'c:tx')
+  if (!tx) return withBody(title, `<c:tx>${builtTitleRichText(escapedText)}</c:tx>` + title.inner)
+  const rich = childElements(tx.inner).find(child => child.name === 'c:rich')
+  let text = builtTitleRichText(escapedText)
+  if (rich) {
+    let firstRun = true
+    let body = rich.inner.replace(
+      /(<a:t(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?)(\/>|>[\s\S]*?<\/a:t>)/g,
+      (_full, opening: string) => {
+        const value = firstRun ? escapedText : ''
+        firstRun = false
+        return `${opening}>${value}</a:t>`
       },
     )
-    if (isFirstRun) {
-      // A title without any text run (e.g. formula-linked): replace whole tx.
-      return xml.replace(/<c:title>[\s\S]*?<\/c:title>/, () => builtTitle(escaped))
+    if (firstRun) {
+      const paragraph = childElements(body).find(child => child.name === 'a:p')
+      const run = `<a:r><a:t>${escapedText}</a:t></a:r>`
+      body = paragraph
+        ? replaceChildMarkup(body, paragraph, withBody(paragraph, paragraph.inner + run))
+        : body + `<a:p>${run}</a:p>`
     }
-    return xml.replace(/<c:title>[\s\S]*?<\/c:title>/, () => rewritten)
+    text = withBody(rich, body)
   }
-  const chartOpen = /<c:chart>/.exec(xml)
-  if (!chartOpen) throw new ChartEditError('Chart part has no c:chart element.')
-  const insertAt = chartOpen.index + chartOpen[0].length
-  const autoTitle = /<c:autoTitleDeleted /.test(xml) ? '' : '<c:autoTitleDeleted val="0"/>'
-  return xml.slice(0, insertAt) + `${builtTitle(escaped)}${autoTitle}` + xml.slice(insertAt)
+  return withBody(title, replaceChildMarkup(title.inner, tx, withBody(tx, text)))
+}
+
+function builtTitleRichText(escapedText: string): string {
+  return (
+    '<c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r>' +
+    `<a:t>${escapedText}</a:t>` +
+    '</a:r></a:p></c:rich>'
+  )
 }
 
 function builtTitle(escapedText: string): string {
-  return (
-    '<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r>' +
-    `<a:t>${escapedText}</a:t>` +
-    '</a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>'
-  )
+  return `<c:title><c:tx>${builtTitleRichText(escapedText)}</c:tx><c:overlay val="0"/></c:title>`
 }
 
 /// Converts between column/bar/line/area/pie/doughnut. Bar direction changes
@@ -1326,36 +1346,78 @@ function sanitizeSeries(serXml: string, forPie: boolean): string {
   return forPie ? cleaned.replace(/<c:trendline>[\s\S]*?<\/c:trendline>/g, '') : cleaned
 }
 
-/// Sets a series' solid color (fill + line, so bars and lines both take it).
-function setSeriesColor(chartXml: string, seriesIndex: number, color: string): string {
-  const argb = color.slice(1).toUpperCase()
-  const spPr =
-    `<c:spPr><a:solidFill><a:srgbClr val="${argb}"/></a:solidFill>` +
-    `<a:ln><a:solidFill><a:srgbClr val="${argb}"/></a:solidFill></a:ln></c:spPr>`
-  const seriesPattern = /<c:ser>[\s\S]*?<\/c:ser>/g
-  let found = false
-  // Document position, not c:idx: the sidecar numbers series by document
-  // order, so a file whose c:idx values are shuffled must still edit the
-  // series the UI showed as N.
-  let position = -1
-  const result = chartXml.replace(seriesPattern, (serXml) => {
-    position += 1
-    if (position !== seriesIndex) return serXml
-    found = true
-    // The series-level spPr precedes any c:dPt; don't clobber a point's spPr.
-    const dPtAt = serXml.indexOf('<c:dPt>')
-    const scope = dPtAt === -1 ? serXml : serXml.slice(0, dPtAt)
-    const replaced = scope.replace(/<c:spPr>[\s\S]*?<\/c:spPr>/, () => spPr)
-    if (replaced !== scope) return replaced + (dPtAt === -1 ? '' : serXml.slice(dPtAt))
-    // No spPr yet: schema order puts it right after c:tx (or c:order when
-    // the series has no name element).
-    const anchor = /<c:tx>[\s\S]*?<\/c:tx>/.exec(serXml) ?? /<c:order val="[0-9]+"\/>/.exec(serXml)
-    if (!anchor) throw new ChartEditError('Chart series is missing idx/order structure.')
-    const insertAt = anchor.index + anchor[0].length
-    return serXml.slice(0, insertAt) + spPr + serXml.slice(insertAt)
+/// Series indices follow the document order of the plots and their series.
+function editChartSeries(
+  chartXml: string,
+  seriesIndex: number,
+  edit: (inner: string) => string,
+): string {
+  return editChartContents(chartXml, inner => {
+    const plotArea = childElements(inner).find(child => child.name === 'c:plotArea')
+    if (!plotArea) throw new ChartEditError('Chart part has no plot area.')
+    let remaining = seriesIndex
+    for (const plot of childElements(plotArea.inner)) {
+      if (!plot.name.startsWith('c:') || !plot.name.endsWith('Chart')) continue
+      const series = childElements(plot.inner).filter(child => child.name === 'c:ser')
+      const match = series[remaining]
+      if (match) {
+        const updatedPlot = withBody(
+          plot,
+          replaceChildMarkup(plot.inner, match, withBody(match, edit(match.inner))),
+        )
+        return replaceChildMarkup(
+          inner, plotArea, withBody(plotArea, replaceChildMarkup(plotArea.inner, plot, updatedPlot)),
+        )
+      }
+      remaining -= series.length
+    }
+    throw new ChartEditError(`Chart has no series with index ${seriesIndex}.`)
   })
-  if (!found) throw new ChartEditError(`Chart has no series with index ${seriesIndex}.`)
-  return result
+}
+
+function solidChartFill(color: string): string {
+  return `<a:solidFill><a:srgbClr val="${color.slice(1).toUpperCase()}"/></a:solidFill>`
+}
+
+const DRAWING_FILL_NAMES = ['a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill']
+const POINT_HEADER = ['c:idx', 'c:invertIfNegative', 'c:marker', 'c:bubble3D']
+const POINT_SHAPE_HEADER = [...POINT_HEADER, 'c:explosion']
+const POINT_SUCCESSORS = ['c:dLbls', 'c:trendline', 'c:errBars', 'c:cat', 'c:val', 'c:xVal', 'c:yVal']
+
+function replaceDrawingFill(inner: string, fill: string, leading: readonly string[]): string {
+  const existing = childElements(inner).find(child => DRAWING_FILL_NAMES.includes(child.name))
+  return existing ? replaceChildMarkup(inner, existing, fill) : insertAfterLastChild(inner, leading, fill)
+}
+
+function patchChartShapePaint(
+  inner: string,
+  fill: string,
+  leading: readonly string[],
+  recolorLine: boolean,
+): string {
+  const existing = childElements(inner).find(child => child.name === 'c:spPr')
+  let shape = replaceDrawingFill(existing?.inner ?? '', fill, ['a:xfrm', 'a:prstGeom', 'a:custGeom'])
+  if (recolorLine) {
+    const line = childElements(shape).find(child => child.name === 'a:ln')
+    if (!line) {
+      shape = insertAfterLastChild(shape, DRAWING_FILL_NAMES, `<a:ln>${fill}</a:ln>`)
+    } else if (!childElements(line.inner).some(child => child.name === 'a:noFill')) {
+      // Recolor the outline without enabling a deliberately hidden line.
+      shape = replaceChildMarkup(shape, line, withBody(line, replaceDrawingFill(line.inner, fill, [])))
+    }
+  }
+  return existing ? replaceChildMarkup(inner, existing, withBody(existing, shape))
+    : insertAfterLastChild(inner, leading, `<c:spPr>${shape}</c:spPr>`)
+}
+
+/// Sets a series' solid fill and visible line color.
+function setSeriesColor(chartXml: string, seriesIndex: number, color: string): string {
+  return editChartSeries(chartXml, seriesIndex, inner => {
+    if (!childElements(inner).some(child => ['c:spPr', 'c:tx', 'c:order'].includes(child.name))) {
+      throw new ChartEditError('Chart series is missing idx/order structure.')
+    }
+    return patchChartShapePaint(inner, solidChartFill(color), ['c:tx', 'c:order'], true)
+  })
 }
 
 /// Per-point fills via c:dPt on the series at the given document position.
@@ -1364,80 +1426,40 @@ function setPointColors(
   seriesIndex: number,
   points: Record<string, string>,
 ): string {
-  const seriesPattern = /<c:ser>[\s\S]*?<\/c:ser>/g
-  let found = false
-  let position = -1
-  const result = chartXml.replace(seriesPattern, (serXml) => {
-    position += 1
-    if (position !== seriesIndex) return serXml
-    found = true
-    let next = serXml
-    const entries = Object.entries(points)
-      .map(([point, color]) => [Number(point), color] as const)
-      .sort((a, b) => a[0] - b[0])
-    for (const [point, color] of entries) {
-      next = upsertPointColor(next, point, color)
-    }
-    return next
-  })
-  if (!found) throw new ChartEditError(`Chart has no series with index ${seriesIndex}.`)
-  return result
+  const entries = Object.entries(points).map(([point, color]) => [Number(point), color] as const)
+    .sort((a, b) => a[0] - b[0])
+  return editChartSeries(chartXml, seriesIndex, inner =>
+    entries.reduce((series, [point, color]) => upsertPointColor(series, point, color), inner))
 }
 
-function upsertPointColor(serXml: string, pointIndex: number, color: string): string {
-  const fill = `<a:solidFill><a:srgbClr val="${color.slice(1).toUpperCase()}"/></a:solidFill>`
-  const dPts = [...serXml.matchAll(/<c:dPt>[\s\S]*?<\/c:dPt>/g)]
-  for (const dPt of dPts) {
-    const idx = Number(/<c:idx val="([0-9]+)"\/>/.exec(dPt[0])?.[1])
-    if (idx !== pointIndex) continue
-    return (
-      serXml.slice(0, dPt.index) +
-      patchPointFill(dPt[0], fill) +
-      serXml.slice(dPt.index + dPt[0].length)
-    )
-  }
-  const element =
-    `<c:dPt><c:idx val="${pointIndex}"/><c:bubble3D val="0"/>` + `<c:spPr>${fill}</c:spPr></c:dPt>`
-  const insertAt = dPtInsertionIndex(serXml, dPts, pointIndex)
-  return serXml.slice(0, insertAt) + element + serXml.slice(insertAt)
+function upsertPointColor(inner: string, pointIndex: number, color: string): string {
+  const fill = solidChartFill(color)
+  return upsertChartPoint(inner, pointIndex, `<c:spPr>${fill}</c:spPr>`, body =>
+    patchChartShapePaint(body, fill, POINT_SHAPE_HEADER, false))
 }
 
-/// Where a new dPt with this idx belongs: ascending among existing dPt
-/// entries, otherwise before dLbls/cat/val.
-function dPtInsertionIndex(
-  serXml: string,
-  dPts: readonly RegExpExecArray[],
+function upsertChartPoint(
+  inner: string,
   pointIndex: number,
-): number {
-  let insertAt = -1
-  for (const dPt of dPts) {
-    const idx = Number(/<c:idx val="([0-9]+)"\/>/.exec(dPt[0])?.[1])
-    if (idx > pointIndex) return dPt.index
-    insertAt = dPt.index + dPt[0].length
-  }
-  if (insertAt !== -1) return insertAt
-  const anchor = /<c:dLbls[>/]|<c:cat[>/]|<c:val[>/]|<c:xVal[>/]/.exec(serXml)
+  initial: string,
+  edit: (body: string) => string,
+): string {
+  const children = childElements(inner)
+  const points = children.filter(child => child.name === 'c:dPt').map(point => {
+    const idx = childElements(point.inner).find(child => child.name === 'c:idx')
+    const value = idx && withNamespaces(idx, new Map()).attributes.get('val')
+    return { point, index: value && /^\d+$/.test(value.trim()) ? Number(value) : NaN }
+  })
+  const existing = points.find(point => point.index === pointIndex)?.point
+  if (existing) return replaceChildMarkup(inner, existing, withBody(existing, edit(existing.inner)))
+  const element =
+    `<c:dPt><c:idx val="${pointIndex}"/><c:bubble3D val="0"/>${initial}</c:dPt>`
+  const following = points.find(point => point.index > pointIndex)?.point
+  const previous = points.at(-1)?.point
+  if (!following && previous) return replaceChildMarkup(inner, previous, previous.xml + element)
+  const anchor = following ?? children.find(child => POINT_SUCCESSORS.includes(child.name))
   if (!anchor) throw new ChartEditError('Chart series has no data element to anchor a point.')
-  return anchor.index
-}
-
-/// Existing dPt: swap only the spPr fill, keeping every other child.
-function patchPointFill(dPtXml: string, fill: string): string {
-  const spPrMatch = /<c:spPr>([\s\S]*?)<\/c:spPr>/.exec(dPtXml)
-  if (!spPrMatch || spPrMatch[1] === undefined) {
-    const anchor = /<c:pictureOptions[\s/>]|<c:extLst[\s/>]/.exec(dPtXml)
-    const insertAt = anchor ? anchor.index : dPtXml.lastIndexOf('</c:dPt>')
-    return dPtXml.slice(0, insertAt) + `<c:spPr>${fill}</c:spPr>` + dPtXml.slice(insertAt)
-  }
-  const inner = spPrMatch[1]
-  // Only touch the shape fill, never a fill nested inside a:ln.
-  const lnAt = inner.search(/<a:ln[\s>]/)
-  const head = lnAt === -1 ? inner : inner.slice(0, lnAt)
-  const tail = lnAt === -1 ? '' : inner.slice(lnAt)
-  const fillPattern =
-    /<a:noFill\/>|<a:solidFill>[\s\S]*?<\/a:solidFill>|<a:gradFill[\s\S]*?<\/a:gradFill>|<a:pattFill[\s\S]*?<\/a:pattFill>|<a:blipFill[\s\S]*?<\/a:blipFill>|<a:grpFill\/>/
-  const nextHead = fillPattern.test(head) ? head.replace(fillPattern, () => fill) : head + fill
-  return dPtXml.replace(spPrMatch[0], () => `<c:spPr>${nextHead}${tail}</c:spPr>`)
+  return replaceChildMarkup(inner, anchor, element + anchor.xml)
 }
 
 function escapeXmlText(input: string): string {

@@ -114,6 +114,21 @@ describe('fetchRemoteTable', () => {
     expect(table?.headers).toEqual(['Currency', 'Rate'])
   })
 
+  it('limits the body and cell count for public web queries', async () => {
+    const url = 'https://8.8.8.8/rates.csv'
+    const csv = () => htmlResponse('Currency,Rate\nEUR,1.09', 'text/csv')
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(csv())
+      .mockResolvedValueOnce(htmlResponse('Currency,Buy,Sell\n' + 'EUR,1.09,1.10\n'.repeat(34_000), 'text/csv'))
+      .mockResolvedValueOnce(csv())
+    await expect(fetchRemoteTable(url, { directPublic: true, maxBytes: 16, fetchImpl })).resolves.toBeNull()
+    await expect(fetchRemoteTable(url, { directPublic: true, fetchImpl })).resolves.toBeNull()
+    await expect(fetchRemoteTable(url, { directPublic: true, fetchImpl })).resolves.toMatchObject({
+      headers: ['Currency', 'Rate'],
+      rows: [['EUR', '1.09']],
+    })
+  })
+
   it('bounds the fetch with a timeout so a trickling server cannot pin it', async () => {
     const timeout = vi.spyOn(AbortSignal, 'timeout')
     try {

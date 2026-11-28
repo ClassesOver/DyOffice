@@ -433,6 +433,23 @@ describe('setPageSizeBytes', () => {
     expect(out.getPage(0).getWidth()).toBe(842)
     expect(out.getPage(0).getHeight()).toBe(595)
   })
+
+  it('scales each static form fill with its page content, including rotated and already sized pages', async () => {
+    const doc = await PDFDocument.create()
+    doc.addPage([100, 200]).setMediaBox(10, 20, 100, 200)
+    doc.addPage([120, 200]).setRotation(degrees(90))
+    doc.addPage([300, 400])
+    const rect: [number, number, number, number] = [20, 30, 60, 50]
+    const fills = doc.getPageIndices().map(pageIndex => ({ id: `fill-${pageIndex}`, kind: 'text' as const, pageIndex, rect, text: 'Entry', fontSize: 14 }))
+    const input = await apply(await doc.save(), request({ staticFormFills: fills }))
+    const output = await setPageSizeBytes(input, 300, 400)
+    expect(await readStaticFormFills(output)).toEqual([
+      { ...fills[0], rect: [40, 60, 120, 100] },
+      { ...fills[1], rect: [30, 45, 90, 75] },
+      fills[2],
+    ])
+    expect(await readStaticFormFills(input)).toEqual(fills)
+  })
 })
 
 describe('splitPagesBytes', () => {
@@ -511,6 +528,50 @@ describe('cropPagesBytes', () => {
 })
 
 describe('static form fill metadata', () => {
+  const rect: [number, number, number, number] = [12, 20, 50, 36]
+  const text = { id: 'shared', kind: 'text', pageIndex: 0, rect, text: 'Alice' } as const
+  const cross = { id: 'cross', kind: 'cross', pageIndex: 2, rect } as const
+
+  async function documents() {
+    const target = await apply(await makePdf([[100, 100], [100, 100], [100, 100]]), request({
+      staticFormFills: [text, { ...text, id: 'removed', pageIndex: 1, text: 'Removed' }, cross],
+    }))
+    const source = await apply(await makePdf([[100, 100]]), request({
+      staticFormFills: [{ ...text, text: 'Source' }],
+    }))
+    return { target, source }
+  }
+
+  it('copies selected and repeated pages and remaps records in split files', async () => {
+    const { target } = await documents()
+    const extracted = await readStaticFormFills(await extractPagesBytes(target, [2, 0, 0]))
+    expect(extracted).toHaveLength(3)
+    expect(extracted.slice(0, 2)).toEqual([{ ...cross, pageIndex: 0 }, { ...text, pageIndex: 1 }])
+    expect(extracted[2]).toMatchObject({ ...text, id: expect.any(String), pageIndex: 2 })
+    expect(new Set(extracted.map(fill => fill.id)).size).toBe(3)
+    const parts = await splitPdfBytes(target, 2)
+    expect(await Promise.all(parts.map(readStaticFormFills))).toEqual([
+      [text, { ...text, id: 'removed', pageIndex: 1, text: 'Removed' }],
+      [{ ...cross, pageIndex: 0 }],
+    ])
+  })
+
+  it('keeps target fill IDs and resolves collisions when inserting or replacing pages', async () => {
+    const { target, source } = await documents()
+    const inserted = await readStaticFormFills((await insertPdfBytes(target, source, 0)).merged)
+    expect(inserted).toContainEqual(text)
+    expect(inserted).toContainEqual({ ...cross, pageIndex: 3 })
+    expect(inserted.find(fill => fill.pageIndex === 1)).toMatchObject({ ...text, id: expect.not.stringMatching(/^shared$/), pageIndex: 1, text: 'Source' })
+    const replaced = await readStaticFormFills((await replacePagesBytes(target, source, [1, 2])).merged)
+    expect(replaced).toHaveLength(2)
+    expect(replaced).toContainEqual(text)
+    expect(replaced.find(fill => fill.pageIndex === 1)).toMatchObject({ ...text, id: expect.not.stringMatching(/^shared$/), pageIndex: 1, text: 'Source' })
+    const merged = await readStaticFormFills((await mergePdfBytes(target, [source, source])).merged)
+    expect(merged.filter(fill => fill.text === 'Source').map(fill => fill.pageIndex)).toEqual([3, 4])
+    expect(new Set(merged.map(fill => fill.id)).size).toBe(5)
+    expect(await readStaticFormFills(await insertBlankPageBytes(target, -1))).toContainEqual({ ...text, pageIndex: 1 })
+  })
+
   it('persists records and remaps their pages through delete and reorder', async () => {
     const bytes = await makePdf([
       [100, 100],

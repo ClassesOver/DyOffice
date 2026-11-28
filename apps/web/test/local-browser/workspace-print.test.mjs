@@ -1,0 +1,1910 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {readFile} from 'node:fs/promises'
+import {createRequire} from 'node:module'
+import {fileURLToPath} from 'node:url'
+import {join} from 'node:path'
+import {expect} from '@playwright/test'
+import {PDFDocument} from 'pdf-lib'
+import * as CFB from 'cfb'
+import JSZip from 'jszip'
+import {launchTestBrowser} from '../helpers/browser.mjs'
+import {docxBytes,fileFixture,importFile} from '../helpers/files.mjs'
+import {stubHomeHero} from '../helpers/home-hero.mjs'
+import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
+import {password} from '../helpers/identity.mjs'
+import {officeBrowserAsset} from '../helpers/office-browser-assets.mjs'
+import {buildLocalApp} from '../../server/src/app.ts'
+import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
+import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
+import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
+
+const built=Boolean(process.env.DYOFFICE_TEST_OFFICE_ASSETS||(
+ process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY&&process.env.DYOFFICE_TEST_NATIVE_DOCS_DIST&&
+ process.env.DYOFFICE_TEST_SHEETS_DIST&&process.env.DYOFFICE_TEST_SLIDES_DIST&&process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
+))
+
+const workbookImportWasi=process.env.DYOFFICE_TEST_XLSX_WASI_REFRESH_RUNNER
+test('workspace Sheets imports text into a selection with undo and save',{skip:!built,timeout:150000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+10
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false,csvImportLimitMb:64})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),...sheets})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const bytes=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+ const {file}=await importFile(f,f.alice.token,bytes,'text-import.xlsx')
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+ const editor=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`),html=editor.locator('html')
+ await expect(html).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ assert.equal(await html.evaluate(()=>window.desktopApi.getCsvImportLimit()),64)
+ const tab=page.getByRole('tab',{name:'text-import.xlsx',exact:true})
+ await page.getByRole('tab',{name:'首页',exact:true}).click()
+ await accountAction(page,'个人设置')
+ const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+ await settingsTab(settings,'通用偏好')
+ const limit=settings.getByLabel('CSV 导入上限',{exact:true})
+ await expect(limit).toHaveValue('64')
+ await limit.selectOption('128')
+ await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+ await expect(settings).toContainText('个人偏好已保存')
+ await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+ await tab.click()
+ assert.equal(await html.evaluate(()=>window.desktopApi.getCsvImportLimit()),128)
+ await editor.getByRole('button',{name:'Data',exact:true}).click()
+ const activate=cell=>html.evaluate((_node,cell)=>{window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange(cell).activate()},cell)
+ const values=cells=>html.evaluate((_node,cells)=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return sheet&&cells.map(cell=>sheet.getRange(cell).getValue())
+ },cells)
+ async function importText(name,text){
+  const chooser=page.waitForEvent('filechooser')
+  await editor.getByRole('button',{name:'From Text/CSV',exact:true}).click()
+  await (await chooser).setFiles({name,mimeType:'text/plain',buffer:Buffer.from(text)})
+ }
+ await activate('B2')
+ const cells=['B2','B3','C3','D3','B4']
+ const formula=()=>html.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getFormula())
+ const before=await values(cells)
+ assert.equal(await formula(),'=A2*2')
+ await importText('too-many-cells.csv',Array(501).fill(Array(101).fill('text').join(',')).join('\n'))
+ await expect(editor.locator('.workbook-status')).toContainText('over 50,000 cells')
+ assert.deepEqual(await values(cells),before)
+ const csv='Name,Count,Code\r\n"With, comma",42,007\r\n=1+2,9,k'
+ await importText('selected.csv',csv)
+ const imported=['Name','With, comma',42,'007','=1+2']
+ await expect.poll(()=>values(cells)).toEqual(imported)
+ assert.equal(await formula(),'')
+ await editor.getByRole('button',{name:'Undo',exact:true}).first().click()
+ await expect.poll(()=>values(cells)).toEqual(before)
+ assert.equal(await formula(),'=A2*2')
+ await activate('B2')
+ await importText('selected.csv',csv)
+ await expect.poll(()=>values(cells)).toEqual(imported)
+ await activate('J17')
+ await importText('notes.TSV','Name\tCount\nA, B, C, D, E\t57')
+ await expect.poll(()=>values(['J18','K18'])).toEqual(['A, B, C, D, E',57])
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ assert.equal(await head(),file.revision)
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+s')
+ await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
+ const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await head()))
+ const xml=await zip.file('xl/worksheets/sheet1.xml').async('string')
+ assert.match(xml,/<c\b[^>]*\br="C3"[^>]*>\s*<v>42<\/v>/)
+ assert.match(xml,/<c\b[^>]*\br="K18"[^>]*>\s*<v>57<\/v>/)
+ await page.reload()
+ await expect.poll(()=>values(cells),{timeout:30000}).toEqual(imported)
+ await expect.poll(()=>values(['J18','K18'])).toEqual(['A, B, C, D, E',57])
+})
+
+test('workspace opens and saves CSV with its original name and supports XLSX copies and AI CSV creation',{skip:!built,timeout:210000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+11
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:true,showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),...sheets})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ const picker=upload.locator('input[type=file]')
+ await expect(picker).toHaveAttribute('accept',/(?:^|,)\.csv(?:,|$)/)
+ const original=Buffer.from('sep=;\r\nName;Code\r\nAlpha;007\r\n')
+ await picker.setInputFiles({name:'Ledger.CSV',mimeType:'text/csv',buffer:original})
+ await upload.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+ await expect(upload).toContainText('已完成 1',{timeout:60000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ const token=f.alice.token
+ const [file]= (await f.files.listFiles(token)).files
+ assert.equal(file.name,'Ledger.CSV')
+ assert.equal(file.format,'csv')
+ const tab=page.getByRole('tab',{name:'Ledger.CSV',exact:true})
+ const frame=page.frameLocator(`iframe[data-document-id="${file.id}"]`)
+ const workbook=frame.locator('html')
+ await expect(workbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const values=()=>workbook.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return sheet&&['A1','A2','B2'].map(cell=>sheet.getRange(cell).getValue())
+ })
+ await expect.poll(values).toEqual(['Name','Alpha','007'])
+ await workbook.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue('Beta'))
+ await expect.poll(values).toEqual(['Name','Beta','007'])
+ const head=async()=>(await f.files.openFile(token,file.id)).file.revision
+ const workspace=createWorkspaceService(f.transactions)
+ const exports=await workspace.createFolder(token,{name:'Exports',parentId:null})
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ const csvCopyDialog=frame.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await csvCopyDialog.getByLabel('File format',{exact:true}).selectOption('csv')
+ await expect(csvCopyDialog).toContainText('CSV saves the current sheet')
+ await csvCopyDialog.getByLabel('File name').fill('Ledger values.csv')
+ await csvCopyDialog.getByRole('combobox',{name:'Folder',exact:true}).selectOption(exports.id)
+ await csvCopyDialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(frame.getByText('Saved copy: Ledger values.csv',{exact:true})).toBeVisible({timeout:30000})
+ const csvCopy=(await f.files.listFiles(token)).files.find(item=>item.name==='Ledger values.csv')
+ assert.ok(csvCopy)
+ assert.ok((await workspace.listFiles(token,{folderId:exports.id})).files.some(item=>item.id===csvCopy.id))
+ assert.equal(csvCopy.format,'csv')
+ assert.notEqual(csvCopy.id,file.id)
+ assert.deepEqual(await f.files.readFile(token,csvCopy.id,csvCopy.revision),Buffer.from('\ufeffName,Code\r\nBeta,007\r\n'))
+ assert.equal(await head(),file.revision)
+ await expect(tab).toHaveAttribute('aria-selected','true')
+ const save=async()=>{await tab.focus();await page.keyboard.press('ControlOrMeta+s')}
+ const formatDialog=frame.locator('dialog.web-csv-export-dialog')
+ await save()
+ await expect(formatDialog).toContainText('Keep this file in CSV format?')
+ await formatDialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal(await head(),file.revision)
+ await save()
+ await formatDialog.getByRole('button',{name:'Save as .xlsx',exact:true}).click()
+ const copyDialog=frame.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(copyDialog.getByLabel('File name')).toHaveValue('Ledger.xlsx')
+ await expect(copyDialog.getByLabel('File format',{exact:true})).toHaveCount(0)
+ await copyDialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ const copy=async()=> (await f.files.listFiles(token)).files.find(item=>item.name==='Ledger.xlsx')
+ await expect(frame.getByText('Saved copy: Ledger.xlsx',{exact:true})).toBeVisible({timeout:30000})
+ await expect.poll(async()=>Boolean(await copy()),{timeout:30000}).toBe(true)
+ const xlsx=await copy()
+ const zip=await JSZip.loadAsync(await f.files.readFile(token,xlsx.id,xlsx.revision))
+ assert.match(await zip.file('xl/worksheets/sheet1.xml').async('string'),/Beta/)
+ assert.equal(await head(),file.revision)
+ await save()
+ await formatDialog.getByRole('button',{name:'Continue as CSV',exact:true}).click()
+ await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
+ assert.deepEqual(await f.files.readFile(token,file.id,file.revision),original)
+ assert.deepEqual(await f.files.readFile(token,file.id,await head()),Buffer.from('\ufeffName,Code\r\nBeta,007\r\n'))
+ await page.reload()
+ await expect(workbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect.poll(values).toEqual(['Name','Beta','007'])
+
+ await page.getByRole('tab',{name:'首页',exact:true}).click()
+ await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+ await picker.setInputFiles({name:'Blank.csv',mimeType:'text/csv',buffer:Buffer.alloc(0)})
+ await upload.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+ await expect(upload).toContainText('已完成 1',{timeout:60000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ const blank=(await f.files.listFiles(token)).files.find(item=>item.name==='Blank.csv')
+ assert.equal(blank.size,0)
+ const blankFrame=page.frameLocator(`iframe[data-document-id="${blank.id}"]`)
+ const emptyWorkbook=blankFrame.locator('html')
+ await expect(emptyWorkbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect(blankFrame.locator('.csv-empty-notice')).toBeVisible()
+ await emptyWorkbook.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A1').setValue('First row'))
+ await page.getByRole('tab',{name:'Blank.csv',exact:true}).focus()
+ await page.keyboard.press('ControlOrMeta+s')
+ await blankFrame.getByRole('button',{name:'Continue as CSV',exact:true}).click()
+ const blankHead=async()=>(await f.files.openFile(token,blank.id)).file.revision
+ await expect.poll(blankHead,{timeout:30000}).not.toBe(blank.revision)
+ assert.deepEqual(await f.files.readFile(token,blank.id,blank.revision),Buffer.alloc(0))
+ assert.deepEqual(await f.files.readFile(token,blank.id,await blankHead()),Buffer.from('\ufeffFirst row\r\n'))
+
+ const sourceRevision=await blankHead()
+ const generatedText='Label,Code\r\n"West, coast",007\r\n'
+ const generated=await emptyWorkbook.evaluate((_node,content)=>window.desktopApi.createDocument({
+  type:'csv',title:'Ledger',content,
+ }),generatedText)
+ assert.deepEqual(generated,{ok:true,name:'Ledger-2.csv'})
+ assert.equal(await blankHead(),sourceRevision)
+ await expect(page.getByRole('tab',{name:generated.name,exact:true})).toHaveAttribute('aria-selected','true')
+ const generatedFile=(await f.files.listFiles(token)).files.find(item=>item.name===generated.name)
+ assert.equal(generatedFile.format,'csv')
+ assert.deepEqual(await f.files.readFile(token,generatedFile.id,generatedFile.revision),Buffer.from('\ufeff'+generatedText))
+ const generatedWorkbook=page.frameLocator(`iframe[data-document-id="${generatedFile.id}"]`).locator('html')
+ await expect(generatedWorkbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect.poll(()=>generatedWorkbook.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return sheet&&['A2','B2'].map(cell=>sheet.getRange(cell).getValue())
+ })).toEqual(['West, coast','007'])
+})
+
+test('workspace opens XLSM, writes cell edits and saves XLSM copies with the original VBA part',{skip:!built,timeout:180000},async t=>{
+ const {macroWorkbook,vbaFixture}=await import('../helpers/xlsm.mjs')
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+12
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),...sheets})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ const picker=upload.locator('input[type=file]')
+ await expect(picker).toHaveAttribute('accept',/(?:^|,)\.xlsm(?:,|$)/)
+ const original=await macroWorkbook(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ await picker.setInputFiles({name:'Ledger.XLSM',mimeType:'application/vnd.ms-excel.sheet.macroEnabled.12',buffer:original})
+ await upload.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+ await expect(upload).toContainText('已完成 1',{timeout:60000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ const token=f.alice.token,[file]=(await f.files.listFiles(token)).files
+ assert.equal(file.format,'xlsm')
+ const editor=page.frameLocator(`iframe[data-document-id="${file.id}"]`),html=editor.locator('html')
+ const tab=page.getByRole('tab',{name:'Ledger.XLSM',exact:true})
+ await expect(html).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await html.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(58))
+ const head=async()=>(await f.files.openFile(token,file.id)).file.revision
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+s')
+ await expect(editor.locator('.app-toast')).toHaveText('Saved.',{timeout:30000})
+ await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
+ async function verify(id,revision){
+  const zip=await JSZip.loadAsync(await f.files.readFile(token,id,revision))
+  assert.deepEqual(await zip.file('xl/vbaProject.bin').async('nodebuffer'),vbaFixture)
+  assert.match(await zip.file('[Content_Types].xml').async('string'),/sheet\.macroEnabled\.main\+xml/)
+  assert.match(await zip.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="A2"[^>]*>\s*<v>58<\/v>/)
+ }
+ await verify(file.id,await head())
+ assert.deepEqual(await f.files.readFile(token,file.id,file.revision),original)
+ const workspace=createWorkspaceService(f.transactions)
+ const parent=await workspace.createFolder(token,{name:'Reports',parentId:null})
+ const folder=await workspace.createFolder(token,{name:'Macros',parentId:parent.id})
+ await workspace.moveFile(token,file.id,{folderId:folder.id})
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ const dialog=editor.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(dialog.getByLabel('File name')).toHaveValue('Ledger.xlsm')
+ const location=dialog.getByRole('combobox',{name:'Folder',exact:true})
+ await expect(location.getByRole('option',{name:'Reports / Macros',exact:true})).toHaveCount(1)
+ await expect(location).toHaveValue(folder.id)
+ await dialog.getByLabel('File name').fill('Ledger copy.xlsm')
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(editor.getByText('Saved copy: Ledger copy.xlsm',{exact:true})).toBeVisible({timeout:30000})
+ const copy=(await f.files.listFiles(token)).files.find(item=>item.name==='Ledger copy.xlsm')
+ assert.ok(copy)
+ assert.ok((await workspace.listFiles(token,{folderId:folder.id})).files.some(item=>item.id===copy.id))
+ assert.equal(copy.format,'xlsm')
+ await verify(copy.id,copy.revision)
+})
+
+test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} uploads as editable XLSX copies`,{skip:!built,timeout:workbookImportWasi?240000:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+9
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+  DYOFFICE_XLSX_WASI_REFRESH_RUNNER:workbookImportWasi,
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),...sheets})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.keyboard.press('ControlOrMeta+o')
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ const picker=upload.locator('input[type=file]')
+ await expect(picker).toHaveAttribute('accept',workbookImportWasi?/(?:^|,)\.xls(?:,|$)/:/(?:^|,)\.tsv$/)
+ const legacySource=workbookImportWasi?await readFile(new URL('../../../sheets/native/xlsx-engine/tests/fixtures/cell-styles.xls',import.meta.url)):null
+ await picker.setInputFiles([
+  {name:'Quarter.TSV',mimeType:'text/tab-separated-values',buffer:Buffer.from('\ufeffName\tAmount\r\nA, B, C, D, E\t42\r\n=1+2\t5')},
+  {name:'Blank.tsv',mimeType:'text/tab-separated-values',buffer:Buffer.alloc(0)},
+  ...(legacySource?[
+   {name:'Styled.XLS',mimeType:'application/vnd.ms-excel',buffer:legacySource},
+   {name:'Broken.xls',mimeType:'application/vnd.ms-excel',buffer:Buffer.from('not a workbook')},
+  ]:[]),
+ ])
+ await upload.getByRole('button',{name:`开始上传（${legacySource?4:2}）`,exact:true}).click()
+ await expect(upload).toContainText(`已完成 ${legacySource?3:2}`,{timeout:60000})
+ if(legacySource)await expect(upload).toContainText('未完成 1')
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ const {files}=await f.files.listFiles(f.alice.token)
+ assert.deepEqual(files.map(file=>file.name).sort(),['Blank.xlsx','Quarter.xlsx',...(legacySource?['Styled.xlsx']:[])])
+ const [quarter,blank]=['Quarter.xlsx','Blank.xlsx'].map(name=>files.find(file=>file.name===name))
+ const frame=file=>page.frameLocator(`iframe[data-document-id="${file.id}"]`)
+ await expect(frame(blank).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const tab=page.getByRole('tab',{name:'Quarter.xlsx',exact:true})
+ await tab.click()
+ const workbook=frame(quarter).locator('html')
+ await expect(workbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const values=()=>workbook.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return sheet&&['A1','A2','B2','A3'].map(cell=>sheet.getRange(cell).getValue())
+ })
+ await expect.poll(values).toEqual(['Name','A, B, C, D, E',42,'=1+2'])
+ await workbook.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').setValue(51))
+ const head=async()=>(await f.files.openFile(f.alice.token,quarter.id)).file.revision
+ const base=await head()
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+s')
+ await expect.poll(head,{timeout:30000}).not.toBe(base)
+ const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,quarter.id,await head()))
+ const sheet=await zip.file('xl/worksheets/sheet1.xml').async('string')
+ assert.match(sheet,/<c\b[^>]*\br="B2"[^>]*>\s*<v>51<\/v>/)
+ if(legacySource){
+  const legacy=files.find(file=>file.name==='Styled.xlsx')
+  const legacyTab=page.getByRole('tab',{name:legacy.name,exact:true})
+  await legacyTab.click()
+  const html=frame(legacy).locator('html')
+  await expect(html).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+  const savedWorkbook=await JSZip.loadAsync(await f.files.readFile(f.alice.token,legacy.id,legacy.revision))
+  const styles=await savedWorkbook.file('xl/styles.xml').async('string')
+  assert.match(styles,/<fgColor rgb="FF003366"\/>/)
+  assert.match(styles,/<alignment[^>]*textRotation="45"/)
+  const image=await savedWorkbook.file('xl/media/image1.png').async('nodebuffer')
+  assert.equal(image.subarray(1,4).toString(),'PNG')
+  await html.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A20').setValue(73))
+  const legacyHead=async()=>(await f.files.openFile(f.alice.token,legacy.id)).file.revision
+  await legacyTab.focus()
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(legacyHead,{timeout:30000}).not.toBe(legacy.revision)
+  const edited=await JSZip.loadAsync(await f.files.readFile(f.alice.token,legacy.id,await legacyHead()))
+  assert.match(await edited.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*\br="A20"[^>]*>\s*<v>73<\/v>/)
+  assert.deepEqual(await edited.file('xl/media/image1.png').async('nodebuffer'),image)
+  await legacyTab.focus()
+  await page.keyboard.press('ControlOrMeta+o')
+  await expect(picker).toHaveAttribute('accept',/(?:^|,)\.ods,\.ots(?:,|$)/)
+  const odf=await readFile(new URL('../../../sheets/native/xlsx-engine/tests/fixtures/cross-sheet-references.ods',import.meta.url))
+  const template=await JSZip.loadAsync(odf)
+  template.file('mimetype','application/vnd.oasis.opendocument.spreadsheet-template')
+  await picker.setInputFiles([
+   {name:'Skip.ods',mimeType:'application/vnd.oasis.opendocument.spreadsheet',buffer:odf},
+   {name:'References.ods',mimeType:'application/vnd.oasis.opendocument.spreadsheet',buffer:odf},
+   {name:'Template.ots',mimeType:'application/vnd.oasis.opendocument.spreadsheet-template',buffer:await template.generateAsync({type:'nodebuffer'})},
+  ])
+  await upload.getByRole('button',{name:'开始上传（3）',exact:true}).click()
+  const prompt=upload.getByRole('group',{name:'OpenDocument 转换'})
+  await expect(prompt).toContainText('Skip.ods')
+  await prompt.getByRole('button',{name:'跳过此文件'}).click()
+  await expect(prompt).toContainText('References.ods')
+  await prompt.getByRole('checkbox',{name:'下次直接转换'}).check()
+  await prompt.getByRole('button',{name:'转换并打开'}).click()
+  await expect(upload).toContainText('已完成 2 · 已跳过 1',{timeout:60000})
+  await upload.getByRole('button',{name:'完成',exact:true}).click()
+  assert.equal((await f.preferences.get(f.alice.token)).skipOdsImportPrompt,true)
+  assert.equal((await f.preferences.get(f.alice.token)).skipOdtImportPrompt,false)
+  const postImport=(await f.files.listFiles(f.alice.token)).files
+  assert.equal(postImport.some(file=>file.name==='Skip.xlsx'),false)
+  for(const name of ['References.xlsx','Template.xlsx']){
+   const file=postImport.find(file=>file.name===name)
+   assert.ok(file)
+   const converted=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.id,file.revision))
+   const xml=await converted.file('xl/worksheets/sheet1.xml').async('string')
+   assert.match(xml,/<f>Other!A1\*2<\/f><v>200<\/v>/)
+  }
+  const references=postImport.find(file=>file.name==='References.xlsx')
+  const referencesTab=page.getByRole('tab',{name:references.name,exact:true})
+  await referencesTab.click()
+  const referencesHtml=frame(references).locator('html')
+  await expect(referencesHtml).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+  await referencesHtml.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A20').setValue(52))
+  await referencesTab.focus()
+  await page.keyboard.press('ControlOrMeta+s')
+  const referenceHead=async()=>(await f.files.openFile(f.alice.token,references.id)).file.revision
+  await expect.poll(referenceHead,{timeout:30000}).not.toBe(references.revision)
+  const savedOdf=await JSZip.loadAsync(await f.files.readFile(f.alice.token,references.id,await referenceHead()))
+  const savedSheet=await savedOdf.file('xl/worksheets/sheet1.xml').async('string')
+  assert.match(savedSheet,/<c\b[^>]*\br="A20"[^>]*>\s*<v>52<\/v>/)
+  assert.match(savedSheet,/<f>Other!A1\*2<\/f>/)
+  await page.reload()
+  await expect.poll(()=>referencesHtml.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A20').getValue()),{timeout:30000}).toBe(52)
+  await tab.click()
+ }
+ await page.reload()
+ await expect.poll(values,{timeout:30000}).toEqual(['Name','A, B, C, D, E',51,'=1+2'])
+})
+
+for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace converts ${family} files into editable copies`,{skip:!built,timeout:180000},async t=>{
+ const legacy=family==='legacy Office',hancom=family==='Hancom'
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+13
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,skipOdfImportPrompt:legacy})
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+  nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ const workspaceFiles=async()=>(await f.files.listFiles(f.alice.token)).files
+ const korean='한글 업무 보고서'
+ const docs=hancom?[
+  ['Report','hwp','docx','hwp',korean,'word/document.xml'],
+  ['Memo','hwpx','docx','hwpx',korean,'word/document.xml'],
+  ['Zip from portal','hwp','docx','hwpx',korean,'word/document.xml'],
+  ['Binary from portal','hwpx','docx','hwp',korean,'word/document.xml'],
+ ]:legacy?[
+  ['Memo','doc','docx','word','Legacy DOC text extraction','word/document.xml'],
+  ['Template','dot','docx','word','Legacy DOC text extraction','word/document.xml'],
+  ['Briefing','ppt','pptx','slides','Legacy PPT title','ppt/slides/slide1.xml'],
+ ]:[
+  ['Memo','odt','docx','text','Memo heading','word/document.xml'],
+  ['Template','ott','docx','text','Template heading','word/document.xml'],
+  ['Briefing','odp','pptx','presentation','Briefing title','ppt/slides/slide1.xml'],
+  ['Theme','otp','pptx','presentation','Theme title','ppt/slides/slide1.xml'],
+ ]
+ const sources=[]
+ let hancomInputs
+ if(hancom){
+  const {HwpDocument,initSync}=await import('@rhwp/core')
+  const require=createRequire(import.meta.url)
+  initSync({module:await readFile(require.resolve('@rhwp/core/rhwp_bg.wasm'))})
+  const document=HwpDocument.createEmpty()
+  try {
+   document.createBlankDocument()
+   document.insertText(0,0,0,korean)
+   hancomInputs={hwp:Buffer.from(document.exportHwp()),hwpx:Buffer.from(document.exportHwpx()),encrypted:Buffer.from(document.exportHwpWithPassword('fixture-password'))}
+  } finally {document.free()}
+ }
+ for(const [name,ext,,kind,content] of docs){
+  if(hancom){
+   sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer:hancomInputs[kind]})
+   continue
+  }
+  if(legacy){
+   const fixture=kind==='word'?'doc2docx/tests/fixtures/text-basic.doc':'file-parse/tests/fixtures/legacy-sample.ppt'
+   let buffer=await readFile(new URL(`../../../../packages/${fixture}`,import.meta.url))
+   if(ext==='dot'){
+    const template=CFB.read(buffer,{type:'buffer'}),word=CFB.find(template,'/WordDocument')
+    word.content.writeUInt16LE(word.content.readUInt16LE(10)|1,10)
+    buffer=CFB.write(template,{type:'buffer'})
+   }
+   sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer})
+   continue
+  }
+  const zip=new JSZip()
+  zip.file('mimetype',`application/vnd.oasis.opendocument.${kind}${ext==='ott'||ext==='otp'?'-template':''}`)
+  const body=kind==='text'?`<text:h text:outline-level="1">${content}</text:h>`:
+   `<draw:page draw:name="1"><draw:frame svg:x="1cm" svg:y="1cm" svg:width="10cm" svg:height="2cm"><draw:text-box><text:p>${content}</text:p></draw:text-box></draw:frame></draw:page>`
+  zip.file('content.xml',`<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`)
+  sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer:await zip.generateAsync({type:'nodebuffer'})})
+ }
+ const token=f.alice.token,csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
+ const workspace=createWorkspaceService(f.transactions)
+ const parent=hancom?await workspace.createFolder(token,{name:'Reports',parentId:null}):null
+ const destination=parent?await workspace.createFolder(token,{name:'Converted',parentId:parent.id}):null
+ const convert=(buffer,headers={})=>app.inject({method:'POST',url:`/api/v1/files/convert-${docs[0][1]}`,payload:buffer,
+  headers:{origin,'content-type':'application/octet-stream',...headers}})
+ assert.equal((await convert(sources[0].buffer)).statusCode,401)
+ const auth={cookie:`${SESSION_COOKIE}=${token}`,'x-csrf-token':csrf.sessionToken(token)}
+ assert.equal((await convert(hancom?hancomInputs.encrypted:sources[2].buffer,auth)).statusCode,400)
+ const malformed=hancom?await JSZip.loadAsync(hancomInputs.hwpx):new JSZip()
+ malformed.file(hancom?'Contents/section0.xml':'content.xml','<!DOCTYPE doc [<!ENTITY value "test">]><doc>&value;</doc>')
+ assert.equal((await convert(await malformed.generateAsync({type:'nodebuffer'}),auth)).statusCode,400)
+ // Selecting a file for conversion must not publish or store its source bytes.
+ await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+ const dialog=page.getByRole('dialog',{name:'上传文件',exact:true}),picker=dialog.locator('input[type=file]')
+ const accept=(await picker.getAttribute('accept')).split(',')
+ for(const [,ext] of docs)assert.ok(accept.includes('.'+ext))
+ await picker.setInputFiles(sources)
+ if(destination){
+  const row=dialog.getByRole('listitem').filter({hasText:'Report.hwp'})
+  await row.getByText('保存转换副本', {exact:true}).click()
+  await row.getByLabel('副本名称', {exact:true}).fill('Filed report')
+  await row.getByLabel('保存位置', {exact:true}).selectOption({label:'Reports / Converted'})
+ }
+ await dialog.getByRole('button',{name:`开始上传（${docs.length}）`,exact:true}).click()
+ const prompt=dialog.getByRole('group',{name:hancom?'Hancom 转换':legacy?'旧版 Office 转换':'OpenDocument 转换',exact:true})
+ for(const [index,[name,ext,format]] of docs.entries()){
+  await expect(prompt).toContainText(`${name}.${ext}`,{timeout:30000})
+  await expect(prompt).toContainText(format.toUpperCase()+' 副本')
+  if(index===0)assert.deepEqual(await workspaceFiles(),[])
+  if(hancom)await prompt.getByRole('checkbox',{name:'下次直接转换'}).check()
+  await prompt.getByRole('button',{name:'转换并打开',exact:true}).click()
+  if(hancom)break
+ }
+ await expect(dialog).toContainText(`已完成 ${docs.length}`,{timeout:60000})
+ await dialog.getByRole('button',{name:'完成',exact:true}).click()
+ const stored=await workspaceFiles()
+ const savedName=(name,format)=>`${hancom&&name==='Report'?'Filed report':name}.${format}`
+ assert.deepEqual(stored.map(item=>item.name).sort(),docs.map(([name,,format])=>savedName(name,format)).sort())
+ if(destination)assert.deepEqual((await workspace.listFiles(token,{folderId:destination.id})).files.map(file=>file.name),['Filed report.docx'])
+ for(const [name,,format,,content,part] of docs){
+  const file=stored.find(item=>item.name===savedName(name,format))
+  assert.equal(file.format,format)
+  await page.getByRole('tab',{name:file.name,exact:true}).click()
+  const native=page.frameLocator(`iframe[data-document-id="${file.id}"]`)
+  await expect(native.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+  const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.id,file.revision))
+  assert.ok((await zip.file(part).async('string')).includes(content),file.name)
+ }
+ if(hancom){
+  const saved=await f.preferences.get(token)
+  assert.equal(saved.skipHwpImportPrompt,true)
+  assert.equal(saved.skipOdtImportPrompt,false)
+  const uploadAgain=async name=>{
+   await page.getByRole('tab',{name:'首页',exact:true}).click()
+   await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+   await picker.setInputFiles({...sources[1],name})
+   await dialog.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+  }
+  await page.reload()
+  await uploadAgain('Remembered.hwpx')
+  await expect(dialog).toContainText('已完成 1',{timeout:30000})
+  await dialog.getByRole('button',{name:'完成',exact:true}).click()
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await accountAction(page,'个人设置')
+  const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  const confirm=settings.getByRole('switch',{name:'确认文件格式转换',exact:true})
+  await expect(confirm).not.toBeChecked()
+  await confirm.check()
+  await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+  await expect(settings).toContainText('个人偏好已保存')
+  await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+  assert.equal((await f.preferences.get(token)).skipHwpImportPrompt,false)
+  await uploadAgain('Ask again.hwpx')
+  await expect(prompt).toContainText('Ask again.hwpx')
+  await prompt.getByRole('button',{name:'跳过此文件',exact:true}).click()
+  await expect(dialog).toContainText('已跳过 1')
+  assert.equal((await workspaceFiles()).some(file=>file.name==='Ask again.docx'),false)
+ }
+})
+
+test('workspace document theme updates the open Word and Excel canvases without saving either file',{skip:!built,timeout:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+6
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',theme:'dark',documentTheme:'light',showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),nativeDocsDirectory:officeBrowserAsset('docs'),
+  nativeSheetsDirectory:officeBrowserAsset('sheets'),...sheets,
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const originals=[await docxBytes(),await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))]
+ const files=[]
+ for(const [index,name] of ['theme.docx','theme.xlsx'].entries())files.push((await importFile(f,f.alice.token,originals[index],name)).file)
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ for(const file of files){
+  await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+  await expect(frame(file.fileId).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+  await expect(frame(file.fileId).locator('html')).toHaveAttribute('data-doc-theme','light')
+  await expect(frame(file.fileId).locator('html')).toHaveAttribute('data-theme','dark')
+ }
+ const word=frame(files[0].fileId).locator('.workspace').first(),excel=frame(files[1].fileId).locator('html')
+ await expect(word).not.toHaveClass(/page-dark/)
+ await expect(excel).not.toHaveClass(/univer-dark/)
+ async function setTheme(documentTheme,lightUi=false){
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  await accountAction(page,'个人设置')
+  const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  if(lightUi){
+   const light=settings.getByRole('radio',{name:'浅色',exact:true})
+   await light.press('Space')
+   await expect(light).toBeChecked()
+  }
+  await settings.getByLabel('文档主题',{exact:true}).selectOption(documentTheme)
+  await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+  await expect(settings).toContainText('个人偏好已保存')
+  await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+ }
+ await setTheme('dark',true)
+ await expect(page.locator('html')).toHaveAttribute('data-theme','light')
+ await expect(word).toHaveClass(/page-dark/)
+ await expect(excel).toHaveClass(/univer-dark/)
+ await setTheme('follow')
+ await expect(word).not.toHaveClass(/page-dark/)
+ await expect(excel).not.toHaveClass(/univer-dark/)
+ for(const [index,file] of files.entries()){
+  await expect(frame(file.fileId).locator('html')).not.toHaveAttribute('data-doc-theme',/./)
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),originals[index])
+ }
+})
+
+test('workspace converts a PDF into named editable Office copies in the selected folder',{skip:!built,timeout:150000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+16
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ const token=f.alice.token,workspace=createWorkspaceService(f.transactions)
+ await f.preferences.update(token,{language:'en',autoSave:false,showAssistant:false})
+ const folder=await workspace.createFolder(token,{name:'Converted reports',parentId:null})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({
+  DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),
+  DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+  nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),nativePdfDirectory:officeBrowserAsset('pdf'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},...sheets,
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([600,800]).drawText('Quarterly revenue example',{x:65,y:710,size:18})
+ const original=Buffer.from(await pdf.save()),{file}=await importFile(f,token,original,'Quarterly report.pdf')
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{
+  headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password},
+ })).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ const source=frame(file.fileId)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const selectFormat=async label=>{
+  await source.getByRole('button',{name:'PDF Converter',exact:true}).click()
+  await source.getByRole('button',{name:'PDF to '+label,exact:true}).click()
+ }
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await selectFormat('Word')
+ await expect(destination.getByRole('textbox',{name:'File name'})).toHaveValue('Quarterly report.docx',{timeout:25000})
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal((await f.files.listFiles(token)).files.length,1)
+
+ let committed
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(committed)return route.continue()
+  const response=await route.fetch()
+  assert.equal(response.status(),200)
+  committed=(await response.json()).file
+  await route.abort()
+ })
+ for(const [label,format,part] of [
+  ['Word','docx','word/document.xml'],['Excel','xlsx','xl/worksheets/sheet1.xml'],['PPT','pptx','ppt/slides/slide1.xml'],
+ ]){
+  await page.getByRole('tab',{name:'Quarterly report.pdf',exact:true}).click()
+  if(format==='pptx'){
+   await source.getByRole('button',{name:'Pages',exact:true}).click()
+   await source.getByRole('button',{name:'Rotate right',exact:true}).click()
+   await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+   await source.getByRole('button',{name:'Home',exact:true}).click()
+  }
+  await selectFormat(label)
+  await destination.getByRole('textbox',{name:'File name'}).fill('Converted '+label)
+  await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
+  await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+  if(format==='docx'){
+   const confirm=source.getByRole('button',{name:'确认副本保存结果',exact:true})
+   await expect(confirm).toBeVisible({timeout:30000})
+   await confirm.click()
+   await expect(page).toHaveURL(origin+'/#/file/'+committed.fileId)
+   assert.deepEqual(finishes,[finishes[0],finishes[0]])
+  }
+  const tabName='Converted '+label+'.'+format
+  await expect(page.getByRole('tab',{name:tabName,exact:true})).toHaveAttribute('aria-selected','true',{timeout:30000})
+  const entry=(await workspace.listFiles(token,{folderId:folder.id})).files.find(item=>item.name===tabName)
+  assert.ok(entry)
+  const {file:saved}=await f.files.openFile(token,entry.id)
+  const archive=await JSZip.loadAsync(await f.files.readFile(token,entry.id,saved.revision))
+  const document=await archive.file(part).async('string')
+  if(format==='pptx'){
+   assert.match(await archive.file('ppt/presentation.xml').async('string'),/<p:sldSz\b[^>]*cx="10160000"[^>]*cy="7620000"/)
+   assert.match(document,/<p:pic>/)
+   assert.ok(archive.file(/^ppt\/media\/[^/]+\.png$/).length)
+  }else assert.match(document,/Quarterly revenue example/)
+  await expect(frame(entry.id).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ }
+ assert.equal((await f.files.listFiles(token)).files.length,4)
+ await page.getByRole('tab',{name:'Quarterly report.pdf',exact:true}).click()
+ await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ assert.equal((await f.files.openFile(token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),original)
+})
+
+test('workspace PowerPoint exports a named PDF to a folder and reopens it',{skip:!built,timeout:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+17
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ const token=f.alice.token,workspace=createWorkspaceService(f.transactions)
+ await f.preferences.update(token,{language:'en',autoSave:false,showAssistant:false})
+ const sourceFolder=await workspace.createFolder(token,{name:'Presentations',parentId:null})
+ const folder=await workspace.createFolder(token,{name:'Published PDF',parentId:null})
+ const deck=await JSZip.loadAsync(await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url)))
+ const hidden='ppt/slides/slide2.xml'
+ deck.file(hidden,(await deck.file(hidden).async('string')).replace(/<p:sld(?=\s)/,'<p:sld show="0"'))
+ const original=await deck.generateAsync({type:'nodebuffer'})
+ const {file}=await importFile(f,token,original,'Board review.pptx')
+ await workspace.moveFile(token,file.fileId,{folderId:sourceFolder.id})
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+  nativeSlidesDirectory:officeBrowserAsset('slides'),nativePdfDirectory:officeBrowserAsset('pdf'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000},acceptDownloads:true})
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{
+  headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password},
+ })).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ const source=frame(file.fileId)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const notes=source.locator('.notes-pane textarea')
+ await notes.fill('Unsaved review note')
+ const exportPdf=async()=>{
+  await source.locator('.ribbon-tab-file').click()
+  await source.getByRole('button',{name:'Export as PDF…',exact:true}).click()
+ }
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ const name=destination.getByRole('textbox',{name:'File name'})
+ const location=destination.getByRole('combobox',{name:'Folder',exact:true})
+ await exportPdf()
+ await expect(name).toHaveValue('Board review.pdf',{timeout:6000})
+ await expect(location).toHaveValue(sourceFolder.id)
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal((await f.files.listFiles(token)).files.length,1)
+ await exportPdf()
+ await name.fill('Local review')
+ const [download]=await Promise.all([
+  page.waitForEvent('download'),
+  destination.getByRole('button',{name:'Download PDF',exact:true}).click(),
+ ])
+ assert.equal(download.suggestedFilename(),'Local review.pdf')
+ const local=await PDFDocument.load(await readFile(await download.path()))
+ assert.equal(local.getPageCount(),1)
+ assert.deepEqual(local.getPage(0).getSize(),{width:13.333*72,height:7.5*72})
+ assert.equal((await f.files.listFiles(token)).files.length,1)
+ await expect(source.locator('.status-msg')).toContainText('Local review.pdf')
+
+ let committed
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(committed)return route.continue()
+  const response=await route.fetch()
+  assert.equal(response.status(),200)
+  committed=(await response.json()).file
+  await route.abort()
+ })
+ await exportPdf()
+ await name.fill('Board proof')
+ await location.selectOption(folder.id)
+ await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=source.getByRole('button',{name:'Confirm PDF save',exact:true})
+ await expect(confirm).toBeVisible({timeout:25000})
+ await confirm.click()
+ await expect(page).toHaveURL(origin+'/#/file/'+committed.fileId)
+ await expect(frame(committed.fileId).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ const files=(await workspace.listFiles(token,{folderId:folder.id})).files
+ assert.deepEqual(files.map(item=>[item.id,item.name]),[[committed.fileId,'Board proof.pdf']])
+ const output=await PDFDocument.load(await f.files.readFile(token,committed.fileId,committed.revision))
+ assert.equal(output.getPageCount(),1)
+ assert.deepEqual(output.getPage(0).getSize(),local.getPage(0).getSize())
+ await page.getByRole('tab',{name:'Board review.pptx',exact:true}).click()
+ await expect(notes).toHaveValue('Unsaved review note')
+ await expect(source.locator('button.qa-btn[aria-label^="Save"]')).toBeEnabled()
+ assert.equal((await f.files.openFile(token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),original)
+})
+
+test('workspace file menus, shortcuts and tab recovery work across four native editors',{skip:!built,timeout:210000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)
+ const origin='http://localhost:'+port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({
+  DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),
+  DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),
+  DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},localShellDirectory:officeBrowserAsset('local-shell'),
+  nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),
+  nativePdfDirectory:officeBrowserAsset('pdf'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},
+  ...sheets,
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300]).drawText('Workspace print PDF')
+ const cases=[
+  ['docx',await docxBytes(),'.modal.print-dialog'],
+  ['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)),'.format-cells-dialog.print-dialog'],
+  ['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url)),'.modal.print-dialog'],
+  ['pdf',Buffer.from(await pdf.save()),'.pdf-modal[role="dialog"][aria-label="Print"]'],
+ ]
+ const documents=[]
+ for(const [format,bytes,dialog] of cases){
+  const name='workspace-print.'+format
+  const {file}=await importFile(f,f.alice.token,bytes,name)
+  documents.push({format,name,file,dialog})
+ }
+ const browser=await launchTestBrowser()
+ f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1050}})
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ const cancelUpload=async()=>{
+  await expect(upload).toBeVisible()
+  await upload.getByRole('button',{name:'取消',exact:true}).press('Enter')
+  await expect(upload).toBeHidden()
+ }
+ await page.keyboard.press('ControlOrMeta+o')
+ await cancelUpload()
+ const editorFrame=({file})=>page.locator(`.workspace-document-frame[data-document-id="${file.fileId}"]`)
+ const frame=document=>editorFrame(document).contentFrame()
+ const tabFor=documentName=>page.getByRole('tab',{name:documentName,exact:true})
+ const tabMenuItem=async(documentName,label)=>{
+  await tabFor(documentName).click({button:'right'})
+  return page.getByRole('menuitem',{name:label,exact:true})
+ }
+ const openFromFileMenu=async document=>{
+  const editor=frame(document)
+  await editor.getByRole('button',{name:'File',exact:true}).click()
+  const open=editor.getByRole('button',{name:/^Open…/})
+  await expect(open,document.name).toBeEnabled()
+  await open.click()
+  await expect(upload,document.name).toBeVisible()
+ }
+ const openFromEditor=async document=>{
+  await frame(document).locator('button:enabled:visible').first().focus()
+  await expect(editorFrame(document),document.name).toBeFocused()
+  await page.keyboard.press('ControlOrMeta+o')
+ }
+ for(const document of documents){
+  await page.evaluate(id=>{location.hash='#/file/'+id},document.file.fileId)
+  await expect(frame(document).locator('html'),document.name).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ }
+ for(const document of documents){
+  const tab=page.getByRole('tab',{name:document.name,exact:true})
+  await tab.click()
+  await expect(tab).toHaveAttribute('aria-selected','true')
+  await expect(page.locator(`.workspace-document[data-file-id="${document.file.fileId}"] .document-loading-content`)).toHaveAttribute('data-loading','false')
+  await tab.focus()
+  await expect(tab).toBeFocused()
+  if(document.format==='docx'||document.format==='pptx'){
+   const zoom=frame(document).locator('.zoom-value:visible')
+   await page.keyboard.press('ControlOrMeta+0')
+   await expect(zoom).toHaveText('100%')
+   await page.keyboard.press('ControlOrMeta+Equal')
+   const percent=async()=>Number.parseInt(await zoom.innerText(),10)
+   await expect.poll(percent).toBeGreaterThan(100)
+   await frame(document).locator('button:enabled:visible').first().focus()
+   await expect(editorFrame(document),document.name).toBeFocused()
+   await page.keyboard.press('ControlOrMeta+0')
+   await expect(zoom).toHaveText('100%')
+   await page.keyboard.press('ControlOrMeta+Minus')
+   await expect.poll(percent).toBeLessThan(100)
+   await page.keyboard.press('ControlOrMeta+0')
+   await expect(zoom).toHaveText('100%')
+   await tab.focus()
+  }
+  await page.keyboard.press('ControlOrMeta+p')
+  const dialog=frame(document).locator(document.dialog)
+  await expect(dialog,document.name).toBeVisible()
+  for(const inactive of documents.filter(item=>item!==document)){
+   await expect(frame(inactive).locator(inactive.dialog),inactive.name).toHaveCount(0)
+  }
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+  await expect(dialog).toBeHidden()
+  await tab.focus()
+  await page.keyboard.press('ControlOrMeta+Shift+s')
+  const copyDialog=frame(document).getByRole('dialog',{name:'Save a copy to your workspace'})
+  await expect(copyDialog.getByRole('textbox',{name:'File name'}),document.name).toHaveValue(document.name)
+  for(const inactive of documents.filter(item=>item!==document)){
+   await expect(frame(inactive).getByRole('dialog',{name:'Save a copy to your workspace'}),inactive.name).toHaveCount(0)
+  }
+  await copyDialog.getByRole('button',{name:'Cancel',exact:true}).click()
+  await expect(copyDialog).toHaveCount(0)
+  await tabFor('首页').click()
+  await (await tabMenuItem(document.name,'打印…')).click()
+  await expect(tab).toHaveAttribute('aria-selected','true')
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+  await expect(dialog).toBeHidden()
+  await tabFor('首页').click()
+  await (await tabMenuItem(document.name,'另存为…')).click()
+  await expect(tab).toHaveAttribute('aria-selected','true')
+  await expect(copyDialog.getByRole('textbox',{name:'File name'})).toHaveValue(document.name)
+  await copyDialog.getByRole('button',{name:'Cancel',exact:true}).click()
+  await expect(copyDialog).toHaveCount(0)
+  await openFromEditor(document)
+  await cancelUpload()
+  await openFromFileMenu(document)
+  await cancelUpload()
+  await expect(tab).toHaveAttribute('aria-selected','true')
+  assert.equal((await f.files.openFile(f.alice.token,document.file.fileId)).file.revision,document.file.revision)
+ }
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,documents.length)
+ const heads=new Map(documents.map(({file})=>[file.fileId,file.revision]))
+ const revision=async id=>(await f.files.openFile(f.alice.token,id)).file.revision
+ for(const document of documents){
+  const {file,format}=document
+  const tab=page.getByRole('tab',{name:document.name,exact:true})
+  await tab.click()
+  await expect(tab).toHaveAttribute('aria-selected','true')
+  await expect(editorFrame(document)).toBeVisible()
+  const editor=frame(document)
+  let verify
+  if(format==='docx'){
+   const body=editor.locator('.tiptap.doc-page[contenteditable="true"]').first()
+   await body.click()
+   await page.keyboard.press('ControlOrMeta+Home')
+   await page.keyboard.insertText('Saved from workspace tab')
+   await page.keyboard.press('Enter')
+   await expect(editor.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
+   verify=async bytes=>assert.match(await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string'),/Saved from workspace tab/)
+  }else if(format==='xlsx'){
+   const html=editor.locator('html')
+   const value=()=>html.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue())
+   await expect.poll(value).toBe(12.5)
+   await html.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25))
+   await expect.poll(value).toBe(21.25)
+   verify=async bytes=>assert.match(await (await JSZip.loadAsync(bytes)).file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*\br="A2"[^>]*>\s*<v>21\.25<\/v>/)
+  }else if(format==='pptx'){
+   await editor.getByRole('button',{name:'Design',exact:true}).click()
+   await editor.getByRole('button',{name:'Slide Size',exact:true}).click()
+   const resized=page.waitForResponse(response=>response.url().endsWith('/slides/slides')&&response.status()===200)
+   await editor.getByRole('button',{name:'Standard (4:3)',exact:true}).click()
+   await (await resized).finished()
+   await expect.poll(()=>editor.locator('html').evaluate(()=>window.slidesApi.getSlideSize())).toEqual({cx:9144000,cy:6858000})
+   await expect.poll(()=>editor.locator('html').evaluate(()=>window.slidesApi.isDirty())).toBe(true)
+   verify=async bytes=>assert.match(await (await JSZip.loadAsync(bytes)).file('ppt/presentation.xml').async('string'),/<p:sldSz\b[^>]*\bcx="9144000"[^>]*\bcy="6858000"/)
+  }else{
+   await editor.getByRole('button',{name:'Pages',exact:true}).click()
+   await editor.getByRole('button',{name:'Rotate right',exact:true}).click()
+   await expect(editor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+   verify=async bytes=>assert.equal((await PDFDocument.load(bytes)).getPage(0).getRotation().angle,90)
+  }
+  assert.equal(await revision(file.fileId),file.revision)
+  await tab.focus()
+  await expect(tab).toBeFocused()
+  if(format==='pdf'||format==='pptx'){
+   await tabFor('首页').click()
+   await (await tabMenuItem(document.name,'保存')).click()
+   await expect(tab).toHaveAttribute('aria-selected','true')
+  }else await page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(()=>revision(file.fileId),{message:document.name,timeout:30000}).not.toBe(file.revision)
+  const saved=await revision(file.fileId)
+  await verify(await f.files.readFile(f.alice.token,file.fileId,saved))
+  heads.set(file.fileId,saved)
+  for(const [id,expected] of heads)assert.equal(await revision(id),expected)
+ }
+ await expect(page.getByRole('tab',{name:documents.at(-1).name,exact:true})).toHaveAttribute('aria-selected','true')
+ const name='shortcut-open.docx'
+ await openFromFileMenu(documents.at(-1))
+ await upload.locator('input[type=file]').setInputFiles({name,mimeType:'application/octet-stream',buffer:await docxBytes()})
+ await upload.getByRole('button',{name:/^开始上传/}).click()
+ await expect(upload).toContainText('已上传并打开',{timeout:15000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ await expect(page.getByRole('tab',{name,exact:true})).toHaveAttribute('aria-selected','true')
+ await expect(page.frameLocator(`iframe[title="${name}"]`).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect(page.getByRole('tab',{name:documents.at(-1).name,exact:true})).toHaveAttribute('aria-selected','false')
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,documents.length+1)
+
+ const [word,sheetTab,slides,pdfTab]=documents
+ await tabFor(pdfTab.name).click()
+ const pdfEditor=frame(pdfTab)
+ await pdfEditor.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await expect(pdfEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ const pdfRevision=heads.get(pdfTab.file.fileId)
+ assert.equal(await revision(pdfTab.file.fileId),pdfRevision)
+
+ async function closeRightWithPrompt(accept){
+  const move=await tabMenuItem(sheetTab.name,'关闭右侧页签')
+  const pendingPrompt=page.waitForEvent('dialog',{timeout:15000})
+  const click=move.click()
+  const dialog=await pendingPrompt
+  assert.equal(dialog.message(),'PDF 有未保存修改。保存并关闭？')
+  if(accept)await dialog.accept()
+  else await dialog.dismiss()
+  await click
+ }
+ await closeRightWithPrompt(false)
+ await expect(tabFor(slides.name)).toHaveCount(0)
+ await expect(tabFor(pdfTab.name)).toBeVisible()
+ await expect(tabFor(name)).toBeVisible()
+ assert.equal(await revision(pdfTab.file.fileId),pdfRevision)
+ await closeRightWithPrompt(true)
+ await expect.poll(()=>revision(pdfTab.file.fileId),{timeout:30000}).not.toBe(pdfRevision)
+ try{await expect(tabFor(pdfTab.name)).toHaveCount(0,{timeout:15000})}catch(error){
+  t.diagnostic(JSON.stringify(await pdfEditor.locator('.dyoffice-pdf-persistence-state').evaluate(node=>({dirty:node.dataset.dirty,text:node.textContent,attention:node.dataset.attention}))))
+  throw error
+ }
+ await expect(tabFor(name)).toHaveCount(0)
+ const closedPdf=await f.files.readFile(f.alice.token,pdfTab.file.fileId,await revision(pdfTab.file.fileId))
+ assert.equal((await PDFDocument.load(closedPdf)).getPage(0).getRotation().angle,180)
+
+ await (await tabMenuItem(sheetTab.name,'关闭其他页签')).click()
+ await expect(tabFor(word.name)).toHaveCount(0)
+ await expect(tabFor(sheetTab.name)).toBeVisible()
+ await (await tabMenuItem(sheetTab.name,'关闭所有页签')).click()
+ await expect(tabFor('首页')).toHaveAttribute('aria-selected','true')
+ await expect(page.locator('.workspace-document-frame')).toHaveCount(0)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,documents.length+1)
+ await f.files.trashFile(f.alice.token,sheetTab.file.fileId)
+ let renamed='renamed-before-reopen.docx'
+ await f.files.renameFile(f.alice.token,word.file.fileId,renamed)
+ await (await tabMenuItem('首页','重新打开已关闭的页签')).click()
+ await expect(tabFor(renamed)).toHaveAttribute('aria-selected','true',{timeout:15000})
+ await expect(tabFor(sheetTab.name)).toHaveCount(0)
+ await expect(frame(word).locator('.tiptap.doc-page')).toContainText('Saved from workspace tab',{timeout:30000})
+ assert.equal(await revision(word.file.fileId),heads.get(word.file.fileId))
+ await (await tabMenuItem(renamed,'重新打开已关闭的页签')).click()
+ await expect(tabFor(name)).toHaveAttribute('aria-selected','true',{timeout:15000})
+ const tabOrder=()=>page.getByRole('tablist').getByRole('tab')
+ const activeFrame=page.locator(`iframe[title="${name}"]`)
+ await activeFrame.evaluate(frame=>{frame.dataset.moveProbe='same-instance'})
+ const moveLeft=await tabMenuItem(name,'向左移动')
+ await expect(page.getByRole('menuitem',{name:'向右移动',exact:true})).toHaveAttribute('aria-disabled','true')
+ await moveLeft.click()
+ await expect.poll(()=>tabOrder().evaluateAll(tabs=>tabs.map(tab=>tab.getAttribute('aria-label')))).toEqual(['首页',name,renamed])
+ await (await tabMenuItem(name,'向右移动')).click()
+ await expect.poll(()=>tabOrder().evaluateAll(tabs=>tabs.map(tab=>tab.getAttribute('aria-label')))).toEqual(['首页',renamed,name])
+ await (await tabMenuItem(renamed,'向右移动')).click()
+ await expect.poll(()=>tabOrder().evaluateAll(tabs=>tabs.map(tab=>tab.getAttribute('aria-label')))).toEqual(['首页',name,renamed])
+ await expect(tabFor(name)).toHaveAttribute('aria-selected','true')
+ await expect(activeFrame).toHaveAttribute('data-move-probe','same-instance')
+ await page.reload()
+ await expect.poll(()=>tabOrder().evaluateAll(tabs=>tabs.map(tab=>tab.getAttribute('aria-label'))),{timeout:15000}).toEqual(['首页',name,renamed])
+ await expect(tabFor(name)).toHaveAttribute('aria-selected','true')
+ await expect(editorFrame(word)).toHaveCount(0)
+ await (await tabMenuItem(renamed,'打印…')).click()
+ await expect(tabFor(renamed)).toHaveAttribute('aria-selected','true')
+ const dormantPrint=frame(word).locator(word.dialog)
+ await expect(dormantPrint).toBeVisible({timeout:30000})
+ await dormantPrint.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(dormantPrint).toBeHidden()
+
+ await tabFor('首页').click()
+ const recent=(filename)=>page.locator('.recent-row').filter({has:page.getByText(filename,{exact:true})})
+ await recent(renamed).locator('.more-btn').click()
+ await page.getByRole('menuitem',{name:'Duplicate',exact:true}).click()
+ const copyName='renamed-before-reopen Copy.docx'
+ await expect(recent(copyName)).toBeVisible({timeout:15000})
+ const sourceBytes=await f.files.readFile(f.alice.token,word.file.fileId,heads.get(word.file.fileId))
+ const copies=async()=>(await f.files.listFiles(f.alice.token)).files.filter(file=>file.name.startsWith('renamed-before-reopen Copy'))
+ const [copy]=await copies()
+ assert.equal(copy.name,copyName)
+ assert.deepEqual(await f.files.readFile(f.alice.token,copy.id,copy.revision),sourceBytes)
+
+ const finishPattern='**/duplicate/*/finish'
+ let publishedStatus,publishedUrl
+ await page.route(finishPattern,async route=>{
+  publishedUrl=route.request().url()
+  publishedStatus=(await route.fetch()).status()
+  await route.abort('failed')
+ },{times:1})
+ await (await tabMenuItem(renamed,'创建副本')).click()
+ await expect(page.locator('.web-notice')).toContainText('副本尚未确认，请再次执行创建副本以核对结果。',{timeout:15000})
+ assert.equal(publishedStatus,200)
+ assert.equal((await copies()).length,2)
+ const confirmed=page.waitForResponse(response=>response.url()===publishedUrl&&response.status()===200)
+ await (await tabMenuItem(renamed,'创建副本')).click()
+ await confirmed
+ await expect(page.locator('.web-notice')).toHaveCount(0)
+ await expect(recent('renamed-before-reopen Copy 2.docx')).toBeVisible({timeout:15000})
+ assert.equal((await copies()).length,2)
+ assert.equal(await revision(word.file.fileId),heads.get(word.file.fileId))
+
+ await tabFor(renamed).click()
+ const draft=frame(word).locator('.tiptap.doc-page[contenteditable="true"]').first()
+ await draft.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText('Draft kept through tab rename')
+ await expect(frame(word).locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
+ await (await tabMenuItem(renamed,'重命名')).click()
+ const renameInput=page.locator('.tab-rename-input')
+ await expect(renameInput).toHaveValue(renamed)
+ await renameInput.fill('invalid.xlsx')
+ await renameInput.press('Enter')
+ await expect(page.locator('.web-notice')).toBeVisible()
+ await expect(tabFor(renamed)).toHaveAttribute('aria-selected','true')
+ await tabFor(renamed).dblclick()
+ await expect(renameInput).toHaveValue(renamed)
+ await renameInput.fill('Cancelled rename')
+ await renameInput.press('Escape')
+ await expect(renameInput).toHaveCount(0)
+ await expect(tabFor(renamed)).toBeVisible()
+ await (await tabMenuItem(renamed,'重命名')).click()
+ await renameInput.fill('renamed-with-draft')
+ await renameInput.press('Enter')
+ renamed='renamed-with-draft.docx'
+ await expect(tabFor(renamed)).toHaveAttribute('aria-selected','true')
+ await expect(draft).toContainText('Draft kept through tab rename')
+ assert.equal((await f.files.openFile(f.alice.token,word.file.fileId)).name,renamed)
+ assert.equal(await revision(word.file.fileId),heads.get(word.file.fileId))
+
+ const workspace=createWorkspaceService(f.transactions)
+ const project=await workspace.createFolder(f.alice.token,{name:'Tab Reveal Project',parentId:null})
+ const reports=await workspace.createFolder(f.alice.token,{name:'Tab Reveal Reports',parentId:project.id})
+ await workspace.moveFile(f.alice.token,word.file.fileId,{folderId:reports.id})
+ await tabFor(name).click()
+ const reveal=await tabMenuItem(renamed,'打开所在文件夹')
+ await expect(reveal).toBeVisible()
+ await reveal.click()
+ await expect(tabFor('首页')).toHaveAttribute('aria-selected','true')
+ const located=recent(renamed)
+ await expect(located).toBeVisible({timeout:15000})
+ await expect(located.getByRole('checkbox')).toBeChecked()
+ await expect(page.locator('.home')).toContainText('Tab Reveal Reports')
+ await expect(recent(copyName)).toHaveCount(0)
+ await expect(tabFor(name)).toBeVisible()
+ await expect(tabFor(renamed)).toBeVisible()
+
+ await f.files.trashFile(f.alice.token,word.file.fileId)
+ await tabFor(name).click()
+ await (await tabMenuItem(renamed,'打开所在文件夹')).click()
+ await expect(page.locator('.web-notice')).toContainText('文件不存在或已移入回收站')
+ await expect(tabFor(name)).toHaveAttribute('aria-selected','true')
+
+})
+
+test('pinned workspace tabs support copying, splitting and safe window moves',{skip:!built,timeout:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+1
+ const origin='http://localhost:'+port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},localShellDirectory:officeBrowserAsset('local-shell'),
+  nativePdfDirectory:officeBrowserAsset('pdf'),
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300])
+ const bytes=Buffer.from(await pdf.save())
+ const names=['pinned.pdf','ordinary.pdf']
+ const files=[]
+ for(const name of names)files.push((await importFile(f,f.alice.token,bytes,name)).file)
+ const browser=await launchTestBrowser()
+ f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ const tab=name=>page.getByRole('tab',{name,exact:true})
+ const editor=name=>page.locator(`iframe[title="${name}"]`)
+ for(let i=0;i<files.length;i++){
+  await page.evaluate(id=>{location.hash='#/file/'+id},files[i].fileId)
+  await expect(editor(names[i]).contentFrame().locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ }
+ async function chooseTabMenuItem(label){
+  await tab(names[0]).click({button:'right'})
+  await page.getByRole('menuitem',{name:label,exact:true}).click()
+ }
+ const dropOnEditor=(filename)=>editor(names[1]).contentFrame().locator('body').evaluate((body,{filename,bytes})=>{
+  const transfer=new DataTransfer()
+  transfer.items.add(new File([Uint8Array.from(bytes)],filename,{type:'application/octet-stream'}))
+  body.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:transfer}))
+  return !body.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}))
+ },{filename,bytes:[...bytes]})
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ assert.equal(await dropOnEditor('ignored.bin'),true)
+ await expect(upload).toHaveCount(0)
+ assert.equal(await dropOnEditor('dragged.pdf'),true)
+ await expect(upload).toContainText('dragged.pdf')
+ assert.equal((await f.files.listFiles(f.alice.token)).files.some(file=>file.name==='dragged.pdf'),false)
+ await upload.getByRole('button',{name:'取消',exact:true}).press('Enter')
+ await expect(upload).toBeHidden()
+ await expect(tab(names[1])).toHaveAttribute('aria-selected','true')
+ await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin})
+ const readClipboard=()=>page.evaluate(()=>navigator.clipboard.readText())
+ const link=origin+'/#/file/'+files[0].fileId
+ await chooseTabMenuItem('复制文件名')
+ await expect.poll(readClipboard).toBe(names[0])
+ await expect(tab(names[1])).toHaveAttribute('aria-selected','true')
+ await chooseTabMenuItem('复制工作区链接')
+ await expect.poll(readClipboard).toBe(link)
+
+ await tab('首页').click()
+ await page.evaluate(()=>navigator.clipboard.writeText('before copying from home'))
+ const recent=page.locator('.recent-row').filter({has:page.getByText(names[0],{exact:true})})
+ await recent.locator('.more-btn').click()
+ await page.getByRole('menuitem',{name:'Copy workspace link',exact:true}).click()
+ await expect.poll(readClipboard).toBe(link)
+ const copiedLink=await readClipboard()
+ await expect(tab('首页')).toHaveAttribute('aria-selected','true')
+ await tab(names[1]).click()
+ await chooseTabMenuItem('并排查看')
+ const left=page.locator('.workspace-document[data-workspace-pane="left"]')
+ const right=page.locator('.workspace-document[data-workspace-pane="right"]')
+ await expect(left.locator('iframe')).toHaveAttribute('title',names[1])
+ await expect(right.locator('iframe')).toHaveAttribute('title',names[0])
+ await expect(left).toBeVisible()
+ await expect(right).toBeVisible()
+ const [leftBounds,rightBounds]=await Promise.all([left.boundingBox(),right.boundingBox()])
+ assert.ok(Math.abs(leftBounds.x+leftBounds.width-rightBounds.x)<=1)
+ assert.ok(Math.abs(leftBounds.width-rightBounds.width)<=2)
+ const separator=page.getByRole('separator',{name:'调整并排窗格宽度',exact:true})
+ await expect(separator).toHaveAttribute('aria-valuenow','50')
+ const beforeResize=await right.locator('iframe').elementHandle()
+ const handle=await separator.boundingBox()
+ const handleX=handle.x+handle.width/2, handleY=handle.y+handle.height/2
+ await page.mouse.move(handleX,handleY)
+ await page.mouse.down()
+ await page.mouse.move(handleX+leftBounds.width*0.3,handleY,{steps:6})
+ await page.mouse.up()
+ await expect(separator).toHaveAttribute('aria-valuenow','65')
+ assert.ok((await left.boundingBox()).width>leftBounds.width*1.2)
+ assert.ok((await right.boundingBox()).width<rightBounds.width*0.8)
+ await separator.press('ArrowLeft')
+ await expect(separator).toHaveAttribute('aria-valuenow','60')
+ await separator.press('Home')
+ await expect(separator).toHaveAttribute('aria-valuenow','25')
+ await separator.press('End')
+ await expect(separator).toHaveAttribute('aria-valuenow','75')
+ await separator.press('Enter')
+ await expect(separator).toHaveAttribute('aria-valuenow','50')
+ assert.equal(await beforeResize.evaluate(node=>node.isConnected),true)
+ const rightPdf=editor(names[0]).contentFrame()
+ const leftPdf=editor(names[1]).contentFrame()
+ await rightPdf.getByRole('button',{name:'Pages',exact:true}).focus()
+ await expect(tab(names[0])).toHaveAttribute('aria-selected','true')
+ await page.keyboard.press('ControlOrMeta+p')
+ const printDialog='.pdf-modal[role="dialog"][aria-label="Print"]'
+ await expect(rightPdf.locator(printDialog)).toBeVisible()
+ await expect(leftPdf.locator(printDialog)).toHaveCount(0)
+ await rightPdf.locator(printDialog).getByRole('button',{name:'Cancel',exact:true}).click()
+ await leftPdf.getByRole('button',{name:'Pages',exact:true}).click()
+ await expect(tab(names[1])).toHaveAttribute('aria-selected','true')
+ await rightPdf.getByRole('button',{name:'Pages',exact:true}).click()
+ await expect(tab(names[0])).toHaveAttribute('aria-selected','true')
+ await chooseTabMenuItem('退出并排查看')
+ await expect(right).toHaveCount(0)
+ await expect(editor(names[1])).toHaveCount(1)
+ await tab('首页').click()
+ await chooseTabMenuItem('并排查看')
+ const homePane=page.locator('.app-frame-content[data-workspace-pane="left"]')
+ await expect(homePane).toBeVisible()
+ await expect(right).toBeVisible()
+ const homeWidth=(await homePane.boundingBox()).width
+ await separator.press('ArrowRight')
+ await expect(separator).toHaveAttribute('aria-valuenow','55')
+ assert.ok((await homePane.boundingBox()).width>homeWidth)
+ await chooseTabMenuItem('退出并排查看')
+ await tab(names[1]).click()
+ await chooseTabMenuItem('固定页签')
+ await expect(tab(names[0])).toHaveAttribute('aria-description','Pinned')
+ await expect(tab(names[1])).toHaveAttribute('aria-selected','true')
+ await tab('首页').click()
+ await page.reload()
+ await expect(tab('首页')).toHaveAttribute('aria-selected','true',{timeout:15000})
+ const order=await page.getByRole('tablist').getByRole('tab').evaluateAll(tabs=>tabs.map(tab=>tab.getAttribute('aria-label')))
+ assert.deepEqual(order,['首页',...names])
+ await expect(tab(names[0])).toHaveAttribute('aria-description','Pinned')
+ await expect(editor(names[0]).contentFrame().locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect(editor(names[1])).toHaveCount(0)
+ await chooseTabMenuItem('取消固定页签')
+ await expect(tab(names[0])).not.toHaveAttribute('aria-description','Pinned')
+ await expect(tab('首页')).toHaveAttribute('aria-selected','true')
+ await page.reload()
+ await expect(tab(names[0])).toBeVisible()
+ await expect(page.locator('.workspace-document-frame')).toHaveCount(0)
+
+ await tab(names[0]).click()
+ const pdfEditor=editor(names[0]).contentFrame()
+ await expect(pdfEditor.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await pdfEditor.getByRole('button',{name:'Pages',exact:true}).click()
+ await pdfEditor.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await expect(pdfEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ const closePrompt=page.waitForEvent('dialog',{timeout:15000})
+ const keyboardClose=tab(names[0]).press('Delete')
+ const closeDialog=await closePrompt
+ assert.equal(closeDialog.message(),'PDF 有未保存修改。保存并关闭？')
+ await closeDialog.dismiss()
+ await keyboardClose
+ await expect(tab(names[0])).toBeFocused()
+ await expect(pdfEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await tab(names[1]).click()
+ const item=page.getByRole('menuitem',{name:'下载已保存文件',exact:true})
+ await tab(names[0]).click({button:'right'})
+ await expect(item).toBeVisible()
+ const downloadPromise=page.waitForEvent('download')
+ await item.click()
+ const download=await downloadPromise
+ assert.equal(download.suggestedFilename(),names[0])
+ assert.deepEqual(await readFile(await download.path()),bytes)
+ await expect(tab(names[1])).toHaveAttribute('aria-selected','true')
+ await tab(names[0]).click()
+ await expect(pdfEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await chooseTabMenuItem('并排查看')
+ await expect(right.locator('iframe')).toHaveAttribute('title',names[0])
+ await separator.press('ArrowLeft')
+ await expect(separator).toHaveAttribute('aria-valuenow','45')
+ await expect(pdfEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await chooseTabMenuItem('退出并排查看')
+ async function moveToWindow(){
+  await tab(names[0]).click({button:'right'})
+  await page.getByRole('menuitem',{name:'在新窗口打开',exact:true}).click()
+ }
+ await page.evaluate(()=>{
+  const open=window.open
+  window.open=()=>{window.open=open;return null}
+ })
+ await moveToWindow()
+ await expect(page.locator('.web-notice')).toContainText('浏览器拦截了新窗口')
+ await expect(tab(names[0])).toHaveAttribute('aria-selected','true')
+
+ async function dragToWindow(returnToStrip=false){
+  const bounds=await tab(names[0]).boundingBox()
+  const x=bounds.x+bounds.width/2, y=bounds.y+bounds.height/2
+  await page.mouse.move(x,y)
+  await page.mouse.down()
+  const pageCount=page.context().pages().length
+  await page.mouse.move(x,y+88,{steps:5})
+  await expect(tab(names[0])).toBeVisible()
+  assert.equal(page.context().pages().length,pageCount)
+  if(returnToStrip)await page.mouse.move(x,y,{steps:5})
+  await page.mouse.up()
+ }
+ await dragToWindow(true)
+ await expect(tab(names[0])).toHaveAttribute('aria-selected','true')
+ await expect(pdfEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ async function answerMovePrompt(accept,moveDocument=moveToWindow){
+  const popup=page.context().waitForEvent('page',{timeout:15000})
+  const prompt=page.waitForEvent('dialog',{timeout:15000})
+  const move=moveDocument()
+  const dialog=await prompt
+  assert.equal(dialog.message(),'PDF 有未保存修改。保存并关闭？')
+  if(accept)await dialog.accept()
+  else await dialog.dismiss()
+  await move
+  return popup
+ }
+ const cancelled=await answerMovePrompt(false)
+ await expect.poll(()=>cancelled.isClosed()).toBe(true)
+ await expect(tab(names[0])).toHaveAttribute('aria-selected','true')
+ const revision=async()=>(await f.files.openFile(f.alice.token,files[0].fileId)).file.revision
+ assert.equal(await revision(),files[0].revision)
+ await chooseTabMenuItem('固定页签')
+ const moved=await answerMovePrompt(true,dragToWindow)
+ await expect(tab(names[0])).toHaveCount(0,{timeout:30000})
+ await expect(tab(names[1])).toBeVisible()
+ const movedTab=moved.getByRole('tab',{name:names[0],exact:true})
+ await expect(movedTab).toHaveAttribute('aria-selected','true',{timeout:30000})
+ await expect(movedTab).toHaveAttribute('aria-description','Pinned')
+ await expect(moved.getByRole('tab',{name:names[1],exact:true})).toHaveCount(0)
+ await expect(moved.frameLocator(`iframe[title="${names[0]}"]`).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ assert.equal(await moved.evaluate(()=>window.opener),null)
+ const saved=await PDFDocument.load(await f.files.readFile(f.alice.token,files[0].fileId,await revision()))
+ assert.equal(saved.getPage(0).getRotation().angle,90)
+
+ const recipient=await browser.newPage()
+ await stubHomeHero(recipient)
+ await recipient.goto(copiedLink)
+ await expect(recipient.getByRole('heading',{name:'登录你的工作区',exact:true})).toBeVisible()
+ await recipient.getByLabel('用户名',{exact:true}).fill('alice')
+ await recipient.getByLabel('密码',{exact:true}).fill(password)
+ await recipient.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(recipient.getByRole('tab',{name:names[0],exact:true})).toHaveAttribute('aria-selected','true',{timeout:30000})
+ await expect(recipient.getByRole('tab',{name:names[1],exact:true})).toHaveCount(0)
+ await expect(recipient.frameLocator(`iframe[title="${names[0]}"]`).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await recipient.close()
+ const dockedEditor=moved.frameLocator(`iframe[title="${names[0]}"]`)
+ await dockedEditor.getByRole('button',{name:'Pages',exact:true}).click()
+ await dockedEditor.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await expect(dockedEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ async function confirmDock(accept){
+  await movedTab.click({button:'right'})
+  const action=moved.getByRole('menuitem',{name:'移回原工作区',exact:true})
+  await expect(action).toBeVisible()
+  const prompt=moved.waitForEvent('dialog',{timeout:15000})
+  const click=action.click().catch(error=>{if(!moved.isClosed())throw error})
+  const dialog=await prompt
+  assert.equal(dialog.message(),'PDF 有未保存修改。保存并关闭？')
+  if(accept)await dialog.accept()
+  else await dialog.dismiss()
+  await click
+ }
+ await confirmDock(false)
+ await expect(dockedEditor.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await expect(tab(names[0])).toHaveCount(0)
+ const docked=moved.waitForEvent('close',{timeout:30000})
+ await confirmDock(true)
+ await docked
+ await expect(tab(names[0])).toHaveAttribute('aria-selected','true')
+ await expect(tab(names[0])).toHaveAttribute('aria-description','Pinned')
+ await expect(editor(names[0]).contentFrame().locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const returned=await PDFDocument.load(await f.files.readFile(f.alice.token,files[0].fileId,await revision()))
+ assert.equal(returned.getPage(0).getRotation().angle,180)
+ await tab(names[1]).click()
+ await expect(tab(names[1])).toHaveAttribute('aria-selected','true')
+ assert.equal(await dropOnEditor('dragged.pdf'),true)
+ await upload.getByRole('button',{name:/^开始上传/}).click()
+ await expect(upload).toContainText('已上传并打开',{timeout:15000})
+ await upload.getByRole('button',{name:'完成',exact:true}).press('Enter')
+ await expect(tab('dragged.pdf')).toHaveAttribute('aria-selected','true')
+ await expect(editor('dragged.pdf').contentFrame().locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const imported=(await f.files.listFiles(f.alice.token)).files.find(file=>file.name==='dragged.pdf')
+ assert.ok(imported)
+ assert.deepEqual(await f.files.readFile(f.alice.token,imported.id,imported.revision),bytes)
+})
+
+test('workspace opens recent documents and restores the resized split on refresh',{skip:!built,timeout:90000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+2
+ const origin='http://localhost:'+port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false})
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+  nativePdfDirectory:officeBrowserAsset('pdf'),
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300])
+ const bytes=Buffer.from(await pdf.save())
+ const older=await importFile(f,f.alice.token,bytes,'older.pdf')
+ const newer=await importFile(f,f.alice.token,bytes,'newer.pdf')
+ const browser=await launchTestBrowser()
+ f.cleanup.unshift(()=>browser.close())
+ const context=await browser.newContext()
+ const page=await context.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ for(const file of [older,newer]){
+  await page.evaluate(id=>{location.hash='#/file/'+id},file.file.fileId)
+  const editor=page.frameLocator(`iframe[data-document-id="${file.file.fileId}"]`)
+  await expect(editor.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ }
+ const newerEditor=page.frameLocator('iframe[title="newer.pdf"]')
+ await newerEditor.getByRole('button',{name:'Pages',exact:true}).focus()
+ await page.keyboard.press('ControlOrMeta+o')
+ const open=page.getByRole('dialog',{name:'上传文件',exact:true})
+ await open.getByRole('button',{name:'最近打开',exact:true}).click()
+ const entries=open.getByRole('list',{name:'最近文件',exact:true}).getByRole('button')
+ await expect(entries).toHaveCount(2)
+ await expect(entries.nth(0)).toContainText('newer.pdf')
+ await expect(entries.nth(1)).toContainText('older.pdf')
+ await entries.nth(1).click()
+ await expect(open).toBeHidden()
+ await expect(page.getByRole('tab',{name:'older.pdf',exact:true})).toHaveAttribute('aria-selected','true')
+ const next=page.getByRole('tab',{name:'newer.pdf',exact:true})
+ await expect(next).toHaveAttribute('aria-selected','false')
+ const selected=page.getByRole('tab',{name:'older.pdf',exact:true})
+ await next.click({button:'right'})
+ await page.getByRole('menuitem',{name:'并排查看',exact:true}).click()
+ const separator=page.getByRole('separator',{name:'调整并排窗格宽度',exact:true})
+ await separator.press('ArrowRight')
+ await expect(separator).toHaveAttribute('aria-valuenow','55')
+ const originalEditor=await page.locator('iframe[title="older.pdf"]').elementHandle()
+ await next.click({button:'right'})
+ await page.getByRole('menuitem',{name:'交换左右窗格',exact:true}).click()
+ await expect(page.locator('.workspace-document[data-workspace-pane="right"] iframe')).toHaveAttribute('title','older.pdf')
+ assert.equal(await originalEditor.evaluate(node=>node.isConnected),true)
+ await expect(selected).toHaveAttribute('aria-selected','true')
+ await page.reload()
+ await expect(separator).toHaveAttribute('aria-valuenow','55',{timeout:15000})
+ const left=page.locator('.workspace-document[data-workspace-pane="left"]')
+ const right=page.locator('.workspace-document[data-workspace-pane="right"]')
+ await expect(left.locator('iframe')).toHaveAttribute('title','newer.pdf')
+ await expect(right.locator('iframe')).toHaveAttribute('title','older.pdf')
+ await expect(left.frameLocator('iframe').locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect(right.frameLocator('iframe').locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect(selected).toHaveAttribute('aria-selected','true')
+ await selected.press('Delete')
+ await expect(separator).toHaveCount(0)
+ await expect(selected).toHaveCount(0)
+ await expect(next).toHaveAttribute('aria-selected','true')
+ await expect(next).toBeFocused()
+
+ const home=page.getByRole('tab',{name:'首页',exact:true})
+ await home.click()
+ await accountAction(page,'个人设置')
+ const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+ await settingsTab(settings,'通用偏好')
+ const restoreDocuments=settings.getByRole('switch',{name:'重新打开上次的文档',exact:true})
+ await expect(restoreDocuments).toBeChecked()
+ await restoreDocuments.uncheck()
+ await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+ await expect(settings).toContainText('个人偏好已保存')
+ assert.equal((await f.preferences.get(f.alice.token)).restoreSession,false)
+ assert.equal((await f.preferences.get(f.bob.token)).restoreSession,true)
+ await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+ await page.reload()
+ await expect(home).toHaveAttribute('aria-selected','true')
+ await expect(next).toHaveCount(0)
+ await expect(separator).toHaveCount(0)
+ await page.evaluate(id=>{location.hash='#/file/'+id},older.file.fileId)
+ await expect(selected).toHaveAttribute('aria-selected','true')
+ await expect(page.frameLocator('iframe[title="older.pdf"]').locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect(next).toHaveCount(0)
+
+ await home.click()
+ await accountAction(page,'个人设置')
+ await settingsTab(settings,'通用偏好')
+ await expect(restoreDocuments).not.toBeChecked()
+ await restoreDocuments.check()
+ await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+ await expect(settings).toContainText('个人偏好已保存')
+ await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+ await page.reload()
+ await expect(home).toHaveAttribute('aria-selected','true')
+ await expect(selected).toBeVisible()
+ await expect(next).toHaveCount(0)
+
+ await selected.click({button:'right'})
+ await page.getByRole('menuitem',{name:'并排查看',exact:true}).click()
+ await separator.press('ArrowRight')
+ await expect(separator).toHaveAttribute('aria-valuenow','55')
+ await home.click({button:'right'})
+ await page.getByRole('menuitem',{name:'交换左右窗格',exact:true}).click()
+ await expect(page.locator('.app-frame-content[data-workspace-pane="right"]')).toBeVisible()
+ const closed=page.waitForEvent('close')
+ await page.close({runBeforeUnload:true})
+ await closed
+ const reopened=await context.newPage()
+ await stubHomeHero(reopened)
+ await reopened.goto(origin)
+ await expect(reopened.getByRole('tab',{name:'首页',exact:true})).toHaveAttribute('aria-selected','true')
+ await expect(reopened.getByRole('separator',{name:'调整并排窗格宽度',exact:true})).toHaveAttribute('aria-valuenow','55')
+ await expect(reopened.locator('.app-frame-content[data-workspace-pane="right"]')).toBeVisible()
+ await expect(reopened.locator('.workspace-document[data-workspace-pane="left"] iframe')).toHaveAttribute('title','older.pdf')
+ await expect(reopened.frameLocator('iframe[title="older.pdf"]').locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+
+ const oldWorkspace=await context.newPage()
+ await stubHomeHero(oldWorkspace)
+ await oldWorkspace.goto(origin)
+ await expect(oldWorkspace.getByRole('tab',{name:'older.pdf',exact:true})).toBeVisible()
+
+ await accountAction(reopened,'个人设置')
+ const reopenedSettings=reopened.getByRole('dialog',{name:'个人设置',exact:true})
+ await settingsTab(reopenedSettings,'通用偏好')
+ await reopenedSettings.getByRole('switch',{name:'重新打开上次的文档',exact:true}).uncheck()
+ await reopenedSettings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+ await expect(reopenedSettings).toContainText('个人偏好已保存')
+ const oldClosed=oldWorkspace.waitForEvent('close')
+ await oldWorkspace.close({runBeforeUnload:true})
+ await oldClosed
+ assert.equal(await reopened.evaluate(()=>Object.keys(localStorage).filter(key=>key.startsWith('dyoffice:workspace:last:v1:')).length),0)
+ await reopened.close()
+ const optedOut=await context.newPage()
+ await stubHomeHero(optedOut)
+ await optedOut.goto(origin)
+ await expect(optedOut.getByRole('tab',{name:'首页',exact:true})).toHaveAttribute('aria-selected','true')
+ await expect(optedOut.getByRole('tab',{name:'older.pdf',exact:true})).toHaveCount(0)
+})
+
+test('idle workspace tabs release clean editors and wake on selection',{skip:!built,timeout:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+3
+ const origin='http://localhost:'+port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},
+  localShellDirectory:officeBrowserAsset('local-shell'),nativePdfDirectory:officeBrowserAsset('pdf'),
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300])
+ const bytes=Buffer.from(await pdf.save())
+ const names=['dirty.pdf','sleep.pdf','pinned.pdf','left.pdf','right.pdf']
+ const files=[]
+ for(const name of names)files.push((await importFile(f,f.alice.token,bytes,name)).file)
+ const browser=await launchTestBrowser()
+ f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await page.addInitScript(()=>Object.defineProperty(navigator,'deviceMemory',{value:8}))
+ await page.clock.install()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ const tab=name=>page.getByRole('tab',{name,exact:true})
+ const iframe=name=>page.locator(`iframe[title="${name}"]`)
+ const editor=name=>iframe(name).contentFrame()
+ async function setSleeping(enabled){
+  await tab('首页').click()
+  await accountAction(page,'个人设置')
+  const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  const sleep=settings.getByRole('switch',{name:'休眠不活跃的标签页',exact:true})
+  await expect(sleep).toBeChecked({checked:!enabled})
+  await sleep.setChecked(enabled)
+  await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+  await expect(settings).toContainText('个人偏好已保存')
+  assert.equal((await f.preferences.get(f.alice.token)).sleepInactiveTabs,enabled)
+  assert.equal((await f.preferences.get(f.bob.token)).sleepInactiveTabs,true)
+  await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+ }
+ await setSleeping(false)
+ for(const [index,file] of files.entries()){
+  await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+  await expect(editor(names[index]).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+  if(index===0){
+   await editor(names[0]).getByRole('button',{name:'Pages',exact:true}).click()
+   await editor(names[0]).getByRole('button',{name:'Rotate right',exact:true}).click()
+   await expect(editor(names[0]).locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+  }
+ }
+ await tab(names[2]).click({button:'right'})
+ await page.getByRole('menuitem',{name:'固定页签',exact:true}).click()
+ await page.clock.fastForward(11*60_000)
+ await expect(iframe(names[1])).toHaveCount(1)
+ await setSleeping(true)
+ await tab(names[4]).click()
+ await tab(names[3]).click({button:'right'})
+ await page.getByRole('menuitem',{name:'并排查看',exact:true}).click()
+ const order=await page.getByRole('tab').allTextContents()
+ await page.clock.fastForward(61_000)
+ await expect(tab(names[1])).toHaveClass(/tab-dormant/)
+ await expect(iframe(names[1])).toHaveCount(0)
+ assert.deepEqual(await page.getByRole('tab').allTextContents(),order)
+ for(const index of [0,2,3,4])await expect(iframe(names[index])).toHaveCount(1)
+ await expect(editor(names[0]).locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await tab(names[1]).click()
+ await expect(tab(names[1])).toHaveAttribute('aria-selected','true')
+ await expect(tab(names[1])).not.toHaveClass(/tab-dormant/)
+ await expect(editor(names[1]).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+})
+
+test('Home organizes starred files into persistent named groups',{skip:!built,timeout:90000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+4
+ const origin='http://localhost:'+port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false})
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const workspace=createWorkspaceService(f.transactions)
+ const bytes=await docxBytes()
+ for(const name of ['client-notes.docx','client-plan.docx']){
+  const file=(await importFile(f,f.alice.token,bytes,name)).file
+  await workspace.setStar(f.alice.token,file.fileId,{starred:true})
+ }
+ const browser=await launchTestBrowser()
+ f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ const starred=page.locator('.nav-item').filter({has:page.getByText('Starred',{exact:true})})
+ await starred.click()
+ const notes=page.locator('.recent-row').filter({has:page.getByText('client-notes.docx',{exact:true})})
+ const plan=page.locator('.recent-row').filter({has:page.getByText('client-plan.docx',{exact:true})})
+ const pills=page.getByRole('tablist',{name:'Filter by group'})
+ const group=pills.getByRole('button',{name:'Client A',exact:true})
+ async function groupPicker(row){
+  await row.locator('.more-btn').click()
+  await page.getByRole('menuitem',{name:'Move to group…',exact:true}).click()
+  return page.getByRole('dialog',{name:'Move to group',exact:true})
+ }
+ let picker=await groupPicker(notes)
+ await picker.getByPlaceholder('Group name').fill('Client A')
+ await picker.getByRole('button',{name:'New group',exact:true}).click()
+ await expect(group).toBeVisible()
+ await group.click()
+ await expect(notes).toBeVisible()
+ await expect(plan).toHaveCount(0)
+ await pills.getByRole('button',{name:'All',exact:true}).click()
+ picker=await groupPicker(plan)
+ await picker.getByRole('button',{name:'Client A',exact:true}).click()
+ await expect(picker).toHaveCount(0)
+ await page.reload()
+ await starred.click()
+ await group.click()
+ await expect(notes).toBeVisible()
+ await expect(plan).toBeVisible()
+ for(const row of [notes,plan]){
+  picker=await groupPicker(row)
+  await picker.getByRole('button',{name:'Remove from group',exact:true}).click()
+  await expect(picker).toHaveCount(0)
+ }
+ await expect(group).toHaveCount(0)
+ await expect(notes).toBeVisible()
+ await expect(plan).toBeVisible()
+})
+
+test('PPTX presenter opens a private synced audience window',{skip:!built,timeout:90000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+5
+ const origin='http://localhost:'+port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},
+  localShellDirectory:officeBrowserAsset('local-shell'),nativeSlidesDirectory:officeBrowserAsset('slides'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const bytes=await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
+ const {file}=await importFile(f,f.alice.token,bytes,'presenter.pptx')
+ const browser=await launchTestBrowser()
+ f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1050}})
+ await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{value:'MacIntel'}))
+ await stubHomeHero(page)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ const editor=page.frameLocator('iframe[title="presenter.pptx"]')
+ await expect(editor.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const viewerFullscreen=()=>editor.locator('html').evaluate(()=>document.fullscreenElement===document.documentElement)
+ const shellFullscreen=()=>page.evaluate(()=>document.fullscreenElement?.getAttribute('title')==='presenter.pptx')
+ const begin=editor.getByRole('button',{name:'From Beginning',exact:true})
+ const slideshow=editor.locator('.slideshow')
+ await editor.getByRole('button',{name:'Slide Show',exact:true}).click()
+ await begin.click()
+ await expect.poll(viewerFullscreen).toBe(true)
+ await expect.poll(shellFullscreen).toBe(true)
+ await expect(slideshow.locator('canvas').first()).toBeVisible()
+ await page.evaluate(()=>document.exitFullscreen())
+ await expect(slideshow).toHaveCount(0)
+ await expect.poll(shellFullscreen).toBe(false)
+ // Browser/parent permission denial leaves an in-frame presentation, with normal exit.
+ await editor.locator('html').evaluate(root=>{
+  Object.defineProperty(root,'requestFullscreen',{configurable:true,value:()=>Promise.reject(new DOMException('Denied','NotAllowedError'))})
+ })
+ await begin.click()
+ await expect(slideshow.locator('canvas').first()).toBeVisible()
+ assert.equal(await viewerFullscreen(),false)
+ await slideshow.press('Escape')
+ await expect(slideshow).toHaveCount(0)
+ await editor.locator('html').evaluate(root=>Reflect.deleteProperty(root,'requestFullscreen'))
+ await editor.getByRole('button',{name:'Design',exact:true}).click()
+ await editor.getByRole('button',{name:'Slide Size',exact:true}).click()
+ await editor.getByRole('button',{name:'Standard (4:3)',exact:true}).click()
+ await expect.poll(()=>editor.locator('html').evaluate(()=>window.slidesApi.getSlideSize())).toEqual({cx:9144000,cy:6858000})
+ await editor.getByRole('button',{name:'Slide Show',exact:true}).click()
+ await editor.getByRole('button',{name:'Presenter View',exact:true}).click()
+ const presenter=editor.locator('.presenter')
+ const opener=presenter.getByRole('button',{name:'Open Audience Window',exact:true})
+ await expect(opener).toBeVisible()
+ await expect.poll(viewerFullscreen).toBe(true)
+ const popup=page.context().waitForEvent('page')
+ await opener.click()
+ const audience=await popup
+ await expect(audience.locator('.ss-stagebox canvas').first()).toBeVisible({timeout:30000})
+ assert.equal(await editor.locator('html').evaluate(()=>window.dyofficeEditorCanSleep()),false)
+ const size=await audience.locator('.ss-stagebox').boundingBox()
+ assert.ok(size&&Math.abs(size.width/size.height-4/3)<0.02)
+ assert.equal(await audience.evaluate(()=>window.opener),null)
+ assert.equal(new URL(audience.url()).protocol,'about:')
+ await audience.getByRole('button',{name:'Enter Full Screen',exact:true}).click()
+ await expect.poll(()=>audience.evaluate(()=>document.fullscreenElement===document.documentElement)).toBe(true)
+ await audience.evaluate(()=>document.exitFullscreen())
+ await presenter.press('b')
+ await expect(audience.locator('.ss-black')).toBeVisible()
+ await presenter.press('b')
+ await expect(audience.locator('.ss-black')).toHaveCount(0)
+ await audience.keyboard.press('ArrowRight')
+ await expect(presenter.locator('.pv-nav-label')).toHaveText('Slide 2 of 2')
+ await presenter.getByRole('button',{name:/^Pen/}).click()
+ const stage=await presenter.locator('.pv-stagebox').boundingBox()
+ assert.ok(stage)
+ await page.mouse.move(stage.x+stage.width/4,stage.y+stage.height/4)
+ await page.mouse.down()
+ await page.mouse.move(stage.x+stage.width/2,stage.y+stage.height/2,{steps:5})
+ await page.mouse.up()
+ await expect.poll(()=>audience.locator('.ink-layer canvas').evaluate(canvas=>{
+  const ctx=canvas.getContext('2d')
+  return ctx&&ctx.getImageData(0,0,canvas.width,canvas.height).data.some((channel,index)=>index%4===3&&channel>0)
+ })).toBe(true)
+ const closed=audience.waitForEvent('close')
+ // Keydown closes the popup before Playwright can dispatch keyup.
+ await Promise.all([closed,audience.keyboard.press('Escape',{delay:250}).catch(error=>{
+  if(!audience.isClosed()||!(error instanceof Error)||!error.message.includes('Target page, context or browser has been closed'))throw error
+ })])
+ await expect(presenter).toHaveCount(0)
+ await expect.poll(shellFullscreen).toBe(false)
+ assert.equal(await editor.locator('html').evaluate(()=>window.dyofficeEditorCanSleep()),true)
+ await editor.getByRole('button',{name:'Presenter View',exact:true}).click()
+ await expect.poll(viewerFullscreen).toBe(true)
+ await presenter.getByRole('button',{name:/Use Slide Show$/}).click()
+ await expect(presenter).toHaveCount(0)
+ await expect(slideshow.locator('canvas').first()).toBeVisible()
+ await expect.poll(shellFullscreen).toBe(true)
+ await page.evaluate(()=>document.exitFullscreen())
+ await expect(slideshow).toHaveCount(0)
+ await expect(page.getByRole('tab',{name:'presenter.pptx',exact:true})).toHaveAttribute('aria-selected','true')
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+})

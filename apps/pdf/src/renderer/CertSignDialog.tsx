@@ -59,6 +59,7 @@ export function CertSignDialog({
   currentPage,
   hasSignatures,
   webHost = false,
+  workspaceIntro,
   onCancel,
   onSigned,
 }: {
@@ -69,10 +70,10 @@ export function CertSignDialog({
   /** The document already carries signatures: it can still be signed, but not certified */
   hasSignatures: boolean
   webHost?: boolean
+  workspaceIntro?: string
   onCancel: () => void
-  onSigned: (path: string) => void
+  onSigned: (path: string, workspace?: true) => void
 }): ReactElement {
-  const dialogRef = useModalDialog(onCancel)
   const [source, setSource] = useState<'system' | 'file'>(IS_MAC || webHost ? 'file' : 'system')
   const [cert, setCert] = useState<{ certId: string; fileName: string } | null>(null)
   const [systemCerts, setSystemCerts] = useState<SystemCertificateInfo[]>([])
@@ -97,6 +98,7 @@ export function CertSignDialog({
   const [level, setLevel] = useState<1 | 2 | 3>(2)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const dialogRef = useModalDialog(onCancel, { escape: !busy })
 
   // A different password or certificate invalidates what was checked
   useEffect(() => {
@@ -203,8 +205,12 @@ export function CertSignDialog({
             }
           : undefined,
       })
-      if (result.ok) onSigned(result.path)
-      else if (!result.cancelled) setError(t(certErrorKey(result.error)))
+      if (result.ok) {
+        if (result.workspace) onSigned(result.path, true)
+        else onSigned(result.path)
+      } else if (result.cancelled) {
+        if (result.pending) onCancel()
+      } else setError(t(certErrorKey(result.error)))
     } catch {
       setError(t('certErrFailed'))
     } finally {
@@ -225,7 +231,7 @@ export function CertSignDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="pdf-modal-title">{t('certSignTitle')}</div>
-        <div className="pdf-modal-hint">{t(webHost ? 'certSignWebIntro' : 'certSignIntro')}</div>
+        <div className="pdf-modal-hint">{workspaceIntro ?? t(webHost ? 'certSignWebIntro' : 'certSignIntro')}</div>
 
         <div className="pdf-field">
           <span>{t('certSource')}</span>
@@ -489,7 +495,7 @@ export function CertSignDialog({
             onClick={() => void sign()}
             disabled={!signer || busy}
           >
-            {busy ? t('certSigning') : t(webHost ? 'certSignDownload' : 'certSignButton')}
+            {busy ? t('certSigning') : t(webHost && !workspaceIntro ? 'certSignDownload' : 'certSignButton')}
           </button>
         </div>
       </div>

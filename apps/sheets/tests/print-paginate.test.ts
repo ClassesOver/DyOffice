@@ -94,12 +94,26 @@ describe('planPrintPages', () => {
     ])
   })
 
-  it('drops an area without visible body cells', () => {
+  it('keeps an area when all of its visible rows or columns are titles', () => {
+    const pages = planPrintPages(
+      input({
+        areas: [{ startRow: 0, endRow: 0, startColumn: 0, endColumn: 3 }],
+        titleRows: { start: 0, end: 0 },
+      }),
+    )
+    expect(pages).toEqual([
+      { area: 0, rowStart: 0, rowEnd: 0, colStart: 0, colEnd: 1 },
+      { area: 0, rowStart: 0, rowEnd: 0, colStart: 2, colEnd: 3 },
+    ])
+  })
+
+  it('drops an area when its only row is a hidden title', () => {
     expect(
       planPrintPages(
         input({
           areas: [{ startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }],
           titleRows: { start: 0, end: 0 },
+          rowHeightPt: () => 0,
         }),
       ),
     ).toEqual([])

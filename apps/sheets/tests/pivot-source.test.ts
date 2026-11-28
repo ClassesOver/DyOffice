@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parseRange } from '@genoffice/xlsx-gateway/domain/cell-address'
 import {
+  findPivotAtSelection,
   getSourceRange,
   handleCreatePivot,
   pivotFieldOptions,
@@ -78,7 +79,8 @@ function fixture(
   const workbook = { getActiveSheet: () => worksheet, getActiveRange: () => selection }
   const state = {
     flags: { preloadComplete: true },
-    file: { sheets: [{ id: 's1', tables: [] }] },
+    file: { sheets: [{ id: 's1', tables: [], pivotTables: [] }] },
+    pivotDefinitions: new Map(),
     editJournal: createEditJournal(),
   } as unknown as LazyWorkbookState
   const ctx = {
@@ -108,6 +110,14 @@ function addTable(f: ReturnType<typeof fixture>, ref: string, totalsRowCount = 0
 }
 
 describe('pivot source selection', () => {
+  it('keeps a usable pivot selectable when a preceding output reference is broken', () => {
+    const { ctx, state } = fixture()
+    const broken = { path: 'broken.xml', cachePath: null, outputRef: '#REF!' }
+    const usable = { path: 'usable.xml', cachePath: null, outputRef: '$B$2:$C$3' }
+    state.file.sheets[0]!.pivotTables.push(broken, usable)
+    expect(findPivotAtSelection(ctx)).toMatchObject({ kind: 'file', pivot: usable })
+  })
+
   it('uses the whole continuous region for a single data cell and its headers', () => {
     const { ctx, reads } = fixture()
     const source = getSourceRange(ctx)

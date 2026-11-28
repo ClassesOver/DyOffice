@@ -5,10 +5,11 @@
  * Functions take the ActionCtx built fresh per call.
  */
 import type { InsertKind, LinkTargetOp } from '../shared/ipc'
-import type { ActionCtx } from './action-context'
+import type { ActionCtx, ScreenRecordingSession } from './action-context'
 import { applySelectionLink, saveEditSelection, selectionLink } from './TextEditOverlay'
 import { FIT_WIDTH } from './app-constants'
-import { fileExt } from '../shared/media-kinds'
+import { fileExt, type DroppedFileKind } from '../shared/media-kinds'
+import { insertExternalImage } from './clipboard-actions'
 import type { WordArtPreset } from '@genoffice/ui'
 import {
   chartSampleData,
@@ -17,7 +18,7 @@ import {
   type IconDef,
   type SmartArtDef,
 } from './insert-presets'
-import { t } from './i18n/locale'
+import { getLang, t } from './i18n/locale'
 import { isLineDrawKind, type DrawRect } from './draw-shape'
 import {
   EQUATION_BODY_PR,
@@ -402,11 +403,37 @@ export async function insertEquation(ctx: ActionCtx, text: string): Promise<void
 
 export async function insertMediaFile(ctx: ActionCtx, kind: 'video' | 'audio'): Promise<void> {
   if (!ctx.slide) return
-  const r = await window.slidesApi.insertMedia(ctx.current, kind, FIT_WIDTH)
-  if (r) {
-    ctx.applySlide(ctx.current, r.slide)
-    ctx.setSelectedIds([r.sourceId])
-    ctx.setStatus(kind === 'video' ? t('appStatusVideoInserted') : t('appStatusAudioInserted'))
+  try {
+    const r = await window.slidesApi.insertMedia(ctx.current, kind, FIT_WIDTH)
+    if (r) {
+      ctx.applySlide(ctx.current, r.slide)
+      ctx.setSelectedIds([r.sourceId])
+      ctx.setStatus(r.warning ?? t(kind === 'video' ? 'appStatusVideoInserted' : 'appStatusAudioInserted'))
+    }
+  } catch (error) { if(error instanceof Error)ctx.setStatus(error.message) }
+}
+
+/** Run a drop in file order so generation-fenced hosts can adopt each write before the next. */
+export async function insertDroppedFiles(
+  ctx: ActionCtx,
+  files: readonly { f: File; kind: Exclude<DroppedFileKind, 'other'> }[],
+  atPx: { x: number; y: number },
+  canInsert: () => boolean,
+  mediaLimit?: number,
+): Promise<void> {
+  for (const { f, kind } of files) {
+    if (!canInsert()) return
+    if (kind !== 'image') {
+      await insertDroppedMedia(ctx, f, kind, atPx, mediaLimit, canInsert)
+      continue
+    }
+    const ext = (fileExt(f.name) || 'png').replace(/^jpeg$/, 'jpg')
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer())
+      if (canInsert()) await insertExternalImage(ctx, bytesToBase64(bytes), ext, atPx, canInsert)
+    } catch {
+      if (canInsert()) ctx.setStatus(t('appStatusImageUnsupported', { ext: ext.toUpperCase() }))
+    }
   }
 }
 
@@ -415,33 +442,43 @@ export async function insertMediaFile(ctx: ActionCtx, kind: 'video' | 'audio'): 
  * centered on the drop point. Electron hands us the file's path, which lets main
  * build the poster frame from the system thumbnail; a path-less File falls back to bytes.
  */
-export async function insertDroppedMedia(
+async function insertDroppedMedia(
   ctx: ActionCtx,
   file: File,
   kind: 'video' | 'audio',
   atPx: { x: number; y: number },
+  sizeLimit: number | undefined,
+  canInsert: () => boolean,
 ): Promise<void> {
   if (!ctx.slide) return
-  const slideIndex = ctx.current
-  const path = window.desktop.getPathForFile(file)
-  const source = path
-    ? { path }
-    : { base64: bytesToBase64(new Uint8Array(await file.arrayBuffer())) }
-  const r = await window.slidesApi.addMediaBytes({
-    slideIndex,
-    kind,
-    ext: fileExt(file.name),
-    fitWidthPx: FIT_WIDTH,
-    name: file.name,
-    centerPx: atPx,
-    ...source,
-  })
-  if (!r) return
-  ctx.applySlide(slideIndex, r.slide)
-  ctx.setSelectedIds([r.sourceId])
-  ctx.setStatus(
-    r.warning ?? (kind === 'video' ? t('appStatusVideoInserted') : t('appStatusAudioInserted')),
-  )
+  if(sizeLimit&&(!file.size||file.size>sizeLimit)){
+    const limit=sizeLimit/1024**2
+    ctx.setStatus(getLang()==='zh'?`请选择不超过 ${limit} MiB 的音视频文件。`:`Choose an audio or video file up to ${limit} MiB.`)
+    return
+  }
+  try {
+    const slideIndex = ctx.current
+    const path = sizeLimit ? undefined : window.desktop?.getPathForFile?.(file)
+    const source = path
+      ? { path }
+      : { base64: bytesToBase64(new Uint8Array(await file.arrayBuffer())) }
+    if (!canInsert()) return
+    const r = await window.slidesApi.addMediaBytes({
+      slideIndex,
+      kind,
+      ext: fileExt(file.name),
+      fitWidthPx: FIT_WIDTH,
+      name: file.name,
+      centerPx: atPx,
+      ...source,
+    })
+    if (!r) return
+    ctx.applySlide(slideIndex, r.slide)
+    ctx.setSelectedIds([r.sourceId])
+    ctx.setStatus(
+      r.warning ?? (kind === 'video' ? t('appStatusVideoInserted') : t('appStatusAudioInserted')),
+    )
+  } catch(error) { if(error instanceof Error)ctx.setStatus(error.message) }
 }
 
 /** Chunked: spreading a large array into fromCharCode would blow the call stack. */
@@ -453,58 +490,110 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
-/** Screen recording: getDisplayMedia + MediaRecorder; when stopped, inserted into the current page as webm video. */
-export async function toggleScreenRecord(ctx: ActionCtx): Promise<void> {
+export function screenRecordingMime(): string | undefined {
+  if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) return
+  return ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(mime => MediaRecorder.isTypeSupported(mime))
+}
+
+/** Embed the captured screen in the page selected before the browser opened its picker. */
+export async function toggleScreenRecord(ctx: ActionCtx, options: {
+  maxBytes?: number
+  onActive?: (active: boolean) => void
+  targetIndex?: (partPath: string) => number
+  canInsert?: () => boolean
+} = {}): Promise<void> {
   if (ctx.recorderRef.current) {
-    ctx.recorderRef.current.rec.stop()
+    ctx.recorderRef.current.stop()
     return
   }
   if (!ctx.slide) return
+  const mime = screenRecordingMime()
+  if (!mime) { ctx.setStatus(t('appStatusRecordingUnavailable')); return }
+  const partPath = ctx.slide.partPath
+  let stream: MediaStream | undefined, recorder: MediaRecorder | undefined
+  let size = 0, tooLarge = false
+  const chunks: Blob[] = []
+  const releaseTracks = () => stream?.getTracks().forEach(track => track.stop())
+  const active = () => ctx.recorderRef.current === capture
+  const finish = () => {
+    if (!active()) return
+    ctx.recorderRef.current = null
+    options.onActive?.(false)
+    ctx.setRecording(false)
+  }
+  const capture: ScreenRecordingSession = {
+    stop() {
+      if (recorder && recorder.state !== 'inactive') recorder.stop()
+    },
+    cancel() {
+      finish()
+      capture.stop()
+      releaseTracks()
+      chunks.length = 0
+    },
+  }
+  ctx.recorderRef.current = capture
+  options.onActive?.(true)
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
-    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm'
-    const rec = new MediaRecorder(stream, { mimeType: mime })
-    const chunks: Blob[] = []
-    rec.ondataavailable = (ev) => {
-      if (ev.data.size > 0) chunks.push(ev.data)
-    }
-    const slideIndex = ctx.current
-    const { width, height } = stream.getVideoTracks()[0]?.getSettings() ?? {}
-    rec.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop())
-      ctx.recorderRef.current = null
-      ctx.setRecording(false)
-      const blob = new Blob(chunks, { type: 'video/webm' })
-      if (blob.size === 0) {
-        ctx.setStatus(t('appStatusRecordingEmpty'))
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+    if (!active()) { releaseTracks(); return }
+    const track = stream.getVideoTracks()[0]
+    if (!track || track.readyState === 'ended') throw Error('No live display track')
+    const { width, height } = track.getSettings()
+    recorder = new MediaRecorder(stream, { mimeType: mime })
+    recorder.ondataavailable = (event) => {
+      if (!active() || !event.data.size || tooLarge) return
+      size += event.data.size
+      if (options.maxBytes !== undefined && size > options.maxBytes) {
+        tooLarge = true
+        chunks.length = 0
+        capture.stop()
+        releaseTracks()
         return
       }
-      const r = await window.slidesApi.addMediaBytes({
-        slideIndex,
-        kind: 'video',
-        base64: bytesToBase64(new Uint8Array(await blob.arrayBuffer())),
-        ext: 'webm',
-        fitWidthPx: FIT_WIDTH,
-        name: `Screen recording ${new Date().toLocaleTimeString()}`,
-        ...(width && height ? { natural: { width, height } } : {}),
-      })
-      if (r) {
-        ctx.applySlide(slideIndex, r.slide)
-        ctx.setSelectedIds([r.sourceId])
-        ctx.setStatus(t('appStatusRecordingInserted'))
-      }
+      chunks.push(event.data)
     }
-    // Also clean up when the user ends via the system "Stop sharing"
-    stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-      if (rec.state !== 'inactive') rec.stop()
-    })
-    rec.start(1000)
-    ctx.recorderRef.current = { rec, stream }
+    recorder.onerror = () => {
+      if (active()) ctx.setStatus(t('appStatusRecordingUnavailable'))
+      capture.cancel()
+    }
+    recorder.onstop = async () => {
+      releaseTracks()
+      if (!active()) return
+      try {
+        if (tooLarge) {
+          const limit = options.maxBytes! / 1024 ** 2
+          ctx.setStatus(getLang() === 'zh' ? `屏幕录制超过 ${limit} MiB，未插入。` : `Screen recording exceeded ${limit} MiB. Nothing was inserted.`)
+          return
+        }
+        if (!size) { ctx.setStatus(t('appStatusRecordingEmpty')); return }
+        const bytes = new Uint8Array(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer())
+        chunks.length = 0
+        if (!active() || options.canInsert?.() === false) return
+        const slideIndex = partPath && options.targetIndex ? options.targetIndex(partPath) : ctx.current
+        if (slideIndex < 0) { ctx.setStatus(t('appStatusRecordingUnavailable')); return }
+        const result = await window.slidesApi.addMediaBytes({
+          slideIndex, kind: 'video', base64: bytesToBase64(bytes), ext: 'webm', fitWidthPx: FIT_WIDTH,
+          name: `Screen recording ${new Date().toLocaleTimeString()}`,
+          ...(width && height ? { natural: { width, height } } : {}),
+        })
+        if (active() && result) {
+          ctx.applySlide(slideIndex, result.slide)
+          ctx.setSelectedIds([result.sourceId])
+          ctx.setStatus(t('appStatusRecordingInserted'))
+        }
+      } catch (error) {
+        if (active()) ctx.setStatus(error instanceof Error ? error.message : t('appStatusRecordingUnavailable'))
+      } finally { finish() }
+    }
+    track.addEventListener('ended', capture.stop, { once: true })
+    recorder.start(1000)
     ctx.setRecording(true)
     ctx.setStatus(t('appStatusRecording'))
   } catch {
-    ctx.setStatus(t('appStatusRecordingUnavailable'))
+    releaseTracks()
+    if (active()) ctx.setStatus(t('appStatusRecordingUnavailable'))
+    finish()
   }
 }

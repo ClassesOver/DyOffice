@@ -5,6 +5,63 @@ use crate::visuals::resolve_part_target;
 use crate::visuals::{reset_sheet_passes, sheet_passes};
 
 #[test]
+fn worksheet_hyperlinks_resolve_the_office_relationship_namespace() {
+    let (_directory, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>7</v></c><c r="B1"><v>8</v></c><c r="C1"><v>9</v></c></row></sheetData><hyperlinks xmlns:link="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:ext="urn:extension"><hyperlink ref="A1" ext:id="rId2" link:id="rId1"/><hyperlink ref="B1" link:id="rId1" ext:id="rId2"/><hyperlink ref="C1" ext:id="rId2" location="S!A1"/></hyperlinks></worksheet>"#,
+        ),
+        (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/expected" TargetMode="External"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/extension" TargetMode="External"/></Relationships>"#,
+        ),
+    ]);
+    let mut sessions = WorkbookSessions::new();
+    let metadata = sessions.open(&path).unwrap();
+    let range = CellRange {
+        start_row: 0,
+        end_row: 0,
+        start_column: 0,
+        end_column: 2,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let result = loop {
+        let result = sessions
+            .read_range(&metadata.session_id, &metadata.sheets[0].id, &range)
+            .unwrap();
+        if result.indexing_complete {
+            break result;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worksheet indexing timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let links: Vec<_> = result
+        .hyperlinks
+        .iter()
+        .map(|link| (link.column, link.target.as_str()))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            (0, "https://example.com/expected"),
+            (1, "https://example.com/expected"),
+            (2, "#S!A1"),
+        ]
+    );
+}
+
+#[test]
 fn normalizes_crlf_and_stray_cr_to_lf() {
     let mut crlf = "Hyderabad Day Shift\r\n(500 Seats)".to_owned();
     normalize_line_endings(&mut crlf);
@@ -1396,6 +1453,16 @@ fn rejects_entries_escaping_the_package() {
 /// still reach the wire — the renderer needs them for the column MDW.
 #[test]
 fn normal_font_name_survives_theme_substitution() {
+    let palette: String = [
+        "dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4",
+        "accent5", "accent6", "hlink", "folHlink",
+    ]
+    .into_iter()
+    .map(|slot| format!(r#"<a:{slot}><a:srgbClr val="224466"/></a:{slot}>"#))
+    .collect();
+    let theme = format!(
+        r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme>{palette}</a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="Yu Gothic"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+    );
     let (_dir, path) = open_fixture(&[
         (
             "xl/workbook.xml",
@@ -1403,15 +1470,19 @@ fn normal_font_name_survives_theme_substitution() {
         ),
         (
             "xl/_rels/workbook.xml.rels",
-            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="theme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="parts/active%20theme.xml"/></Relationships>"#,
         ),
         (
             "xl/worksheets/sheet1.xml",
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
         ),
         (
+            "xl/parts/active theme.xml",
+            &theme,
+        ),
+        (
             "xl/theme/theme1.xml",
-            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="Yu Gothic"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#,
+            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme name="Unused"><a:majorFont><a:latin typeface="Unused Major"/></a:majorFont><a:minorFont><a:latin typeface="Unused Minor"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#,
         ),
         (
             "xl/styles.xml",
@@ -1420,6 +1491,7 @@ fn normal_font_name_survives_theme_substitution() {
     ]);
     let mut sessions = WorkbookSessions::new();
     let metadata = sessions.open(&path).unwrap();
+    assert_eq!(metadata.theme_colors.as_ref().unwrap()[4], "#224466");
     assert_eq!(metadata.styles[0].font_family.as_deref(), Some("Calibri"));
     assert_eq!(
         metadata.normal_font_name.as_deref(),
@@ -1435,7 +1507,74 @@ fn normal_font_name_survives_theme_substitution() {
 /// An empty <v/> on a t="s" cell degrades to a valueless styled cell;
 /// erroring used to blank every cell of the sheet.
 #[test]
-fn empty_shared_string_value_keeps_sheet_readable() {
+fn workbook_uses_linked_styles_and_shared_strings() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+              <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="parts/linked%20styles.xml"/>
+              <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="/xl/parts/strings.xml"/>
+            </Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row></sheetData></worksheet>"#,
+        ),
+        (
+            "xl/parts/linked styles.xml",
+            r#"<styleSheet><fonts><font><name val="Linked Font"/><color indexed="1"/></font></fonts><cellXfs><xf numFmtId="2" fontId="0"/></cellXfs><colors><indexedColors><rgbColor rgb="FF000000"/><rgbColor rgb="FF123456"/></indexedColors></colors></styleSheet>"#,
+        ),
+        (
+            "xl/styles.xml",
+            r#"<styleSheet><fonts><font><name val="Orphan Font"/></font></fonts><cellXfs><xf fontId="0"/></cellXfs></styleSheet>"#,
+        ),
+        (
+            "xl/parts/strings.xml",
+            r#"<s:sst xmlns:s="http://purl.oclc.org/ooxml/spreadsheetml/main" xmlns:e="urn:example">
+                <s:si/><e:si><e:t>Foreign item</e:t></e:si>
+                <e:extension><s:si><s:t>Nested item</s:t></s:si></e:extension>
+                <s:si><s:r><s:rPr><s:b/><e:i/></s:rPr><s:t>Linked</s:t></s:r>
+                <e:r><s:t>Foreign run</s:t></e:r><s:rPh><s:t>Phonetic text</s:t></s:rPh>
+                <s:r><s:t xml:space="preserve"> text</s:t></s:r></s:si>
+            </s:sst>"#,
+        ),
+        (
+            "xl/sharedStrings.xml",
+            "<sst><si><t>A</t></si><si><t>Orphan text</t></si></sst>",
+        ),
+    ]);
+    let mut sessions = WorkbookSessions::new();
+    let metadata = sessions.open(&path).unwrap();
+    assert_eq!(metadata.styles[0].font_family.as_deref(), Some("Linked Font"));
+    assert_eq!(metadata.styles[0].font_color.as_deref(), Some("#123456"));
+    let range = CellRange {
+        start_row: 0,
+        end_row: 0,
+        start_column: 0,
+        end_column: 0,
+    };
+    let result = sessions
+        .read_range(&metadata.session_id, "sheet-1", &range)
+        .unwrap();
+    assert!(matches!(
+        result.cells[0].value.as_ref(),
+        Some(CellValue::String(text)) if text == "Linked text"
+    ));
+    let rich = result.cells[0].rich.as_ref().unwrap();
+    assert_eq!(rich.len(), 2);
+    assert_eq!(rich[0].text, "Linked");
+    assert!(rich[0].bold);
+    assert!(!rich[0].italic);
+    assert_eq!(rich[1].text, " text");
+}
+
+#[test]
+fn empty_and_nonstandard_cached_values_keep_sheet_readable() {
     let (_dir, path) = open_fixture(&[
         (
             "xl/workbook.xml",
@@ -1451,7 +1590,13 @@ fn empty_shared_string_value_keeps_sheet_readable() {
         ),
         (
             "xl/worksheets/sheet1.xml",
-            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v/></c><c r="C1" t="s"><v>99</v></c></row></sheetData></worksheet>"#,
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v/></c><c r="C1" t="s"><v>99</v></c>
+                <c r="D1" t="b"><v/></c><c r="E1" t="b"><v> </v></c><c r="F1" t="b"><v>0</v></c>
+                <c r="G1" t="b"><v>true</v></c><c r="H1" t="e"><v/></c>
+                <c r="I1" t="e"><v>_x0023_REF!</v></c><c r="J1" t="str"><v/></c>
+                <c r="K1" t="str"><v></v></c><c r="L1"><v>1e999</v></c>
+                <c r="M1"><v>NaN</v></c><c r="N1" t="n"><v>0x10</v></c>
+                <c r="O1"><v>_x0031_</v></c><c r="P1"><v>-1.25e2</v></c></row></sheetData></worksheet>"#,
         ),
     ]);
     let mut sessions = WorkbookSessions::new();
@@ -1461,7 +1606,7 @@ fn empty_shared_string_value_keeps_sheet_readable() {
         start_row: 0,
         end_row: 0,
         start_column: 0,
-        end_column: 2,
+        end_column: 15,
     };
     let result = loop {
         let result = sessions
@@ -1472,10 +1617,126 @@ fn empty_shared_string_value_keeps_sheet_readable() {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
-    assert_eq!(result.cells.len(), 1);
+    let columns: Vec<_> = result.cells.iter().map(|cell| cell.column).collect();
+    assert_eq!(columns, [0, 5, 6, 8, 10, 11, 12, 13, 14, 15]);
     assert!(
         matches!(&result.cells[0].value, Some(CellValue::String(text)) if text == "Partner ID")
     );
+    assert!(matches!(result.cells[1].value, Some(CellValue::Boolean(false))));
+    assert!(matches!(result.cells[2].value, Some(CellValue::Boolean(true))));
+    assert!(matches!(&result.cells[3].value, Some(CellValue::String(text)) if text == "#REF!"));
+    assert!(matches!(&result.cells[4].value, Some(CellValue::String(text)) if text.is_empty()));
+    for (cell, expected) in result.cells[5..9].iter().zip(["1e999", "NaN", "0x10", "1"]) {
+        assert!(matches!(&cell.value, Some(CellValue::String(text)) if text == expected));
+    }
+    assert!(matches!(result.cells[9].value, Some(CellValue::Number(-125.0))));
+}
+
+#[test]
+fn workbook_skips_missing_worksheet_links_and_remaps_sheet_metadata() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                <bookViews><workbookView activeTab="4"/></bookViews>
+                <sheets>
+                    <sheet name="NoLink" sheetId="10"/>
+                    <sheet name="NoRelationship" sheetId="11" r:id="rId11"/>
+                    <sheet name="First" sheetId="1" r:id="rId1"/>
+                    <sheet name="NoPart" sheetId="12" r:id="rId12"/>
+                    <sheet name="Last" sheetId="2" r:id="rId2"/>
+                    <sheet name="Wrong kind" sheetId="13" r:id="rId13"/>
+                    <sheet name="External" sheetId="14" r:id="rId14"/>
+                </sheets>
+                <definedNames>
+                    <definedName name="Missing" localSheetId="3">NoPart!$A$1</definedName>
+                    <definedName name="Scoped" localSheetId="4">Last!$A$1</definedName>
+                    <definedName name="_xlnm.Print_Area" localSheetId="4">Last!$A$1:$B$2</definedName>
+                    <definedName name="Global">First!$A$1</definedName>
+                </definedNames>
+            </workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships>
+                <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+                <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
+                <Relationship Id="rId12" Target="worksheets/missing.xml"/>
+                <Relationship Id="rId13" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="worksheets/sheet1.xml"/>
+                <Relationship Id="rId14" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="https://example.invalid/sheet.xml" TargetMode="External"/>
+            </Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            "<worksheet><sheetData/></worksheet>",
+        ),
+        (
+            "xl/worksheets/sheet2.xml",
+            "<worksheet><sheetData/></worksheet>",
+        ),
+    ]);
+    let metadata = WorkbookSessions::new().open(&path).unwrap();
+    assert_eq!(
+        metadata
+            .sheets
+            .iter()
+            .map(|sheet| sheet.id.as_str())
+            .collect::<Vec<_>>(),
+        ["sheet-1", "sheet-2"]
+    );
+    assert_eq!(metadata.active_tab, 1);
+    assert!(!metadata.sheets[0].has_scoped_defined_names);
+    assert!(metadata.sheets[1].has_scoped_defined_names);
+    assert_eq!(
+        metadata.sheets[1].print_area.as_deref(),
+        Some("Last!$A$1:$B$2")
+    );
+    assert_eq!(
+        metadata
+            .defined_names
+            .iter()
+            .map(|name| (name.name.as_str(), name.sheet_index))
+            .collect::<Vec<_>>(),
+        [("Scoped", Some(1)), ("Global", None)]
+    );
+}
+
+#[test]
+fn workbook_reads_only_declared_names_and_valid_sheet_scopes() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<s:workbook xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                xmlns:ext="urn:example:extension">
+                <s:sheets><s:sheet name="Data" sheetId="1" r:id="rId1"/><s:sheet name="Other" sheetId="2" r:id="rId2"/></s:sheets>
+                <s:definedNames>
+                    <s:definedName name="Visible">"&#x6D4B;<![CDATA[&amp;]]>"</s:definedName>
+                    <s:definedName name="_xlnm.Print_Area" localSheetId="0">Data!$A$1:$B$2</s:definedName>
+                    <s:definedName name="Hidden" localSheetId="0" hidden="1"/>
+                    <s:definedName name="MissingSheet" localSheetId="5">Other!$B$2</s:definedName>
+                    <ext:definedName name="Foreign" localSheetId="1">Other!$A$1</ext:definedName>
+                </s:definedNames>
+                <s:extLst><s:ext uri="urn:example:extension"><ext:definedNames>
+                    <s:definedName name="_xlnm.Print_Area" localSheetId="0">Data!$Z$99</s:definedName>
+                    <s:definedName name="Nested" localSheetId="1">Other!$C$3</s:definedName>
+                </ext:definedNames></s:ext></s:extLst>
+            </s:workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>"#,
+        ),
+        ("xl/worksheets/sheet1.xml", "<worksheet><sheetData/></worksheet>"),
+        ("xl/worksheets/sheet2.xml", "<worksheet><sheetData/></worksheet>"),
+    ]);
+    let metadata = WorkbookSessions::new().open(&path).unwrap();
+    assert_eq!(metadata.sheets[0].print_area.as_deref(), Some("Data!$A$1:$B$2"));
+    assert!(metadata.sheets[0].has_scoped_defined_names);
+    assert!(!metadata.sheets[1].has_scoped_defined_names);
+    assert_eq!(metadata.defined_names.len(), 1);
+    assert_eq!(metadata.defined_names[0].name, "Visible");
+    assert_eq!(metadata.defined_names[0].formula, r#""测&amp;""#);
 }
 
 #[test]
@@ -1917,6 +2178,41 @@ fn parses_workbook_pr_date1904() {
 }
 
 #[test]
+fn workbook_ignores_extension_elements_and_uses_office_relationship_ids() {
+    let (_dir, path) = open_fixture(&[
+        (
+            "xl/workbook.xml",
+            r#"<s:workbook xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                xmlns:ext="urn:example:workbook-metadata" xmlns="urn:example:workbook-metadata">
+                <s:workbookPr date1904="1"/>
+                <s:workbookProtection lockStructure="1"/>
+                <s:bookViews><s:workbookView activeTab="1"/></s:bookViews>
+                <s:sheets>
+                    <s:sheet name="A" sheetId="1" ext:id="ignored" rel:id="rId1"/>
+                    <s:sheet name="B" sheetId="2" rel:id="rId2"/>
+                </s:sheets>
+                <s:extLst><s:ext uri="urn:example:workbook-metadata">
+                    <workbookPr date1904="0"/><workbookProtection lockStructure="0"/>
+                    <workbookView activeTab="0"/><sheet name="Extra" sheetId="3" ext:id="ignored"/>
+                </s:ext></s:extLst>
+            </s:workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>"#,
+        ),
+        ("xl/worksheets/sheet1.xml", "<worksheet><sheetData/></worksheet>"),
+        ("xl/worksheets/sheet2.xml", "<worksheet><sheetData/></worksheet>"),
+    ]);
+    let metadata = WorkbookSessions::new().open(&path).unwrap();
+    assert_eq!(metadata.sheets.len(), 2);
+    assert_eq!(metadata.active_tab, 1);
+    assert!(metadata.date1904);
+    assert!(metadata.workbook_protection.unwrap().lock_structure);
+}
+
+#[test]
 fn parses_workbook_view_active_tab() {
     let sheet_xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
     let (_dir, path) = open_fixture(&[
@@ -2101,7 +2397,7 @@ fn chartsheet_keeps_its_tab_and_renders_its_chart() {
         ),
         (
             "xl/drawings/drawing1.xml",
-            r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9304587" cy="6077107"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>"#,
+            r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9304587" cy="6077107"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm flipH="true" flipV="1"><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>"#,
         ),
         (
             "xl/drawings/_rels/drawing1.xml.rels",
@@ -2131,6 +2427,7 @@ fn chartsheet_keeps_its_tab_and_renders_its_chart() {
         .find(|visual| visual.sheet_id == "sheet-9")
         .expect("chartsheet chart visual");
     assert_eq!(chart.kind, "chart");
+    assert!(chart.flip_h && chart.flip_v);
     assert_eq!(chart.chart_path.as_deref(), Some("xl/charts/chart1.xml"));
     let chart_types = &chart.chart.as_ref().expect("parsed chart").chart_types;
     assert_eq!(chart_types, &["barChart"]);
@@ -3775,7 +4072,7 @@ fn assigns_implicit_addresses_without_r() {
             "xl/worksheets/sheet1.xml",
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <sheetData>
-<row r="3" spans="3:5"><c r="C3"><v>1</v></c><c><v>2</v></c><c><v>3</v></c></row>
+<row r="&#51;" spans="3:5"><c r="&#x43;3"><v>1</v></c><c><v>2</v></c><c><v>3</v></c></row>
 <row><c><v>9</v></c></row>
 </sheetData>
 </worksheet>"#,

@@ -1,4 +1,4 @@
-import {PDFDocument,PDFName,PDFArray,PDFDict,PDFNumber,PDFObjectCopier,PDFTextField,PDFCheckBox,PDFRadioGroup,PDFDropdown,PDFSignature,StandardFonts} from 'pdf-lib'
+import {PDFDocument,PDFName,PDFArray,PDFDict,PDFNumber,PDFObjectCopier,PDFTextField,PDFCheckBox,PDFRadioGroup,PDFDropdown,PDFSignature,StandardFonts} from '../../../../pdf/src/shared/pdf-lib.ts'
 import fontkit from '@pdf-lib/fontkit'
 import {validatePdfFormFieldOperations} from '../../../../../packages/web-contracts/src/pdf-form-fields.ts'
 import {pdfInsertFormState} from './insert-form-integrity.mjs'

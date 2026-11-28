@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Editor } from '@tiptap/core'
+import { useEditorState } from '@tiptap/react'
 import { mergeFieldInstruction } from '@genoffice/docx-engine'
 import type { MergeDataSource, MergeOutputMode } from '../../shared/ipc'
 import type { PmNode } from '../editor/convert'
@@ -87,11 +88,16 @@ export function MailMergePanel({
 
   const records = source?.records ?? []
   const record = records[recordIndex]
+  const editorDocument = useEditorState({
+    editor,
+    selector: ({ editor }) => editor.state.doc,
+    equalityFn: (previous, next) => previous === next,
+  })
   // the template with this record's values in it, as the user reads it
   const preview = useMemo(() => {
     if (!record) return ''
-    return documentText(substituteMergeFields(editor.getJSON() as PmNode, record))
-  }, [editor, record])
+    return documentText(substituteMergeFields(editorDocument.toJSON() as PmNode, record))
+  }, [editorDocument, record])
 
   const insertField = (name: string) => {
     onInsertField(mergeFieldInstruction(name))

@@ -1,21 +1,28 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {execFileSync} from 'node:child_process'
+import {randomUUID} from 'node:crypto'
+import {createRequire} from 'node:module'
 import {createServer} from 'node:http'
+import {deflateSync} from 'node:zlib'
 import JSZip from 'jszip'
-import {PDFDict,PDFDocument,PDFHexString,PDFName,PDFString,rgb} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFDocument,PDFHexString,PDFName,PDFRawStream,PDFString,concatTransformationMatrix,degrees,drawObject,popGraphicsState,pushGraphicsState,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
-import {fileFixture,importFile} from '../helpers/files.mjs'
+import {docxBytes,fileFixture,importFile} from '../helpers/files.mjs'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {password} from '../helpers/identity.mjs'
+import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
 import {isHomeHeroRequest,stubHomeHero} from '../helpers/home-hero.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
+import {createAssistantChannelService} from '../../server/src/modules/assistant-channel/service.ts'
 import {fileURLToPath} from 'node:url'
 import {readFile} from 'node:fs/promises'
 import {Readable} from 'node:stream'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {readPdfLeafObjects} from '../../../pdf/src/main/text-edit.ts'
+import {encryptDocument} from '../../../pdf/src/main/pdf-crypt.ts'
 import {readImageSource} from '../../../pdf/src/main/image-edit.ts'
 import {pdfInsertFormState} from '../../server/src/pdf/insert-form-integrity.mjs'
 import {PNG} from 'pngjs'
@@ -23,6 +30,684 @@ import {renderPdfPages} from '../../server/src/pdf/raster.mjs'
 
 const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const liveImageConfig=process.env.DYOFFICE_LIVE_PDF_IMAGE_CONFIG
+test('workspace PDF zoom follows personal settings and keeps the last zoom within the account',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((request,response)=>app.routing(request,response))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ for(const account of [f.alice,f.bob])await f.preferences.update(account.token,{language:'en',restoreSession:false,showAssistant:false})
+ const doc=await PDFDocument.create()
+ doc.addPage([400,1200]).drawText('PDF zoom fixture',{x:50,y:1100})
+ const bytes=Buffer.from(await doc.save())
+ const files=[]
+ for(const [index,account] of [f.alice,f.alice,f.alice,f.bob].entries()){
+  files.push((await importFile(f,account.token,bytes,`zoom-${index}.pdf`)).file)
+ }
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1420,height:900}})
+ await stubHomeHero(page)
+ async function login(username){
+  const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+  assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username,password}})).status(),200)
+ }
+ async function setDefault(mode){
+  await page.goto(origin)
+  await expect(page.locator('.home')).toBeVisible()
+  await accountAction(page,'个人设置')
+  const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  await settings.getByLabel('PDF 默认缩放',{exact:true}).selectOption(mode)
+  await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+  await expect(settings).toContainText('个人偏好已保存')
+ }
+ const zoom=()=>page.locator('.status-bar .zoom-value').textContent().then(value=>Number.parseInt(value,10))
+ async function open(index){
+  await page.goto(origin+'/native-pdf/?fileId='+files[index].fileId)
+  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+  await expect(page.locator('.pdf-page').first().locator('canvas')).toBeVisible()
+ }
+ await login('alice')
+ await setDefault('page')
+ await open(0)
+ await expect.poll(zoom).toBeLessThan(80)
+ const pageZoom=await zoom()
+ await page.locator('.status-bar').getByRole('button',{name:'Zoom in',exact:true}).click()
+ await expect.poll(zoom).toBeGreaterThan(pageZoom)
+ const custom=await zoom()
+ await setDefault('last')
+ await open(1)
+ await expect.poll(zoom).toBe(custom)
+ await setDefault('width')
+ await open(2)
+ await expect.poll(zoom).toBeGreaterThan(100)
+ const widthZoom=await zoom()
+ await open(0)
+ await expect.poll(zoom).toBe(custom)
+ await page.goto('about:blank')
+ await page.context().clearCookies()
+ await login('bob')
+ await setDefault('last')
+ await open(3)
+ await expect.poll(zoom).toBe(widthZoom)
+ assert.equal((await f.preferences.get(f.alice.token)).pdfDefaultZoom,'width')
+})
+
+test('native Web PDF saves a reduced PDF to the selected folder without leaving the source',{skip:!directory,timeout:65000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const workspace=createWorkspaceService(f.transactions)
+ const folder=await workspace.createFolder(f.alice.token,{name:'Compressed scans',parentId:null})
+ const pdf=await PDFDocument.create(),sheet=pdf.addPage([400,300])
+ sheet.drawText('Keep selectable source text',{x:30,y:260})
+ const uncompressed=deflateSync(Buffer.from('q Q\n'.repeat(25000)),{level:0})
+ sheet.node.addContentStream(pdf.context.register(PDFRawStream.of(pdf.context.obj({Filter:'FlateDecode',Length:uncompressed.length}),uncompressed)))
+ const scan=new PNG({width:3000,height:100});scan.data.fill(180)
+ const image=await pdf.embedPng(PNG.sync.write(scan));sheet.drawImage(image,{x:30,y:100,width:300,height:10})
+ const original=Buffer.from(await pdf.save()),{file}=await importFile(f,f.alice.token,original,'Scan draft.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const context=await browser.newContext({viewport:{width:1420,height:900},acceptDownloads:true})
+ const page=await context.newPage()
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const source=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await source.getByRole('button',{name:'Pages',exact:true}).click()
+ await source.getByRole('button',{name:'Rotate right',exact:true}).click()
+ const dirty=source.locator('.dyoffice-pdf-persistence-state')
+ await expect(dirty).toHaveAttribute('data-dirty','true')
+ const reduce=source.getByRole('button',{name:'Reduce file size',exact:true})
+ await expect(reduce).toBeEnabled({timeout:2500})
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ const reductions=[]
+ page.on('request',request=>{if(request.url().endsWith('/pdf/reduce-size'))reductions.push(request.url())})
+ await reduce.click()
+ await expect(destination.getByRole('textbox',{name:'File name'})).toHaveValue('Scan draft-small.pdf',{timeout:5000})
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal(reductions.length,0)
+
+ await reduce.click()
+ await destination.getByRole('textbox',{name:'File name'}).fill('Compact scan')
+ await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
+ const finishes=[]
+ let published
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(finishes.length!==1)return route.continue()
+  const committed=await route.fetch()
+  assert.equal(committed.status(),200)
+  published=(await committed.json()).file
+  await route.abort()
+ })
+ await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=source.getByRole('button',{name:'确认副本保存结果',exact:true})
+ await expect(confirm).toBeVisible({timeout:20000})
+ await confirm.click()
+ await expect(confirm).toHaveCount(0)
+ await expect(source.getByText('Copy saved.',{exact:true})).toBeVisible()
+ assert.ok(published)
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ assert.equal(reductions.length,1)
+ await expect(page.getByRole('tab',{name:'Scan draft.pdf',exact:true})).toHaveAttribute('aria-selected','true')
+ await expect(page.getByRole('tab',{name:'Compact scan.pdf',exact:true})).toHaveCount(0)
+ const copies=(await workspace.listFiles(f.alice.token,{folderId:folder.id})).files
+ assert.deepEqual(copies.map(entry=>[entry.id,entry.name]),[[published.fileId,'Compact scan.pdf']])
+ const bytes=await f.files.readFile(f.alice.token,published.fileId,published.revision),copy=await PDFDocument.load(bytes)
+ assert.ok(bytes.length<original.length/3)
+ assert.equal(copy.getPageCount(),1)
+ assert.equal(copy.getPage(0).getRotation().angle,0)
+ assert.ok((await readPdfLeafObjects(bytes)).some(item=>item.type===1&&item.text.includes('Keep selectable source text')))
+ assert.ok(copy.context.enumerateIndirectObjects().some(([,obj])=>obj instanceof PDFRawStream&&String(obj.dict.get(PDFName.of('Subtype')))==='/Image'&&String(obj.dict.get(PDFName.of('Width')))==='2480'))
+ await expect(dirty).toHaveAttribute('data-dirty','true')
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+
+ const compact=published
+ const fresh=await context.newPage()
+ await stubHomeHero(fresh)
+ await fresh.goto(origin+'/#/file/'+compact.fileId)
+ const compactEditor=fresh.frameLocator(`iframe[data-document-id="${compact.fileId}"]`)
+ await expect(compactEditor.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await compactEditor.getByRole('button',{name:'Pages',exact:true}).click()
+ await compactEditor.getByRole('button',{name:'Reduce file size',exact:true}).click()
+ await compactEditor.getByRole('dialog',{name:'Save a copy to your workspace'}).getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(compactEditor.getByText('This file is already small; nothing to squeeze')).toBeVisible({timeout:18000})
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+ assert.equal((await f.files.openFile(f.alice.token,compact.fileId)).file.revision,compact.revision)
+
+ const standalone=await context.newPage()
+ await standalone.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(standalone.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await standalone.getByRole('button',{name:'Pages',exact:true}).click()
+ const [download]=await Promise.all([
+  standalone.waitForEvent('download',{timeout:18000}),
+  standalone.getByRole('button',{name:'Reduce file size',exact:true}).click(),
+ ])
+ assert.equal(download.suggestedFilename(),'Scan draft-small.pdf')
+ assert.ok((await readFile(await download.path())).length<original.length/3)
+
+ const currentCsrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ const postReduction=(fileId,revision)=>page.request.post(origin+'/api/v1/files/'+fileId+'/pdf/reduce-size',{
+  headers:{origin,'x-csrf-token':currentCsrf.csrfToken},data:{revision},
+ })
+ assert.equal((await postReduction(file.fileId,compact.revision)).status(),409)
+ const form=await PDFDocument.create()
+ form.addPage([300,300])
+ const fields=form.getForm()
+ fields.acroForm.dict.set(PDFName.of('XFA'),form.context.register(form.context.flateStream('<xdp/>')))
+ const unsupported=(await importFile(f,f.alice.token,Buffer.from(await form.save({updateFieldAppearances:false})),'xfa.pdf')).file
+ assert.equal((await postReduction(unsupported.fileId,unsupported.revision)).status(),400)
+})
+
+test('native Web PDF ribbon imports fillable pages with duplicate field names',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const target=await PDFDocument.create(),targetPage=target.addPage([400,300])
+ targetPage.drawText('Target page')
+ const existing=target.getForm().createTextField('contact')
+ existing.addToPage(targetPage,{x:35,y:200,width:150,height:20});existing.setText('Existing name')
+ const original=Buffer.from(await target.save()),{file}=await importFile(f,f.alice.token,original,'destination.pdf')
+ const donor=await PDFDocument.create(),source=donor.addPage([400,300]),form=donor.getForm()
+ const field=form.createTextField('contact')
+ field.addToPage(source,{x:35,y:200,width:150,height:20});field.setText('Taylor Chen')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1420,height:1000}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ await page.getByRole('button',{name:'Import pages',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'Import PDF pages',exact:true})
+ await dialog.getByLabel('Choose source PDF').setInputFiles({name:'form.pdf',mimeType:'application/pdf',buffer:Buffer.from(await donor.save())})
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ await dialog.getByRole('button',{name:'Import and save',exact:true}).click()
+ await expect.poll(head,{timeout:20000}).not.toBe(file.revision)
+ const importedRevision=await head(),contact=page.locator('.pdf-form-layer input[title="contact_2"]')
+ await expect(contact).toHaveValue('Taylor Chen',{timeout:15000})
+ await contact.fill('Grace Hopper')
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await page.keyboard.press('Control+s')
+ await expect.poll(head,{timeout:18000}).not.toBe(importedRevision)
+ const saved=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,await head()))
+ const savedField=saved.getForm().getTextField('contact_2')
+ assert.equal(saved.getPageCount(),2)
+ assert.equal(savedField.getText(),'Grace Hopper')
+ assert.equal(saved.getForm().getTextField('contact').getText(),'Existing name')
+ assert.deepEqual(savedField.acroField.getWidgets().map(widget=>String(widget.P())),[String(saved.getPage(1).ref)])
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
+
+test('native Web PDF ribbon replaces and imports workspace and local pages with revision undo',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const pdf=await PDFDocument.create(),replacement=await PDFDocument.create()
+ for(const width of [400,500,600,700,800])pdf.addPage([width,300]).drawText('Original '+width,{x:35,y:250})
+ for(const width of [310,320])replacement.addPage([width,300]).drawText('Replacement '+width,{x:35,y:250})
+ const originalForm=pdf.getForm(),customer=originalForm.createTextField('customer')
+ for(const index of [2,3])customer.addToPage(pdf.getPage(index),{x:35,y:105,width:140,height:20})
+ customer.setText('Ada Lovelace')
+ const removedField=originalForm.createTextField('obsolete')
+ removedField.addToPage(pdf.getPage(4),{x:35,y:105,width:140,height:20})
+ removedField.setText('Removed with the page')
+ const existingFrom=pdf.getPage(1)
+ existingFrom.node.addAnnot(pdf.context.register(pdf.context.obj({
+  Type:'Annot',Subtype:'Link',Rect:[30,236,160,275],Dest:[2,'Fit'],
+ })))
+ const [replacementFrom,replacementTo]=replacement.getPages()
+ replacementFrom.node.addAnnot(replacement.context.register(replacement.context.obj({
+  Type:'Annot',Subtype:'Link',Rect:[30,236,190,274],Dest:[replacementTo.ref,'Fit'],
+ })))
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'replace-ribbon.pdf')
+ const replacementBytes=Buffer.from(await replacement.save())
+ const {file:workspaceReplacement}=await importFile(f,f.alice.token,replacementBytes,'replacement.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1420,height:900}})
+ const errors=[],saveResponses=[]
+ page.on('pageerror',error=>errors.push(error.message))
+ page.on('response',response=>{
+  const path=new URL(response.url()).pathname
+  if(path.endsWith('/pdf/apply-ops')||path.endsWith('/commits'))saveResponses.push([path.split('/').at(-1),response.status()])
+ })
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ const action=page.getByRole('button',{name:'Replace pages',exact:true})
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ const readSaved=async revision=>PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,revision))
+ const widths=async revision=>(await readSaved(revision)).getPages().map(p=>p.getWidth())
+ const verifyForm=async(revision,pageIndex)=>{
+  const saved=await readSaved(revision),form=saved.getForm()
+  assert.deepEqual(form.getFields().map(field=>field.getName()),['customer'])
+  const field=form.getTextField('customer')
+  assert.equal(field.getText(),'Ada Lovelace')
+  assert.deepEqual(field.acroField.getWidgets().map(widget=>String(widget.P())),[String(saved.getPage(pageIndex).ref)])
+ }
+ async function verifySavedJump(revision,from,to){
+  const stored=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,revision))
+  const annotation=stored.getPage(from).node.Annots().lookup(0,PDFDict)
+  assert.equal(String(annotation.lookup(PDFName.of('Dest'),PDFArray).get(0)),String(stored.getPage(to).ref))
+ }
+ async function chooseTargets(range){
+  await action.click()
+  const targets=page.getByPlaceholder(/Pages to replace/)
+  await targets.fill(range)
+  await targets.press('Enter')
+  return page.getByRole('dialog',{name:`Replace pages ${range.replace(',', ', ')}`,exact:true})
+ }
+ async function chooseWorkspaceSource(dialog,source){
+  await dialog.getByRole('button',{name:'Choose from workspace…',exact:true}).click()
+  const picker=page.getByRole('dialog',{name:'Select a source PDF',exact:true})
+  await picker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(source.fileId)
+  const [response]=await Promise.all([
+   page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${source.fileId}/content`),
+   picker.getByRole('button',{name:'Use selected file',exact:true}).click(),
+  ])
+  assert.ok(response.ok())
+  assert.equal(new URL(response.url()).searchParams.get('revision'),source.revision)
+ }
+ const canceled=await chooseTargets('2')
+ try{await expect(canceled).toBeVisible({timeout:10000})}
+ catch(error){
+  t.diagnostic(JSON.stringify({errors,dialogs:await page.locator('dialog,.pdf-modal,.pdf-toast').allTextContents(),status:await page.locator('.dyoffice-pdf-persistence-state').getAttribute('title')}))
+  throw error
+ }
+ await canceled.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal(await head(),file.revision)
+
+ await page.getByRole('button',{name:'Delete page',exact:true}).click()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ const dialog=await chooseTargets('2,4')
+ try{await expect(dialog).toBeVisible({timeout:12000})}
+ catch(error){
+  t.diagnostic(JSON.stringify({errors,saveResponses,dialogs:await page.locator('dialog,.pdf-modal,.pdf-toast').allTextContents()}))
+  throw error
+ }
+ const flushed=await head()
+ assert.notEqual(flushed,file.revision)
+ assert.deepEqual(await widths(flushed),[500,600,700,800])
+ await verifySavedJump(flushed,0,1)
+ const confirm=dialog.getByRole('button',{name:'Replace and save',exact:true})
+ await expect(confirm).toBeDisabled()
+ await dialog.getByRole('button',{name:'Choose from workspace…',exact:true}).click()
+ await page.getByRole('dialog',{name:'Select a source PDF',exact:true}).getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(confirm).toBeDisabled()
+ await chooseWorkspaceSource(dialog,workspaceReplacement)
+ await expect(confirm).toBeEnabled()
+ assert.equal(await head(),flushed)
+ await confirm.click()
+ await expect.poll(head,{timeout:12000}).not.toBe(flushed)
+ assert.deepEqual(await widths(await head()),[500,310,320,700])
+ await verifySavedJump(await head(),0,1)
+ await verifySavedJump(await head(),1,2)
+ await expect(action).toBeEnabled()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','false')
+
+ const importAction=page.getByRole('button',{name:'Import pages',exact:true})
+ const importDialog=page.getByRole('dialog',{name:'Import PDF pages',exact:true})
+ const replaced=await head()
+ await verifyForm(replaced,3)
+ await importAction.click()
+ await expect(importDialog).toBeVisible({timeout:8000})
+ await importDialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal(await head(),replaced)
+
+ await page.getByRole('button',{name:'Delete page',exact:true}).click()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await importAction.click()
+ await expect(importDialog.getByText(/after page 1/)).toBeVisible({timeout:12000})
+ const importBase=await head()
+ assert.notEqual(importBase,replaced)
+ assert.deepEqual(await widths(importBase),[310,320,700])
+ const source=await PDFDocument.create()
+ for(const width of [210,220])source.addPage([width,300]).drawText('Imported '+width,{x:35,y:250})
+ const [importFrom,importTo]=source.getPages()
+ const importName=PDFString.of('Imported second page')
+ source.catalog.set(PDFName.of('Names'),source.context.obj({
+  Dests:{Names:[importName,[importTo.ref,'XYZ',0,280,null]]},
+ }))
+ importFrom.node.addAnnot(source.context.register(source.context.obj({
+  Type:'Annot',Subtype:'Link',Rect:[30,236,190,274],Dest:importName,
+ })))
+ const sourceFile={name:'import.pdf',mimeType:'application/pdf',buffer:Buffer.from(await source.save())}
+ const {file:workspaceImport}=await importFile(f,f.alice.token,sourceFile.buffer,sourceFile.name)
+ await chooseWorkspaceSource(importDialog,workspaceImport)
+ assert.equal(await head(),importBase)
+ await importDialog.getByRole('button',{name:'Import and save',exact:true}).click()
+ await expect.poll(head,{timeout:12000}).not.toBe(importBase)
+ assert.deepEqual(await widths(await head()),[310,210,220,320,700])
+ await expect(importAction).toBeEnabled()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','false')
+
+ const imported=await head()
+ await verifyForm(imported,4)
+ await verifySavedJump(imported,1,2)
+ const thumbnails=page.locator('.pdf-thumbs')
+ await thumbnails.evaluate(list=>{list.scrollTop=0})
+ await thumbnails.click({button:'right',position:{x:4,y:4}})
+ await page.locator('.thumb-menu').getByRole('button',{name:'Import pages',exact:true}).click()
+ await expect(importDialog.getByText(/before the first page/)).toBeVisible()
+ await importDialog.getByLabel('Choose source PDF').setInputFiles(sourceFile)
+ await importDialog.getByRole('button',{name:'Import and save',exact:true}).click()
+ await expect.poll(head,{timeout:12000}).not.toBe(imported)
+ assert.deepEqual(await widths(await head()),[210,220,310,210,220,320,700])
+ await expect(importAction).toBeEnabled()
+ const prepended=await head()
+ await verifyForm(prepended,6)
+ const undo=page.getByRole('button',{name:/^Undo \(/})
+ const redo=page.getByRole('button',{name:/^Redo \(/})
+ const csrfForHistory=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ async function replay(button,target,parent){
+  await expect(button).toBeEnabled({timeout:3500})
+  await button.click()
+  await expect.poll(head,{timeout:12000}).not.toBe(parent)
+  const restored=await head()
+  assert.notEqual(restored,target)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,restored),await f.files.readFile(f.alice.token,file.fileId,target))
+  const response=await page.request.get(origin+'/api/v1/files/'+file.fileId+'/revisions',{headers:{'x-csrf-token':csrfForHistory.csrfToken}})
+  assert.ok(response.ok())
+  const receipt=(await response.json()).revisions.find(row=>row.revision===restored)
+  assert.ok(receipt)
+  assert.equal(receipt.parentRevision,parent)
+  assert.equal(receipt.restoredFrom,target)
+  await expect(importAction).toBeEnabled()
+  return restored
+ }
+ const undidPrepend=await replay(undo,imported,prepended)
+ const undidImport=await replay(undo,importBase,undidPrepend)
+ await expect(undo).toBeDisabled()
+ const redidImport=await replay(redo,imported,undidImport)
+ const redidPrepend=await replay(redo,prepended,redidImport)
+ await expect(redo).toBeDisabled()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ const dirty=page.locator('.dyoffice-pdf-persistence-state')
+ await expect(dirty).toHaveAttribute('data-dirty','true')
+ await undo.click()
+ await expect(dirty).toHaveAttribute('data-dirty','false')
+ assert.equal(await head(),redidPrepend)
+ await replay(undo,imported,redidPrepend)
+ await page.getByRole('button',{name:'Home',exact:true}).click()
+ await page.locator('.pdf-page[data-page="1"] .pdf-link').click()
+ await expect(page.locator('.tb-page-input')).toHaveValue('3')
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ assert.deepEqual(await f.files.readFile(f.alice.token,workspaceReplacement.fileId,workspaceReplacement.revision),replacementBytes)
+ assert.deepEqual(await f.files.readFile(f.alice.token,workspaceImport.fileId,workspaceImport.revision),sourceFile.buffer)
+ assert.equal((await f.files.openFile(f.alice.token,workspaceReplacement.fileId)).file.revision,workspaceReplacement.revision)
+ assert.equal((await f.files.openFile(f.alice.token,workspaceImport.fileId)).file.revision,workspaceImport.revision)
+ assert.deepEqual(errors,[])
+})
+
+test('native Web PDF ribbon crops and resizes saved form pages',{skip:!directory,timeout:70000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const pdf=await PDFDocument.create()
+ for(const width of [400,500])pdf.addPage([width,300]).drawText('Original page '+width,{x:120,y:200})
+ const customer=pdf.getForm().createTextField('customer')
+ customer.setText('Ada Lovelace')
+ customer.addToPage(pdf.getPage(0),{x:140,y:80,width:150,height:28})
+ const fillKey=PDFName.of('GenOfficeStaticFormFills')
+ const staticFill={id:'resize-static',kind:'text',pageIndex:0,rect:[140,130,215,157],text:'Original entry',fontSize:14,color:'#111111',align:'left'}
+ const png=new PNG({width:3,height:3});png.data.fill(255)
+ const picture=await pdf.embedPng(PNG.sync.write(png))
+ pdf.getPage(0).drawImage(picture,{x:140,y:130,width:75,height:27})
+ pdf.catalog.set(fillKey,PDFHexString.fromText(JSON.stringify([staticFill])))
+ const readFills=doc=>JSON.parse(doc.catalog.lookup(fillKey).decodeText())
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'geometry.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1420,height:900}})
+ const errors=[]
+ page.on('pageerror',error=>errors.push(error.message))
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const ribbon=page.getByRole('button',{name:'Pages',exact:true})
+ const cropButton=page.getByRole('button',{name:'Crop pages',exact:true})
+ const dialog=page.getByRole('dialog')
+ const selectCrop=async()=>{
+  await cropButton.click()
+  const preview=dialog.locator('img')
+  await expect(preview).toBeVisible()
+  const box=await preview.boundingBox()
+  await page.mouse.move(box.x+1,box.y+1)
+  await page.mouse.down()
+  await page.mouse.move(box.x+box.width/4,box.y+box.height/5,{steps:5})
+  await page.mouse.up()
+ }
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ const saved=async revision=>PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,revision))
+ await ribbon.click()
+ await selectCrop()
+ await dialog.getByRole('button',{name:'Apply',exact:true}).click()
+ await expect.poll(head,{timeout:12000}).not.toBe(file.revision)
+ const croppedRevision=await head(),cropped=await saved(croppedRevision)
+ assert.equal(cropped.getForm().getTextField('customer').getText(),'Ada Lovelace')
+ const kept=cropped.getPage(0).getCropBox()
+ assert.ok(Math.abs(kept.x-100)<2&&Math.abs(kept.height-240)<2,JSON.stringify(kept))
+ assert.deepEqual(cropped.getPage(1).getCropBox(),{x:0,y:0,width:500,height:300})
+ assert.deepEqual(readFills(cropped),[staticFill])
+ await expect(cropButton).toBeEnabled()
+
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await page.getByRole('button',{name:'Page size',exact:true}).click()
+ await page.locator('.pdf-modal').getByRole('button',{name:'A5',exact:true}).click()
+ await expect.poll(async()=>{
+  const current=await saved(await head())
+  return current.getPages().map(p=>[p.getWidth(),p.getHeight(),p.getRotation().angle])
+ },{timeout:18000}).toEqual([[595,420,90],[420,595,0]])
+ const resized=await saved(await head())
+ assert.equal(resized.getForm().getTextField('customer').getText(),'Ada Lovelace')
+ const resizedFill={...staticFill,rect:staticFill.rect.map(coordinate=>coordinate*1.4)}
+ assert.deepEqual(readFills(resized),[resizedFill])
+ await expect(cropButton).toBeEnabled()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','false')
+
+ const resizedRevision=await head()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await selectCrop()
+ await page.keyboard.press('Control+s')
+ await expect.poll(head,{timeout:12000}).not.toBe(resizedRevision)
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','false')
+ const rotatedRevision=await head()
+ await dialog.getByRole('button',{name:'Apply',exact:true}).click()
+ await expect(page.getByText('The page changed. Open the crop preview again.',{exact:true})).toBeVisible()
+ assert.equal(await head(),rotatedRevision)
+ const input=page.locator('.pdf-form-layer input[title="customer"]')
+ await expect(input).toHaveValue('Ada Lovelace')
+ await input.fill('Grace Hopper')
+ await page.getByRole('button',{name:'Fill Form',exact:true}).click()
+ await page.locator('.pdf-page[data-page="0"] .pdf-imgedit-hit').click({timeout:10000})
+ await page.locator('.pdf-del-popup').getByRole('button',{name:'Edit text',exact:true}).click()
+ const editor=page.getByPlaceholder('Enter the text to place',{exact:true})
+ await expect(editor).toHaveValue('Original entry')
+ await editor.fill('Edited after resize')
+ await page.locator('.pdf-modal').getByRole('button',{name:'OK',exact:true}).click()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ const staged=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${file.fileId}/pdf/apply-ops/uploads`,{timeout:15000})
+ await page.getByRole('button',{name:'Save',exact:true}).click()
+ const stagedResult=await staged
+ assert.ok(stagedResult.ok(),await stagedResult.text())
+ await expect.poll(head,{timeout:14000}).not.toBe(rotatedRevision)
+ const edited=await saved(await head())
+ assert.equal(edited.getForm().getTextField('customer').getText(),'Grace Hopper')
+ assert.deepEqual(edited.getForm().getTextField('customer').acroField.getWidgets()[0].getRectangle(),resized.getForm().getTextField('customer').acroField.getWidgets()[0].getRectangle())
+ assert.deepEqual(readFills(edited),[{...resizedFill,text:'Edited after resize'}])
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ assert.deepEqual(errors,[])
+})
+
+test('native Web PDF converts to editable Word Excel and PowerPoint downloads',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([600,800]).drawText('Quarterly revenue example',{x:65,y:710,size:18})
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'Quarterly report.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,assistantChannels:true})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1420,height:820},acceptDownloads:true})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ for(const [label,extension,part] of [
+  ['Word','docx','word/document.xml'],
+  ['Excel','xlsx','xl/worksheets/sheet1.xml'],
+  ['PPT','pptx','ppt/slides/slide1.xml'],
+ ]){
+  await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
+  const action=page.getByRole('button',{name:'PDF to '+label,exact:true})
+  await expect(action).toBeEnabled({timeout:2000})
+  const [download]=await Promise.all([page.waitForEvent('download',{timeout:35000}),action.click()])
+  assert.equal(download.suggestedFilename(),'Quarterly report.'+extension)
+  const result=await JSZip.loadAsync(await readFile(await download.path()))
+  assert.match(await result.file(part).async('string'),/Quarterly revenue example/)
+ }
+ for(const [label,extension] of [['Markdown','md'],['HTML','html']]){
+  await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
+  const action=page.getByRole('button',{name:'PDF to '+label,exact:true})
+  await expect(action).toBeEnabled({timeout:2000})
+  const [download]=await Promise.all([page.waitForEvent('download',{timeout:35000}),action.click()])
+  assert.equal(download.suggestedFilename(),'Quarterly report.'+extension)
+  const result=await readFile(await download.path(),'utf8')
+  assert.match(result,/Quarterly revenue example/)
+  if(extension==='html')assert.match(result,/<title>Quarterly report<\/title>/)
+ }
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await page.getByRole('button',{name:'Home',exact:true}).click()
+ await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
+ const converted=page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/pdf/convert-office'))
+ const [draftDownload]=await Promise.all([
+  page.waitForEvent('download',{timeout:35000}),page.getByRole('button',{name:'PDF to PPT',exact:true}).click(),
+ ])
+ assert.equal(draftDownload.suggestedFilename(),'Quarterly report.pptx')
+ const request=(await converted).postDataJSON()
+ assert.equal(request.revision,file.revision)
+ assert.deepEqual(request.snapshot.rotations,{'0':90})
+ const convertedDraft=await JSZip.loadAsync(await readFile(await draftDownload.path()))
+ assert.match(await convertedDraft.file('ppt/presentation.xml').async('string'),/<p:sldSz\b[^>]*cx="10160000"[^>]*cy="7620000"/)
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+
+ const other=await browser.newContext()
+ try {
+  const challenge=await(await other.request.get(origin+'/api/v1/auth/csrf')).json()
+  assert.equal((await other.request.post(origin+'/api/v1/auth/login',{
+   headers:{origin,'x-csrf-token':challenge.csrfToken},data:{username:'bob',password},
+  })).status(),200)
+  const proof=await(await other.request.get(origin+'/api/v1/auth/session-proof')).json()
+  const denied=await other.request.post(origin+'/api/v1/files/'+file.fileId+'/pdf/convert-office',{
+   headers:{origin,'x-csrf-token':proof.csrfToken},data:{revision:file.revision,format:'docx'},
+  })
+  assert.equal(denied.status(),404)
+ } finally { await other.close() }
+
+ const {PDFDocument:NativePDFDocument}=createRequire(new URL('../../../pdf/package.json',import.meta.url))('pdf-lib')
+ const protectedPdf=await NativePDFDocument.create()
+ protectedPdf.addPage().drawText('Owner-authorized conversion')
+ encryptDocument(protectedPdf,{
+  userPassword:'',ownerPassword:'export-owner',
+  permissions:{printing:true,modifying:false,annotating:false,copying:false},
+ })
+ const protectedBytes=Buffer.from(await protectedPdf.save({useObjectStreams:false}))
+ const protectedId=randomUUID(),protectedRevision=randomUUID(),owner=f.alice.user.id
+ const stored=await f.objects.putImmutable(`${f.deploymentId}/${owner}/objects/${protectedRevision}`,protectedBytes)
+ // Upload policy forbids encrypted PDFs. Exercise an already stored revision.
+ await f.ownerDb.transaction(async db=>{
+  await db.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,owner])
+  const {rows:[workspace]}=await db.query('SELECT id FROM workspaces WHERE deployment_id=$1 AND owner_id=$2',[f.deploymentId,owner])
+  await db.query("INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision) VALUES($1,$2,$3,$4,'Protected report.pdf','pdf',$5)",[protectedId,f.deploymentId,owner,workspace.id,protectedRevision])
+  await db.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size) VALUES($1,$2,$3,$4,$5,$6,$7)',[protectedRevision,f.deploymentId,owner,protectedId,stored.key,stored.sha256,stored.size])
+ })
+ await page.goto(origin+'/native-pdf/?fileId='+protectedId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
+ await page.getByRole('button',{name:'PDF to Word',exact:true}).click()
+ const authorization=page.getByRole('dialog',{name:'Enter the PDF owner password'})
+ await expect(authorization).toBeVisible()
+ await authorization.locator('input').fill('incorrect')
+ await authorization.getByRole('button',{name:'Convert',exact:true}).click()
+ await expect(authorization.getByRole('alert')).toBeVisible()
+ await authorization.locator('input').fill('export-owner')
+ const [authorized]=await Promise.all([
+  page.waitForEvent('download',{timeout:35000}),authorization.getByRole('button',{name:'Convert',exact:true}).click(),
+ ])
+ assert.equal(authorized.suggestedFilename(),'Protected report.docx')
+ const authorizedDocx=await JSZip.loadAsync(await readFile(await authorized.path()))
+ assert.match(await authorizedDocx.file('word/document.xml').async('string'),/Owner-authorized conversion/)
+ assert.deepEqual(await f.files.readFile(f.alice.token,protectedId,protectedRevision),protectedBytes)
+
+ const channels=createAssistantChannelService({transactions:f.transactions,credentialKey:f.csrfKey})
+ const {conversationId}=await channels.createConversation(f.alice.token,{fileId:file.fileId})
+ const {memberToken}=await channels.issueDshToken(f.alice.token,conversationId,60,false,true)
+ const {ticket}=await channels.issueEditTicket(memberToken,file.fileId,undefined)
+ const guest=await browser.newContext()
+ try {
+  const redeemed=await guest.request.post(origin+'/dsh-edit/redeem',{headers:{origin},data:{ticket}})
+  assert.equal(redeemed.status(),200)
+  const referer=origin+(await redeemed.json()).url
+  const proof=await(await guest.request.get(origin+'/api/v1/auth/session-proof',{headers:{referer}})).json()
+  const convert=(id,revision)=>guest.request.post(origin+'/api/v1/files/'+id+'/pdf/convert-office',{
+   headers:{origin,referer,'x-csrf-token':proof.csrfToken},data:{revision,format:'docx'},
+  })
+  const result=await convert(file.fileId,file.revision)
+  assert.equal(result.status(),200)
+  const guestDocx=await JSZip.loadAsync(await result.body())
+  assert.match(await guestDocx.file('word/document.xml').async('string'),/Quarterly revenue example/)
+  assert.equal((await convert(protectedId,protectedRevision)).status(),404)
+ } finally { await guest.close() }
+})
+
 test('native Web PDF opens an internal link at its explicit destination',{skip:!directory,timeout:60000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
@@ -56,6 +741,302 @@ test('native Web PDF opens an internal link at its explicit destination',{skip:!
  await expect.poll(()=>markedLocation.evaluate(mark=>Math.abs(
   mark.getBoundingClientRect().top-document.querySelector('.pdf-scroll').getBoundingClientRect().top,
  ))).toBeLessThan(60)
+})
+
+test('native Web PDF autosaves after a manual save and follows live workspace preferences',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:true,showAssistant:false})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300]).drawText('Review original')
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'Autosave review.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ const ready=()=>expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const uiDirty=value=>expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty',String(value))
+ const button=name=>page.getByRole('button',{name,exact:true})
+ const head=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ const rotation=async revision=>(await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,revision))).getPage(0).getRotation().angle
+ const blur=()=>page.evaluate(()=>window.dispatchEvent(new FocusEvent('blur')))
+ const prepare=request=>request.method()==='POST'&&new URL(request.url()).pathname===`/api/v1/files/${file.fileId}/pdf/apply-ops/uploads`
+ const blurWithoutSave=async revision=>{
+  await assert.rejects(Promise.all([page.waitForRequest(prepare,{timeout:750}),blur()]),{name:'TimeoutError'})
+  assert.equal(await head(),revision)
+  await uiDirty(true)
+ }
+ const rotate=async()=>{await button('Rotate right').click();await uiDirty(true)}
+ const saveManually=async previous=>{
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(head,{timeout:12000}).not.toBe(previous)
+  await uiDirty(false)
+  return head()
+ }
+ await ready()
+ await button('Pages').click()
+ await rotate()
+ await blurWithoutSave(file.revision)
+ const manual=await saveManually(file.revision)
+ assert.equal(await rotation(manual),90)
+
+ await rotate()
+ const preferenceRead=request=>request.method()==='GET'&&new URL(request.url()).pathname==='/api/v1/preferences'
+ let releasePreference
+ const heldPreference=new Promise(resolve=>{releasePreference=resolve})
+ await page.route('**/api/v1/preferences',async route=>{await heldPreference;await route.continue()},{times:1})
+ const copy=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ try{
+  await Promise.all([page.waitForRequest(preferenceRead),blur()])
+  await page.keyboard.press('ControlOrMeta+Shift+s')
+  await expect(copy).toBeVisible()
+  const read=page.waitForResponse(response=>preferenceRead(response.request())&&response.ok())
+  releasePreference()
+  await read
+ }finally{releasePreference()}
+ await blurWithoutSave(manual)
+ await copy.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(copy).toHaveCount(0)
+ await Promise.all([page.waitForRequest(prepare,{timeout:10000}),blur()])
+ await expect.poll(head,{timeout:12000}).not.toBe(manual)
+ await uiDirty(false)
+ const auto=await head()
+ assert.equal(await rotation(auto),180)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+
+ await f.preferences.update(f.alice.token,{autoSave:false})
+ await rotate()
+ await blurWithoutSave(auto)
+ await f.preferences.update(f.alice.token,{autoSave:true})
+ await Promise.all([page.waitForRequest(prepare,{timeout:10000}),blur()])
+ await expect.poll(head,{timeout:12000}).not.toBe(auto)
+ await uiDirty(false)
+ assert.equal(await rotation(await head()),270)
+})
+
+test('native Web PDF Save As creates a workspace copy of unsaved page changes',{skip:!directory,timeout:60000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300]).drawText('Source page')
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'manual-save-as.pdf')
+ const workspace=createWorkspaceService(f.transactions)
+ const pdfFolder=await workspace.createFolder(f.alice.token,{name:'Review',parentId:null})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1280,height:720}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const dialog=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ const name=dialog.getByRole('textbox',{name:'File name'})
+ const openSaveAs=async()=>{
+  await page.getByRole('button',{name:'File',exact:true}).click()
+  const saveAs=page.locator('#pdf-web-file-menu').getByRole('button',{name:/^Save As/})
+  await expect(saveAs).toBeEnabled()
+  await saveAs.click()
+  await expect(name).toHaveValue('manual-save-as.pdf')
+ }
+ await openSaveAs()
+ await name.fill('Unedited copy')
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(page.getByText('Saved copy: Unedited copy.pdf',{exact:true})).toBeVisible({timeout:15000})
+ const unedited=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Unedited copy.pdf')
+ assert.ok(unedited)
+ assert.deepEqual(await f.files.readFile(f.alice.token,unedited.id,unedited.revision),original)
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ const persistence=page.locator('.dyoffice-pdf-persistence-state')
+ await expect(persistence).toHaveAttribute('data-dirty','true')
+ await openSaveAs()
+ await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+ await workspace.moveFile(f.alice.token,file.fileId,{folderId:pdfFolder.id})
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ await name.fill('Rotated copy')
+ await expect(dialog.getByRole('combobox',{name:'Folder',exact:true})).toHaveValue(pdfFolder.id)
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(page.getByText('Saved copy: Rotated copy.pdf',{exact:true})).toBeVisible({timeout:15000})
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,3)
+ const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Rotated copy.pdf')
+ assert.ok(copy)
+ assert.ok((await workspace.listFiles(f.alice.token,{folderId:pdfFolder.id})).files.some(item=>item.id===copy.id))
+ const stored=await PDFDocument.load(await f.files.readFile(f.alice.token,copy.id,copy.revision))
+ assert.equal(stored.getPage(0).getRotation().angle,90)
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ await expect(persistence).toHaveAttribute('data-dirty','true')
+})
+
+test('native Web PDF exports A0 pages as PNG and JPG after saving rotations',{skip:!directory,timeout:65000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([2384,3370]).drawRectangle({x:0,y:0,width:2384,height:3370,color:rgb(1,0,0)})
+ pdf.addPage([240,300]).drawRectangle({x:0,y:0,width:240,height:300,color:rgb(0,0,1)})
+ pdf.addPage([3600,4800]).drawRectangle({x:0,y:0,width:3600,height:4800,color:rgb(0,1,0)})
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'Large plan.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:900},acceptDownloads:true})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'Pages',exact:true}).click()
+ await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await page.getByRole('button',{name:'Home',exact:true}).click()
+ for(const format of ['png','jpg']){
+  await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
+  const action=page.getByRole('button',{name:`Export as ${format.toUpperCase()}`,exact:true})
+  const [download]=await Promise.all([page.waitForEvent('download',{timeout:17000}),action.click()])
+  assert.equal(download.suggestedFilename(),`Large plan-${format}.zip`)
+  const zip=await JSZip.loadAsync(await readFile(await download.path()))
+  assert.deepEqual(Object.keys(zip.files),[1,2,3].map(number=>`Large plan-0${number}.${format}`))
+  const big=await zip.file(`Large plan-01.${format}`).async('nodebuffer')
+  const small=await zip.file(`Large plan-02.${format}`).async('nodebuffer')
+  const limited=await zip.file(`Large plan-03.${format}`).async('nodebuffer')
+  if(format==='png'){
+   assert.deepEqual([big.readUInt32BE(16),big.readUInt32BE(20)],[7020,4966])
+   const blue=PNG.sync.read(small)
+   assert.deepEqual([blue.width,blue.height],[500,625])
+   assert.deepEqual([...blue.data.subarray(0,4)],[0,0,255,255])
+   assert.deepEqual([limited.readUInt32BE(16),limited.readUInt32BE(20)],[6000,8000])
+  }else{
+   assert.deepEqual([...big.subarray(0,3)],[255,216,255])
+   assert.deepEqual([...small.subarray(0,3)],[255,216,255])
+   const sizes=await page.evaluate(async encoded=>{
+    const results=[]
+    for(const data of encoded){
+     const image=await createImageBitmap(new Blob([Uint8Array.from(atob(data),char=>char.charCodeAt(0))],{type:'image/jpeg'}))
+     results.push([image.width,image.height])
+     image.close()
+    }
+    return results
+   },[big,small,limited].map(image=>image.toString('base64')))
+   assert.deepEqual(sizes,[[7020,4966],[500,625],[6000,8000]])
+  }
+ }
+ const {file:saved}=await f.files.openFile(f.alice.token,file.fileId)
+ assert.notEqual(saved.revision,file.revision)
+ assert.equal((await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,saved.revision))).getPage(0).getRotation().angle,90)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
+
+test('native Web PDF prints page ranges and parity through the browser dialog',{skip:!directory,timeout:60000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ const pdf=await PDFDocument.create()
+ for(const [width,height,rotation,color] of [[240,300,0,rgb(1,0,0)],[240,300,0,rgb(0,0,1)],[240,360,90,rgb(0,1,0)]]){
+  const sheet=pdf.addPage([width,height])
+  sheet.setRotation(degrees(rotation))
+  sheet.drawRectangle({x:0,y:0,width,height,color})
+ }
+ const {file}=await importFile(f,f.alice.token,Buffer.from(await pdf.save()),'print-range.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1280,height:720}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await page.keyboard.press('ControlOrMeta+p')
+ const dialog=page.getByRole('dialog',{name:'Print',exact:true})
+ await expect(dialog).toBeVisible()
+ await expect(dialog.getByText('Default printer',{exact:true})).toHaveCount(0)
+ await dialog.getByRole('combobox',{name:'Print',exact:true}).selectOption('even')
+ await page.evaluate(()=>{
+  const append=document.body.append
+  document.body.append=function(...children){
+   for(const frame of children){
+    if(!(frame instanceof HTMLIFrameElement)||!frame.sandbox.contains('allow-modals'))continue
+    frame.addEventListener('load',()=>{
+     const target=frame.contentWindow
+     const browserPrint=target.print.bind(target)
+     target.print=()=>{
+      const canvas=document.createElement('canvas')
+      canvas.width=canvas.height=1
+      const ctx=canvas.getContext('2d')
+      const pages=[...target.document.images].map(image=>{
+       ctx.drawImage(image,0,0,1,1)
+       return Array.from(ctx.getImageData(0,0,1,1).data)
+      })
+      window.printedPdf={title:target.document.title,pages,html:frame.srcdoc}
+      browserPrint()
+     }
+    },{capture:true,once:true})
+   }
+   return append.apply(this,children)
+  }
+ })
+ await dialog.getByRole('button',{name:'Print',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>window.printedPdf?.pages.length)).toBe(1)
+ const {pages:[pixel]}=await page.evaluate(()=>window.printedPdf)
+ assert.ok(pixel[0]<10&&pixel[1]<10&&pixel[2]>245,'only the blue second page should print')
+
+ await page.keyboard.press('ControlOrMeta+p')
+ await expect(dialog).toBeVisible()
+ await dialog.getByRole('radio',{name:'Custom range',exact:true}).check()
+ await dialog.getByPlaceholder('e.g. 1,3,5-8').fill('1-3')
+ await dialog.getByRole('combobox',{name:'Print',exact:true}).selectOption('odd')
+ await dialog.getByRole('button',{name:'Print',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>window.printedPdf?.pages.length)).toBe(2)
+ const {title,html,pages:[first,last]}=await page.evaluate(()=>window.printedPdf)
+ assert.equal(title,'print-range')
+ assert.ok(first[0]>245&&first[1]<10&&first[2]<10,'first output page should be red')
+ assert.ok(last[0]<10&&last[1]>245&&last[2]<10,'second output page should be green')
+ const output=await browser.newPage()
+ try {
+  const printSizes=async(doc,expected)=>{
+   await output.setContent(doc)
+   const printed=await PDFDocument.load(await output.pdf({preferCSSPageSize:true}))
+   assert.equal(printed.getPageCount(),expected.length)
+   expected.forEach(([width,height],index)=>{
+    const size=printed.getPage(index).getSize()
+    assert.ok(Math.abs(size.width-width)<1&&Math.abs(size.height-height)<1,JSON.stringify(size))
+   })
+  }
+  await printSizes(html,[[240,300],[360,240]])
+  await page.keyboard.press('ControlOrMeta+p')
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button',{name:'Print',exact:true}).click()
+  await expect.poll(()=>page.evaluate(()=>window.printedPdf?.pages.length)).toBe(3)
+  await printSizes((await page.evaluate(()=>window.printedPdf)).html,[[240,300],[240,300],[360,240]])
+ } finally {
+  await output.close()
+ }
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
 })
 
 test('native Web PDF prevents a 101st draft page and saves the existing edits',{skip:!directory,timeout:90000},async t=>{
@@ -210,10 +1191,16 @@ test('native PDF OCR reads a real scan and saves a searchable layer without chan
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'OCR test model'}],defaultId:'mock'}}))
  const calls=[{name:'read_pages',input:{start:1,end:4}},{name:'search_text',input:{query:'OCR Smoke Fixture'}},{name:'search_text',input:{query:'文件识别测试'}}]
+ const instruction='Read the four pages and find the scan headings.'
+ const isScanTurn=request=>{
+  if(request.method()!=='POST'||!request.url().endsWith('/api/v1/ai/turns'))return false
+  const payload=request.postDataJSON()?.request
+  return payload?.format==='pdf'&&payload.messages?.some(message=>message.role==='user'&&message.text?.startsWith(instruction))
+ }
  let turn=0
  await page.route('**/api/v1/ai/turns',route=>{
-  if(isHomeHeroRequest(route.request()))return route.fallback()
-  if(turn>0)results.push(route.request().postDataJSON().request.messages.at(-1).results[0])
+  if(!isScanTurn(route.request()))return route.fallback()
+  if(turn>0)results.push(route.request().postDataJSON().request.messages.at(-1).results?.[0])
   const call=calls[turn++]
   const body=call?'event: tool_call\ndata: '+JSON.stringify({id:'scan-'+turn,...call}):'event: delta\ndata: {"text":"Scanned page read"}'
   return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
@@ -227,9 +1214,16 @@ test('native PDF OCR reads a real scan and saves a searchable layer without chan
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
- await assistant.getByRole('textbox',{name:'消息'}).fill('Read the four pages and find the scan headings.')
- await assistant.getByRole('button',{name:'发送',exact:true}).click()
+ const composer=assistant.getByRole('textbox',{name:'消息'})
+ await composer.fill(instruction)
+ await expect(composer).toHaveValue(instruction)
+ await expect(assistant.getByRole('button',{name:'发送',exact:true})).toBeEnabled()
+ // The dock and OCR progress can reflow after opening. Use the composer
+ // shortcut, then require the PDF turn to reach the mock before waiting on OCR.
+ await Promise.all([page.waitForRequest(isScanTurn,{timeout:8000}),composer.press('Enter')])
  await expect(assistant.getByText('Scanned page read',{exact:true})).toBeVisible({timeout:25000})
+ assert.deepEqual(results.map(result=>result?.name),calls.map(call=>call.name))
+ assert.ok(results.every(result=>result&&!result.isError))
  const recognizedPages=results[0].output.split(/\[Page \d+\]/).slice(1)
  assert.match(recognizedPages[0],/OCR.*OCR Smoke Fixture/s)
  assert.match(recognizedPages[1],/Digital second page/)
@@ -265,7 +1259,7 @@ test('native PDF OCR reads a real scan and saves a searchable layer without chan
  assert.equal(await head(),savedRevision)
 })
 
-test('native PDF form marks address visible pages after an unsaved reorder',{skip:!directory,timeout:60000},async t=>{
+test('native PDF form marks and editable static fills follow an unsaved reorder',{skip:!directory,timeout:90000},async t=>{
  const origin='http://localhost:4251',f=await fileFixture(t,{origin,buildApp:false})
  const seed=await PDFDocument.create(),form=seed.getForm()
  for(const name of ['OriginalFirst','OriginalSecond']){
@@ -280,13 +1274,15 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  f.cleanup.unshift(()=>app.close())
  await app.listen({port:4251,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage()
+ const page=await browser.newPage({viewport:{width:960,height:2400}})
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
  const calls=[
+  ['goto_page',{page:1}],
   ['goto_page',{page:2}],
   ['apply_ops',{ops:[{op:'setPageOrder',order:[2,1]}]}],
   ['add_form_mark',{page:1,kind:'check',x:40,y:84}],
+  ['add_form_mark',{page:2,kind:'cross',x:205,y:155}],
  ]
  let modelTurns=0
  const results=[]
@@ -306,28 +1302,47 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await expect(page.locator('.home')).toBeVisible()
  await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const scroller=page.locator('.pdf-scroll')
+ await expect.poll(()=>scroller.evaluate(el=>el.scrollHeight-el.clientHeight)).toBe(0)
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
  for(const step of calls.keys()){
   await assistant.getByRole('textbox',{name:'消息'}).fill('Apply form step '+step)
   await assistant.getByRole('button',{name:'发送',exact:true}).click()
   await expect(assistant.getByText('Form step '+step,{exact:true})).toBeVisible({timeout:15000})
-  if(step===0)await expect(page.locator('.pdf-thumb').nth(1)).toHaveClass(/pdf-thumb-active/)
+  if(step<2)await expect(page.locator('.pdf-thumb').nth(step)).toHaveClass(/pdf-thumb-active/)
  }
  for(const result of results)assert.ok(!result.isError,result.output)
- assert.equal(results[0].name,'goto_page')
- assert.match(results[0].output,/Navigated to page 2/)
+ assert.equal(results[1].name,'goto_page')
+ assert.match(results[1].output,/Navigated to page 2/)
  recordVerifiedOfficeEffect('pdf','goto_page')
- assert.match(results[2].output,/OriginalSecond/)
+ assert.match(results[3].output,/OriginalSecond/)
+ assert.match(results[4].output,/Placed a cross/)
+ const fillTab=page.getByRole('button',{name:'填写表单',exact:true})
+ const fillText=page.getByPlaceholder('输入要放置的文字',{exact:true})
+ const confirmFill=page.locator('.pdf-modal').getByRole('button',{name:'确定',exact:true})
+ const targetPage=page.locator('.pdf-page[data-page="1"]')
+ await fillTab.click()
+ await page.getByRole('button',{name:'添加文字',exact:true}).click()
+ await fillText.fill('Editable on reopen')
+ await confirmFill.click()
+ await targetPage.click({position:{x:150,y:140}})
+ await expect(targetPage.locator('.pdf-imgedit-img')).toBeVisible()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  await page.getByRole('button',{name:'保存',exact:true}).click()
  await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
  const revision=await head()
  const saved=await f.files.readFile(f.alice.token,file.fileId,revision)
- const result=(await PDFDocument.load(saved)).getForm()
+ const output=await PDFDocument.load(saved),result=output.getForm()
  assert.equal(result.getCheckBox('OriginalFirst').isChecked(),false)
  assert.equal(result.getCheckBox('OriginalSecond').isChecked(),true)
+ const fills=doc=>JSON.parse(doc.catalog.lookup(PDFName.of('GenOfficeStaticFormFills')).decodeText())
+ const [cross,firstFill]=fills(output)
+ assert.equal(cross.kind,'cross')
+ assert.equal(cross.pageIndex,1)
+ assert.equal(firstFill.pageIndex,0)
+ assert.equal(firstFill.text,'Editable on reopen')
  const leaves=await readPdfLeafObjects(saved)
  assert.deepEqual(leaves.filter(item=>/^Original(First|Second)$/.test(item.text??'')).map(item=>[item.page,item.text]),[
   [0,'OriginalSecond'],[1,'OriginalFirst'],
@@ -337,8 +1352,99 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await page.reload()
  await reopened
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await fillTab.click()
+ await page.locator('.pdf-page[data-page="0"] .pdf-imgedit-hit').click({timeout:10000})
+ await page.locator('.pdf-del-popup').getByRole('button',{name:'编辑文字',exact:true}).click()
+ await expect(fillText).toHaveValue('Editable on reopen')
+ await fillText.fill('Edited after reopening')
+ await confirmFill.click()
+ await page.getByRole('button',{name:'保存',exact:true}).click()
+ await expect.poll(head,{timeout:15000}).not.toBe(revision)
+ const edited=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,await head()))
+ assert.deepEqual(fills(edited),[cross,{...firstFill,text:'Edited after reopening'}])
  recordVerifiedOfficeEffect('pdf','apply_ops.setPageOrder')
  recordVerifiedOfficeEffect('pdf','add_form_mark')
+})
+
+test('native Web PDF sends the desktop ribbon and selected-text assistant prompts',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((request,response)=>app.routing(request,response))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,autoSave:false})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([400,400]).drawText('Selected text for the assistant',{x:40,y:320})
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'Quick actions.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,
+  csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
+ const requests=[]
+ let release
+ const hold=new Promise(resolve=>{release=resolve})
+ await page.route('**/api/v1/ai/turns',async route=>{
+  const message=route.request().postDataJSON().request.messages.findLast(item=>item.role==='user').text
+  const n=requests.push(message)
+  if(n===1)await hold
+  await route.fulfill({contentType:'text/event-stream',body:`event: delta\ndata: {"text":"Quick action reply ${n}"}\n\nevent: done\ndata: {}\n\n`})
+ })
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const action=name=>page.getByRole('button',{name,exact:true})
+ const assistant=page.locator('.shared-editor-assistant'),composer=assistant.getByRole('textbox',{name:'Message'})
+ const reply=n=>expect(assistant.getByText(`Quick action reply ${n}`,{exact:true})).toBeVisible()
+ await action('Annotate').click()
+ await action('AI Review Summary').click()
+ try{
+  await expect.poll(()=>requests.length).toBe(1)
+  assert.match(requests[0],/summarize the review feedback page by page/)
+  await composer.fill('Keep this draft.')
+  await action('Home').click()
+  await action('AI Key Points').click()
+  await expect(composer).toHaveValue('Keep this draft.\n\nPlease extract the key points of this document as a list.')
+  assert.equal(requests.length,1)
+ }finally{release()}
+ await reply(1)
+ await assistant.getByRole('button',{name:'Send',exact:true}).click()
+ await reply(2)
+ assert.match(requests[1],/Keep this draft\..*extract the key points/s)
+ for(const [tab,button,prompt] of [
+  [null,'AI Summarize',/summarize the main content/],
+  ['Annotate','AI Process Notes',/work through the notes/],
+  ['Fill Form','AI Fill Form',/identify the form fields/],
+ ]){
+  if(tab)await action(tab).click()
+  const next=requests.length+1
+  await action(button).click()
+  await reply(next)
+  assert.match(requests.at(-1),prompt)
+ }
+ const text=page.locator('.textLayer span').getByText('Selected text for the assistant',{exact:true})
+ await expect(text).toBeVisible()
+ await text.evaluate(element=>{
+  const selection=window.getSelection(),range=document.createRange()
+  range.selectNodeContents(element)
+  selection.removeAllRanges()
+  selection.addRange(range)
+  element.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}))
+ })
+ await page.locator('.pdf-sel-ask').click()
+ const ask=page.locator('.ai-ask-pop').getByRole('textbox')
+ await ask.fill('Explain the selected text.')
+ await ask.press('Enter')
+ await reply(6)
+ assert.match(requests.at(-1),/Explain the selected text/)
+ assert.match(requests.at(-1),/selected the following text.*Selected text for the assistant/s)
+ assert.equal(requests.length,6)
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 })
 
 test('native PDF model receives visible page and selection context, and cites navigable pages',{skip:!directory,timeout:60000},async t=>{
@@ -417,10 +1523,54 @@ test('native PDF model receives visible page and selection context, and cites na
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
 })
 
+test('native PDF renders a JPEG 2000 image with the packaged decoder',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((request,response)=>app.routing(request,response))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{theme:'light'})
+ const source=await PDFDocument.create(),sheet=source.addPage([240,240])
+ // Lossless 16 × 16 OpenJPEG codestream with blue and gold halves.
+ const jpeg2000=Buffer.from(
+  '/0//UQAvAAAAAAAQAAAAEAAAAAAAAAAAAAAAEAAAABAAAAAAAAAAAAADBwEBBwEBBwEB/1IADAAAAAEBAgQEAAH/XAAKQEBISFBISFD/ZAAlAAFDcmVhdGVkIGJ5IE9wZW5KUEVHIHZlcnNpb24gMi40LjD/'+
+  'kAAKAAAAAACBAAH/k8fUFCIT9xKfOitokxffgJAX1YCE2D696zRjQrhOasJztYffgIgRT4oXYm5kgRUHeIWg0ARmf8HzhgAXLKiIKD/PwCQX2JaJCi2LiB/H2hAAFyvIPOhBScnB84QAIW4NJ8/AICIaDsVNOP8fx9oIACFuDNH/2Q==','base64')
+ const image=PDFRawStream.of(source.context.obj({Type:'XObject',Subtype:'Image',Width:16,Height:16,ColorSpace:'DeviceRGB',BitsPerComponent:8,Filter:'JPXDecode',Length:jpeg2000.length}),jpeg2000)
+ const key=PDFName.of('ImageFixture')
+ sheet.node.setXObject(key,source.context.register(image))
+ sheet.pushOperators(pushGraphicsState(),concatTransformationMatrix(128,0,0,128,32,48),drawObject(key),popGraphicsState())
+ const {file}=await importFile(f,f.alice.token,Buffer.from(await source.save()),'jpeg2000.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
+  nativePdfDirectory:directory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const canvas=page.locator('.pdf-page[data-page="0"] canvas').first()
+ await expect(canvas).toBeVisible()
+ const colors=await canvas.evaluate(node=>[64,128].map(x=>
+  Array.from(node.getContext('2d').getImageData(Math.floor(node.width*x/240),Math.floor(node.height*128/240),1,1).data)))
+ assert.deepEqual(colors,[[0,128,255,255],[255,192,0,255]])
+})
+
 for (const theme of ['light','dark']) test(`native PDF saves and reopens an assistant mark without changing other page colors in the ${theme} UI theme`,{skip:!directory,timeout:90000},async t=>{
  const origin='http://localhost:4267',f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{theme})
  const source=await PDFDocument.create(),sheet=source.addPage([300,240])
+ const rotated=theme==='dark'
+ if(rotated){
+  sheet.setCropBox(10,20,270,200)
+  sheet.setRotation(degrees(90))
+  sheet.node.set(PDFName.of('UserUnit'),source.context.obj(2))
+ }
  sheet.drawRectangle({x:40,y:140,width:16,height:16,borderWidth:1,borderColor:rgb(0,0,0)})
  sheet.drawText('Consent',{x:64,y:141,size:12})
  source.addPage([300,240]).drawRectangle({x:24,y:30,width:180,height:120,color:rgb(0.15,0.45,0.85)})
@@ -441,7 +1591,7 @@ for (const theme of ['light','dark']) test(`native PDF saves and reopens an assi
   if(isHomeHeroRequest(route.request()))return route.fallback()
   const call=turn++===0
   if(!call)result=route.request().postDataJSON().request.messages.at(-1).results[0]
-  const body=call?'event: tool_call\ndata: '+JSON.stringify({id:'printed-check',name:'add_form_mark',input:{page:1,kind:'check',x:40,y:84}})
+  const body=call?'event: tool_call\ndata: '+JSON.stringify({id:'printed-check',name:'add_form_mark',input:{page:1,kind:'check',...(rotated?{x:250,y:70}:{x:40,y:84})}})
    :'event: delta\ndata: '+JSON.stringify({text:'Printed mark queued'})
   return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
  })
@@ -990,6 +2140,101 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
 })
 
 
+async function chooseLocalPdfAttachment(page){
+ await page.getByRole('button',{name:'Add attachment',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'Choose a PDF attachment',exact:true})
+ await expect(dialog).toBeVisible({timeout:5000})
+ const [chooser]=await Promise.all([page.waitForEvent('filechooser'),dialog.getByRole('button',{name:'Choose local file…',exact:true}).click()])
+ return chooser
+}
+
+test('native Web PDF saves and exports workspace and 20 MiB local attachments',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const pdf=await PDFDocument.create();pdf.addPage([240,300]).drawText('Attachment boundary fixture',{x:20,y:240})
+ const original=Buffer.from(await pdf.save()),{file}=await importFile(f,f.alice.token,original,'attachments.pdf')
+ const empty=Buffer.alloc(0),{file:workspaceFile}=await importFile(f,f.alice.token,empty,'empty-workspace.csv')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1420,height:900},acceptDownloads:true})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ const panel=async()=>{
+  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+  await page.getByRole('button',{name:'View',exact:true}).click()
+  await page.getByRole('button',{name:'Attachments',exact:true}).click()
+ }
+ await panel()
+ const workspacePicker=page.getByRole('dialog',{name:'Choose a PDF attachment',exact:true})
+ const openWorkspacePicker=async()=>{
+  await page.getByRole('button',{name:'Add attachment',exact:true}).click()
+  await expect(workspacePicker).toBeVisible({timeout:5000})
+ }
+ await openWorkspacePicker()
+ await workspacePicker.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(workspacePicker).toHaveCount(0)
+ await expect(page.locator('.pdf-attachment')).toHaveCount(0)
+ await openWorkspacePicker()
+ await workspacePicker.getByRole('combobox',{name:'File type',exact:true}).selectOption('csv')
+ await workspacePicker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(workspaceFile.fileId)
+ const [workspaceRead]=await Promise.all([
+  page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${workspaceFile.fileId}/content`),
+  workspacePicker.getByRole('button',{name:'Use selected file',exact:true}).click(),
+ ])
+ assert.ok(workspaceRead.ok())
+ assert.equal(new URL(workspaceRead.url()).searchParams.get('revision'),workspaceFile.revision)
+ await expect(page.locator('.pdf-attachment-name[title="empty-workspace.csv"]')).toBeVisible()
+ const large=Buffer.alloc(20*1024*1024,0xa5)
+ large.set(Buffer.from('PDF attachment starts here'))
+ large[large.length-1]=0x5a
+ const attachments=[['empty.txt',empty],['large.bin',large]]
+ for(const [name,buffer] of attachments){
+  const picker=await chooseLocalPdfAttachment(page)
+  await picker.setFiles({name,mimeType:'application/octet-stream',buffer})
+  await expect(page.locator(`.pdf-attachment-name[title="${name}"]`)).toBeVisible({timeout:6000})
+ }
+ const extra=await chooseLocalPdfAttachment(page)
+ await extra.setFiles({name:'extra.txt',mimeType:'text/plain',buffer:Buffer.from('x')})
+ await expect(page.getByText('New attachments can total up to 20 MiB per save.')).toBeVisible()
+ await expect(page.locator('.pdf-attachment-name[title="extra.txt"]')).toHaveCount(0)
+ const {file:oversized}=await importFile(f,f.alice.token,Buffer.from('x'),'workspace-overflow.csv')
+ const overflowReads=[]
+ const trackOverflow=request=>{
+  if(new URL(request.url()).pathname===`/api/v1/files/${oversized.fileId}/content`)overflowReads.push(request.url())
+ }
+ page.on('request',trackOverflow)
+ await openWorkspacePicker()
+ await workspacePicker.getByRole('combobox',{name:'File type',exact:true}).selectOption('csv')
+ await workspacePicker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(oversized.fileId)
+ await workspacePicker.getByRole('button',{name:'Use selected file',exact:true}).click()
+ await expect(page.getByText('The selected files exceed the combined size limit.')).toBeVisible()
+ page.off('request',trackOverflow)
+ assert.deepEqual(overflowReads,[])
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ await page.keyboard.press('ControlOrMeta+s')
+ await expect.poll(head,{timeout:35000}).not.toBe(file.revision)
+ const revision=await head()
+ await page.reload()
+ await panel()
+ for(const [name,buffer] of [['empty-workspace.csv',empty],...attachments]){
+  const entry=page.locator('.pdf-attachment').filter({has:page.getByText(name,{exact:true})})
+  const [download]=await Promise.all([page.waitForEvent('download',{timeout:20000}),entry.getByRole('button',{name:'Export',exact:true}).click()])
+  assert.equal(download.suggestedFilename(),name)
+  assert.deepEqual(await readFile(await download.path()),buffer)
+ }
+ assert.equal(await head(),revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ assert.equal((await f.files.openFile(f.alice.token,workspaceFile.fileId)).file.revision,workspaceFile.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,workspaceFile.fileId,workspaceFile.revision),empty)
+})
+
 test('native Web PDF compares local files and downloads page images and an embedded attachment',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
@@ -999,7 +2244,7 @@ test('native Web PDF compares local files and downloads page images and an embed
  const f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'en'})
  const pdf=await PDFDocument.create()
- pdf.addPage([240,300]).drawText('PDF comparison fixture')
+ pdf.addPage([240,300]).drawText('Alpha Beta',{x:30,y:200,size:14})
  const attachment=Buffer.from('Embedded test content')
  await pdf.attach(attachment,'evidence.txt',{mimeType:'text/plain'})
  const original=Buffer.from(await pdf.save())
@@ -1014,9 +2259,47 @@ test('native Web PDF compares local files and downloads page images and an embed
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'View',exact:true}).click()
  await page.getByRole('button',{name:'Compare',exact:true}).click()
- const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.locator('.pdf-compare-pick').click()])
- await chooser.setFiles({name:'identical.pdf',mimeType:'application/pdf',buffer:original})
- await expect(page.getByText('Both documents carry the same text')).toBeVisible()
+ const picker=page.getByRole('dialog',{name:'Select a PDF to compare',exact:true})
+ await page.locator('.pdf-compare-pick').click()
+ await expect(picker).toBeVisible()
+ const [chooser]=await Promise.all([page.waitForEvent('filechooser'),picker.getByRole('button',{name:'Choose local file…',exact:true}).click()])
+ const split=await PDFDocument.create(),splitPage=split.addPage([240,300])
+ splitPage.drawText('Alpha',{x:30,y:200,size:14})
+ splitPage.drawText('Beta',{x:40,y:190,size:14})
+ const splitBytes=Buffer.from(await split.save())
+ const desktop=await import('../../../pdf/src/main/read-text.ts')
+ const desktopOriginal=(await desktop.readPdfText(original)).pages.map(page=>page.text)
+ assert.deepEqual((await desktop.readPdfText(splitBytes)).pages.map(page=>page.text),desktopOriginal)
+ const writes=[]
+ let engineLoads=0
+ const trackComparison=request=>{
+  const path=new URL(request.url()).pathname
+  const readingChat=path.endsWith('/assistant-chat')&&request.postDataJSON()?.updates?.length===0
+  if(!readingChat&&!['GET','HEAD'].includes(request.method()))writes.push(path)
+  if(/\/pdfium-[^/]+\.wasm$/.test(request.url()))engineLoads++
+ }
+ page.on('request',trackComparison)
+ await chooser.setFiles({name:'same-text.pdf',mimeType:'application/pdf',buffer:splitBytes})
+ await expect(page.getByText('Both documents carry the same text')).toBeVisible({timeout:10000})
+ const changed=await PDFDocument.create(),changedPage=changed.addPage([240,300])
+ changedPage.drawText('Alpha Beta',{x:30,y:200,size:14})
+ changedPage.drawText('Extra comparison line',{x:30,y:120,size:14})
+ const comparisonBytes=Buffer.from(await changed.save())
+ const {file:comparison}=await importFile(f,f.alice.token,comparisonBytes,'extra-line.pdf')
+ await page.locator('.pdf-compare-pick').click()
+ await picker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(comparison.fileId)
+ const [workspaceRead]=await Promise.all([
+  page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${comparison.fileId}/content`),
+  picker.getByRole('button',{name:'Use selected file',exact:true}).click(),
+ ])
+ assert.ok(workspaceRead.ok())
+ assert.equal(new URL(workspaceRead.url()).searchParams.get('revision'),comparison.revision)
+ await expect(page.locator('.pdf-compare-added')).toHaveText('+1 lines',{timeout:10000})
+ assert.equal((await f.files.openFile(f.alice.token,comparison.fileId)).file.revision,comparison.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,comparison.fileId,comparison.revision),comparisonBytes)
+ page.off('request',trackComparison)
+ assert.deepEqual(writes,[])
+ assert.equal(engineLoads,1)
  await page.getByRole('button',{name:'Attachments',exact:true}).click()
  await expect(page.getByRole('button',{name:'Add attachment',exact:true})).toBeEnabled()
  const [embedded]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export',exact:true}).click()])
@@ -1025,7 +2308,7 @@ test('native Web PDF compares local files and downloads page images and an embed
 
  await page.getByRole('button',{name:'Home',exact:true}).click()
  await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
- await expect(page.getByRole('button',{name:'PDF to Word',exact:true})).toBeDisabled()
+ await expect(page.getByRole('button',{name:'PDF to Markdown',exact:true})).toBeEnabled()
  const [images]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export as PNG',exact:true}).click()])
  const archive=await JSZip.loadAsync(await readFile(await images.path()))
  assert.deepEqual(Object.keys(archive.files),['comparison-01.png'])
@@ -1037,9 +2320,23 @@ test('native Web PDF compares local files and downloads page images and an embed
   await page.getByRole('button',{name:'Attachments',exact:true}).click()
  }
  const addedBytes=Buffer.from('New browser attachment')
- const [pickAttachment]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('button',{name:'Add attachment',exact:true}).click()])
+ const pickAttachment=await chooseLocalPdfAttachment(page)
  await pickAttachment.setFiles({name:'added.txt',mimeType:'text/plain',buffer:addedBytes})
  await expect(page.locator('.pdf-attachment-name[title="added.txt"]')).toBeVisible()
+ const {default:officeCrypto}=await import('officecrypto-tool')
+ const protectedName='protected-attachment.docx'
+ const openPassword='attachment fixture password'
+ const protectedBytes=Buffer.from(officeCrypto.encrypt(await docxBytes(),{password:openPassword}))
+ const stage=await f.files.stageUpload(f.alice.token,{name:protectedName,size:protectedBytes.length})
+ await f.files.receiveUpload(f.alice.token,stage.uploadId,protectedBytes,{password:openPassword,format:'docx'})
+ const {file:protectedFile}=await f.files.finishUpload(f.alice.token,stage.uploadId)
+ assert.equal((await f.files.openFile(f.alice.token,protectedFile.fileId)).documentPasswordProtected,true)
+ await page.getByRole('button',{name:'Add attachment',exact:true}).click()
+ const attachmentPicker=page.getByRole('dialog',{name:'Choose a PDF attachment',exact:true})
+ await attachmentPicker.getByRole('combobox',{name:'File type',exact:true}).selectOption('docx')
+ await attachmentPicker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(protectedFile.fileId)
+ await attachmentPicker.getByRole('button',{name:'Use selected file',exact:true}).click()
+ await expect(page.locator('.pdf-attachment-name[title="protected-attachment.docx"]')).toBeVisible()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  await page.getByRole('button',{name:'Home',exact:true}).click()
  await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
@@ -1051,67 +2348,304 @@ test('native Web PDF compares local files and downloads page images and an embed
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'View',exact:true}).click()
  await page.getByRole('button',{name:'Attachments',exact:true}).click()
- const added=page.locator('.pdf-attachment').filter({hasText:'added.txt'})
- const [stored]=await Promise.all([page.waitForEvent('download'),added.getByRole('button',{name:'Export',exact:true}).click()])
- assert.deepEqual(await readFile(await stored.path()),addedBytes)
+ for(const [name,bytes] of [['added.txt',addedBytes],[protectedName,protectedBytes]]){
+  const added=page.locator('.pdf-attachment').filter({has:page.getByText(name,{exact:true})})
+  const [stored]=await Promise.all([page.waitForEvent('download'),added.getByRole('button',{name:'Export',exact:true}).click()])
+  assert.equal(stored.suggestedFilename(),name)
+  assert.deepEqual(await readFile(await stored.path()),bytes)
+ }
+ assert.equal((await f.files.openFile(f.alice.token,protectedFile.fileId)).file.revision,protectedFile.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,protectedFile.fileId,protectedFile.revision),protectedBytes)
 })
 
-test('native Web PDF merges local files in order into a separate download',{skip:!directory,timeout:90000},async t=>{
+test('native Web PDF saves exported attachments to a workspace folder and recovers a lost receipt',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
  const origin='http://localhost:'+server.address().port
  const f=await fileFixture(t,{origin,buildApp:false})
- await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const workspace=createWorkspaceService(f.transactions)
+ const sourceFolder=await workspace.createFolder(f.alice.token,{name:'Reports',parentId:null})
+ const destination=await workspace.createFolder(f.alice.token,{name:'Exported attachments',parentId:null})
+ const evidence=await docxBytes()
+ const pdf=await PDFDocument.create()
+ pdf.addPage().drawText('Attachment export fixture')
+ await pdf.attach(evidence,'evidence.docx')
+ await pdf.attach(Buffer.alloc(0),'blank.csv')
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'attachments-source.pdf')
+ await workspace.moveFile(f.alice.token,file.fileId,{folderId:sourceFolder.id})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({acceptDownloads:true})
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+ await expect(frame.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await frame.getByRole('button',{name:'View',exact:true}).click()
+ await frame.getByRole('button',{name:'Attachments',exact:true}).click()
+ const exportButton=name=>frame.locator('.pdf-attachment').filter({has:frame.getByText(name,{exact:true})}).getByRole('button',{name:'Export',exact:true})
+ const dialog=frame.getByRole('dialog',{name:'Save a copy to your workspace',exact:true})
+ const name=dialog.getByRole('textbox',{name:'File name',exact:true})
+ const folder=dialog.getByRole('combobox',{name:'Folder',exact:true})
+ await exportButton('evidence.docx').click()
+ await expect(name).toHaveValue('evidence.docx',{timeout:5000})
+ await expect(folder).toHaveValue(sourceFolder.id)
+ await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ await exportButton('evidence.docx').click()
+ const [download]=await Promise.all([page.waitForEvent('download'),dialog.getByRole('button',{name:'Download attachment',exact:true}).click()])
+ assert.equal(download.suggestedFilename(),'evidence.docx')
+ assert.deepEqual(await readFile(await download.path()),evidence)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(finishes.length===1){
+   const response=await route.fetch()
+   assert.equal(response.status(),200)
+   return route.abort()
+  }
+  return route.continue()
+ })
+ await exportButton('evidence.docx').click()
+ await name.fill('Audit evidence')
+ await folder.selectOption(destination.id)
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=frame.getByRole('button',{name:'确认副本保存结果',exact:true})
+ await expect(confirm).toBeVisible({timeout:20000})
+ await confirm.click()
+ await expect(confirm).toHaveCount(0)
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ const saved=(await workspace.listFiles(f.alice.token,{folderId:destination.id})).files
+ assert.deepEqual(saved.map(item=>item.name),['Audit evidence.docx'])
+ const auditCopy=(await f.files.openFile(f.alice.token,saved[0].id)).file
+ assert.deepEqual(await f.files.readFile(f.alice.token,auditCopy.fileId,auditCopy.revision),evidence)
+ await expect(page).toHaveURL(origin+'/#/file/'+file.fileId)
+
+ await exportButton('blank.csv').click()
+ await expect(name).toHaveValue('blank.csv')
+ await folder.selectOption(destination.id)
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(frame.getByText('Saved copy: blank.csv',{exact:true})).toBeVisible({timeout:20000})
+ const copies=(await workspace.listFiles(f.alice.token,{folderId:destination.id})).files
+ assert.deepEqual(copies.map(item=>item.name).sort(),['Audit evidence.docx','blank.csv'])
+ const emptyId=copies.find(item=>item.name==='blank.csv').id
+ const emptyCopy=(await f.files.openFile(f.alice.token,emptyId)).file
+ assert.deepEqual(await f.files.readFile(f.alice.token,emptyCopy.fileId,emptyCopy.revision),Buffer.alloc(0))
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
+
+test('native Web PDF publishes and opens mixed workspace and local PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const workspace=createWorkspaceService(f.transactions)
+ const folder=await workspace.createFolder(f.alice.token,{name:'Merged reports',parentId:null})
  const makePdf=async widths=>{
   const doc=await PDFDocument.create()
   for(const width of widths)doc.addPage([width,300]).drawText('Page '+width)
+  if(widths.length===2){
+   const [first,second]=doc.getPages()
+   const name=PDFString.of('Next page')
+   doc.catalog.set(PDFName.of('Names'),doc.context.obj({Dests:{Names:[name,[second.ref,'Fit']]}}))
+   doc.catalog.set(PDFName.of('PageLabels'),doc.context.obj({Nums:[0,{S:'r',St:3}]}))
+   const root=doc.context.obj({Type:'Outlines',Count:1}),rootRef=doc.context.register(root)
+   const bookmark=doc.context.register(doc.context.obj({Title:PDFString.of('Donor chapter'),Parent:rootRef,Dest:name}))
+   root.set(PDFName.of('First'),bookmark);root.set(PDFName.of('Last'),bookmark)
+   doc.catalog.set(PDFName.of('Outlines'),rootRef)
+   first.node.addAnnot(doc.context.register(doc.context.obj({
+    Type:'Annot',Subtype:'Link',Rect:[10,230,110,275],Dest:name,
+   })))
+  }
+  const field=doc.getForm().createTextField('customer')
+  field.addToPage(doc.getPage(0),{x:30,y:160,width:120,height:22});field.setText('Customer '+widths[0])
+  await doc.attach(Buffer.from('Attachment '+widths[0]),'report.txt',{mimeType:'text/plain'})
   return Buffer.from(await doc.save())
  }
  const original=await makePdf([240])
  const {file}=await importFile(f,f.alice.token,original,'merge-source.pdf')
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
  f.cleanup.unshift(()=>app.close())
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage({acceptDownloads:true})
+ const context=await browser.newContext({acceptDownloads:true}),page=await context.newPage()
  const errors=[]
  page.on('pageerror',error=>errors.push(error.message))
+ await stubHomeHero(page)
  const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
  assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
- await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
- await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
- await page.getByRole('button',{name:'Pages',exact:true}).click()
- await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ const source=frame(file.fileId)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await source.getByRole('button',{name:'Pages',exact:true}).click()
+ await source.getByRole('button',{name:'Rotate right',exact:true}).click()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
- const pick=async()=> (await Promise.all([
-  page.waitForEvent('filechooser',{timeout:5000}),
-  page.getByRole('button',{name:'Merge PDF',exact:true}).click(),
- ]))[0]
- const canceled=await pick()
+ const merge=source.getByRole('button',{name:'Merge PDF',exact:true})
+ const sources=source.getByRole('dialog',{name:'Select PDFs to merge',exact:true})
+ const pickLocal=async()=>{
+  await expect(sources).toBeVisible({timeout:5000})
+  return (await Promise.all([
+   page.waitForEvent('filechooser',{timeout:5000}),
+   sources.getByRole('button',{name:'Choose local files…',exact:true}).click(),
+  ]))[0]
+ }
+ await merge.click()
+ const canceled=await pickLocal()
  await canceled.setFiles([])
- await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await sources.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
  assert.equal(await head(),file.revision)
- const selected=await pick()
+ await merge.click()
+ const selected=await pickLocal()
  assert.equal(selected.isMultiple(),true)
- const [download]=await Promise.all([
-  page.waitForEvent('download'),
-  selected.setFiles([
-   {name:'z-first.pdf',mimeType:'application/pdf',buffer:await makePdf([250,260])},
-   {name:'a-second.pdf',mimeType:'application/pdf',buffer:await makePdf([270])},
-  ]),
- ])
- assert.equal(download.suggestedFilename(),'merge-source-merged.pdf')
- const merged=await PDFDocument.load(await readFile(await download.path()))
+ const {createPdfStampsJob}=await import('../../server/src/pdf/stamps-job.mjs')
+ const donor=await createPdfStampsJob({allowAcroForm:true}).execute(await makePdf([250,260]),JSON.stringify({
+  version:1,action:'stamps',operation:{op:'set_header_footer',header_left:'Donor header',page_number:true},
+ }))
+ const inputs=[
+  {name:'z-first.pdf',mimeType:'application/pdf',buffer:donor.bytes},
+  {name:'a-second.pdf',mimeType:'application/pdf',buffer:await makePdf([270])},
+ ]
+ await selected.setFiles(inputs)
+ const use=sources.getByRole('button',{name:'Use selected files',exact:true})
+ await use.click()
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(destination.getByRole('textbox',{name:'File name'})).toHaveValue('merge-source-merged.pdf',{timeout:5000})
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ assert.equal(await head(),file.revision)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+
+ const donors=[]
+ for(const input of inputs)donors.push((await importFile(f,f.alice.token,input.buffer,input.name)).file)
+ await merge.click()
+ const search=sources.getByRole('searchbox',{name:'Search files',exact:true})
+ const list=sources.getByRole('listbox',{name:'Workspace files',exact:true})
+ const add=sources.getByRole('button',{name:'Add selected file',exact:true})
+ await expect(use).toBeDisabled()
+ for(const [index,input] of inputs.entries()){
+  await search.fill(input.name)
+  await expect(list.getByRole('option',{name:input.name,exact:true})).toHaveCount(1)
+  await list.selectOption(donors[index].fileId)
+  await add.click()
+  await expect(add).toBeDisabled()
+ }
+ const order=sources.getByRole('list',{name:'Merge order',exact:true}).getByRole('listitem')
+ await sources.getByRole('button',{name:'Remove a-second.pdf',exact:true}).click()
+ await expect(order).toHaveCount(1)
+ const mixedLocal=await pickLocal()
+ await mixedLocal.setFiles([inputs[1]])
+ await expect(order).toHaveText([/^z-first\.pdf/, /^Local \/ a-second\.pdf/])
+ await use.click()
+ await destination.getByRole('textbox',{name:'File name'}).fill('Client packet')
+ await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
+ let copy
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(finishes.length!==1)return route.continue()
+  const committed=await route.fetch()
+  assert.equal(committed.status(),200)
+  copy=(await committed.json()).file
+  await route.abort()
+ })
+ await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=source.getByRole('button',{name:'确认副本保存结果',exact:true})
+ await expect(confirm).toBeVisible({timeout:20000})
+ assert.ok(copy)
+ await confirm.click()
+ await expect(page).toHaveURL(origin+'/#/file/'+copy.fileId)
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ const copies=(await workspace.listFiles(f.alice.token,{folderId:folder.id})).files
+ assert.deepEqual(copies.map(item=>[item.id,item.name]),[[copy.fileId,'Client packet.pdf']])
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,4)
+ for(const [index,donor] of donors.entries()){
+  assert.equal((await f.files.openFile(f.alice.token,donor.fileId)).file.revision,donor.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,donor.fileId,donor.revision),Buffer.from(inputs[index].buffer))
+ }
+ const downloaded=await f.files.readFile(f.alice.token,copy.fileId,copy.revision)
+ const merged=await PDFDocument.load(downloaded)
  assert.deepEqual(merged.getPages().map(p=>p.getWidth()),[240,250,260,270])
  assert.equal(merged.getPage(0).getRotation().angle,90)
+ const next=merged.getPage(1).node.Annots().lookup(0,PDFDict).lookup(PDFName.of('Dest'),PDFArray)
+ assert.equal(String(next.get(0)),String(merged.getPage(2).ref))
+ const fields=['customer','customer_2','customer_3'].map(name=>merged.getForm().getTextField(name))
+ assert.deepEqual(fields.map(field=>field.getText()),['Customer 240','Customer 250','Customer 270'])
+ assert.deepEqual(fields.map(field=>String(field.acroField.getWidgets()[0].P())),[0,1,3].map(index=>String(merged.getPage(index).ref)))
+ const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+ const labelReader=getDocument({data:Uint8Array.from(downloaded)})
+ try {
+  const output=await labelReader.promise
+  assert.deepEqual(await output.getPageLabels(),['1','iii','iv','4'])
+  const [bookmark]=await output.getOutline()
+  assert.equal(bookmark.title,'Donor chapter')
+  assert.equal(await output.getPageIndex(bookmark.dest[0]),2)
+ }
+ finally { await labelReader.destroy() }
  const savedRevision=await head()
  assert.notEqual(savedRevision,file.revision)
  const saved=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,savedRevision))
  assert.equal(saved.getPageCount(),1)
  assert.equal(saved.getPage(0).getRotation().angle,90)
+ assert.deepEqual(saved.getForm().getFields().map(field=>field.getName()),['customer'])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ const output=frame(copy.fileId)
+ await expect(output.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const imported=output.locator('.pdf-form-layer input[title="customer_2"]')
+ await expect(imported).toHaveValue('Customer 250',{timeout:15000})
+ await imported.fill('Updated imported value')
+ await expect(output.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await output.getByRole('button',{name:'Save',exact:true}).click()
+ const copyHead=async()=>(await f.files.openFile(f.alice.token,copy.fileId)).file.revision
+ await expect.poll(copyHead,{timeout:18000}).not.toBe(copy.revision)
+ const savedCopyBytes=await f.files.readFile(f.alice.token,copy.fileId,await copyHead())
+ const savedCopy=await PDFDocument.load(savedCopyBytes)
+ assert.deepEqual(fields.map(field=>savedCopy.getForm().getTextField(field.getName()).getText()),['Customer 240','Updated imported value','Customer 270'])
+ const text=(await readPdfLeafObjects(savedCopyBytes)).filter(item=>item.type===1).map(item=>item.text).join('|')
+ for(const stamp of ['Donor header','1 / 2','2 / 2'])assert.ok(text.includes(stamp),stamp)
+ await output.getByRole('button',{name:'View',exact:true}).click()
+ await output.getByRole('button',{name:'Outline',exact:true}).click()
+ await output.getByRole('treeitem',{name:'Donor chapter',exact:true}).click()
+ await expect(output.locator('.tb-page-input')).toHaveValue('3')
+ await output.getByRole('button',{name:'Attachments',exact:true}).click()
+ for(const [name,content] of [['report.txt','Attachment 240'],['report (2).txt','Attachment 250'],['report (3).txt','Attachment 270']]){
+  const entry=output.locator('.pdf-attachment').filter({has:output.getByText(name,{exact:true})})
+  const [attachment]=await Promise.all([page.waitForEvent('download'),entry.getByRole('button',{name:'Export',exact:true}).click()])
+  assert.equal(attachment.suggestedFilename(),name)
+  assert.equal(await readFile(await attachment.path(),'utf8'),content)
+ }
  assert.deepEqual(errors,[])
+
+ const standalone=await context.newPage()
+ await standalone.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(standalone.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await standalone.getByRole('button',{name:'Pages',exact:true}).click()
+ const [standalonePicker]=await Promise.all([
+  standalone.waitForEvent('filechooser'),
+  standalone.getByRole('button',{name:'Merge PDF',exact:true}).click(),
+ ])
+ const [directDownload]=await Promise.all([
+  standalone.waitForEvent('download'),
+  standalonePicker.setFiles([inputs[1]]),
+ ])
+ assert.equal(directDownload.suggestedFilename(),'merge-source-merged.pdf')
+ assert.deepEqual((await PDFDocument.load(await readFile(await directDownload.path()))).getPages().map(page=>page.getWidth()),[240,270])
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,4)
+
 })
 
 test('native Web PDF saves rotation, drawings, bookmarks and widget deletion together',{skip:!directory,timeout:90000},async t=>{

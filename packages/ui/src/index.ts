@@ -25,6 +25,7 @@ export {
 } from './ai-panel-prefs'
 export {
   applyAiPanelPrefs,
+  setAiPanelOpenStorage,
   aiPanelInitiallyOpen,
   rememberAiPanelOpen,
   useAiPanelPrefs,

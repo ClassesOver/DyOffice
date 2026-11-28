@@ -14,6 +14,18 @@ const WORKBOOK =
   '</definedNames><calcPr/></workbook>'
 
 describe('applyDefinedNamesState', () => {
+  it('preserves quoted hidden names and comments during a snapshot save', () => {
+    const comment = '<!-- <definedName name="Example">1</definedName> -->'
+    const hidden = "<definedName name='Con&#102;lict' hidden='true' localSheetId='&#48;'>1</definedName>"
+    const original = `<workbook><sheets/><definedNames custom="keep">${comment}${hidden}` +
+      `<definedName name='OldName'>1</definedName></definedNames></workbook>`
+    const state = { names: [{ name: 'NewName', formula: '2' }], preserveNames: [] }
+    expect(applyDefinedNamesState(original, state)).toBe(
+      `<workbook><sheets/><definedNames custom="keep">${comment}${hidden}` +
+      '<definedName name="NewName">2</definedName></definedNames></workbook>',
+    )
+  })
+
   it('rewrites modeled names, preserving built-ins and preserve-listed ones', () => {
     const xml = applyDefinedNamesState(WORKBOOK, {
       names: [

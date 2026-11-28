@@ -12,10 +12,12 @@ import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
+import {macroWorkbook} from '../helpers/xlsm.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
 import {objectTransferAdmission} from '../../server/src/modules/files/transfer-admission.ts'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 const hostManifest=process.env.DYOFFICE_TEST_HOST_MANIFEST
@@ -84,6 +86,10 @@ for(const mode of modes)test(mode!=='node'
  const reference='<externalReference r:id="rIdExternal1"/>'
  const relationship=`<Relationship Id="rIdExternal1" Type="${relationshipNamespace}/externalLink" Target="externalLinks/externalLink1.xml"/>`
  const formula='<c r="G3"><f>[1]Catalog!$A$1</f><v>84</v></c>'
+ const textFormula='<c r="K3" t="str"><f>&quot;[1]Catalog!A1&quot;</f><v>[1]Catalog!A1</v></c>'
+ const shared=mode==='node'
+  ? '<c r="I3" s="1"><f t="shared" ref="I3:J3" si="0">[1]Catalog!A1</f><v>91</v></c><c r="J3"><f t="shared" si="0"/><v>92</v></c>'
+  : ''
  const update=async(path,find,replacement)=>{
   const xml=await zip.file(path).async('string')
   assert.ok(xml.includes(find),path)
@@ -92,8 +98,8 @@ for(const mode of modes)test(mode!=='node'
  await update(book,'</sheets>',`</sheets><externalReferences>${reference}</externalReferences>`)
  await update(bookRelationships,'</Relationships>',relationship+'</Relationships>')
  await update('[Content_Types].xml','</Types>',`<Override PartName="/${link}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/></Types>`)
- await update(worksheet,'A1:F3','A1:G3')
- await update(worksheet,'<row r="3"><c r="A3"><v>7.5</v></c></row>',`<row r="3"><c r="A3"><v>7.5</v></c>${formula}</row>`)
+ await update(worksheet,'A1:F3','A1:K3')
+ await update(worksheet,'<row r="3"><c r="A3"><v>7.5</v></c></row>',`<row r="3"><c r="A3"><v>7.5</v></c>${formula}${shared}${textFormula}</row>`)
  zip.file(link,`<externalLink xmlns="${sheetNamespace}" xmlns:r="${relationshipNamespace}"><externalBook r:id="rId1"><sheetNames><sheetName val="Catalog"/></sheetNames><sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>84</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>`)
  zip.file(linkRelationships,`<Relationships xmlns="${packageRelationshipNamespace}"><Relationship Id="rId1" Type="${relationshipNamespace}/externalLinkPath" Target="${externalTarget.replace('&','&amp;')}" TargetMode="External"/></Relationships>`)
  const original=await zip.generateAsync({type:'nodebuffer'})
@@ -103,7 +109,18 @@ for(const mode of modes)test(mode!=='node'
  sourceZip.file(worksheet,(await sourceZip.file(worksheet).async('string')).replace(
   '<c r="A1" t="inlineStr"><is><t>Revenue</t></is></c>','<c r="A1"><v>37</v></c>'))
  const sourceBytes=await sourceZip.generateAsync({type:'nodebuffer'})
- const source=(await importFile(f,f.alice.token,sourceBytes,'Source catalog.xlsx')).file
+ const macroSourceBytes=refreshAvailable?await macroWorkbook(sourceBytes):null
+ const source=macroSourceBytes?(await importFile(f,f.alice.token,macroSourceBytes,'Source catalog.xlsm')).file:null
+ if(refreshAvailable){
+  const workspace=createWorkspaceService(f.transactions)
+  const archive=await workspace.createFolder(f.alice.token,{name:'Archive',parentId:null})
+  const sales=await workspace.createFolder(f.alice.token,{name:'Sales',parentId:null})
+  const distractor=(await importFile(f,f.alice.token,macroSourceBytes,'Source catalog.xlsm')).file
+  await workspace.moveFile(f.alice.token,distractor.fileId,{folderId:archive.id})
+  await workspace.moveFile(f.alice.token,source.fileId,{folderId:sales.id})
+  await importFile(f,f.alice.token,sourceBytes,'Source catalog.xlsx')
+  await importFile(f,f.bob.token,macroSourceBytes,'Private catalog.xlsm')
+ }
  app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,
   csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,
@@ -207,21 +224,40 @@ for(const mode of modes)test(mode!=='node'
  if(refreshAvailable){
   const beforeSourceChange=await revisionCount()
   await reopenedPanel.getByRole('button',{name:'Change Source',exact:true}).click()
-  await reopenedPanel.getByRole('combobox',{name:'Source',exact:true}).selectOption({label:'Source catalog.xlsx'})
-  await reopenedPanel.getByRole('button',{name:'Save',exact:true}).click()
+  const picker=page.getByRole('dialog',{name:'Choose a workbook source',exact:true})
+  const choices=picker.getByRole('listbox',{name:'Workspace files',exact:true})
+  await expect(choices.getByRole('option',{name:'Source catalog.xlsx',exact:true})).toHaveCount(1)
+  await expect(choices.getByRole('option',{name:'external-reference.xlsx',exact:true})).toHaveCount(0)
+  await picker.getByRole('button',{name:'Cancel',exact:true}).click()
+  assert.equal(await revisionCount(),beforeSourceChange)
+  await reopenedPanel.getByRole('button',{name:'Change Source',exact:true}).click()
+  await picker.getByRole('combobox',{name:'File type',exact:true}).selectOption('xlsm')
+  await picker.getByRole('searchbox',{name:'Search files',exact:true}).fill('catalog')
+  await expect(choices.getByRole('option',{name:'Archive / Source catalog.xlsm',exact:true})).toHaveCount(1)
+  await expect(choices.getByRole('option',{name:'Sales / Source catalog.xlsm',exact:true})).toHaveCount(1)
+  await expect(choices.getByRole('option',{name:'Private catalog.xlsm',exact:true})).toHaveCount(0)
+  const prematureSourceReads=[]
+  const trackSource=request=>{
+   if(new URL(request.url()).pathname===`/api/v1/files/${source.fileId}/content`)prematureSourceReads.push(request.url())
+  }
+  page.on('request',trackSource)
+  await choices.selectOption({label:'Sales / Source catalog.xlsm'})
+  await picker.getByRole('button',{name:'Use selected file',exact:true}).click()
   await expect.poll(revisionCount,{timeout:20000}).toBe(beforeSourceChange+1)
+  page.off('request',trackSource)
+  assert.deepEqual(prematureSourceReads,[])
   const changed=(await f.files.openFile(f.alice.token,initial.fileId)).file
   const savedSource=await JSZip.loadAsync(await f.files.readFile(f.alice.token,initial.fileId,changed.revision))
   const sourceTarget=origin+'/api/v1/files/'+source.fileId+'/content?revision='+source.revision
   assert.ok((await savedSource.file(linkRelationships).async('string')).includes(`Target="${sourceTarget}"`))
   assert.ok((await savedSource.file(worksheet).async('string')).includes(formula))
-  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsx',exact:true})).toBeVisible()
+  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsm',exact:true})).toBeVisible()
   let openedSource
   await expect.poll(async()=>{
    openedSource=await app.inject({method:'GET',url:sourceTarget,headers:{cookie:SESSION_COOKIE+'='+f.alice.token}})
    return openedSource.statusCode
   },{timeout:12000}).toBe(200)
-  assert.deepEqual(openedSource.rawPayload,sourceBytes)
+  assert.deepEqual(openedSource.rawPayload,macroSourceBytes)
   const preview=page.waitForResponse(response=>response.url().endsWith('/sheets/external-links/preview'),{timeout:20000})
   await reopenedPanel.getByRole('button',{name:'Update Values',exact:true}).click()
   const previewResult=await preview
@@ -270,7 +306,7 @@ for(const mode of modes)test(mode!=='node'
   {timeout:30000}).toBe(37)
   await page.getByRole('button',{name:'Formulas',exact:true}).click()
   await page.getByRole('button',{name:'External Links',exact:true}).click()
-  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsx',exact:true})).toBeVisible()
+  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsm',exact:true})).toBeVisible()
   expectedValue=37
  }
  const countBeforeBreak=await revisionCount()
@@ -321,11 +357,27 @@ for(const mode of modes)test(mode!=='node'
  assert.equal(broken.file(linkRelationships),null)
  assert.ok(!(await broken.file(book).async('string')).includes(reference))
  assert.ok(!(await broken.file(bookRelationships).async('string')).includes(relationship))
- assert.ok((await broken.file(worksheet).async('string')).includes(`<c r="G3"><v>${expectedValue}</v></c>`))
+ const brokenSheet=await broken.file(worksheet).async('string')
+ assert.ok(brokenSheet.includes(`<c r="G3"><v>${expectedValue}</v></c>`))
+ assert.ok(brokenSheet.replaceAll('&quot;','"').includes(textFormula.replaceAll('&quot;','"')))
+ if(shared){
+  assert.ok(brokenSheet.includes('<c r="I3" s="1"><v>91</v></c>'))
+  assert.ok(brokenSheet.includes('<c r="J3"><v>92</v></c>'))
+ }
  assert.deepEqual(bytes,await f.files.readFile(f.alice.token,initial.fileId,head.revision))
  assert.equal(await revisionCount(),countBeforeBreak+1)
  await page.reload()
  await expect.poll(localAmount,{timeout:30000}).toBe(21.25)
  await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:expectedValue,formula:''})
+ if(shared)await expect.poll(()=>page.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return ['I3','J3'].map(address=>{
+   const range=sheet?.getRange(address)
+   return {value:range?.getRawValues()?.[0]?.[0],display:range?.getValue(),formula:range?.getFormula()??''}
+  })
+ })).toEqual([{value:91,display:'3/31/1900',formula:''},{value:92,display:92,formula:''}])
+ const remainingFormula=()=>page.evaluate(()=>
+  window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('K3').getFormula())
+ await expect.poll(remainingFormula).toBe('="[1]Catalog!A1"')
  assert.equal(externalRequests,0)
 })

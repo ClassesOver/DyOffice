@@ -620,11 +620,7 @@ pub(crate) fn data_labels_node<'a>(document: &'a Document<'a>) -> Option<Node<'a
 }
 
 pub(crate) fn data_labels_mode(labels: Node<'_, '_>) -> &'static str {
-    let shown = |name: &str| {
-        direct_child(labels, name)
-            .and_then(|node| node.attribute("val"))
-            .is_some_and(|value| value == "1" || value == "true")
-    };
+    let shown = |name| boolean_child(labels, name).unwrap_or(false);
     if shown("delete") {
         return "none";
     }
@@ -635,6 +631,12 @@ pub(crate) fn data_labels_mode(labels: Node<'_, '_>) -> &'static str {
         (_, true, _) => "value",
         _ => "none",
     }
+}
+
+fn boolean_child(parent: Node<'_, '_>, name: &str) -> Option<bool> {
+    // CT_Boolean defaults to true for a present element without val.
+    direct_child(parent, name)
+        .map(|node| matches!(node.attribute("val"), None | Some("1" | "true")))
 }
 
 pub(crate) fn data_labels(document: &Document<'_>) -> Option<String> {
@@ -806,9 +808,15 @@ pub(crate) fn parse_chart_series(
         .and_then(|ln| ln.attribute("w"))
         .and_then(|value| value.parse::<f64>().ok())
         .map(|emu| emu / 12700.0 * (96.0 / 72.0));
-    let smooth = direct_child(series, "smooth")
-        .and_then(|node| node.attribute("val"))
-        .map(|value| value == "1" || value == "true");
+    let line_dash = line
+        .and_then(|ln| direct_child(ln, "prstDash"))
+        .and_then(|dash| dash.attribute("val"))
+        .map(ToOwned::to_owned);
+    let smooth = boolean_child(series, "smooth").or_else(|| {
+        series
+            .parent()
+            .and_then(|plot| boolean_child(plot, "smooth"))
+    });
     let marker = direct_child(series, "marker")
         .and_then(|node| direct_child(node, "symbol"))
         .and_then(|node| node.attribute("val"))
@@ -841,6 +849,7 @@ pub(crate) fn parse_chart_series(
         point_explosions: (!point_explosions.is_empty()).then_some(point_explosions),
         line_color,
         line_width,
+        line_dash,
         smooth,
         marker,
         category_groups: category_node.and_then(category_groups),
@@ -858,15 +867,10 @@ pub(crate) fn point_labels(labels: Node<'_, '_>) -> Vec<PointLabel> {
         .filter(|node| node.has_tag_name("dLbl"))
         .filter_map(|label| {
             let index = direct_child(label, "idx")?.attribute("val")?.parse().ok()?;
-            let flag = |name: &str| {
-                direct_child(label, name)
-                    .and_then(|node| node.attribute("val"))
-                    .map(|value| value == "1" || value == "true")
-            };
-            let show_val = if flag("delete") == Some(true) {
+            let show_val = if boolean_child(label, "delete") == Some(true) {
                 Some(false)
             } else {
-                flag("showVal")
+                boolean_child(label, "showVal")
             };
             let layout =
                 direct_child(label, "layout").and_then(|node| direct_child(node, "manualLayout"));

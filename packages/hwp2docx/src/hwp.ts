@@ -74,9 +74,14 @@ export async function hwpToHwpx(hwp: Uint8Array): Promise<Uint8Array> {
  * extension: a zip is HWPX (some sites serve it as .hwp), an OLE compound file
  * or an HWP 3 signature goes through rhwp first (others serve HWP 5 as .hwpx).
  */
-export async function convertHwpToDocx(bytes: Uint8Array): Promise<HwpxToDocxResult> {
-  if (isZip(bytes)) return convertHwpxToDocx(bytes)
+export async function convertHwpToDocx(bytes: Uint8Array, validateHwpx?: (bytes: Uint8Array) => Promise<void>): Promise<HwpxToDocxResult> {
+  if (isZip(bytes)) {
+    if (validateHwpx) await validateHwpx(bytes)
+    return convertHwpxToDocx(bytes)
+  }
   if (!isHwpBinary(bytes) && !isHwp3(bytes)) throw new HwpConvertError('unreadable')
-  const result = await convertHwpxToDocx(await hwpToHwpx(bytes))
+  const hwpx = await hwpToHwpx(bytes)
+  if (validateHwpx) await validateHwpx(hwpx)
+  const result = await convertHwpxToDocx(hwpx)
   return { ...result, via: 'rhwp' }
 }

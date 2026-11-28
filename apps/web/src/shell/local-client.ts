@@ -1,5 +1,8 @@
 import type {WebFile} from './web-home-bridge'
+import {isEncryptedOfficeFormat,type EncryptedOfficeFormat} from '../../../../packages/web-contracts/src/api'
+import {workspaceConversionTarget,type ConvertedCopyDestination} from '../../../../packages/web-contracts/src/file-imports'
 export type SessionEndReason='expired'|'logout_failed'
+export class IncorrectOfficeUploadPassword extends Error {}
 /** Local mode only: HttpOnly session cookies, ephemeral CSRF, no bearer/JSON fallback. */
 export function createLocalShellClient(send:typeof fetch=fetch) {
  let csrf:string|undefined
@@ -20,7 +23,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
   for(const controller of pending)controller.abort()
   pending.clear()
  }
- async function perform<T=unknown>(path:string,method='GET',body?:unknown,stamp=generation,sessionProof?:string,signal?:AbortSignal):Promise<T>{
+ async function perform<T=unknown>(path:string,method='GET',body?:unknown,stamp=generation,sessionProof?:string,signal?:AbortSignal,decode?: (response:Response)=>Promise<T>,encryptedFormat?:EncryptedOfficeFormat):Promise<T>{
   if(!path.startsWith('/api/v1/')||path.includes('\\')||path.includes('#'))throw new Error('Expected same-origin local API path')
   assertCurrent(stamp)
   signal?.throwIfAborted()
@@ -33,10 +36,10 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
   signal?.addEventListener('abort',abort,{once:true})
   if(signal?.aborted)abort()
   try{
-   const response=await send(path,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(write||sessionProof?{'X-CSRF-Token':sessionProof??csrf!}:{}),...(body!==undefined?{'Content-Type':binary?'application/octet-stream':'application/json'}:{})},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})})
+   const response=await send(path,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,...(decode||encryptedFormat||path.endsWith('/sheets/unlock')?{redirect:'error' as const}:{}),headers:{...(write||sessionProof?{'X-CSRF-Token':sessionProof??csrf!}:{}),...(encryptedFormat==='docx'?{'X-DyOffice-Open-After-Import':'1'}:{}),...(body!==undefined?{'Content-Type':encryptedFormat?`application/vnd.dyoffice.encrypted-${encryptedFormat}`:binary?'application/octet-stream':'application/json'}:{})},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})})
    assertCurrent(stamp)
    signal?.throwIfAborted()
-   const value=response.status===204?undefined:await response.json().catch(error=>{if(response.ok)throw error;return undefined})
+   const value=response.ok&&decode?await decode(response):response.status===204?undefined:await response.json().catch(error=>{if(response.ok)throw error;return undefined})
    assertCurrent(stamp)
    signal?.throwIfAborted()
    if(!response.ok){
@@ -61,13 +64,30 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    const {csrfToken}=await request<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,signal)
    assertCurrent(stamp)
    if(!/^[A-Za-z0-9_-]{43}$/.test(csrfToken)||(expectedProof!==undefined&&expectedProof!==csrfToken))throw stale()
+   async function verifySession(requestSignal?:AbortSignal){
+    // A rotated cookie can arrive in another tab before its page navigates.
+    try{
+     const current=await perform<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,stamp,undefined,requestSignal)
+     if(current.csrfToken!==csrfToken)throw stale()
+    }catch(cause){requestSignal?.throwIfAborted();throw Object.assign(stale(),{cause})}
+   }
    return {
     proof:csrfToken,
-    async request<T=unknown>(path:string,method='GET',body?:unknown,requestSignal?:AbortSignal){
-     const result=await perform<T>(path,method,body,stamp,csrfToken,requestSignal)
-     // A rotated cookie can arrive in another tab before its page navigates.
-     try{const current=await perform<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,stamp,undefined,requestSignal);if(current.csrfToken!==csrfToken)throw stale()}catch(cause){requestSignal?.throwIfAborted();throw Object.assign(stale(),{cause})}
+    async request<T=unknown>(path:string,method='GET',body?:unknown,requestSignal?:AbortSignal,encryptedFormat?:EncryptedOfficeFormat){
+     const result=await perform<T>(path,method,body,stamp,csrfToken,requestSignal,undefined,encryptedFormat)
+     await verifySession(requestSignal)
      return result
+    },
+    async download(path:string,options?:{body:unknown;signal?:AbortSignal}){
+     const blob=await perform<Blob>(path,options?'POST':'GET',options?.body,stamp,csrfToken,options?.signal,async response=>{
+      if(response.headers.get('content-type')?.split(';',1)[0]!=='application/octet-stream'){
+       await response.body?.cancel()
+       throw new Error('未收到有效的下载文件。')
+      }
+      return response.blob()
+     })
+     await verifySession(options?.signal)
+     return blob
     },
    }
   }
@@ -113,14 +133,38 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    do{const page:{files:WebFile[];nextCursor:string|null}=await request<{files:WebFile[];nextCursor:string|null}>(`/api/v1/files?limit=100${cursor?'&cursor='+encodeURIComponent(cursor):''}`);files.push(...page.files);cursor=page.nextCursor;if(cursor){if(seen.has(cursor))throw new Error('Invalid file pagination');seen.add(cursor)}}while(cursor)
    return files
   },
-  async upload(file:File,expectedProof:string,autoName=false){
+  async upload(file:File,expectedProof:string,autoName=false,password?:string,destination?:ConvertedCopyDestination){
    if(!expectedProof)throw stale()
    if(file.size>32*1024*1024)throw new Error('文件超过 32 MiB 限制')
+   const dot=file.name.lastIndexOf('.')
+   const extension=dot<0?'':file.name.slice(dot+1).toLowerCase()
+   const encryptedFormat=password!==undefined&&extension&&isEncryptedOfficeFormat(extension)?extension:undefined
+   if(password!==undefined&&(!encryptedFormat||!password.length||password.length>255))throw new Error('请输入有效的打开密码。')
    const bound=await bindSession(expectedProof)
-   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size,...(autoName?{autoName:true}:{})})
-   await bound.request(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/content`,'PUT',file)
+   // Files dragged onto a native editor are created in the iframe's realm.
+   let content=file instanceof Blob?file:new Blob([file])
+   const target=workspaceConversionTarget(extension)
+   const stem=destination?.stem?.trim()??file.name.slice(0,dot)
+   if(target&&!stem)throw new Error('请输入副本名称。')
+   if(target)content=await bound.download(`/api/v1/files/convert-${extension}`,{body:content})
+   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:target?`${stem}.${target}`:file.name,size:target?content.size:file.size,...(autoName?{autoName:true}:{}),...(target&&destination?.folderId?{folderId:destination.folderId}:{})})
+   const path=`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}`
+   if(password!==undefined){
+    const encoded=new TextEncoder().encode(password)
+    const prefix=new Uint8Array(2)
+    new DataView(prefix.buffer).setUint16(0,encoded.length)
+    content=new Blob([prefix,encoded,content])
+    encoded.fill(0)
+   }
+   let ready:{unlockId?:string}|undefined
+   try{ready=await bound.request(path+'/content','PUT',content,undefined,encryptedFormat)}
+   catch(error){
+    if(password!==undefined&&(error as {status?:number})?.status===422)throw new IncorrectOfficeUploadPassword('打开密码错误。')
+    throw error
+   }
    // A failed finish may have committed: never retry or cancel it automatically.
-   return bound.request<{file:{fileId:string};format:string}>(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/finish`,'POST')
+   const result=await bound.request<{file:{fileId:string;revision:string};format:string}>(path+'/finish','POST')
+   return {...result,...(encryptedFormat==='docx'&&result.format==='docx'&&typeof ready?.unlockId==='string'&&/^[\da-f-]{36}$/.test(ready.unlockId)?{unlockId:ready.unlockId}:{})}
   },
  }
 }

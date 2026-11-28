@@ -1,6 +1,7 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-import {PDFName} from 'pdf-lib'
+import {PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openEditablePdf} from './editable-document.mjs'
+import {openPdfForInserts} from './insert-form-integrity.mjs'
 import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024
 export const pdfSplitSafetyCodes=new Set([...pdfStampsSafetyCodes,'MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_SPLIT','PDF_SPLIT_VERIFY_FAILED','OUTPUT_LIMIT'])
@@ -26,7 +27,8 @@ export function createPdfSplitJob(){
   const pagesPerFile=parsePdfSplitRequest(raw),original=Buffer.from(input),inputSha256=hash(original)
   busy=true
   try{
-   const managed=await capturePdfManagedStamps(original),working=managed.bytes,source=await openEditablePdf(working);check(signal)
+   const managed=await capturePdfManagedStamps(original,{allowAcroForm:true}),working=managed.bytes
+   const source=await openPdfForInserts(working,{planning:true});check(signal)
    const count=source.getPageCount(),parts=Math.ceil(count/pagesPerFile)
    if(parts<2||parts>100)fail('INVALID_PDF_SPLIT')
    const {splitPdfBytes}=await import('../../../../pdf/src/main/save-pdf.ts')
@@ -37,13 +39,13 @@ export function createPdfSplitJob(){
    for(let index=0;index<outputs.length;index++){
     let bytes=Buffer.from(outputs[index])
     if(bytes.length<1||bytes.length>MAX_BYTES)fail('OUTPUT_LIMIT')
-    const reopened=await openEditablePdf(bytes);check(signal)
+    const reopened=await openEditablePdf(bytes,{allowAcroForm:true});check(signal)
     if(reopened.getPageCount()!==Math.min(pagesPerFile,count-index*pagesPerFile))fail('PDF_SPLIT_VERIFY_FAILED')
     for(let page=0;page<reopened.getPageCount();page++){
      const before=source.getPage(index*pagesPerFile+page),after=reopened.getPage(page)
      if(JSON.stringify(before.getMediaBox())!==JSON.stringify(after.getMediaBox())||JSON.stringify(before.getCropBox())!==JSON.stringify(after.getCropBox())||before.getRotation().angle!==after.getRotation().angle||JSON.stringify(notes(before))!==JSON.stringify(notes(after)))fail('PDF_SPLIT_VERIFY_FAILED')
     }
-    bytes=await reapplyPdfManagedStamps(bytes,managed.operations);check(signal);total+=bytes.length
+    bytes=await reapplyPdfManagedStamps(bytes,managed.operations,{allowAcroForm:true,signal});check(signal);total+=bytes.length
     if(total>MAX_BYTES)fail('OUTPUT_LIMIT')
     files.push({bytes,sha256:hash(bytes),size:bytes.length})
    }

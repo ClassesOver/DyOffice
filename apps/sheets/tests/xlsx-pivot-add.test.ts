@@ -1,3 +1,4 @@
+import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -33,8 +34,9 @@ function pivotAddition(overrides: Partial<SheetPivotAddition> = {}): SheetPivotA
 async function planWith(
   pivots: SheetPivotAddition[],
   structuralOps: Parameters<typeof planCellEditsToXlsx>[2] = [],
+  bytes?: Buffer,
 ) {
-  const source = await createBufferEntrySource(await buildEditFixture())
+  const source = await createBufferEntrySource(bytes ?? await buildEditFixture())
   return planCellEditsToXlsx(
     source,
     [],
@@ -56,6 +58,105 @@ async function planWith(
 }
 
 describe('pivot additions', () => {
+  it.each([
+    [false, 45292, '1/1/2024'],
+    [true, 0, '1/1/1904'],
+  ] as const)('matches formatted cache members with date1904=%s', async (date1904, serial, date) => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    if (date1904) zip.file(workbookPath, workbook.replace('<sheets>', "<workbookPr date1904='true'/><sheets>"))
+    const stylesPath = 'xl/styles.xml'
+    const styles = await zip.file(stylesPath)!.async('text')
+    zip.file(stylesPath, styles.replace(/<cellXfs\b[^>]*>[\s\S]*?<\/cellXfs>/,
+      "<cellXfs count='3'><xf numFmtId='0'/><xf numFmtId='14'/><xf numFmtId='164'/></cellXfs>")
+      .replace(/<styleSheet\b[^>]*>/, "$&<numFmts count='1'><numFmt numFmtId='164' formatCode='000'/></numFmts>"))
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(sheetPath)!.async('text')
+    zip.file(sheetPath, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      `<row r="2"><c r="A2" s="1"><v>${serial}</v></c><c r="B2"><v>10</v></c></row>` +
+      '<row r="3"><c r="A3" s="2"><v>1</v></c><c r="B3"><v>20</v></c></row>' +
+      '<row r="4"><c r="A4"><v>1</v></c><c r="B4"><v>30</v></c></row></sheetData>'))
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 3, endColumn: 1 },
+      fieldNames: ['Label', 'Amount'], rowItems: [date, '001', '1'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')).toContain(
+      '<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r><r><x v="2"/><n v="30"/></r>',
+    )
+  })
+
+  it('uses the declared styles and shared-string parts when default paths contain unrelated files', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const relsPath = 'xl/_rels/workbook.xml.rels'
+    const rels = await zip.file(relsPath)!.async('text')
+    zip.file(relsPath, rels.replace('Target="styles.xml"', "Target='parts/styles%20one.xml'")
+      .replace('Target="sharedStrings.xml"', "Target='parts/strings.xml'"))
+    zip.file('xl/parts/styles one.xml',
+      '<styleSheet><numFmts><numFmt numFmtId="164" formatCode="000"/></numFmts>' +
+      '<cellXfs><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs></styleSheet>')
+    zip.file('xl/parts/strings.xml', '<sst><si><t>West</t></si></sst>')
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      '<row r="2"><c r="A2" s="1"><v>1</v></c><c r="B2"><v>10</v></c></row>' +
+      '<row r="3"><c r="A3" t="s"><v>0</v></c><c r="B3"><v>20</v></c></row></sheetData>'))
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 },
+      fieldNames: ['Region', 'Amount'], rowItems: ['001', 'West'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')).toContain(
+      '<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r>',
+    )
+  })
+
+  it('reads cache data from real source cells and preserves rich-text members', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      '<row r="1"><c r="A1" t="inlineStr"><is><t>Region</t></is></c></row>' +
+      '<!-- <row r="2"><c r="B2"><v>999</v></c></row> -->' +
+      "<row r='2'><c r='A2' t='inlineStr'><is><r><t>E&#97;</t></r><r><t>st</t></r>" +
+      '<rPh sb="0" eb="1"><t>phantom</t></rPh></is></c><c><v>&#49;0</v></c></row>' +
+      '<row><c r="A3" t="s"><v>1</v></c><c r="B3"><v><![CDATA[20]]></v></c></row></sheetData>'))
+    zip.file('xl/sharedStrings.xml',
+      '<sst><si/><!-- <si><t>phantom</t></si> --><si><r><t>We</t></r><r><t>st</t></r></si></sst>')
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 },
+      fieldNames: ['Region', 'Amount'], rowItems: ['East', 'West'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    const records = plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')!
+    expect(records).toContain('<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r>')
+  })
+
+  it('writes and refreshes Boolean dimension members without creating duplicate labels', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/worksheets/sheet1.xml'
+    const sheet = await zip.file(path)!.async('text')
+    zip.file(path, sheet.replace(/<sheetData>[\s\S]*?<\/sheetData>/, '<sheetData>' +
+      '<row r="1"><c r="A1" t="inlineStr"><is><t>Flag</t></is></c><c r="B1" t="inlineStr"><is><t>Amount</t></is></c></row>' +
+      '<row r="2"><c r="A2" t="b"><v>1</v></c><c r="B2"><v>10</v></c></row>' +
+      '<row r="3"><c r="A3" t="b"><v>false</v></c><c r="B3"><v>20</v></c></row></sheetData>'))
+    const plan = await planWith([pivotAddition({
+      sourceArea: { startRow: 0, startColumn: 0, endRow: 2, endColumn: 1 },
+      fieldNames: ['Flag', 'Amount'], rowItems: ['true', 'false'],
+      values: [{ fieldIndex: 1, agg: 'sum' }],
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    const definition = parsePivotDefinition(
+      plan.added.get('xl/pivotTables/pivotTable1.xml')!,
+      plan.added.get('xl/pivotCache/pivotCacheDefinition1.xml')!,
+    )
+    const source = [['Flag', 'Amount'], [true, 10], [false, 20]]
+    expect(growPivotDefinition(definition, source).grown).toBe(false)
+    expect(recomputePivotData(definition, source).data).toEqual([[10], [20], [30]])
+    const records = plan.added.get('xl/pivotCache/pivotCacheRecords1.xml')!
+    expect(records).toContain('<r><x v="0"/><n v="10"/></r><r><x v="1"/><n v="20"/></r>')
+  })
+
   it('writes the cache pair, the definition, and every linkage', async () => {
     const plan = await planWith([pivotAddition()])
 
@@ -171,6 +272,34 @@ describe('pivot additions', () => {
     const workbook = plan.replaced.get('xl/workbook.xml')
     expect(workbook).toContain('cacheId="1"')
     expect(workbook).toContain('cacheId="2"')
+  })
+
+  it('adds a cache to the real workbook list without reusing an encoded cache ID', async () => {
+    const first = await planWith([pivotAddition()])
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    for (const [path, xml] of [...first.added, ...first.replaced]) zip.file(path, xml)
+    const workbookPath = 'xl/workbook.xml'
+    const workbook = await zip.file(workbookPath)!.async('text')
+    const comment = '<!-- <pivotCaches><pivotCache cacheId="900"/></pivotCaches> -->'
+    zip.file(workbookPath, workbook.replace('<pivotCaches>', `${comment}<pivotCaches>`)
+      .replace('cacheId="1"', "cacheId='&#49;'"))
+    const plan = await planWith([pivotAddition({
+      name: 'Pivot2',
+      location: { startRow: 0, startColumn: 9, endRow: 4, endColumn: 10 },
+    })], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.added.get('xl/pivotTables/pivotTable2.xml')).toContain('cacheId="2"')
+    expect(plan.replaced.get(workbookPath)).toContain(comment)
+    expect(plan.replaced.get(workbookPath)).toMatch(/<pivotCaches><pivotCache cacheId='&#49;'[^>]*\/><pivotCache cacheId="2"[^>]*\/><\/pivotCaches>/)
+  })
+
+  it('inserts the first cache list before workbook recovery metadata', async () => {
+    const zip = await JSZip.loadAsync(await buildEditFixture())
+    const path = 'xl/workbook.xml'
+    const workbook = await zip.file(path)!.async('text')
+    const comment = '<!-- <extLst/> -->'
+    zip.file(path, workbook.replace('</workbook>', `${comment}<fileRecoveryPr/></workbook>`))
+    const plan = await planWith([pivotAddition()], [], await zip.generateAsync({ type: 'nodebuffer' }))
+    expect(plan.replaced.get(path)).toMatch(/<!-- <extLst\/> --><pivotCaches>[^]*<\/pivotCaches><fileRecoveryPr\/>/)
   })
 
   it('rejects duplicate names, bad field indexes, and mismatched widths', async () => {
@@ -558,6 +687,20 @@ describe('multi-level column pivots', () => {
     const growth = growPivotDefinition(definition, source)
     expect(growth.grown).toBe(false)
     expect(recomputePivotData(definition, source).data).toEqual([[10], [10]])
+  })
+
+  it.each([
+    ['equal', 'Part~?~*~~'],
+    ['contains', '*Part~?~*~~*'],
+    ['beginsWith', 'Part~?~*~~*'],
+  ] as const)('escapes literal wildcard characters in a %s label filter', async (op, criteria) => {
+    const filter = { kind: 'label', field: 0, op, value: 'Part?*~' } as const
+    const plan = await planWith([pivotAddition({ filters: [filter] })])
+    const table = plan.added.get('xl/pivotTables/pivotTable1.xml')!
+    expect(table).toContain('stringValue1="Part?*~"')
+    expect(table).toContain(`<customFilter val="${criteria}"/>`)
+    const cache = plan.added.get('xl/pivotCache/pivotCacheDefinition1.xml')!
+    expect(parsePivotDefinition(table, cache).filters).toEqual([filter])
   })
 
   it('writes a top-N value filter with iMeasureFld and top10', async () => {

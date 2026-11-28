@@ -116,7 +116,10 @@ export function PrintDialog({
   const [pagesMode, setPagesMode] = useState<'all' | 'range'>('all')
   const [from, setFrom] = useState(1)
   const [to, setTo] = useState(1)
-  const [job, setJob] = useState<PrintJob | null>(null)
+  const [pdfName, setPdfName] = useState<string>()
+  const request = useMemo(() => ({ host, range, settings, revision }), [host, range, settings, revision])
+  const [preview, setPreview] = useState<{ request: typeof request; job: PrintJob } | null>(null)
+  const job = preview?.request === request ? preview.job : null
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [page, setPage] = useState(1)
@@ -143,19 +146,19 @@ export function PrintDialog({
   // lay the sheet out on every tick.
   useEffect(() => {
     let alive = true
+    setError(null)
     const timer = window.setTimeout(() => {
-      host
-        .buildJob(range, overridesFor(settings))
+      request.host
+        .buildJob(request.range, overridesFor(request.settings))
         .then((built) => {
           if (!alive) return
-          setJob(built)
-          setError(null)
+          setPreview({ request, job: built })
           setPage((current) => Math.min(Math.max(current, 1), built.pageCount))
           setTo((current) => (current > built.pageCount ? built.pageCount : current))
         })
         .catch((reason: unknown) => {
           if (!alive) return
-          setJob(null)
+          setPreview(null)
           setError(reason instanceof Error ? reason.message : String(reason))
         })
     }, 120)
@@ -163,7 +166,7 @@ export function PrintDialog({
       alive = false
       window.clearTimeout(timer)
     }
-  }, [host, range, settings, revision])
+  }, [request])
 
   useEffect(() => {
     const pane = paneRef.current
@@ -236,11 +239,13 @@ export function PrintDialog({
 
   const pages = pagesMode === 'all' ? null : { from, to }
   const rangeInvalid =
-    pagesMode === 'range' && (from < 1 || to < from || (pageCount > 0 && to > pageCount))
+    pagesMode === 'range' &&
+    (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from || to > pageCount)
   const canOutput = job !== null && !busy && !rangeInvalid
+  const pdfFileName = (pdfName ?? job?.fileName.replace(/\.pdf$/i, '') ?? '').trim()
 
   const run = async (action: (built: PrintJob) => Promise<string>): Promise<void> => {
-    if (!job) return
+    if (!job || !canOutput) return
     setBusy(true)
     try {
       const message = await action(job)
@@ -265,38 +270,42 @@ export function PrintDialog({
         <header>{t('dlgPrintTitle')}</header>
         <div className="print-dialog-body">
           <div className="print-settings dialog-grid">
-            <label className="dialog-span">
-              {t('dlgPrintPrinter')}
-              <select value={deviceName} onChange={(event) => setDeviceName(event.target.value)}>
-                <option value={DEFAULT_PRINTER}>{t('dlgPrintDefaultPrinter')}</option>
-                {printers.map((printer) => (
-                  <option key={printer.name} value={printer.name}>
-                    {printer.displayName}
-                  </option>
-                ))}
-                <option value={SYSTEM_DIALOG}>{t('dlgPrintSystemDialog')}</option>
-              </select>
-            </label>
-            <label>
-              {t('dlgPrintCopies')}
-              <input
-                type="number"
-                min={1}
-                max={999}
-                value={copies}
-                onChange={(event) =>
-                  setCopies(Math.min(999, Math.max(1, Number(event.target.value) || 1)))
-                }
-              />
-            </label>
-            <label className="dialog-check">
-              <input
-                type="checkbox"
-                checked={collate}
-                onChange={(event) => setCollate(event.target.checked)}
-              />
-              {t('dlgPrintCollate')}
-            </label>
+            {!host.browserPrintDialog && (
+              <>
+                <label className="dialog-span">
+                  {t('dlgPrintPrinter')}
+                  <select value={deviceName} onChange={(event) => setDeviceName(event.target.value)}>
+                    <option value={DEFAULT_PRINTER}>{t('dlgPrintDefaultPrinter')}</option>
+                    {printers.map((printer) => (
+                      <option key={printer.name} value={printer.name}>
+                        {printer.displayName}
+                      </option>
+                    ))}
+                    <option value={SYSTEM_DIALOG}>{t('dlgPrintSystemDialog')}</option>
+                  </select>
+                </label>
+                <label>
+                  {t('dlgPrintCopies')}
+                  <input
+                    type="number"
+                    min={1}
+                    max={999}
+                    value={copies}
+                    onChange={(event) =>
+                      setCopies(Math.min(999, Math.max(1, Number(event.target.value) || 1)))
+                    }
+                  />
+                </label>
+                <label className="dialog-check">
+                  <input
+                    type="checkbox"
+                    checked={collate}
+                    onChange={(event) => setCollate(event.target.checked)}
+                  />
+                  {t('dlgPrintCollate')}
+                </label>
+              </>
+            )}
             <label className="dialog-span">
               {t('dlgPrintRange')}
               <select
@@ -314,6 +323,7 @@ export function PrintDialog({
               {t('dlgPrintPages')}
               <span className="print-pages-row">
                 <select
+                  aria-label={t('dlgPrintPages')}
                   value={pagesMode}
                   onChange={(event) => setPagesMode(event.target.value as 'all' | 'range')}
                 >
@@ -340,6 +350,17 @@ export function PrintDialog({
                 />
               </span>
             </label>
+            {host.browserPrintDialog && (
+              <label className="dialog-span">
+                {t('dlgHfFileName')}
+                <input
+                  value={pdfName ?? job?.fileName.replace(/\.pdf$/i, '') ?? ''}
+                  maxLength={180}
+                  disabled={busy}
+                  onChange={(event) => setPdfName(event.target.value)}
+                />
+              </label>
+            )}
             <label>
               {t('dlgPrintOrientation')}
               <select
@@ -389,68 +410,72 @@ export function PrintDialog({
                 )}
               </select>
             </label>
-            <label>
-              {t('dlgPrintScaling')}
-              <select
-                value={settings.scaling}
-                onChange={(event) => setScaling(event.target.value as Scaling)}
-              >
-                <option value="none">{t('dlgPrintNoScaling')}</option>
-                <option value="sheet">{t('dlgPrintFitSheet')}</option>
-                <option value="columns">{t('dlgPrintFitColumns')}</option>
-                <option value="rows">{t('dlgPrintFitRows')}</option>
-                {host.setup.fitToPage && (
-                  <option value="fit-file">
-                    {t('dlgPrintFitFile', {
-                      width: host.setup.fitToWidth || '*',
-                      height: host.setup.fitToHeight || '*',
-                    })}
-                  </option>
+            {!host.chartSheet && (
+              <>
+                <label>
+                  {t('dlgPrintScaling')}
+                  <select
+                    value={settings.scaling}
+                    onChange={(event) => setScaling(event.target.value as Scaling)}
+                  >
+                    <option value="none">{t('dlgPrintNoScaling')}</option>
+                    <option value="sheet">{t('dlgPrintFitSheet')}</option>
+                    <option value="columns">{t('dlgPrintFitColumns')}</option>
+                    <option value="rows">{t('dlgPrintFitRows')}</option>
+                    {host.setup.fitToPage && (
+                      <option value="fit-file">
+                        {t('dlgPrintFitFile', {
+                          width: host.setup.fitToWidth || '*',
+                          height: host.setup.fitToHeight || '*',
+                        })}
+                      </option>
+                    )}
+                    <option value="custom">{t('dlgPrintCustomScale')}</option>
+                  </select>
+                </label>
+                {settings.scaling === 'custom' && (
+                  <label className="dialog-span">
+                    {t('dlgPrintCustomScalePercent')}
+                    <input
+                      type="number"
+                      min={10}
+                      max={400}
+                      value={settings.scale}
+                      onChange={(event) => {
+                        const scale = Math.min(400, Math.max(10, Number(event.target.value) || 100))
+                        setScaling('custom', scale)
+                      }}
+                    />
+                  </label>
                 )}
-                <option value="custom">{t('dlgPrintCustomScale')}</option>
-              </select>
-            </label>
-            {settings.scaling === 'custom' && (
-              <label className="dialog-span">
-                {t('dlgPrintCustomScalePercent')}
-                <input
-                  type="number"
-                  min={10}
-                  max={400}
-                  value={settings.scale}
-                  onChange={(event) => {
-                    const scale = Math.min(400, Math.max(10, Number(event.target.value) || 100))
-                    setScaling('custom', scale)
-                  }}
-                />
-              </label>
+                <label className="dialog-check">
+                  <input
+                    type="checkbox"
+                    checked={settings.printGridlines}
+                    onChange={(event) =>
+                      update(
+                        { printGridlines: event.target.checked },
+                        `print-gridlines:${event.target.checked ? '1' : '0'}`,
+                      )
+                    }
+                  />
+                  {t('dlgPrintGridlines')}
+                </label>
+                <label className="dialog-check">
+                  <input
+                    type="checkbox"
+                    checked={settings.printHeadings}
+                    onChange={(event) =>
+                      update(
+                        { printHeadings: event.target.checked },
+                        `print-headings:${event.target.checked ? '1' : '0'}`,
+                      )
+                    }
+                  />
+                  {t('dlgPrintHeadings')}
+                </label>
+              </>
             )}
-            <label className="dialog-check">
-              <input
-                type="checkbox"
-                checked={settings.printGridlines}
-                onChange={(event) =>
-                  update(
-                    { printGridlines: event.target.checked },
-                    `print-gridlines:${event.target.checked ? '1' : '0'}`,
-                  )
-                }
-              />
-              {t('dlgPrintGridlines')}
-            </label>
-            <label className="dialog-check">
-              <input
-                type="checkbox"
-                checked={settings.printHeadings}
-                onChange={(event) =>
-                  update(
-                    { printHeadings: event.target.checked },
-                    `print-headings:${event.target.checked ? '1' : '0'}`,
-                  )
-                }
-              />
-              {t('dlgPrintHeadings')}
-            </label>
           </div>
           <div className="print-preview">
             <div className="print-preview-bar">
@@ -526,8 +551,12 @@ export function PrintDialog({
           </button>
           <button
             className="secondary"
-            disabled={!canOutput}
-            onClick={() => void run((built) => host.exportPdf(built, pages))}
+            disabled={!canOutput || (host.browserPrintDialog && !pdfFileName)}
+            onClick={() =>
+              void run((built) => host.browserPrintDialog
+                ? host.exportPdf(built, pages, pdfFileName)
+                : host.exportPdf(built, pages))
+            }
           >
             {t('dlgPrintToPdf')}
           </button>
@@ -537,7 +566,7 @@ export function PrintDialog({
             onClick={() =>
               void run((built) =>
                 host.print(built, {
-                  deviceName: deviceName === SYSTEM_DIALOG ? null : deviceName,
+                  deviceName: host.browserPrintDialog || deviceName === SYSTEM_DIALOG ? null : deviceName,
                   copies,
                   collate,
                   pages,

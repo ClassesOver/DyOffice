@@ -47,10 +47,10 @@ test('Word Web bundles data and same-origin blob pictures with matching relative
   t.after(() => URL.revokeObjectURL(embedded))
   const { api, downloads } = fixture(t)
   const markdown = `# Report\n\n${imageReference('image1.png')}\n\n${imageReference('image2.blob', 'A picture')}\n\n${imageReference('image1.png')}\n`
-  const result = await api.exportMarkdown('Report (Q1).docx', markdown, [
+  const result = await api.exportMarkdown('Source.docx', markdown, [
     { name: 'image1.png', src: `data:image/png;base64,${pixel.toString('base64')}` },
     { name: 'image2.blob', src: embedded },
-  ])
+  ], 'Report (Q1).md')
   assert.equal(result.ok, true)
   assert.equal(downloads.length, 1)
   assert.equal(downloads[0].name, 'Report (Q1).zip')

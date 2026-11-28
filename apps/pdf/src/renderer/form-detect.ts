@@ -264,9 +264,14 @@ const apply = (m: Matrix, x: number, y: number): [number, number] => [
   m[1] * x + m[3] * y + m[5],
 ]
 
+type FormDetectionPage = {
+  getTextContent(): ReturnType<PDFPageProxy['getTextContent']>
+  getOperatorList(): ReturnType<PDFPageProxy['getOperatorList']>
+}
+
 /** Text runs and drawn-path boxes of a page in PDF user space (pdf.js operator list, CTM tracked) */
 export async function collectDetectInput(
-  page: PDFPageProxy,
+  page: FormDetectionPage,
 ): Promise<Pick<DetectPageInput, 'items' | 'shapes'>> {
   const content = await page.getTextContent()
   const items: DetectTextItem[] = []

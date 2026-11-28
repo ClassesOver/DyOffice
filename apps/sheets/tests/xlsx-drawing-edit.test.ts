@@ -101,6 +101,54 @@ describe('applyVisualEdits', () => {
     expect(entries.has('xl/media/image1.png')).toBe(false)
   })
 
+  it('removes the picture media and its SVG fallback without touching foreign references', async () => {
+    const entries = packageWithDrawing()
+    entries.set(PATH, DRAWING
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:ref="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:f="urn:foreign" ')
+      .replace('<a:blip r:embed="rId8"/>',
+        `<f:blip ref:embed="foreignElement"/><a:blip f:embed="foreignAttribute" ref:embed='rId8'>` +
+        '<a:extLst><a:ext uri="svg"><svg:svgBlip xmlns:svg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" ref:embed="svgImage"/></a:ext></a:extLst>' +
+        '</a:blip>'))
+    const relsPath = 'xl/drawings/_rels/drawing1.xml.rels'
+    const parts = ['foreignElement', 'foreignAttribute', 'svgImage']
+    entries.set(relsPath, DRAWING_RELS.replace('</Relationships>', parts.map(id =>
+      `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${id}.svg"/>`,
+    ).join('') + '</Relationships>'))
+    for (const id of parts) entries.set(`xl/media/${id}.svg`, 'fixture')
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 1, remove: true }], new Set())
+
+    expect(entries.get(PATH)).not.toContain('<xdr:pic>')
+    expect(entries.get(relsPath)).not.toContain('rId8')
+    expect(entries.get(relsPath)).not.toContain('svgImage')
+    expect(entries.has('xl/media/image1.png')).toBe(false)
+    expect(entries.has('xl/media/svgImage.svg')).toBe(false)
+    for (const id of ['foreignElement', 'foreignAttribute']) {
+      expect(entries.get(relsPath)).toContain(id)
+      expect(entries.has(`xl/media/${id}.svg`)).toBe(true)
+    }
+  })
+
+  it.each([{ remove: true as const }, { fillColor: '#123456' }])(
+    'cleans an unused shape picture fill after %j',
+    async edit => {
+      const entries = packageWithDrawing()
+      const relsPath = 'xl/drawings/_rels/drawing1.xml.rels'
+      const targetPath = 'xl/media/shape-fill.png'
+      const opaque = '<xdr:extLst><xdr:ext uri="vendor"><v:blip xmlns:v="urn:vendor" r:embed="rId8"/></xdr:ext></xdr:extLst>'
+      entries.set(PATH, DRAWING.replace('<xdr:sp><xdr:txBody/></xdr:sp>',
+        '<xdr:sp><xdr:spPr><a:blipFill><a:blip r:embed="fill"/></a:blipFill>' + opaque + '</xdr:spPr></xdr:sp>'))
+      entries.set(relsPath, DRAWING_RELS.replace('</Relationships>',
+        '<Relationship Id="fill" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/shape-fill.png"/></Relationships>'))
+      entries.set(targetPath, 'png')
+      await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 2, ...edit }], new Set())
+      expect(entries.has(targetPath)).toBe(false)
+      expect(entries.get(relsPath)).not.toContain('Id="fill"')
+      expect(entries.has('xl/media/image1.png')).toBe(true)
+      if (!('remove' in edit)) expect(entries.get(PATH)).toContain(opaque)
+    },
+  )
+
   it('keeps media shared by another anchor while removing only the unused relationship', async () => {
     const entries = packageWithDrawing()
     entries.set(
@@ -233,6 +281,45 @@ describe('applyVisualEdits', () => {
     expect(xml).toContain('<a:xfrm rot="2700000"><a:off x="10" y="20"/>')
   })
 
+  it('writes frame dimensions for shapes whose transform or extent was omitted', async () => {
+    for (const properties of [
+      '<d:prstGeom prst="rect"/>',
+      '<d:xfrm/><d:prstGeom prst="rect"/>',
+      '<d:xfrm><d:off x="12" y="34"/></d:xfrm><d:prstGeom prst="rect"/>',
+    ]) {
+      const drawing = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+        'xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+        `<xdr:twoCellAnchor>${marker('from', 0, 0)}${marker('to', 4, 8)}` +
+        `<xdr:sp><xdr:spPr>${properties}</xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>`
+      const entries = new Map([[PATH, drawing]])
+      await applyVisualEdits(fakePackage(entries), [{
+        drawingPath: PATH, drawingIndex: 0, anchor: ANCHOR, rotation: 90, frameSize: { width: 555, height: 333 },
+      }], new Set())
+      const offset = properties.includes('<d:off') ? '<d:off x="12" y="34"/>' :
+        properties.includes('<d:xfrm/>') ? '' : '<d:off x="0" y="0"/>'
+      expect(entries.get(PATH)).toContain(
+        `<d:xfrm rot="5400000">${offset}<d:ext cx="555" cy="333"/></d:xfrm><d:prstGeom prst="rect"/>`,
+      )
+    }
+  })
+
+  it('flips a shape with no transform and leaves its anchor geometry intact', async () => {
+    const geometry = '<d:prstGeom prst="rect"/>'
+    const drawing = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+      'xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+      `<xdr:oneCellAnchor>${marker('from', 0, 0)}<xdr:ext cx="40000" cy="50000"/>` +
+      `<xdr:sp><xdr:spPr>${geometry}</xdr:spPr></xdr:sp></xdr:oneCellAnchor></xdr:wsDr>`
+    const entries = new Map([[PATH, drawing]])
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0, flipH: false, flipV: false,
+    }], new Set())
+    expect(entries.get(PATH)).toBe(drawing)
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0, flipH: true, flipV: true,
+    }], new Set())
+    expect(entries.get(PATH)).toBe(drawing.replace(geometry, '<d:xfrm flipV="1" flipH="1"/>' + geometry))
+  })
+
   it('fails closed when frameSize targets an anchor without a frame ext', async () => {
     await expect(
       applyVisualEdits(
@@ -285,6 +372,21 @@ describe('applyVisualEdits', () => {
           '<a:ln w="12700"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:ln></xdr:spPr>',
       )
       expect(xml).not.toContain('gradFill')
+    })
+
+    it('repaints alternate DrawingML prefixes without changing extension paint', async () => {
+      const opaque = '<a:extLst><a:ext uri="vendor"><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ext></a:extLst>'
+      const drawing = shapeDrawing(
+        '<d:prstGeom prst="rect"/><d:solidFill><d:srgbClr val="FF0000"/></d:solidFill>' +
+        '<d:ln w="123"><d:solidFill><d:srgbClr val="00FF00"/></d:solidFill><d:prstDash val="dash"/></d:ln>' +
+        opaque,
+      ).replace('<xdr:wsDr ', '<xdr:wsDr xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" ')
+      const xml = await repaint(drawing, { fillColor: '#abcdef', lineColor: '#fedcba' })
+      expect(xml).toContain('<d:solidFill><d:srgbClr val="ABCDEF"/></d:solidFill>')
+      expect(xml).toContain('<d:ln w="123"><d:solidFill><d:srgbClr val="FEDCBA"/></d:solidFill><d:prstDash val="dash"/></d:ln>')
+      expect(xml).toContain(opaque)
+      expect(xml).not.toContain('FF0000')
+      expect(xml).not.toContain('00FF00')
     })
 
     it('writes an explicit noFill over a style fillRef', async () => {
@@ -363,6 +465,17 @@ describe('applyVisualEdits', () => {
     expect(xml).not.toContain(`${marker('from', 2, 20)}<xdr:ext`)
   })
 
+  it('saves the new extent of a resized one-cell anchor', async () => {
+    const entries = packageWithDrawing()
+    entries.set(PATH, DRAWING.replace('<xdr:ext cx="914400" cy="914400"/>',
+      '<xdr:ext cx="914400" cy="914400" xmlns:v="urn:vendor" v:keep="yes"/>'))
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 2, anchor: ANCHOR, anchorSize: { width: 222, height: 333 },
+    }], new Set())
+    expect(entries.get(PATH)).toContain(marker('from', 1, 2).replace('<xdr:colOff>0', '<xdr:colOff>9525') +
+      '<xdr:ext cx="222" cy="333" xmlns:v="urn:vendor" v:keep="yes"/>')
+  })
+
   it('processes several edits on one part high-index first', async () => {
     const entries = packageWithDrawing()
     await applyVisualEdits(
@@ -396,6 +509,27 @@ describe('applyVisualEdits', () => {
     expect(entries.get('[Content_Types].xml')).not.toContain('chart3.xml')
     expect(entries.get('[Content_Types].xml')).toContain('drawing1.xml')
     expect(touched.has('[Content_Types].xml')).toBe(true)
+  })
+
+  it('deletes the chart selected by an inherited relationship alias and preserves a foreign chart target', async () => {
+    const entries = packageWithDrawing()
+    entries.set(PATH, DRAWING
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:ref="http://purl.oclc.org/ooxml/officeDocument/relationships" xmlns:f="urn:foreign" ')
+      .replace('<c:chart ', '<f:chart xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="decoy"/><c:chart ')
+      .replace(/xmlns:r="[^"]+" r:id="rId7"/, "ref:id='rId7' r:id='decoy' xmlns:r='urn:foreign'"))
+    const relsPath = 'xl/drawings/_rels/drawing1.xml.rels'
+    entries.set(relsPath, DRAWING_RELS.replace('</Relationships>',
+      '<Relationship Id="decoy" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" ' +
+      'Target="../charts/decoy.xml"/></Relationships>'))
+    entries.set('xl/charts/decoy.xml', '<c:chartSpace/>')
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+
+    expect(entries.get(PATH)).not.toContain('<xdr:graphicFrame')
+    expect(entries.get(relsPath)).not.toContain('rId7')
+    expect(entries.get(relsPath)).toContain('decoy')
+    expect(entries.has('xl/charts/chart3.xml')).toBe(false)
+    expect(entries.has('xl/charts/decoy.xml')).toBe(true)
   })
 
   it('recursively collects chart-owned style, color, embedding, theme, and media parts', async () => {
@@ -579,6 +713,50 @@ describe('applyVisualEdits', () => {
     expect(entries.get('[Content_Types].xml')).not.toContain('drawing1.xml')
   })
 
+  it('removes the real drawing hookup and retains comments and other prefixed relationships', async () => {
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const comment = '<!-- <drawing r:id="rId5"/> -->'
+    const worksheet = `<worksheet><sheetData/>${comment}</worksheet>`
+    const drawing = `<drawing xmlns:d="${relationshipNs}" d:id='rId&#53;'></drawing>`
+    const other = `<p:Relationship Id="rId6" Type="${relationshipNs}/hyperlink" Target="https://example.org/" TargetMode="External"/>`
+    const rels = '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">'
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const entries = new Map([
+      [PATH, '<xdr:wsDr><xdr:oneCellAnchor><xdr:sp/></xdr:oneCellAnchor></xdr:wsDr>'],
+      [sheetPath, worksheet.replace('</worksheet>', drawing + '</worksheet>')],
+      [relsPath, rels + `<p:Relationship Id="rId5" Type="${relationshipNs}/drawing" Target="../drawings/drawing1.xml"/>` + other + '</p:Relationships>'],
+      ['[Content_Types].xml', CONTENT_TYPES],
+    ])
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+
+    expect(entries.get(sheetPath)).toBe(worksheet)
+    expect(entries.get(relsPath)).toBe(rels + other + '</p:Relationships>')
+    expect(entries.has(PATH)).toBe(false)
+  })
+
+  it('keeps a drawing that is also referenced from real extension markup', async () => {
+    const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const worksheet = `<worksheet xmlns:r="${relationshipNs}"><sheetData/><drawing r:id="rId5"/>` +
+      "<extLst><ext uri='urn:example'><extra xmlns='urn:example' r:id='rId&#53;'/></ext></extLst></worksheet>"
+    const rels = `<Relationships><Relationship Id="rId5" Type="${relationshipNs}/drawing" Target="../drawings/drawing1.xml"/></Relationships>`
+    const entries = new Map([
+      [PATH, '<xdr:wsDr><xdr:oneCellAnchor><xdr:sp/></xdr:oneCellAnchor></xdr:wsDr>'],
+      [sheetPath, worksheet],
+      [relsPath, rels],
+      ['[Content_Types].xml', CONTENT_TYPES],
+    ])
+
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+
+    expect(entries.get(sheetPath)).toBe(worksheet)
+    expect(entries.get(relsPath)).toBe(rels)
+    expect(entries.get(PATH)).toBe('<xdr:wsDr></xdr:wsDr>')
+  })
+
   it('preserves an empty drawing hookup that still has an unsupported relationship', async () => {
     const entries = new Map([
       [
@@ -617,6 +795,24 @@ describe('applyVisualEdits', () => {
     expect(entries.get('xl/drawings/_rels/drawing1.xml.rels')).toContain('rId99')
     expect(entries.has('xl/custom/vendor.xml')).toBe(true)
     expect(entries.get('xl/worksheets/sheet1.xml')).toContain('<drawing')
+  })
+
+  it('moves and resizes an absolute anchor while preserving its format and extensions', async () => {
+    const drawing = '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">' +
+      '<xdr:absoluteAnchor xmlns:v="urn:vendor"><v:pos x="1" y="2"/><xdr:pos x="3" y="4" v:keep="yes"/>' +
+      '<xdr:ext cx="50" cy="60"/><xdr:sp/><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>'
+    const entries = new Map([[PATH, drawing]])
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0,
+      anchor: {
+        absolute: true, fromRow: 0, fromColumn: 0, toRow: 0, toColumn: 0,
+        fromColumnOffset: 90000, fromRowOffset: 150000, toColumnOffset: 180000, toRowOffset: 350000,
+      },
+      anchorSize: { width: 90000, height: 200000 },
+    }], new Set())
+    expect(entries.get(PATH)).toContain(
+      '<v:pos x="1" y="2"/><xdr:pos x="90000" y="150000" v:keep="yes"/><xdr:ext cx="90000" cy="200000"/>',
+    )
   })
 
   it('fails closed on non-chart graphic frames, absolute anchors, and bad indexes', async () => {
@@ -699,6 +895,16 @@ function packageWithDefaultNsDrawing(): Map<string, string> {
 }
 
 describe('applyVisualEdits on default-namespace (openpyxl) drawings', () => {
+  it('uses the same physical index as the visual reader when a comment looks like an anchor', async () => {
+    const entries = packageWithDefaultNsDrawing()
+    const comment = '<!-- <oneCellAnchor><from><row>9</row></from></oneCellAnchor> -->'
+    entries.set(PATH, DEFAULT_NS_DRAWING.replace('<oneCellAnchor>', comment + '<oneCellAnchor>'))
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, anchor: ANCHOR }], new Set())
+    const xml = entries.get(PATH)!
+    expect(xml).toContain(comment)
+    expect(xml).toContain('<from><col>1</col><colOff>9525</colOff><row>2</row><rowOff>0</rowOff></from>')
+  })
+
   it('moves an unprefixed two-cell anchor, keeping its markers unprefixed', async () => {
     const entries = packageWithDefaultNsDrawing()
     await applyVisualEdits(
@@ -909,6 +1115,26 @@ describe('applyVisualEdits arrange properties', () => {
     expect(xml).toContain('<mc:Choice Requires="sle"><xdr:oneCellAnchor>')
   })
 
+  it('cleans the worksheet hookup when its last shape and hyperlinks are removed', async () => {
+    const entries = entriesWith()
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels'
+    const worksheet = 'xl/worksheets/sheet1.xml'
+    entries.set(PATH, drawing.replace(picture, '').replace(line, '').replace(
+      '<a:hlinkClick r:id="rId5"/>',
+      '<a:hlinkClick r:id="rId5"/><a:hlinkHover r:id="hover"/>',
+    ))
+    const link = (id: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/" TargetMode="External"/>`
+    entries.set(RELS_PATH, '<Relationships>' + link('rId5') + link('hover') + '</Relationships>')
+    entries.set(worksheet, '<worksheet><sheetData/><drawing r:id="drawing"/></worksheet>')
+    entries.set(relsPath, '<Relationships><Relationship Id="drawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>')
+    await applyVisualEdits(fakePackage(entries), [{ drawingPath: PATH, drawingIndex: 0, remove: true }], new Set())
+    expect(entries.has(PATH)).toBe(false)
+    expect(entries.has(RELS_PATH)).toBe(false)
+    expect(entries.has(relsPath)).toBe(false)
+    expect(entries.get(worksheet)).toBe('<worksheet><sheetData/></worksheet>')
+    expect(entries.get('[Content_Types].xml')).not.toContain('/xl/drawings/drawing1.xml')
+  })
+
   it('allocates no hyperlink relationship for a removed anchor', async () => {
     const entries = entriesWith()
     await applyVisualEdits(
@@ -934,6 +1160,25 @@ describe('applyVisualEdits arrange properties', () => {
     expect(pic).not.toContain('rot=')
     expect(ln).toContain('<a:xfrm rot="16200000">')
     expect(ln).toContain('<a:ext cx="1" cy="1"/>')
+  })
+
+  it('updates an aliased frame and expanded extent without touching extensions', async () => {
+    const entries = entriesWith()
+    const foreign = '<vendor:extension><a:xfrm rot="123"><a:ext cx="7" cy="8"/></a:xfrm></vendor:extension>'
+    entries.set(PATH, drawing
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:vendor="urn:vendor" ')
+      .replace('<xdr:spPr><a:xfrm rot="600000" flipV="1"><a:off x="0" y="0"/><a:ext cx="100" cy="50"/></a:xfrm>',
+        `<xdr:spPr>${foreign}<d:xfrm rot = '600000' flipV='1'><d:off x="0" y="0"/>` +
+        `<d:ext cx='100' cy="50" vendor:keep="yes"></d:ext></d:xfrm>`))
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 0, anchor: ANCHOR,
+      rotation: 90, flipH: true, flipV: false, frameSize: { width: 555, height: 333 },
+    }], new Set())
+    const [updated] = anchorsOf(entries.get(PATH)!)
+    expect(updated).toContain(foreign)
+    expect(updated).toContain('<d:xfrm flipH="1" rot="5400000"><d:off x="0" y="0"/>')
+    expect(updated).toContain('<d:ext cx="555" cy="333" vendor:keep="yes"></d:ext>')
+    expect(updated).toContain('<xdr:row>2</xdr:row>')
   })
 
   it('writes and clears cNvPr descr and the anchor editAs', async () => {
@@ -967,6 +1212,24 @@ describe('applyVisualEdits arrange properties', () => {
         new Set(),
       ),
     ).rejects.toBeInstanceOf(VisualEditError)
+  })
+
+  it('edits the selected object metadata and leaves vendor lookalikes intact', async () => {
+    const entries = entriesWith()
+    const opaque = '<v:cache xmlns:v="urn:vendor"><v:cNvPr descr="Vendor"><a:hlinkClick r:id="vendor"/></v:cNvPr></v:cache>'
+    entries.set(PATH, drawing
+      .replace('<xdr:wsDr ', '<xdr:wsDr xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:ref="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ')
+      .replace('<xdr:sp><xdr:nvSpPr>', '<xdr:sp>' + opaque + '<xdr:nvSpPr>')
+      .replace('<a:hlinkClick r:id="rId5"/>', `<d:hlinkClick ref:id='rId5'/>`)
+      .replace('name="Shape 1"', `name="Shape 1" descr='Old > text'`))
+    await applyVisualEdits(fakePackage(entries), [{
+      drawingPath: PATH, drawingIndex: 1, altText: 'New & text', hyperlink: '',
+    }], new Set())
+    const [, updated] = anchorsOf(entries.get(PATH)!)
+    expect(updated).toContain(opaque)
+    expect(updated).toContain('<xdr:cNvPr id="3" name="Shape 1" descr="New &amp; text"/>')
+    expect(updated).not.toContain('rId5')
+    expect(entries.get(RELS_PATH)).not.toContain('rId5')
   })
 
   it('adds a hyperlink relationship and replaces or drops hlinkClick', async () => {

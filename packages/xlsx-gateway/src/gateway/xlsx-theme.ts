@@ -1,7 +1,21 @@
-/// Document theme writer: rewrites xl/theme/theme1.xml's <a:clrScheme> and/or
-/// <a:fontScheme> in place. Styles referencing theme slots (color theme=,
-/// font scheme=) follow the new theme in Excel; explicit rgb stays verbatim.
+import { readRootStartTag } from './xlsx-namespace.ts'
+import { updateWorksheetTagAttribute } from './xlsx-structure.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import {
+  applyPatches,
+  escapeXmlAttribute,
+  isElement,
+  patchElement,
+  prefixOf,
+  scopedChildren,
+  withBody,
+  withNamespaces,
+  type ScopedElement,
+  type XmlPatch,
+} from './xlsx-worksheet-xml.ts'
 
+/// Edit the active theme's palette and fonts while preserving other parts of
+/// the theme, including non-Latin typefaces.
 export class ThemeStateError extends Error {}
 
 export interface WorkbookThemeState {
@@ -29,42 +43,60 @@ const SCHEME_SLOTS: readonly (readonly [string, number])[] = [
   ['folHlink', 11],
 ]
 
-function escapeAttr(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
+function themeChild(parent: ScopedElement, name: string): ScopedElement | undefined {
+  return scopedChildren(parent).find((child) => isElement(child, name, parent.namespace))
+}
+
+function withAttribute(xml: string, name: string, value: string): string {
+  const opening = readRootStartTag(xml)
+  return updateWorksheetTagAttribute(opening, name, escapeXmlAttribute(value)) +
+    xml.slice(opening.length)
 }
 
 export function applyThemeState(themeXml: string, state: WorkbookThemeState): string {
-  let xml = themeXml
+  if (state.colors === undefined && state.fonts === undefined) return themeXml
+  const [node] = childElements(themeXml)
+  const root = node && withNamespaces(node, new Map())
+  const elements = root?.local === 'theme' && themeChild(root, 'themeElements')
+  if (!root || !elements) throw new ThemeStateError('The workbook theme has no theme elements.')
+  const patches: XmlPatch[] = []
+
   if (state.colors !== undefined) {
     const { name, values } = state.colors
     if (values.length !== 12) throw new ThemeStateError('A theme palette needs 12 colors.')
-    for (const [slot, index] of SCHEME_SLOTS) {
+    const scheme = themeChild(elements, 'clrScheme')
+    if (!scheme) throw new ThemeStateError('The theme has no color scheme to rewrite.')
+    const slots = scopedChildren(scheme)
+    const colorPatches = SCHEME_SLOTS.map(([name, index]) => {
       const hex = (values[index] ?? '').replace(/^#/, '').toUpperCase()
       if (!/^[0-9A-F]{6}$/.test(hex)) {
-        throw new ThemeStateError(`Theme color ${slot} is not a valid #RRGGBB value.`)
+        throw new ThemeStateError('Theme color ' + name + ' is not a valid #RRGGBB value.')
       }
-      const pattern = new RegExp(`<a:${slot}>[\\s\\S]*?</a:${slot}>`)
-      if (!pattern.test(xml)) {
-        throw new ThemeStateError(`The theme has no ${slot} color scheme slot.`)
-      }
-      xml = xml.replace(pattern, `<a:${slot}><a:srgbClr val="${hex}"/></a:${slot}>`)
-    }
-    xml = xml.replace(/(<a:clrScheme name=")[^"]*(")/, `$1${escapeAttr(name)}$2`)
+      const slot = slots.find((child) => isElement(child, name, scheme.namespace))
+      if (!slot) throw new ThemeStateError('The theme has no ' + name + ' color scheme slot.')
+      const color = '<' + prefixOf(slot.name) + 'srgbClr val="' + hex + '"/>'
+      return patchElement(slot, withBody(slot, color))
+    })
+    const updated = withBody(scheme, applyPatches(scheme.inner, colorPatches))
+    patches.push(patchElement(scheme, withAttribute(updated, 'name', name)))
   }
+
   if (state.fonts !== undefined) {
     const { name, major, minor } = state.fonts
-    const majorPattern = /(<a:majorFont>[\s\S]*?<a:latin[^>]*typeface=")[^"]*(")/
-    const minorPattern = /(<a:minorFont>[\s\S]*?<a:latin[^>]*typeface=")[^"]*(")/
-    if (!majorPattern.test(xml) || !minorPattern.test(xml)) {
-      throw new ThemeStateError('The theme has no font scheme to rewrite.')
-    }
-    xml = xml.replace(majorPattern, `$1${escapeAttr(major)}$2`)
-    xml = xml.replace(minorPattern, `$1${escapeAttr(minor)}$2`)
-    xml = xml.replace(/(<a:fontScheme name=")[^"]*(")/, `$1${escapeAttr(name)}$2`)
+    const scheme = themeChild(elements, 'fontScheme')
+    if (!scheme) throw new ThemeStateError('The theme has no font scheme to rewrite.')
+    const fontPatches = ([['majorFont', major], ['minorFont', minor]] as const).map(([kind, face]) => {
+      const font = themeChild(scheme, kind)
+      const latin = font && themeChild(font, 'latin')
+      if (!font || !latin) throw new ThemeStateError('The theme has no font scheme to rewrite.')
+      const updated = applyPatches(font.inner, [patchElement(latin, withAttribute(latin.xml, 'typeface', face))])
+      return patchElement(font, withBody(font, updated))
+    })
+    const updated = withBody(scheme, applyPatches(scheme.inner, fontPatches))
+    patches.push(patchElement(scheme, withAttribute(updated, 'name', name)))
   }
-  return xml
+
+  const updated = withBody(elements, applyPatches(elements.inner, patches))
+  const offset = root.start + root.opening.length + elements.start
+  return themeXml.slice(0, offset) + updated + themeXml.slice(offset + elements.xml.length)
 }

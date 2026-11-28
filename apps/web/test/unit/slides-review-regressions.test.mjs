@@ -1,6 +1,7 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import Fastify from 'fastify'
+import {editorRouteAuth} from '../helpers/editor-route-auth.mjs'
 import {createSlidesService} from '../../server/src/modules/slides/service.ts'
 import {createSlidesSaveService} from '../../server/src/modules/slides/save.ts'
 import {registerSlidesRoutes} from '../../server/src/modules/slides/routes.ts'
@@ -17,11 +18,17 @@ function fixture(t){
 }
 test('real route accepts bridge open/slide bodies without optional fitWidthPx',async t=>{
  const app=Fastify();t.after(()=>app.close())
- registerSlidesRoutes(app,{open:async()=>({ok:true}),slide:async()=>({ok:true})},{authenticate:async()=>{}},{originCheck(){},requireSession(){}})
- for(const [method,extra]of [['open',{}],['slide',{index:0}]]){
-  const r=await app.inject({method:'POST',url:`/api/v1/files/${file}/slides/${method}`,payload:{...input,...extra}})
+ const {token,headers,sessions,csrf}=editorRouteAuth(),calls=[]
+ const read=async(...args)=>{calls.push(args.slice(0,3));return {ok:true}}
+ registerSlidesRoutes(app,{open:read,slide:read},sessions,csrf)
+ for(const [method,payload] of [['open',input],['slide',{...input,index:0}]]){
+  const url=`/api/v1/files/${file}/slides/${method}`
+  assert.equal((await app.inject({method:'POST',url,payload})).statusCode,401)
+  const r=await app.inject({method:'POST',url,headers,payload})
   assert.equal(r.statusCode,200,r.body)
+  assert.deepEqual(calls.at(-1),[token,file,payload])
  }
+ assert.equal(calls.length,2)
 })
 test('missing or stale lease cannot mutate native state',async t=>{
  const f=fixture(t);await f.s.open('a',file,input)
@@ -48,13 +55,17 @@ test('ordinary fork is fail-closed by default rather than advertised as sandbox'
 test('actual bridge request passes real Fastify open schema and sends lease identity',async t=>{
  const {createSlidesBridge}=await import('../../src/editors/slides-bridge.ts')
  const app=Fastify();t.after(()=>app.close());let received
- registerSlidesRoutes(app,{open:async(_t,_f,body)=>{received=body;return {generation:0,dirty:false,slides:[],size:{cx:1,cy:1}}}},{authenticate:async()=>{}},{originCheck(){},requireSession(){}})
+ const {token,headers,sessions,csrf}=editorRouteAuth()
+ registerSlidesRoutes(app,{open:async(...args)=>{received=args.slice(0,3);return {generation:0,dirty:false,slides:[],size:{cx:1,cy:1}}}},sessions,csrf)
  const host={getState:()=>({revision:{revision},name:'deck.pptx',lease:authority})}
  const bridge=createSlidesBridge(host,file,{language:'en',theme:'light'},{fetchImpl:async(url,options)=>{
-  if(url==='/api/v1/auth/csrf')return Response.json({csrfToken:'a'.repeat(43)})
-  const r=await app.inject({method:options.method,url,headers:options.headers,payload:options.body});return new Response(r.body,{status:r.statusCode,headers:r.headers})
+  if(url==='/api/v1/auth/csrf')return Response.json({csrfToken:csrf.sessionToken(token)})
+  const r=await app.inject({method:options.method,url,headers:{...options.headers,cookie:headers.cookie,origin:headers.origin},payload:options.body})
+  return new Response(r.body,{status:r.statusCode,headers:r.headers})
  }})
- t.after(()=>bridge.dispose());await bridge.api.openPptx(1280);assert.equal(received.editorId,editor);assert.equal(received.leaseEpoch,1)
+ t.after(()=>bridge.dispose())
+ await bridge.api.openPptx(1280)
+ assert.deepEqual(received,[token,file,input])
 })
 test('lease lost during native work discards the draft and returns no success',async t=>{
  let release,entered,closed=0,epoch=1

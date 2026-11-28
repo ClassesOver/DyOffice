@@ -9,13 +9,14 @@ import {
   allocatePartPath,
   appendRelationship,
   registerContentTypeDefault,
+  registerContentTypeOverride,
   relativeTarget,
   relsPathFor,
   resolveRelTarget,
 } from './xlsx-drawing-add.ts'
 import { decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
-import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
-import { nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { ensureRelationshipNamespace, relationshipNamespaceOverride } from './xlsx-namespace.ts'
+import { appendRelationshipRecord, nextFreeRelationshipId, removePartOverride } from './xlsx-sheets.ts'
 import { childElements } from './xlsx-style-entries.ts'
 import { shiftCellArea, StructuralShiftError, type StructuralOp } from './xlsx-structure.ts'
 import { parseRef } from './xlsx-table-add.ts'
@@ -514,28 +515,10 @@ function keepNoteShapes(xml: string, notes: readonly SheetNote[]) {
   return { vml, added: notes.filter(note => !kept.has(noteImageKey(note))), existingIds }
 }
 
-function ensureContentTypeOverride(contentTypes: string, partName: string): string {
-  if (contentTypes.includes(`PartName="/${partName}"`)) return contentTypes
-  return contentTypes.replace(
-    '</Types>',
-    `<Override PartName="/${partName}" ContentType="${COMMENTS_CONTENT_TYPE}"/></Types>`,
-  )
-}
-
-function ensureVmlDefault(contentTypes: string): string {
-  if (/<Default\b[^>]*Extension="vml"/.test(contentTypes)) return contentTypes
-  return contentTypes.replace(
-    '</Types>',
-    '<Default Extension="vml"' +
-      ' ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/></Types>',
-  )
-}
-
 function appendRel(relsXml: string, id: string, type: string, target: string): string {
-  return relsXml.replace(
-    '</Relationships>',
-    `<Relationship Id="${id}" Type="${type}" Target="${target}"/></Relationships>`,
-  )
+  const updated = appendRelationshipRecord(relsXml, id, type, target)
+  if (updated === undefined) throw new NoteEditError('Worksheet has no relationships root element.')
+  return updated
 }
 
 function removeRel(relsXml: string, type: string, id?: string): string {
@@ -551,9 +534,7 @@ async function removeContentTypeOverride(
   touchedEntries: Set<string>,
 ): Promise<void> {
   const contentTypes = await pkg.readText(CONTENT_TYPES_PATH)
-  const stripped = replaceBlocks(contentTypes, xmlBlocks(contentTypes, 'Override'), (block) =>
-    attribute(block.open, 'PartName') === `/${partPath}` ? '' : rawBlock(block),
-  )
+  const stripped = removePartOverride(contentTypes, partPath)
   if (stripped !== contentTypes) {
     pkg.write(CONTENT_TYPES_PATH, stripped)
     touchedEntries.add(CONTENT_TYPES_PATH)
@@ -777,20 +758,23 @@ const EMPTY_RELS =
   '</Relationships>'
 
 /// CT_Worksheet order: legacyDrawing follows drawing and precedes these.
-const AFTER_LEGACY_DRAWING =
-  /<legacyDrawingHF\b|<picture\b|<oleObjects\b|<controls\b|<webPublishItems\b|<tableParts\b|<extLst\b/
+const AFTER_LEGACY_DRAWING = new Set([
+  'legacyDrawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst',
+])
 
 function ensureLegacyDrawingElement(worksheetXml: string, rid: string): string {
-  if (/<legacyDrawing\b/.test(worksheetXml)) return worksheetXml
+  if (legacyDrawing(worksheetXml)) return worksheetXml
   worksheetXml = ensureRelationshipNamespace(worksheetXml)
-  const element = `<legacyDrawing r:id="${rid}"/>`
-  const anchor = AFTER_LEGACY_DRAWING.exec(worksheetXml)
-  if (anchor) {
-    return worksheetXml.slice(0, anchor.index) + element + worksheetXml.slice(anchor.index)
-  }
-  const end = worksheetXml.lastIndexOf('</worksheet>')
-  if (end === -1) throw new NoteEditError('Worksheet has no closing element.')
-  return worksheetXml.slice(0, end) + element + worksheetXml.slice(end)
+  const root = worksheetRoot(worksheetXml)
+  if (!root || root.opening.endsWith('/>')) throw new NoteEditError('Worksheet has no closing element.')
+  const prefix = root.name.slice(0, -root.local.length)
+  const binding = relationshipNamespaceOverride('', root.opening)
+  const element = `<${prefix}legacyDrawing${binding} r:id="${rid}"/>`
+  const anchor = scopedChildren(root).find(({ local, namespace }) =>
+    namespace === root.namespace && AFTER_LEGACY_DRAWING.has(local),
+  )
+  const offset = root.start + root.opening.length + (anchor?.start ?? root.inner.length)
+  return worksheetXml.slice(0, offset) + element + worksheetXml.slice(offset)
 }
 
 /// Replaces the worksheet's whole comment set (empty list removes it).
@@ -944,12 +928,10 @@ export async function applySheetNotes(
     }
   }
 
-  const contentTypes = await pkg.readText(CONTENT_TYPES_PATH)
-  const updatedTypes = ensureVmlDefault(ensureContentTypeOverride(contentTypes, commentsPath))
-  if (updatedTypes !== contentTypes) {
-    pkg.write(CONTENT_TYPES_PATH, updatedTypes)
-    touchedEntries.add(CONTENT_TYPES_PATH)
-  }
+  await registerContentTypeOverride(pkg, commentsPath, COMMENTS_CONTENT_TYPE, touchedEntries)
+  await registerContentTypeDefault(
+    pkg, 'vml', 'application/vnd.openxmlformats-officedocument.vmlDrawing', touchedEntries,
+  )
 
   if (relsChanged) {
     if (hasRels) pkg.write(relsPath, relsXml)

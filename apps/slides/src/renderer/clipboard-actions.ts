@@ -4,7 +4,7 @@
  * ingestion, and the format painter. Functions take the ActionCtx built fresh per call.
  */
 import type { ActionCtx } from './action-context'
-import type { PasteSlideMode, PasteSlideResult } from '../shared/ipc'
+import type { PasteSlideMode, PasteSlideResult, SlidesApi } from '../shared/ipc'
 import { rangeSelection } from '../shared/slide-selection'
 import { mergeSlideUpdate } from '../shared/slide-update'
 import { FIT_WIDTH } from './app-constants'
@@ -71,6 +71,7 @@ export async function insertExternalImage(
   base64: string,
   ext: string,
   atPx?: { x: number; y: number },
+  canInsert: () => boolean = () => true,
 ): Promise<void> {
   const naturalPx = await new Promise<{ width: number; height: number }>((resolve) => {
     const img = new Image()
@@ -78,6 +79,7 @@ export async function insertExternalImage(
     img.onerror = () => resolve({ width: 320, height: 240 })
     img.src = `data:image/${ext};base64,${base64}`
   })
+  if (!canInsert()) return
   const r = await window.slidesApi.addImageBytes({
     slideIndex: ctx.current,
     base64,
@@ -173,14 +175,19 @@ export function pasteParagraphs(text: string): {
   }
 }
 
-export async function pasteClipboard(ctx: ActionCtx): Promise<void> {
-  const external = await window.slidesApi.clipboardExternal()
+export async function pasteClipboard(
+  ctx: ActionCtx,
+  input?: ReturnType<SlidesApi['clipboardExternal']>,
+  canInsert: () => boolean = () => true,
+): Promise<void> {
+  const external = await (input ?? window.slidesApi.clipboardExternal())
+  if (!canInsert()) return
   if (external.kind === 'slide') {
     await pasteSlideAfter(ctx, Math.max(...ctx.selectedSlides, ctx.current))
     return
   }
   if (external.kind === 'image') {
-    await insertExternalImage(ctx, external.base64, external.ext)
+    await insertExternalImage(ctx, external.base64, external.ext, undefined, canInsert)
     return
   }
   if (external.kind === 'text') {

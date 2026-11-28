@@ -1,4 +1,4 @@
-import { SPARKLINE_EXT_URI } from './xlsx-sparkline.ts'
+import { sparklineTarget, SPARKLINE_EXT_URI } from './xlsx-sparkline.ts'
 import {
   elementText,
   escapeXmlAttribute,
@@ -28,16 +28,22 @@ export function rewriteWorksheetVisualReferences(
   rewriteRange?: RangeRewrite,
   preservedSparklineSources?: ReadonlyMap<string, string>,
 ): string {
-  if (!/cfvo|sparklineGroups|conditionalFormattings/.test(xml)) return xml
+  if (!/conditionalFormatting|sparklineGroups/.test(xml)) return xml
   const root = worksheetRoot(xml)
   if (!root) return xml
   const rewritten = rewriteChildren(root, (child) => {
     if (isElement(child, 'conditionalFormatting', root.namespace)) {
-      return rewriteChildren(child, (rule) =>
+      const target = child.attributes.get('sqref')
+      const moved = target && rewriteRange ? rewriteRange(target) : target
+      if (moved === null) return ''
+      const block = rewriteChildren(child, (rule) =>
         isElement(rule, 'cfRule', root.namespace)
-          ? rewriteThresholds(rule, rewriteFormula)
+          ? rewriteConditionalRule(rule, rewriteFormula)
           : rule.xml,
       )
+      return moved === undefined || moved === target
+        ? block
+        : replaceAttribute(child.opening, 'sqref', moved) + block.slice(child.opening.length)
     }
     if (!isElement(child, 'extLst', root.namespace)) return child.xml
     return rewriteChildren(
@@ -80,9 +86,12 @@ export function rewriteWorksheetVisualReferences(
     : xml.slice(0, root.start) + rewritten + xml.slice(root.start + root.xml.length)
 }
 
-function rewriteThresholds(rule: ScopedElement, rewriteFormula: FormulaRewrite): string {
-  return rewriteChildren(rule, (payload) =>
-    payload.namespace === rule.namespace && thresholdCollections.has(payload.local)
+function rewriteConditionalRule(rule: ScopedElement, rewriteFormula: FormulaRewrite): string {
+  return rewriteChildren(rule, (payload) => {
+    if (rule.namespace !== X14_XMLNS && isElement(payload, 'formula', rule.namespace)) {
+      return rewriteFormulaBody(payload, rewriteFormula)
+    }
+    return payload.namespace === rule.namespace && thresholdCollections.has(payload.local)
       ? rewriteChildren(payload, (threshold) => {
           if (!isElement(threshold, 'cfvo', rule.namespace)) return threshold.xml
           if (rule.namespace === X14_XMLNS) {
@@ -96,14 +105,16 @@ function rewriteThresholds(rule: ScopedElement, rewriteFormula: FormulaRewrite):
           }
           const moved = rewriteFormula(formula)
           if (moved === formula) return threshold.xml
-          const opening = threshold.opening.replace(
-            XML_ATTRIBUTE,
-            (attribute, prefix: string, name: string) =>
-              name === 'val' ? `${prefix}"${escapeXmlAttribute(moved)}"` : attribute,
-          )
+          const opening = replaceAttribute(threshold.opening, 'val', moved)
           return opening + threshold.xml.slice(threshold.opening.length)
         })
-      : rewriteFormulaElement(payload, rewriteFormula),
+      : rewriteFormulaElement(payload, rewriteFormula)
+  })
+}
+
+function replaceAttribute(opening: string, name: string, value: string): string {
+  return opening.replace(XML_ATTRIBUTE, (attribute, prefix: string, key: string) =>
+    key === name ? `${prefix}"${escapeXmlAttribute(value)}"` : attribute,
   )
 }
 
@@ -118,7 +129,7 @@ function rewriteExtendedConditionalBlocks(
       isElement(block, 'conditionalFormatting', X14_XMLNS)
         ? rewriteTargetedEntry(block, rewriteRange, (rule) =>
             isElement(rule, 'cfRule', X14_XMLNS)
-              ? rewriteThresholds(rule, rewriteFormula)
+              ? rewriteConditionalRule(rule, rewriteFormula)
               : rule.xml,
           )
         : block.xml,
@@ -142,10 +153,8 @@ function rewriteSparklineGroups(
         items,
         (sparkline) => {
           if (!isElement(sparkline, 'sparkline', X14_XMLNS)) return sparkline.xml
-          const target =
-            preservedSources &&
-            scopedChildren(sparkline).find((field) => isElement(field, 'sqref', XM_XMLNS))
-          const preserved = target && preservedSources?.get(elementText(target.inner))
+          const target = preservedSources && sparklineTarget(scopedChildren(sparkline))
+          const preserved = target && preservedSources?.get(target)
           return rewriteTargetedEntry(sparkline, rewriteRange, (field) =>
             rewriteFormulaElement(
               field,
@@ -184,7 +193,10 @@ function rewriteTargetedEntry(
 }
 
 function rewriteFormulaElement(field: ScopedElement, rewriteFormula: FormulaRewrite): string {
-  if (!isElement(field, 'f', XM_XMLNS)) return field.xml
+  return isElement(field, 'f', XM_XMLNS) ? rewriteFormulaBody(field, rewriteFormula) : field.xml
+}
+
+function rewriteFormulaBody(field: ScopedElement, rewriteFormula: FormulaRewrite): string {
   const original = elementText(field.inner)
   const moved = rewriteFormula(original)
   return moved === original ? field.xml : withBody(field, escapeXmlText(moved))

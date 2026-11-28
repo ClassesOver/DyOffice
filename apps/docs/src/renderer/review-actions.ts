@@ -53,7 +53,8 @@ import {
   type RevisionScope,
 } from './editor/revision-filters'
 import type { StoryRevision } from './editor/story-revisions'
-import { t } from './i18n/locale'
+import { getLang, t } from './i18n/locale'
+import { waitForFullContent } from './phased-content'
 
 /** open the note text dialog; id set = editing an existing note */
 export interface NotePrompt {
@@ -471,27 +472,44 @@ export function clearInks(ctx: ReviewContext): void {
   ctx.setStatus(t('appInksCleared'))
 }
 
-/** Compare: pick a second .docx and diff it against the open document */
-export async function compareWithFile(ctx: ReviewContext): Promise<void> {
-  if (!ctx.doc) return
-  const other = await window.desktop.openDocx()
-  if (!other) return
-  // password-protected comparison target: not wired through the decrypt prompt (yet)
-  if ('needsPassword' in other) {
-    ctx.setStatus(t('appCompareFailed', { error: t('appDocPwdTitle') }))
-    return
-  }
+const COMPARE_ZIP_LIMITS = { maxParts: 5000, maxPartBytes: 24 * 1024 * 1024, maxTotalBytes: 96 * 1024 * 1024 }
+const COMPARE_MAX_BLOCKS = 2500
+const COMPARE_MAX_TEXT_CHARS = 2_000_000
+
+/** Pick a second DOCX and compare it with the live document. */
+export async function compareWithFile(readContext: () => ReviewContext | null): Promise<void> {
+  if (!readContext()?.doc) return
   try {
-    const otherParsed = await parseDocx(await fetchDocBytes(other.dataUrl))
-    const entries = compareParagraphs(
-      ctx.editor
-        ? editorBlockTexts(ctx.editor.getJSON(), ctx.doc.parsed.blocks)
-        : blockTexts(ctx.doc.parsed.blocks),
-      blockTexts(otherParsed.blocks),
-    )
-    ctx.setCompareResult({ otherName: other.name, entries })
+    const browser = !!window.desktop.pickComparisonDocx
+    let target: { name: string; bytes: Uint8Array }
+    if (window.desktop.pickComparisonDocx) {
+      const file = await window.desktop.pickComparisonDocx()
+      if (!file) return
+      target = file
+    } else {
+      const other = await window.desktop.openDocx()
+      if (!other) return
+      if ('needsPassword' in other) throw new Error(t('appDocPwdTitle'))
+      target = { name: other.name, bytes: await fetchDocBytes(other.dataUrl) }
+    }
+    if (!readContext()) return
+    const other = await parseDocx(target.bytes, browser ? { zipLimits: COMPARE_ZIP_LIMITS } : undefined)
+    await waitForFullContent()
+    const ctx = readContext()
+    if (!ctx?.doc) return
+    const left = ctx.editor
+      ? editorBlockTexts(ctx.editor.getJSON(), ctx.doc.parsed.blocks)
+      : blockTexts(ctx.doc.parsed.blocks)
+    const right = blockTexts(other.blocks)
+    if (browser && [left, right].some(text => text.length > COMPARE_MAX_BLOCKS ||
+        text.reduce((sum, paragraph) => sum + paragraph.length, 0) > COMPARE_MAX_TEXT_CHARS)) {
+      throw new Error(getLang() === 'zh'
+        ? '每份文档最多可比较 2,500 个正文块和 200 万个字符。'
+        : 'Each document can contain up to 2,500 body blocks and 2 million characters for comparison.')
+    }
+    ctx.setCompareResult({ otherName: target.name, entries: compareParagraphs(left, right) })
   } catch (err) {
-    ctx.setStatus(t('appCompareFailed', { error: String(err) }))
+    readContext()?.setStatus(t('appCompareFailed', { error: err instanceof Error ? err.message : String(err) }))
   }
 }
 

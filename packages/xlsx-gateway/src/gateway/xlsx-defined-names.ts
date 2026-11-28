@@ -4,6 +4,16 @@
 /// — stay byte-verbatim.
 
 import { withFutureFunctionMarkers } from './future-functions.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import {
+  applyPatches,
+  isElement,
+  patchElement,
+  prefixOf,
+  scopedChildren,
+  withBody,
+  withNamespaces,
+} from './xlsx-worksheet-xml.ts'
 
 export class DefinedNameError extends Error {}
 
@@ -27,17 +37,52 @@ export interface DefinedNamesState {
 const NAME_PATTERN = /^[\p{L}_\\][\p{L}\p{N}_.\\]*$/u
 const CELL_REF_PATTERN = /^(?:[A-Za-z]{1,3}[0-9]+|[Rr][0-9]*[Cc][0-9]*)$/
 
+export function workbookNameParts(workbookXml: string) {
+  const [element] = childElements(workbookXml)
+  const root = element && withNamespaces(element, new Map())
+  if (root?.local !== 'workbook') return undefined
+  const children = scopedChildren(root)
+  const section = children.find((node) => isElement(node, 'definedNames', root.namespace))
+  const entries = section
+    ? scopedChildren(section).filter((node) => isElement(node, 'definedName', root.namespace))
+    : []
+  return { root, children, section, entries, bodyStart: root.start + root.opening.length }
+}
+
+export function workbookDefinedNameElements(workbookXml: string) {
+  return workbookNameParts(workbookXml)?.entries ?? []
+}
+
+export function readWorkbookDefinedNameKeys(workbookXml: string): Set<string> {
+  return new Set(workbookDefinedNameElements(workbookXml).flatMap((entry) => {
+    const name = entry.attributes.get('name')
+    return name ? [name.toLowerCase()] : []
+  }))
+}
+
 export function applyDefinedNamesState(workbookXml: string, state: DefinedNamesState): string {
+  const parts = workbookNameParts(workbookXml)
+  if (!parts) {
+    if (state.names.length === 0) return workbookXml
+    throw new DefinedNameError('workbook.xml has no workbook element.')
+  }
+  const { root, children, section, entries, bodyStart } = parts
   const preserved = new Set(state.preserveNames)
   const preservedKeys = new Set<string>()
-  for (const match of workbookXml.matchAll(/<definedName\b[^>]*>/g)) {
-    const name = /\bname="([^"]*)"/.exec(match[0])?.[1]
-    if (name === undefined || !preserved.has(unescapeXml(name))) continue
-    const scope = /\blocalSheetId="(\d+)"/.exec(match[0])?.[1]
-    preservedKeys.add(`${unescapeXml(name)}\u0000${scope === undefined ? -1 : Number(scope)}`)
-  }
+  const patches = entries.flatMap((entry) => {
+    const name = entry.attributes.get('name') ?? ''
+    const hidden = entry.attributes.get('hidden')
+    if (!name.startsWith('_xlnm') && hidden !== '1' && hidden !== 'true' && !preserved.has(name)) {
+      return [patchElement(entry, '')]
+    }
+    const scope = entry.attributes.get('localSheetId')?.trim()
+    preservedKeys.add(`${name}\u0000${scope && /^\+?\d+$/.test(scope) ? Number(scope) : -1}`)
+    return []
+  })
+
   const seen = new Set<string>()
-  for (const entry of state.names) {
+  const prefix = prefixOf(section?.name ?? root.name)
+  const additions = state.names.map((entry) => {
     validateName(entry.name)
     const key = `${entry.name}\u0000${entry.sheetIndex ?? -1}`
     if (preservedKeys.has(key)) {
@@ -50,33 +95,24 @@ export function applyDefinedNamesState(workbookXml: string, state: DefinedNamesS
       throw new DefinedNameError(`The name "${entry.name}" is defined twice.`)
     }
     seen.add(key)
+    const scope = entry.sheetIndex === undefined ? '' : ` localSheetId="${entry.sheetIndex}"`
+    const formula = escapeXmlText(withFutureFunctionMarkers(entry.formula.replace(/^=/, '')))
+    return `<${prefix}definedName name="${escapeXmlAttribute(entry.name)}"${scope}>${formula}</${prefix}definedName>`
+  }).join('')
+
+  if (section) {
+    const inner = applyPatches(section.inner, patches) + additions
+    const offset = bodyStart + section.start
+    const replacement = inner.trim() ? withBody(section, inner) : ''
+    return workbookXml.slice(0, offset) + replacement + workbookXml.slice(offset + section.xml.length)
   }
-
-  // Drop every modeled entry from the existing section, keeping built-ins,
-  // hidden names, and preserve-listed ones in place.
-  const xml = workbookXml.replace(
-    /<definedName\b[^>]*>[\s\S]*?<\/definedName>|<definedName\b[^>]*\/>/g,
-    (element) => {
-      const name = /\bname="([^"]*)"/.exec(element)?.[1] ?? ''
-      const unescaped = unescapeXml(name)
-      const keep =
-        unescaped.startsWith('_xlnm') ||
-        /\bhidden="(?:1|true)"/.test(element) ||
-        preserved.has(unescaped)
-      return keep ? element : ''
-    },
-  )
-
-  const additions = state.names
-    .map(
-      (entry) =>
-        `<definedName name="${escapeXmlAttribute(entry.name)}"` +
-        (entry.sheetIndex === undefined ? '' : ` localSheetId="${entry.sheetIndex}"`) +
-        `>${escapeXmlText(withFutureFunctionMarkers(entry.formula.replace(/^=/, '')))}</definedName>`,
-    )
-    .join('')
-
-  return appendDefinedNames(xml, additions)
+  if (!additions) return workbookXml
+  const anchor = ['externalReferences', 'functionGroups', 'sheets']
+    .map((name) => children.find((node) => isElement(node, name, root.namespace)))
+    .find((node) => node !== undefined)
+  if (!anchor) throw new DefinedNameError('workbook.xml has no sheets element.')
+  const offset = bodyStart + anchor.start + anchor.xml.length
+  return workbookXml.slice(0, offset) + `<${prefix}definedNames>${additions}</${prefix}definedNames>` + workbookXml.slice(offset)
 }
 
 /**

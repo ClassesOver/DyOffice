@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {PDFDocument,PDFName,PDFString} from 'pdf-lib'
+import {PNG} from 'pngjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
@@ -42,6 +43,11 @@ test('native PDF save maps a mixed desktop draft to one verified Web revision',a
   noteEdits:[{pageIndex:0,objNum:savedNote.objectNumber,rect:[40,100,60,120],oldContents:'Update this note',contents:'Updated saved note'}],
  }
  draft.textInserts.push({pageIndex:3,origin:[36,756],text:'Analysis report appendix',fontSize:12,color:[0,0,0]})
+ const fill={id:'form-text',kind:'text',pageIndex:0,rect:[40,30,70,45],text:'Alice',fontSize:12,color:'#000000',align:'left'}
+ draft.staticFormFills.push(fill)
+ const image=new PNG({width:2,height:2})
+ image.data.fill(255)
+ draft.imageEdits=[{kind:'insertImage',pageIndex:0,rect:fill.rect,layer:'aboveText',image:PNG.sync.write(image).toString('base64')}]
  assert.equal((await bridge.save({...draft,path:'other.pdf'})).ok,false)
  assert.equal(calls,0)
  assert.equal((await bridge.save({...draft,textEdits:[{}]})).ok,false)
@@ -50,6 +56,8 @@ test('native PDF save maps a mixed desktop draft to one verified Web revision',a
  assert.notEqual(revision,file.revision)
  const bytes=await f.files.readFile(f.alice.token,file.fileId,revision),saved=await PDFDocument.load(bytes)
  assert.equal(saved.getTitle(),'Native save')
+ const fills=saved.catalog.lookup(n('GenOfficeStaticFormFills'))
+ assert.deepEqual(JSON.parse(fills.decodeText()),[{...fill,pageIndex:1}])
  assert.deepEqual(saved.getPages().map(page=>[page.getWidth(),page.getRotation().angle]),[[340,0],[300,270],[612,0]])
  const annots=saved.getPage(1).node.Annots().asArray().map(ref=>saved.context.lookup(ref))
  assert.ok(annots.every(dict=>String(dict.get(n('Subtype')))!=='/Underline'))

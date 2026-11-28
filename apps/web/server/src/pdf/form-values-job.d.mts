@@ -1,4 +1,4 @@
-import type {PDFDocument,PDFField} from 'pdf-lib'
+import type {PDFDocument,PDFField} from '../../../../pdf/src/shared/pdf-lib.ts'
 import type {PdfAnnotationProcessor} from './annotation-job.mjs'
 export interface PdfFormValueOperation {readonly op:'setFormValue';readonly value:{readonly name:string;readonly value?:string;readonly checked?:boolean}}
 export const pdfFormValuesSafetyCodes:Set<string>

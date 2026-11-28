@@ -1,17 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
-import type { CreateWorkspaceFolder, UpdateWorkspaceFolder, WorkspaceFile, WorkspaceFileList, WorkspaceFileQuery, WorkspaceFolder, WorkspaceFolderList } from '../../../../../../packages/web-contracts/src/workspace.ts'
+import type { CreateWorkspaceFolder, UpdateWorkspaceFolder, UpdateWorkspaceStarredGroup, WorkspaceFile, WorkspaceFileList, WorkspaceFileQuery, WorkspaceFolder, WorkspaceFolderList, WorkspaceStarredGroups } from '../../../../../../packages/web-contracts/src/workspace.ts'
 import { authError } from '../auth/sessions.ts'
 import { loadFile, scope, uuid } from '../files/queries.ts'
 import { authorize } from '../policy/authorize.ts'
 
 type Timestamp = Date | string
 type FolderRow = { id: string; name: string; parent_id: string | null; created_at: Timestamp; updated_at: Timestamp }
-type FileRow = { id: string; name: string; format: WorkspaceFile['format']; size: number; updated_at: Timestamp; starred: boolean; folder_id: string | null; last_opened_at: Timestamp | null }
+type FileRow = { id: string; name: string; format: WorkspaceFile['format']; size: number; updated_at: Timestamp; starred: boolean; starred_group: string | null; folder_id: string | null; last_opened_at: Timestamp | null }
 const iso = (value: Timestamp) => (value instanceof Date ? value : new Date(value)).toISOString()
 const folderDto = (row: FolderRow): WorkspaceFolder => ({ id: row.id, name: row.name, parentId: row.parent_id, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) })
-const fileDto = (row: FileRow): WorkspaceFile => ({ id: row.id, name: row.name, format: row.format, size: row.size, updatedAt: iso(row.updated_at), starred: row.starred, folderId: row.folder_id, lastOpenedAt: row.last_opened_at === null ? null : iso(row.last_opened_at) })
+const fileDto = (row: FileRow, showGroup: boolean): WorkspaceFile => ({ id: row.id, name: row.name, format: row.format, size: row.size, updatedAt: iso(row.updated_at), starred: row.starred, ...(showGroup && row.starred_group ? {group: row.starred_group} : {}), folderId: row.folder_id, lastOpenedAt: row.last_opened_at === null ? null : iso(row.last_opened_at) })
 
 function record(value: unknown, allowed: readonly string[]) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !allowed.includes(key))) throw authError(400)
@@ -22,6 +22,13 @@ function folderName(value: unknown) {
   const name = value.trim().normalize('NFC')
   if (!name || [...name].length > 100 || Buffer.byteLength(name) > 255 || ['.','..'].includes(name) || /[\u0000-\u001f\u007f-\u009f/\\]/u.test(name)) throw authError(400)
   return name
+}
+function starredGroupName(value: unknown) {
+  if (value === null) return null
+  if (typeof value !== 'string' || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) throw authError(400)
+  const name = value.trim()
+  if ([...name].length > 100) throw authError(400)
+  return name || null
 }
 async function requireFolder(connection: PoolClient, principal: BusinessPrincipal, id: string) {
   const row = (await connection.query<FolderRow>('SELECT id,name,parent_id,created_at,updated_at FROM workspace_folders WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id])).rows[0]
@@ -50,12 +57,16 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
   }
   return {
     async listFiles(token: string, options: WorkspaceFileQuery = {}): Promise<WorkspaceFileList> {
-      const input = record(options, ['view','sort','folderId','limit','offset','ext','q','id'])
+      const input = record(options, ['view','sort','folderId','limit','offset','ext','family','q','id','group'])
       const view = input.view ?? 'all', limit = input.limit ?? 50, offset = input.offset ?? 0
       if (!['all','recent','starred','trash'].includes(view as string) || !Number.isSafeInteger(limit) || (limit as number) < 0 || (limit as number) > 100 || !Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > 1_000_000) throw authError(400)
-      if (input.ext !== undefined && !['docx','xlsx','pptx','pdf'].includes(input.ext as string)) throw authError(400)
+      if (input.ext !== undefined && !['docx','xlsx','pptx','pdf','csv','xlsm'].includes(input.ext as string)) throw authError(400)
+      if (input.family !== undefined && (input.family !== 'spreadsheet' || input.ext !== undefined)) throw authError(400)
+      const formats = input.family === 'spreadsheet' ? ['xlsx','xlsm','csv'] : input.ext === undefined ? null : [input.ext]
       if (input.sort !== undefined && !['modified-asc','modified-desc'].includes(input.sort as string)) throw authError(400)
       if (input.q !== undefined && (typeof input.q !== 'string' || [...input.q].length > 200 || /[\u0000-\u001f\u007f]/u.test(input.q))) throw authError(400)
+      const group = input.group === undefined ? null : starredGroupName(input.group)
+      if (input.group !== undefined && (view !== 'starred' || group === null)) throw authError(400)
       const selectedId = input.id === undefined ? null : uuid(input.id as string)
       const filtered = input.folderId !== undefined, folderId = !filtered || input.folderId === 'root' ? null : uuid(input.folderId as string)
       return access(token, 'files:read', async (connection, principal) => {
@@ -65,7 +76,7 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
         const result = (await connection.query<{ total: string; total_all: string; files: FileRow[] }>(`
           WITH scoped AS MATERIALIZED (
             SELECT f.id,f.name,f.format,r.size,f.updated_at,
-              COALESCE(s.starred,false) AS starred,s.folder_id,s.last_opened_at
+              COALESCE(s.starred,false) AS starred,s.starred_group,s.folder_id,s.last_opened_at
             FROM files f
             JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision
             LEFT JOIN workspace_file_state s ON s.deployment_id=f.deployment_id AND s.owner_id=f.owner_id AND s.file_id=f.id
@@ -74,15 +85,16 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
               AND (f.deleted_at IS NOT NULL)=($3::text='trash')
               AND ($3<>'recent' OR s.last_opened_at IS NOT NULL)
               AND ($3<>'starred' OR s.starred)
+              AND ($11::text IS NULL OR s.starred_group=$11)
               AND (NOT $4::boolean OR s.folder_id IS NOT DISTINCT FROM $5::uuid)
           ), matching AS MATERIALIZED (
-            SELECT * FROM scoped WHERE ($8::text IS NULL OR format=$8)
+            SELECT * FROM scoped WHERE ($8::text[] IS NULL OR format=ANY($8::text[]))
               AND ($9::text IS NULL OR strpos(lower(name),lower($9)) > 0)
           )
           SELECT (SELECT count(*) FROM scoped) AS total_all,(SELECT count(*) FROM matching) AS total,COALESCE(json_agg(page),'[]'::json) AS files
           FROM (SELECT * FROM matching ORDER BY ${order} LIMIT $6 OFFSET $7) page
-        `, [...scope(principal),view,filtered,folderId,limit,offset,input.ext ?? null,input.q ?? null,selectedId])).rows[0]
-        return { files: result.files.map(fileDto), total: Number(result.total), totalAll: Number(result.total_all) }
+        `, [...scope(principal),view,filtered,folderId,limit,offset,formats,input.q ?? null,selectedId,group])).rows[0]
+        return { files: result.files.map(row=>fileDto(row,view==='starred')), total: Number(result.total), totalAll: Number(result.total_all) }
       })
     },
     listFolders: (token: string): Promise<WorkspaceFolderList> => access(token, 'workspace:read', async (connection, principal) => {
@@ -135,7 +147,32 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
       if (typeof value.starred !== 'boolean') throw authError(400)
       return access(token, 'files:write', async (connection, principal, workspaceId) => {
         await loadFile(connection, principal, id)
-        await connection.query('INSERT INTO workspace_file_state(deployment_id,owner_id,workspace_id,file_id,starred) VALUES($1,$2,$3,$4,$5) ON CONFLICT(deployment_id,owner_id,file_id) DO UPDATE SET starred=EXCLUDED.starred', [...scope(principal),workspaceId,id,value.starred])
+        await connection.query('INSERT INTO workspace_file_state(deployment_id,owner_id,workspace_id,file_id,starred) VALUES($1,$2,$3,$4,$5) ON CONFLICT(deployment_id,owner_id,file_id) DO UPDATE SET starred=EXCLUDED.starred,starred_group=CASE WHEN EXCLUDED.starred THEN workspace_file_state.starred_group ELSE NULL END', [...scope(principal),workspaceId,id,value.starred])
+      })
+    },
+    listStarredGroups: (token: string): Promise<WorkspaceStarredGroups> => access(token, 'files:read', async (connection, principal) => {
+      const result = await connection.query<{starred_group: string}>(`SELECT DISTINCT s.starred_group FROM workspace_file_state s
+        JOIN files f ON f.deployment_id=s.deployment_id AND f.owner_id=s.owner_id AND f.id=s.file_id
+        WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.starred AND s.starred_group IS NOT NULL
+          AND f.deleted_at IS NULL AND f.purge_started_at IS NULL
+        ORDER BY s.starred_group`, scope(principal))
+      return {groups: result.rows.map(row=>row.starred_group)}
+    }),
+    async setStarredGroup(token: string, input: UpdateWorkspaceStarredGroup) {
+      const value = record(input, ['ids','group']), group = starredGroupName(value.group)
+      if (!Array.isArray(value.ids) || value.ids.length<1 || value.ids.length>1000) throw authError(400)
+      const ids = [...new Set(value.ids.map(uuid))]
+      return access(token, 'files:write', async (connection, principal) => {
+        const params = [...scope(principal),ids]
+        // Keep trash and purge from changing membership while a group write is running.
+        const files = await connection.query(`SELECT id FROM files WHERE deployment_id=$1 AND owner_id=$2
+          AND id=ANY($3::uuid[]) AND deleted_at IS NULL AND purge_started_at IS NULL ORDER BY id FOR SHARE`, params)
+        if (files.rowCount!==ids.length) throw authError(404)
+        // Overlapping batches lock existing state rows in the same order.
+        await connection.query(`SELECT file_id FROM workspace_file_state WHERE deployment_id=$1 AND owner_id=$2
+          AND file_id=ANY($3::uuid[]) ORDER BY file_id FOR UPDATE`, params)
+        await connection.query(`UPDATE workspace_file_state SET starred_group=$4 WHERE deployment_id=$1 AND owner_id=$2
+          AND file_id=ANY($3::uuid[]) AND starred AND starred_group IS DISTINCT FROM $4::text`, [...params,group])
       })
     },
     recordOpen: (token: string, fileId: string) => access(token, 'files:write', async (connection, principal, workspaceId) => {

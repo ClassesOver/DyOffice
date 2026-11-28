@@ -10,7 +10,7 @@
 /// A separate resolution at connect time — the DNS rebinding window every
 /// check-then-connect guard otherwise carries — never happens.
 
-import { lookup } from 'node:dns/promises'
+import { lookup, Resolver } from 'node:dns/promises'
 import type { LookupAddress, LookupOptions } from 'node:dns'
 import { BlockList, isIP } from 'node:net'
 import { Agent, fetch as undiciFetch, getGlobalDispatcher, type Dispatcher } from 'undici'
@@ -108,7 +108,7 @@ const normalizeHost = (hostname: string): string =>
  * them (see `fetchWithSsrfGuard`); a plain boolean check loses exactly the
  * information that makes rebinding impossible.
  */
-export async function resolveSafeRemoteTarget(raw: unknown): Promise<SafeRemoteTarget | null> {
+export async function resolveSafeRemoteTarget(raw: unknown, directPublic = false, signal?: AbortSignal): Promise<SafeRemoteTarget | null> {
   if (typeof raw !== 'string') return null
   let url: URL
   try {
@@ -117,6 +117,7 @@ export async function resolveSafeRemoteTarget(raw: unknown): Promise<SafeRemoteT
     return null
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  if (directPublic && (url.username || url.password || url.port)) return null
   // URL keeps IPv6 literals bracketed; isIP does not accept the brackets.
   // Strip a trailing dot: DNS treats "localhost." as "localhost", so the
   // hostname gate must too (otherwise the check passes and only the later
@@ -125,7 +126,7 @@ export async function resolveSafeRemoteTarget(raw: unknown): Promise<SafeRemoteT
   if (host === '') return null
   const literalFamily = isIP(host)
   if (literalFamily !== 0) {
-    if (isBlockedAddress(host)) return null
+    if (!allowedAddress(host, directPublic)) return null
     return {
       url: url.toString(),
       hostname: host,
@@ -133,12 +134,13 @@ export async function resolveSafeRemoteTarget(raw: unknown): Promise<SafeRemoteT
       addresses: [{ address: host, family: literalFamily === 4 ? 4 : 6 }],
     }
   }
-  if (host === 'localhost' || BLOCKED_HOST_SUFFIXES.some((s) => host.endsWith(s))) return null
+  if ((directPublic && !host.includes('.')) ||
+      host === 'localhost' || BLOCKED_HOST_SUFFIXES.some((s) => host.endsWith(s))) return null
   try {
-    const addrs = await lookup(host, { all: true })
+    const addrs = directPublic ? await resolveDirectAddresses(host, signal) : await lookup(host, { all: true })
     if (
       addrs.length === 0 ||
-      !addrs.every((a) => !isBlockedAddress(a.address) || isFakeIpDnsArtifact(a.address))
+      !addrs.every((a) => allowedAddress(a.address, directPublic) || (!directPublic && isFakeIpDnsArtifact(a.address)))
     ) {
       return null
     }
@@ -154,6 +156,40 @@ export async function resolveSafeRemoteTarget(raw: unknown): Promise<SafeRemoteT
   } catch {
     return null
   }
+}
+
+async function resolveDirectAddresses(host: string, signal?: AbortSignal): Promise<RemoteTargetAddress[]> {
+  signal?.throwIfAborted()
+  const resolver = new Resolver({ timeout: 2500, tries: 1 })
+  const cancel = () => resolver.cancel()
+  signal?.addEventListener('abort', cancel, { once: true })
+  try {
+    const results = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)])
+    signal?.throwIfAborted()
+    return results.flatMap((result, index): RemoteTargetAddress[] => {
+      if (result.status === 'fulfilled') return result.value.map(address => ({ address, family: index === 0 ? 4 : 6 }))
+      if (result.reason?.code === 'ENODATA' || result.reason?.code === 'ENOTFOUND') return []
+      throw result.reason
+    })
+  } finally {
+    signal?.removeEventListener('abort', cancel)
+  }
+}
+
+const directRestricted = (() => {
+  const list = new BlockList()
+  list.addSubnet('192.88.99.0', 24)
+  list.addSubnet('2001::', 23, 'ipv6')
+  list.addSubnet('2002::', 16, 'ipv6')
+  return list
+})()
+
+function allowedAddress(address: string, directPublic: boolean): boolean {
+  if (isBlockedAddress(address)) return false
+  if (!directPublic) return true
+  return isIP(address) === 4
+    ? !directRestricted.check(address, 'ipv4')
+    : /^[23][0-9a-f]{3}:/i.test(address) && !directRestricted.check(address, 'ipv6')
 }
 
 /**
@@ -218,6 +254,8 @@ export interface FetchWithSsrfGuardOptions {
   /** Redirect hops to follow. Each hop is revalidated. Defaults to 5. */
   maxRedirects?: number
   headers?: Record<string, string>
+  /** Server use. Require public addresses and connect directly to the validated IPs. */
+  directPublic?: boolean
   /**
    * Cancels the request (and any redirect still to be followed). A caller
    * reading a server it does not control passes a timeout here so a trickling
@@ -271,7 +309,7 @@ export async function fetchWithSsrfGuard(
   rawUrl: string,
   options: FetchWithSsrfGuardOptions = {},
 ): Promise<Response | null> {
-  const { maxRedirects = 5, headers, signal, fetchImpl } = options
+  const { maxRedirects = 5, headers, signal, fetchImpl, directPublic = false } = options
   // maxRedirects arrives from callers (CLI flags, IPC-adjacent config): an
   // Infinity value would follow redirects forever, so normalize to 0..10.
   const hopBudget = Number.isFinite(maxRedirects)
@@ -279,8 +317,10 @@ export async function fetchWithSsrfGuard(
     : 5
   let current = rawUrl
   for (let hop = 0; hop <= hopBudget; hop++) {
-    const target = await resolveSafeRemoteTarget(current)
+    signal?.throwIfAborted()
+    const target = await resolveSafeRemoteTarget(current, directPublic, signal)
     if (!target) return null
+    signal?.throwIfAborted()
     // headers/signal stay absent rather than explicitly undefined (exactOptionalPropertyTypes)
     const init: Record<string, unknown> = {
       ...(headers ? { headers } : {}),
@@ -288,14 +328,14 @@ export async function fetchWithSsrfGuard(
       redirect: 'manual',
     }
     let dispatcher: Dispatcher | undefined
-    if (!target.literal && !globalDispatcherRoutesThroughProxy()) {
+    if (directPublic || (!target.literal && !globalDispatcherRoutesThroughProxy())) {
       // A forward proxy resolves at its own exit, so pinning is neither
       // possible (the proxy owns the connection) nor meaningful — when the
       // shell has installed one via setGlobalDispatcher, let the hop ride it
       // instead of dialing the validated address directly and breaking
       // proxied users. Behind a proxy the gate therefore degrades to its
       // per-hop validation; rebinding is then the proxy's to prevent.
-      dispatcher = new Agent({ connect: { lookup: pinnedLookup(target) } })
+      dispatcher = target.literal ? new Agent() : new Agent({ connect: { lookup: pinnedLookup(target) } })
       init.dispatcher = dispatcher
     }
     try {
@@ -305,7 +345,6 @@ export async function fetchWithSsrfGuard(
           : ((await undiciFetch(current, init as never)) as unknown as Response)
       if (resp.status < 300 || resp.status >= 400) return resp
       const location = resp.headers.get('location')
-      if (!location) return null
       // The redirect hop's body is never read; cancel it so the socket — a
       // keep-alive global-dispatcher socket especially — returns to its pool
       // now instead of lingering until the keep-alive timeout.
@@ -314,6 +353,7 @@ export async function fetchWithSsrfGuard(
       } catch {
         // a locked or already-consumed body has nowhere to drain to
       }
+      if (!location) return null
       try {
         current = new URL(location, current).toString()
       } catch {

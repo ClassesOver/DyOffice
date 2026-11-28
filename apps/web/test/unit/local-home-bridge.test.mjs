@@ -235,7 +235,7 @@ for(const action of ['removeRecent','unstarPaths'])test(`${action} rechecks a co
 test('recent page and count stay one bounded server query regardless of workspace size',async()=>{
  const calls=[];const bridge=createLocalHomeBridge(deps(async path=>{calls.push(path);if(calls.length>1)throw new Error('unbounded scan');return {files:[],total:100000,totalAll:200000}}))
  assert.deepEqual(await bridge.recents({offset:50,limit:0,ext:'xlsx'}),{entries:[],total:100000,totalAll:200000})
- const url=new URL(calls[0],'https://local');assert.equal(url.searchParams.get('offset'),'50');assert.equal(url.searchParams.get('limit'),'0');assert.equal(url.searchParams.get('ext'),'xlsx')
+ const url=new URL(calls[0],'https://local');assert.equal(url.searchParams.get('offset'),'50');assert.equal(url.searchParams.get('limit'),'0');assert.equal(url.searchParams.get('family'),'spreadsheet');assert.equal(url.searchParams.has('ext'),false)
 })
 for(const view of ['recents','starred'])test(`${view} refreshes more than 100 loaded rows using valid bounded API pages`,async()=>{
  const calls=[],items=Array.from({length:175},(_,i)=>({...item,id:`file-${i}`,name:`file-${i}.docx`}))

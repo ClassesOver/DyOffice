@@ -6,7 +6,9 @@ import {transform} from 'esbuild'
 import {createDocumentTabs} from '../src/shell/document-tabs.ts'
 import {createEntryNavigator} from '../src/shell/workspace-entry-navigation.ts'
 import {createEntryRecovery,entryHash,parseEntryHash,resolveEntrySnapshot} from '../src/shell/workspace-entry-recovery.ts'
+import {defaultMaxLiveTabs,DEFAULT_IDLE_MS,SLEEP_SWEEP_INTERVAL_MS} from '../../shell/src/main/tab-hibernation.ts'
 import {localNewFormats} from '../src/shell/local-new-sheet.ts'
+import {workspaceFileImports} from '../src/shell/workspace-file-formats.ts'
 const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.url),'utf8')
 const {code}=await transform(source.slice(source.indexOf('function Shell('),source.indexOf('function Login(')),{loader:'tsx',target:'es2022',jsxFactory:'jsx'})
 function fixture({roles=['personal','config_admin'],recovery=false,openInitial=true,initialHash,resolveOpenDocument=async()=>{throw Error('Unexpected document navigation')}}={}){
@@ -15,15 +17,17 @@ function fixture({roles=['personal','config_admin'],recovery=false,openInitial=t
  if(openInitial)documentTabs.open({id,format:'docx',name:'example.docx',src:`/native-docs/?id=${id}`})
  const location={hash:initialHash??entryHash(id),search:''}
  const events=new Map()
- const stage={location:{origin:'http://localhost'},addEventListener:(kind,fn)=>events.set(kind,fn),removeEventListener:kind=>events.delete(kind)}
+ const stage={location:{origin:'http://localhost'},setInterval:()=>1,clearInterval(){},addEventListener:(kind,fn)=>events.set(kind,fn),removeEventListener:kind=>events.delete(kind)}
  const context={
   jsx:(type,props,...children)=>({type,props:{...props,children}}),
   useState:initial=>{const i=stateIndex++;if(!(i in values))values[i]=typeof initial==='function'?initial():initial;return[values[i],value=>{values[i]=typeof value==='function'?value(values[i]):value}]},
-  useRef:initial=>{const i=refIndex++;return refs[i]??(refs[i]={current:initial})},useCallback:fn=>fn,
+  useRef:initial=>{const i=refIndex++;return refs[i]??(refs[i]={current:initial})},useCallback:fn=>fn,useMemo:fn=>fn(),
   useEffect:(fn,deps)=>{const i=effectIndex++,old=installed[i];if(!old||!deps||deps.some((value,index)=>!Object.is(value,old.deps[index])))effects.push(()=>{old?.cleanup?.();installed[i]={deps,cleanup:fn()}})},
   client:{onSessionEnded:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}},documentTabs,entryRecoveryNotice:'',entryRecovery:undefined,sourceWorkspace:undefined,
-  createEntryNavigator,entryHash,parseEntryHash,localNewFormats,resolveOpenDocument,
-  URLSearchParams,location,history:{replaceState(_data,_title,hash){location.hash=hash},pushState(_data,_title,hash){location.hash=hash}},window:stage,
+  createEntryNavigator,entryHash,parseEntryHash,localNewFormats,workspaceFileImports,resolveOpenDocument,
+  URL,URLSearchParams,navigator:{deviceMemory:16},location,history:{replaceState(_data,_title,hash){location.hash=hash},pushState(_data,_title,hash){location.hash=hash}},window:stage,
+  workspaceWindow:undefined,officeImportUnlocks:new Map(),takeOfficeImportUnlock(){},saveWorkspaceEntries(){},updateAutoFileTab(){},saveWorkspaceAssistantSide(){throw new Error('Unexpected preference save')},
+  defaultMaxLiveTabs,DEFAULT_IDLE_MS,SLEEP_SWEEP_INTERVAL_MS,sleepInactiveTabs:false,canCheckpointWorkspace:false,restoreSession:false,logoutPending:false,
   document:{querySelectorAll:selector=>selector==='.workspace-document-frame'?[{contentWindow:caller}]:[]},
   user:{id:'me',roles},capabilities:{},showUpload(){},showChromeMenu(){},showTrash(){},notice(){},updateAutoPdfTab(){},
   AppFrame:'frame',Account:'account',DocumentFrame:'document-frame',NativeSettingsDialog:'dialog',WorkspacePageContent:'content',WorkspaceUploadDialog:'upload',Dropdown:'dropdown',workspacePages:{settings:'个人设置',global:'全局配置'},React:{Fragment:'fragment'},
@@ -61,7 +65,7 @@ test('restoring a requested file does not overwrite a new hash while metadata is
  const restored='10000000-0000-0000-0000-000000000001',requested='20000000-0000-0000-0000-000000000002'
  const sourceCode=source.slice(source.indexOf('async function restore('),source.indexOf('let logoutPending'))
  const {code:restoreCode}=await transform(sourceCode,{loader:'tsx',target:'es2022'})
- const location={hash:entryHash(restored)},documentTabs=createDocumentTabs()
+ const location={hash:entryHash(restored),href:'https://office.example/'+entryHash(restored)},documentTabs=createDocumentTabs()
  let release,started
  const isStarted=new Promise(resolve=>{started=resolve})
  const metadata=new Promise(resolve=>{release=resolve})
@@ -78,7 +82,7 @@ test('restoring a requested file does not overwrite a new hash while metadata is
   document:{documentElement:{dataset:{}}},window:{sessionStorage:{getItem:()=>null}},createUserSkillsClient(){},installBridge(){},createEntryRecovery,
   entryRecovery:undefined,entryRecoveryNotice:'',createDocumentTabs,documentTabs,resolveEntrySnapshot,entryHash,parseEntryHash,
   resolvedDocument:(_capabilities,id,_metadata)=>({id,name:'previous.pdf',format:'pdf',src:`/native-pdf/?fileId=${id}`}),
-  location,history:{replaceState(_data,_title,hash){location.hash=hash}},
+  URL,location,history:{replaceState(_data,_title,hash){location.hash=hash}},
  })
  const result=restore()
  await isStarted

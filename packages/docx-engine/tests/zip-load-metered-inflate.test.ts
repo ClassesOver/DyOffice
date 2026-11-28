@@ -109,6 +109,13 @@ describe('assertZipInflatesWithinLimits', () => {
     const zip = await loadDocxZip(new Uint8Array(archive))
     expect(await zip.file('word/document.xml')?.async('string')).toContain('<w:document/>')
   })
+
+  it('applies a caller-specific part limit before loading a secondary archive', async () => {
+    const archive = onePartArchive('word/document.xml', 3 * KB, 3 * KB)
+    await expect(loadDocxZip(archive, { ...LIMITS, maxPartBytes: 2 * KB })).rejects.toThrow(
+      /declares 3072 uncompressed bytes \(limit 2048\)/,
+    )
+  })
 })
 
 describe('the gate runs where Blob#stream is missing', () => {

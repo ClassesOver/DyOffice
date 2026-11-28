@@ -90,6 +90,40 @@ const FILTER_SOURCE = [
 ]
 
 describe('pivot filters recompute', () => {
+  it.each([
+    ['count', '<top10 top="false" val="2"/>'],
+    ['count', '<top10 percent="true" val="2"/>'],
+    ['valueGreaterThan', '<customFilters><customFilter operator="greaterThanOrEqual" val="30"/></customFilters>'],
+    ['valueBetween', '<customFilters and="false"><customFilter operator="greaterThanOrEqual" val="10"/>' +
+      '<customFilter operator="lessThanOrEqual" val="30"/></customFilters>'],
+  ])('keeps unsupported %s variants out of refresh', (type, conditions) => {
+    const definition = parsePivotDefinition(
+      pivotXmlWithFilters(
+        `<filters><filter fld="0" type="${type}" iMeasureFld="0"><autoFilter ref="A1">` +
+        `<filterColumn colId="0">${conditions}</filterColumn></autoFilter></filter></filters>`,
+      ),
+      FILTER_CACHE_XML,
+    )
+    expect(definition.filters).toEqual([])
+    expect(definition.unsupported).toHaveLength(1)
+  })
+
+  it('reads an inclusive between filter in either condition order', () => {
+    const definition = parsePivotDefinition(
+      pivotXmlWithFilters(
+        '<filters><filter fld="0" type="valueBetween" iMeasureFld="0"><autoFilter ref="A1">' +
+        '<filterColumn colId="0"><customFilters and="true"><customFilter operator="lessThanOrEqual" val="30"/>' +
+        '<customFilter operator="greaterThanOrEqual" val="10"/></customFilters>' +
+        '</filterColumn></autoFilter></filter></filters>',
+      ),
+      FILTER_CACHE_XML,
+    )
+    expect(definition.unsupported).toEqual([])
+    expect(definition.filters).toEqual([{ kind: 'value', field: 0, dataField: 0, op: 'between', from: 10, to: 30 }])
+    expect(recomputePivotData(growPivotDefinition(definition, FILTER_SOURCE).definition, FILTER_SOURCE).data)
+      .toEqual([[30], [10], [40]])
+  })
+
   it('parses supported label and value filter types', () => {
     const definition = parsePivotDefinition(
       pivotXmlWithFilters(
@@ -124,6 +158,18 @@ describe('pivot filters recompute', () => {
     expect(growth.definition.fieldItems[0]!.map((item) => item.hidden)).toEqual([false, true, true])
     const result = recomputePivotData(growth.definition, FILTER_SOURCE)
     expect(result.data).toEqual([[50], [50]])
+  })
+
+  it('keeps a manually hidden member hidden when it matches the label filter', () => {
+    const definition = parsePivotDefinition(
+      pivotXmlWithFilters('<filters><filter fld="0" type="captionContains" stringValue1="t"/></filters>')
+        .replace('<item x="0"/>', '<item x="0" h="1"/>')
+        .replace('<rowItems count="4"><i><x/></i>', '<rowItems count="3">'),
+      FILTER_CACHE_XML,
+    )
+    const growth = growPivotDefinition(definition, FILTER_SOURCE)
+    expect(growth.grown).toBe(false)
+    expect(recomputePivotData(growth.definition, FILTER_SOURCE).data).toEqual([[30], [10], [40]])
   })
 
   it('applies a top-N value filter on refresh: aggregate first, then cut', () => {

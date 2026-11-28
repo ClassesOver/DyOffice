@@ -58,7 +58,7 @@ const cell = (s) => String(s).replaceAll('|', '\\|').replaceAll('\n', ' ')
 const code = (s) => '`' + cell(s).replaceAll('`', "'") + '`'
 const channels = (row) => row.ipc.map((u) => (u.channel === null ? cell(u.op) : cell(u.op) + ' ' + code(u.channel))).join('<br>') || '—'
 
-export function renderMarkdown(result, spec) {
+export function renderMarkdown(result, spec, browserMethods = {}) {
   const { classified } = result
   const apps = [...new Set(classified.map((r) => r.app))]
   const count = (pred) => classified.filter(pred).length
@@ -101,6 +101,13 @@ export function renderMarkdown(result, spec) {
       lines.push('| `' + r.bridge + '.' + r.name + '` | ' + r.lifecycle + ' | ' + channels(r) + ' | ' + r.calls + ' | `' + r.class + '` | `' + r.rule + '` |')
     }
   }
+  const browserRows = Object.entries(browserMethods).flatMap(([app, methods]) =>
+    methods.map(method => '| ' + app + ' | ' + code(method) + ' |'))
+  if (browserRows.length) {
+    lines.push('', '## Browser-only renderer APIs', '',
+      'The Web host supplies these optional members from the shared renderer interfaces.', '',
+      '| Editor | Optional member |', '| --- | --- |', ...browserRows)
+  }
   return lines.join('\n') + '\n'
 }
 
@@ -117,7 +124,8 @@ export async function build(base = root) {
     for (const o of r.opaqueReferences) problems.push(app + ': unresolved bridge reference at ' + o.file + ':' + o.line)
     for (const b of r.bridges) for (const u of b.unresolved) problems.push(app + ': unresolved preload member in ' + b.name + ': ' + u)
   }
-  return { problems, markdown: renderMarkdown(result, spec), result }
+  const browserMethods = Object.fromEntries(Object.entries(report).map(([app, item]) => [app, item.browserOnlyRendererMethods]))
+  return { problems, markdown: renderMarkdown(result, spec, browserMethods), result }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

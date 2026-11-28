@@ -1,11 +1,24 @@
+import type { AssistantPreferences, DocumentTheme } from './preferences.ts'
+import type { CsvImportLimitMb } from '../../xlsx-gateway/src/gateway/csv-limits.ts'
+
 export type OfficeFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf'
+export type WorkspaceFileFormat = OfficeFormat | 'csv' | 'xlsm'
+export type SpreadsheetArchiveFormat = 'xlsx' | 'xlsm'
+export type EncryptedOfficeFormat = 'docx' | SpreadsheetArchiveFormat
+
+export function isSpreadsheetArchive(format: string): format is SpreadsheetArchiveFormat {
+  return format === 'xlsx' || format === 'xlsm'
+}
+export function isEncryptedOfficeFormat(format: string): format is EncryptedOfficeFormat {
+  return format === 'docx' || isSpreadsheetArchive(format)
+}
 export type Principal = Readonly<{ userId: string; sessionId: string; deploymentId: string; roles: readonly string[]; scopes: readonly string[] }>
 /** Stable job identity only; endpoint-specific status DTOs belong to T08. */
 export type JobRef = Readonly<{ id: string }>
 export type RevisionRef = Readonly<{ fileId: string; revision: string; sha256: string; size: number }>
 export type SaveInput = Readonly<{ fileId: string; uploadId: string; baseRevision: string; idempotencyKey: string; leaseEpoch: number; wordVersion?: number; sourceCommandId?: string }>
-export type OpenFileResult = Readonly<{ name?: string; pdfAutoNamePending?: true; autoNamePending?: true; officeSignatureProtected?: true; file: RevisionRef; format: OfficeFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
-export type PublicSettings = Readonly<{ theme: 'light' | 'dark' | 'system'; language: string; authorName?: string; autoSave?: boolean; showAssistant?: boolean }>
+export type OpenFileResult = Readonly<{ name?: string; pdfAutoNamePending?: true; autoNamePending?: true; officeSignatureProtected?: true; workbookPasswordProtected?: true; documentPasswordProtected?: true; file: RevisionRef; format: WorkspaceFileFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
+export type PublicSettings = Readonly<{ theme: 'light' | 'dark' | 'system'; documentTheme?: DocumentTheme; language: string; authorName?: string; autoSave?: boolean; autoSaveUpdatedAt?: number; showAssistant?: boolean; csvImportLimitMb?: CsvImportLimitMb } & AssistantPreferences>
 
 export function isRevisionRef(value: unknown): value is RevisionRef {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false

@@ -262,6 +262,10 @@ interface RibbonProps {
   embeddedDocument?: boolean
   fileActions?: React.ReactNode
   desktopActionsAvailable?: boolean
+  mailMergeAvailable?: boolean
+  compareAvailable?: boolean
+  openAvailable?: boolean
+  saveAsAvailable?: boolean
   aiNamingAvailable?: boolean
   /** App keyboard shortcuts reuse ribbon closures through here (font-size stepping keeps its coalescing) */
   actionsRef?: React.MutableRefObject<{
@@ -725,6 +729,10 @@ function RibbonInner({
   actionsRef,
   quickActions,
   desktopActionsAvailable = true,
+  mailMergeAvailable = desktopActionsAvailable,
+  compareAvailable = desktopActionsAvailable,
+  openAvailable = desktopActionsAvailable,
+  saveAsAvailable = desktopActionsAvailable,
   aiNamingAvailable = desktopActionsAvailable,
   fileActions,
   trailingActions,
@@ -2194,7 +2202,7 @@ function RibbonInner({
       ['images', 'ribbonConvertImages'],
     ] as const
   ).map(([format, key]) => {
-    const unavailable = !desktopActionsAvailable && format !== 'html' && format !== 'md'
+    const unavailable = !desktopActionsAvailable && format === 'images'
     return (
       <button
         key={format}
@@ -2231,8 +2239,8 @@ function RibbonInner({
             {dropdown === 'file' && (
               <div data-rb-panel="" className="file-menu">
                 <button
-                  disabled={!desktopActionsAvailable}
-                  title={!desktopActionsAvailable ? '请在工作区打开其他文件。' : undefined}
+                  disabled={!openAvailable}
+                  title={!openAvailable ? '请在工作区打开其他文件。' : undefined}
                   onClick={() => {
                     setDropdown(null)
                     onOpen()
@@ -2250,8 +2258,7 @@ function RibbonInner({
                   {t('ribbonSave')} <span className="file-menu-key">Ctrl+S</span>
                 </button>
                 <button
-                  disabled={!hasDoc || !desktopActionsAvailable}
-                  title={!desktopActionsAvailable ? '请使用工作区原件下载，Web 暂不支持另存为。' : undefined}
+                  disabled={!hasDoc || !saveAsAvailable}
                   onClick={() => {
                     setDropdown(null)
                     onSaveAs()
@@ -2293,8 +2300,8 @@ function RibbonInner({
         {TABS.filter((tabName) => tabName !== 'file').map((tabName) => (
           <button
             key={tabName}
-            disabled={!desktopActionsAvailable && tabName === 'mailings'}
-            title={!desktopActionsAvailable && tabName === 'mailings' ? '邮件合并仅桌面版可用。' : undefined}
+            disabled={!mailMergeAvailable && tabName === 'mailings'}
+            title={!mailMergeAvailable && tabName === 'mailings' ? '邮件合并仅桌面版可用。' : undefined}
             className={`ribbon-tab ${collapse.tabClass(tab === tabName)}`}
             data-tip={collapse.tabTip(tab === tabName)}
             onClick={() => {
@@ -4568,6 +4575,7 @@ function RibbonInner({
         ) : tab === 'review' ? (
           <ReviewTab
             desktopActionsAvailable={desktopActionsAvailable}
+            compareAvailable={compareAvailable}
             editor={editor}
             hasDoc={hasDoc}
             dropdown={dropdown}

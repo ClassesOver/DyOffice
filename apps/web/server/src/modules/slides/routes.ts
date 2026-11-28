@@ -4,6 +4,7 @@ import { createBrotliCompress } from 'node:zlib'
 import { acceptsBrotli, fastBrotli, minCompressionBytes } from '../../../response-encoding.mjs'
 import {MAX_PPTX_ADVANCE_MS, MAX_PPTX_MEDIA_BYTES, MAX_PPTX_RECORDING_BYTES, MAX_PPTX_RECORDING_SLIDES} from '../../../../worker/src/native/pptx-session-host.ts'
 import {MAX_INK_PAYLOAD_BYTES} from '../../../../../slides/src/shared/ink-payload'
+import {WEB_MODEL3D_MAX_BYTES} from '../../../../../slides/src/shared/model3d-glb'
 import type { SlidesSessions } from './service.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type { SlidesSaveService, SlidesSaveInput } from './save.ts'
@@ -59,6 +60,9 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     }
     const fitWidthPx = { type: 'integer', minimum: 320, maximum: 4096 }
     readRoute<{revision:string;generation:number;fitWidthPx?:number}>('/api/v1/files/:id/slides/open', {...revisionBody,generation:generationBody,fitWidthPx}, (token,id,body,signal)=>slides.open(token,id,body,signal))
+    route<Parameters<SlidesSessions['unlockEditing']>[2]>('/api/v1/files/:id/slides/unlock-editing',{
+      ...revisionBody,generation:generationBody,password:{type:'string',minLength:1,maxLength:255},
+    },(token,id,body,signal)=>slides.unlockEditing(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number;fitWidthPx?:number}>('/api/v1/files/:id/slides/slide', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575},fitWidthPx}, (token,id,body,signal)=>slides.slide(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/notes', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.notes(token,id,body,signal))
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/comments', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.comments(token,id,body,signal))
@@ -73,6 +77,34 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/slides', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.slides(token,id,body,signal))
     const clipboardBase={...revisionBody,generation:generationBody}
     const slideIndex={type:'integer',minimum:0,maximum:1048575}
+    const modelSource={type:'string',minLength:1,maxLength:256}
+    const modelLimit=Math.ceil(WEB_MODEL3D_MAX_BYTES/3)*4,posterLimit=Math.ceil(5*1024*1024/3)*4
+    const posterBase64={type:'string',minLength:1,maxLength:posterLimit}
+    readRoute<Parameters<SlidesSessions['fontFaces']>[2]>('/api/v1/files/:id/slides/font-faces',{
+      ...clipboardBase,
+    },(token,id,body,signal)=>slides.fontFaces(token,id,body,signal))
+    readRoute<Parameters<SlidesSessions['fontData']>[2]>('/api/v1/files/:id/slides/font-data',{
+      ...clipboardBase,sourceId:{type:'string',pattern:'^[0-9a-f]{64}$'},
+    },(token,id,body,signal)=>slides.fontData(token,id,body,signal))
+    readRoute<Parameters<SlidesSessions['model3dData']>[2]>('/api/v1/files/:id/slides/model3d-data',{
+      ...clipboardBase,index:slideIndex,sourceId:modelSource,
+    },(token,id,body,signal)=>slides.model3dData(token,id,body,signal))
+    route<Omit<Extract<Parameters<SlidesSessions['editModel3d']>[2],{mode:'insert'}>,'mode'>>('/api/v1/files/:id/slides/model3d-insert',{
+      ...clipboardBase,slide:slideIndex,fitWidthPx,bytesBase64:{type:'string',minLength:1,maxLength:modelLimit},posterBase64,
+      name:{type:'string',minLength:1,maxLength:255},aspect:{type:'number',minimum:1/3,maximum:3},
+    },(token,id,body,signal)=>slides.editModel3d(token,id,{...body,mode:'insert'},signal),modelLimit+posterLimit+4096,['posterBase64'])
+    const angle={type:'number',minimum:-2160000000,maximum:2160000000}
+    route<Omit<Extract<Parameters<SlidesSessions['editModel3d']>[2],{mode:'view'}>,'mode'>>('/api/v1/files/:id/slides/model3d-view',{
+      ...clipboardBase,slide:slideIndex,sourceId:modelSource,posterBase64,
+      rot:{type:'object',additionalProperties:false,required:['ax','ay','az'],properties:{ax:angle,ay:angle,az:angle}},
+    },(token,id,body,signal)=>slides.editModel3d(token,id,{...body,mode:'view'},signal),posterLimit+4096,['posterBase64'])
+    const mediaBase64Limit=Math.ceil(MAX_PPTX_MEDIA_BYTES/3)*4
+    const mediaCoordinate={type:'number',minimum:-100000,maximum:100000}
+    route<Parameters<SlidesSessions['insertMedia']>[2]>('/api/v1/files/:id/slides/embedded-media',{
+      ...clipboardBase,slide:slideIndex,kind:{type:'string',enum:['audio','video']},fitWidthPx,
+      ext:{type:'string',minLength:3,maxLength:4},bytesBase64:{type:'string',minLength:16,maxLength:mediaBase64Limit},
+      name:{type:'string',maxLength:255},centerPx:{type:'object',additionalProperties:false,required:['x','y'],properties:{x:mediaCoordinate,y:mediaCoordinate}},
+    },(token,id,body,signal)=>slides.insertMedia(token,id,body,signal),mediaBase64Limit+4096,['name','centerPx'])
     readRoute<Parameters<SlidesSessions['mediaData']>[2]>('/api/v1/files/:id/slides/media-data',{
       ...clipboardBase,index:slideIndex,sourceId:{type:'string',minLength:1,maxLength:256},
     },(token,id,body,signal)=>slides.mediaData(token,id,body,signal))

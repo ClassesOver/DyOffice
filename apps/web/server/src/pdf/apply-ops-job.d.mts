@@ -1,7 +1,7 @@
 import type {PdfAnnotationProcessor} from './annotation-job.mjs'
 import type {PlannedPdfFormField} from './form-fields-job.mjs'
 import type {PdfDraftInserts} from './draft-inserts-job.mjs'
-import type {AnnotDeleteInput,NoteEditInput,TextEditInput,PdfAttachmentOps,DrawingInput,OutlineEntryInput,FormWidgetEditInput} from '../../../../pdf/src/shared/ipc.ts'
+import type {AnnotDeleteInput,NoteEditInput,TextEditInput,PdfAttachmentOps,DrawingInput,OutlineEntryInput,FormWidgetEditInput,StaticFormFillRecord} from '../../../../pdf/src/shared/ipc.ts'
 import type {PdfStampOperation} from '../../../../../packages/web-contracts/src/pdf-stamp-ops.ts'
 type Pair=readonly [number,number]
 type Rect=readonly [number,number,number,number]
@@ -25,6 +25,7 @@ export interface PdfApplySnapshot {
  readonly drawings?:readonly Exclude<DrawingInput,{kind:'note'}>[]
  readonly outline?:readonly OutlineEntryInput[]
  readonly formWidgetEdits?:readonly FormWidgetEditInput[]
+ readonly staticFormFills?:readonly StaticFormFillRecord[]
  readonly markups:readonly {readonly id:string;readonly pageIndex:number;readonly type:'highlight'|'underline'|'squiggly'|'strikeout';readonly color:RGB;readonly quads:readonly (readonly number[])[]}[]
  readonly notes:readonly {readonly id:string;readonly input:PdfApplyNote}[]
  readonly textInserts:readonly {readonly id:string;readonly input:PdfApplyTextInsert}[]

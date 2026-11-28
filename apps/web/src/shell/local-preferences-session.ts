@@ -2,7 +2,7 @@ import {createPreferencesClient, type SettingsRequest} from '../../../../package
 import type {createLocalShellClient} from './local-client'
 
 type LocalClient = ReturnType<typeof createLocalShellClient>
-type BoundSession = Awaited<ReturnType<LocalClient['bindSession']>>
+type BoundSession = Pick<Awaited<ReturnType<LocalClient['bindSession']>>, 'proof' | 'request'>
 const stale = () => Object.assign(new Error('登录状态已改变，请重新加载当前工作区。'), {code: 'stale_session'})
 
 /** One preference write fence per workspace, including verified same-user cookie rotation. */

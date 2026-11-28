@@ -87,11 +87,99 @@ test(
     const native = runtime.sheetsNative
     const read = (bytes, sheet) => native.readRange(bytes, sheet, bounds)
     const inspect = (bytes) => native.inspect(bytes, undefined, true)
-    const save = async (bytes, sheetOps, sheetOrder) => {
-      const request = { ...sheetsSaveRequest(first, []), sheetOps, sheetOrder }
+    const save = async (bytes, sheetOps, sheetOrder, fields = {}) => {
+      const request = { ...sheetsSaveRequest(first, []), sheetOps, sheetOrder, ...fields }
       return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request)))
         .bytes
     }
+    await t.test('saves readable cells while preserving dangling worksheet declarations', async () => {
+      const dangling = '<sheet name="No ID" sheetId="8"/><sheet name="No Relation" sheetId="9" r:id="rId9"/><sheet name="No Part" sheetId="10" r:id="rId10"/>' +
+        '<sheet name="External" sheetId="11" r:id="rId11"/><sheet name="Wrong Type" sheetId="12" r:id="rId12"/>'
+      const zip = await JSZip.loadAsync(await fixture({
+        changeWorkbook: (xml) => xml.replace('<sheets>', `<sheets>${dangling}`),
+      }))
+      zip.file(relPath, (await xmlPart(zip, relPath)).replace('</Relationships>',
+        `<Relationship Id="rId10" Type="${r}/worksheet" Target="worksheets/missing.xml"/>` +
+        `<Relationship Id="rId11" Type="${r}/worksheet" Target="https://example.invalid/sheet.xml" TargetMode="&#69;xternal"/>` +
+        `<Relationship Id="rId12" Type="${r}/hyperlink" Target="worksheets/sheet1.xml"/></Relationships>`))
+      const source = await zip.generateAsync({ type: 'nodebuffer' })
+      const before = await inspect(source)
+      assert.deepEqual(before.sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      const saveValue = async (id) => {
+        const request = sheetsSaveRequest(id, [{ row: 0, column: 0, value: 'Updated', writeValue: true }])
+        return (await native.savePlan(source, await runtime.sheetsWorkbookPlanner(source, request))).bytes
+      }
+      const saved = await saveValue(first)
+      assert.equal((await read(saved, 'Acceptance')).cells[0].value, 'Updated')
+      assert.deepEqual((await inspect(saved)).sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      const after = await JSZip.loadAsync(saved)
+      for (const path of [wbPath, relPath]) assert.equal(await xmlPart(after, path), await xmlPart(zip, path))
+      for (const id of ['sheet-10', 'sheet-11', 'sheet-12']) {
+        await assert.rejects(saveValue(id), /Invalid workbook input/)
+      }
+    })
+
+    await t.test('reorders and renames readable tabs around missing worksheets', async () => {
+      const dangling = '<sheet name="Missing" sheetId="9" r:id="rId9"/>'
+      const source = await fixture({
+        changeWorkbook: (xml) => xml
+          .replace('<workbookView/>', '<workbookView activeTab="1"/>')
+          .replace('<sheet name="Other"', `${dangling}<sheet name="Other"`)
+          .replace('</definedNames>', '<definedName name="LocalData" localSheetId="2">Other!$A$1</definedName><definedName name="MissingLocal" localSheetId="1">Missing!$A$1</definedName></definedNames>'),
+      })
+      const before = await inspect(source)
+      assert.deepEqual(before.sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      assert.equal(before.sheets[before.activeTab]?.name, 'Acceptance')
+      const saved = await save(source, [
+        { kind: 'rename-sheet', sheetId: second, newName: 'Renamed' },
+        { kind: 'reorder-sheets' },
+      ], [second, first])
+      const after = await inspect(saved)
+      assert.deepEqual(after.sheets.map(({ name }) => name), ['Renamed', 'Acceptance'])
+      assert.equal(after.sheets[after.activeTab]?.name, 'Acceptance')
+      assert.deepEqual(after.definedNames.find(({ name }) => name === 'LocalData'),
+        { name: 'LocalData', formula: 'Renamed!$A$1', sheetIndex: 0 })
+      const zip = await JSZip.loadAsync(saved)
+      const xml = await xmlPart(zip, wbPath)
+      assert.match(xml, new RegExp(`name="Renamed"[^>]+/>${dangling}<sheet name="Acceptance"`))
+      assert.ok(xml.includes('<definedName name="MissingLocal" localSheetId="1">Missing!$A$1</definedName>'))
+      assert.equal(await xmlPart(zip, relPath), await xmlPart(await JSZip.loadAsync(source), relPath))
+    })
+
+    await t.test('reorders actual worksheets and preserves foreign tab metadata', async () => {
+      const foreignViews = '<ext:bookViews><ext:workbookView activeTab="0"/></ext:bookViews>'
+      const foreignView = '<ext:workbookView activeTab="1"/>'
+      const declaration = "<sheet name='Acceptance' sheetId='1' r:id='rId1'/>"
+      const foreignSheets = `<ext:sheets xmlns="urn:example:tabs">${declaration}</ext:sheets>`
+      const foreignSheet = '<ext:sheet name="ForeignSheet" sheetId="11" r:id="rId3"/>'
+      const source = await fixture({
+        changeWorkbook: (xml) => xml
+          .replace('<workbook ', '<workbook xmlns:ext="urn:example:tabs" ')
+          .replace('<bookViews><workbookView/></bookViews>',
+            `${foreignViews}<bookViews><workbookView activeTab="0"/>${foreignView}</bookViews>`)
+          .replace('<sheet name="Acceptance" sheetId="1" r:id="rId1"/>', declaration)
+          .replace('<sheets>', `${foreignSheets}<sheets>${foreignSheet}`),
+      })
+      const before = await inspect(source)
+      assert.deepEqual(before.sheets.map(({ name }) => name), ['Acceptance', 'Other'])
+      assert.equal(before.sheets[before.activeTab]?.name, 'Acceptance')
+
+      const reorder = [{ kind: 'reorder-sheets' }]
+      const saved = await save(source, reorder, [second, first])
+      const after = await inspect(saved)
+      assert.deepEqual(after.sheets.map(({ name }) => name), ['Other', 'Acceptance'])
+      assert.equal(after.sheets[after.activeTab]?.name, 'Acceptance')
+      const xml = await xmlPart(await JSZip.loadAsync(saved), wbPath)
+      for (const foreign of [foreignViews, foreignView, foreignSheets, foreignSheet]) {
+        assert.ok(xml.includes(foreign), foreign)
+      }
+
+      const misplaced = await fixture({
+        changeWorkbook: (xml) => xml.replace('<sheets>', `${declaration}<sheets>`),
+      })
+      await assert.rejects(save(misplaced, reorder, [second, first]), /Invalid workbook input/)
+    })
+
     await t.test(
       'keeps formulas and defined names attached to the original sheets during a name swap',
       async () => {
@@ -183,6 +271,68 @@ test(
         })
       },
     )
+    await t.test('preserves an explicit active tab followed by a view without an active tab', async () => {
+      const secondary = '<workbookView xWindow="1200" showSheetTabs="0"/>'
+      const source = await fixture({ changeWorkbook: (xml) => xml.replace('<workbookView/>',
+        '<workbookView activeTab="1"/>' + secondary) })
+      const before = await inspect(source)
+      assert.equal(before.sheets[before.activeTab]?.name, 'Other')
+
+      const saved = await save(source, [{ kind: 'reorder-sheets' }], [second, first])
+      const after = await inspect(saved)
+      assert.equal(after.sheets[after.activeTab]?.name, 'Other')
+      assert.equal(after.openingViewport.result.cells[0].value, 100)
+      const xml = await xmlPart(await JSZip.loadAsync(saved), wbPath)
+      assert.ok(xml.includes('<workbookView activeTab="0"/>' + secondary))
+    })
+    await t.test('keeps the visible opening sheet when a hidden active tab is stale', async () => {
+      const source = await fixture({ changeWorkbook: (xml) =>
+        xml.replace('<sheet name="Acceptance"', '<sheet name="Acceptance" state="veryHidden"') })
+      const before = await inspect(source)
+      assert.equal(before.openingViewport.sheetId, second)
+
+      const added = 'local-dashboard'
+      const saved = await save(source, [{ kind: 'add-sheet', sheetId: added, name: 'Dashboard' }],
+        [added, first, second])
+      const after = await inspect(saved)
+      assert.deepEqual(after.sheets.map(({ name, hidden }) => [name, hidden]),
+        [['Dashboard', false], ['Acceptance', true], ['Other', false]])
+      assert.equal(after.sheets[after.activeTab]?.name, 'Other')
+      assert.equal(after.openingViewport.sheetId, after.sheets[after.activeTab].id)
+      assert.equal(after.openingViewport.result.cells[0].value, 100)
+    })
+    await t.test('protects the source sheet of genuine structured table references', async (t) => {
+      const table = { sheetId: second, area: { startRow: 0, endRow: 1, startColumn: 0, endColumn: 0 },
+        name: 'SourceRows', columnNames: ['Amount'], bandedRows: true }
+      const base = await save(await fixture(), [], [first, second], { tableAdditions: [table] })
+      const removal = [{ kind: 'remove-sheet', sheetId: second }]
+      const modified = async (path, edit) => {
+        const zip = await JSZip.loadAsync(base)
+        zip.file(path, edit(await xmlPart(zip, path)))
+        return zip.generateAsync({ type: 'nodebuffer' })
+      }
+      const addRow = (markup) => (xml) => xml.replace('</sheetData>', `<row r="5">${markup}</row></sheetData>`)
+
+      await t.test('allows deletion when text and cached XML only resemble a reference', async () => {
+        const literal = '<c r="A5"><f>"SourceRows[Amount]"</f></c>'
+        const cached = '<custom><f>SUM(SourceRows[Amount])</f></custom>'
+        const file = await modified(one, addRow(literal + '<c r="B5">' + cached + '</c>'))
+        const deleted = await save(file, removal, [first])
+        assert.deepEqual((await inspect(deleted)).sheets.map((sheet) => sheet.name), ['Acceptance'])
+        assert.ok((await xmlPart(await JSZip.loadAsync(deleted), one)).includes(cached))
+      })
+
+      await t.test('blocks deletion for an entity-encoded, case-insensitive reference', async () => {
+        const file = await modified(one, addRow('<c r="A5"><f>SUM(sourcerows&#91;Amount])</f></c>'))
+        await assert.rejects(save(file, removal, [first]), /Invalid workbook input/)
+      })
+
+      await t.test('blocks deletion when a surviving chart reads the table', async () => {
+        const file = await modified('xl/charts/chart1.xml', (xml) =>
+          xml.replace('Acceptance!$A$2:$A$3', 'SourceRows[Amount]'))
+        await assert.rejects(save(file, removal, [first]), /Invalid workbook input/)
+      })
+    })
     await t.test('protects sheets referenced by surviving objects from deletion', async (t) => {
       const clearGlobal = (xml) => xml.replace(/<definedNames>[\s\S]*?<\/definedNames>/, '')
       const hyperlink = '<hyperlinks><hyperlink ref="B1" location="Acceptance!A2"/></hyperlinks>'

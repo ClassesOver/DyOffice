@@ -155,6 +155,52 @@ export function collectPdfInternalLinks(
   return out
 }
 
+/** Chromium can write native PDF destinations for unique IDs in the printed range. */
+export function addBrowserPrintLinks(
+  pages: HTMLElement[],
+  printedPages: HTMLElement[],
+  blocks: Parameters<typeof collectPdfInternalLinks>[1],
+): () => void {
+  const pageByIndex = new Map(printedPages.map((page) => [Number(page.dataset.pvPage), page]))
+  const layers = new Map<HTMLElement, HTMLDivElement>()
+  const destinations = new Map<string, string>()
+  const layerFor = (page: HTMLElement) => {
+    let layer = layers.get(page)
+    if (!layer) {
+      layer = page.ownerDocument.createElement('div')
+      layer.className = 'pv-print-links'
+      layer.setAttribute('aria-hidden', 'true')
+      page.appendChild(layer)
+      layers.set(page, layer)
+    }
+    return layer
+  }
+  for (const link of collectPdfInternalLinks(pages, blocks)) {
+    const source = pageByIndex.get(link.page)
+    const target = pageByIndex.get(link.toPage)
+    if (!source || !target) continue
+    const key = `${link.toPage}:${link.toY}`
+    let id = destinations.get(key)
+    if (!id) {
+      id = `word-print-destination-${destinations.size}`
+      destinations.set(key, id)
+      const marker = target.ownerDocument.createElement('span')
+      marker.id = id
+      marker.style.top = `${link.toY * 100}%`
+      layerFor(target).appendChild(marker)
+    }
+    const anchor = source.ownerDocument.createElement('a')
+    anchor.href = `#${id}`
+    anchor.tabIndex = -1
+    anchor.style.left = `${link.x * 100}%`
+    anchor.style.top = `${link.y * 100}%`
+    anchor.style.width = `${link.w * 100}%`
+    anchor.style.height = `${link.h * 100}%`
+    layerFor(source).appendChild(anchor)
+  }
+  return () => layers.forEach((layer) => layer.remove())
+}
+
 /** the edit canvas holds links the direct (preview-less) print would export dead */
 export function hasInternalLinks(): boolean {
   return document.querySelector('.ProseMirror a[href^="#"], .ProseMirror .doc-toc-line') !== null

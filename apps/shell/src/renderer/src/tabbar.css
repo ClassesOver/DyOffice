@@ -266,6 +266,11 @@ body.overlay-title-bar .tab-bar-drag-spacer {
   white-space: nowrap;
 }
 
+.tab-pin-indicator {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
 .tab-close {
   -webkit-app-region: no-drag;
   flex-shrink: 0;

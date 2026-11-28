@@ -27,12 +27,13 @@ const spark = `
       <x14:sparkline><xm:f>Acceptance!D2:D3</xm:f><xm:sqref>G2</xm:sqref></x14:sparkline>
     </x14:sparklines></x14:sparklineGroup></x14:sparklineGroups>
   </ext>`
+const foreignBarColor = '<negativeFillColor xmlns="urn:example:cf" rgb="FFFF0000"/>'
 const twin = `
   <ext uri="${guids.cf}" xmlns:x14="${x14}" xmlns:xm="${xm}">
     <x14:conditionalFormattings><x14:conditionalFormatting>
       <x14:cfRule type="dataBar" id="${guids.rule}"><x14:dataBar minLength="0" maxLength="100">
         <x14:cfvo type="formula"><xm:f>Acceptance!$D$2</xm:f></x14:cfvo>
-        <x14:cfvo type="max"/><x14:fillColor rgb="FF336699"/>
+        <x14:cfvo type="max"/><x14:fillColor rgb="FF336699"/>${foreignBarColor}
       </x14:dataBar></x14:cfRule>
       <xm:sqref>E2:E3</xm:sqref>
     </x14:conditionalFormatting></x14:conditionalFormattings>
@@ -111,11 +112,13 @@ test(
           /<xm:sqref>([^<]+)<\/xm:sqref>\s*<\/x14:conditionalFormatting>/,
         )?.[1]
         assert.equal(old.cfvos[0].value, 'Acceptance!$D$2')
+        assert.deepEqual([old.minLength, old.maxLength, old.negativeColor], [0, 100, undefined])
         assert.deepEqual(next.ranges, [{ startRow: 2, startColumn: 5, endRow: 3, endColumn: 5 }])
         assert.equal(next.cfvos[0].value, "'New Tab'!$E$3")
         const legacyThreshold = resultXml.match(/<cfvo type="formula" val="([^"]+)"\/>/)?.[1]
         assert.equal(legacyThreshold, "'New Tab'!$E$3")
         assert.equal(extRange, 'F3:F4')
+        assert.ok(resultXml.includes(foreignBarColor))
       },
     )
     await t.test('moves a legacy icon set formula threshold', () => {
@@ -135,5 +138,40 @@ test(
         assert.match(autoFilterXml, /<sortCondition ref=(["'])E3:E5\1\/>/)
       },
     )
+    await t.test('reads, edits and shifts only SpreadsheetML merges', async () => {
+      const foreign = 'xmlns="urn:example:merges"'
+      const extension = `<mergeCells ${foreign} count="1"><mergeCell ref="F2:G2"/></mergeCells>`
+      const foreignMerge = `<mergeCell ${foreign} ref="G2:H2"/>`
+      const comment = '<!-- <mergeCell ref="A1:B1"/> -->'
+      const realMerge = "<mergeCell ref='&#66;2:C2'></mergeCell>"
+      const inputZip = await JSZip.loadAsync(original)
+      const inputXml = await inputZip.file(path).async('string')
+      inputZip.file(path, inputXml.replace('<drawing ', extension +
+        `<mergeCells count="1">${foreignMerge}${comment}${realMerge}</mergeCells><drawing `))
+      const input = await inputZip.generateAsync({ type: 'nodebuffer' })
+      const area = (row, startColumn, endColumn) => ({ startRow: row, endRow: row, startColumn, endColumn })
+      const originalArea = area(1, 1, 2)
+      const addedArea = area(2, 3, 4)
+      const shiftedArea = area(3, 3, 4)
+      const readMerges = async (bytes) => (await read(bytes, 'Acceptance')).merges
+      const save = async (bytes, ...structuralOps) => {
+        const request = { ...sheetsSaveRequest('sheet-1', []), structuralOps: structuralOps.map((op) => ({ sheetId: 'sheet-1', ...op })) }
+        return (await native.savePlan(bytes, await runtime.sheetsWorkbookPlanner(bytes, request))).bytes
+      }
+      assert.deepEqual(await readMerges(input), [originalArea])
+      const added = await save(input, { kind: 'merge-cells', range: addedArea })
+      assert.deepEqual(await readMerges(added), [originalArea, addedArea])
+      const shifted = await save(added, { kind: 'insert-rows', index: 0, count: 1 })
+      assert.deepEqual(await readMerges(shifted), [area(2, 1, 2), shiftedArea])
+      const removed = await save(added, { kind: 'unmerge-cells', range: originalArea })
+      assert.deepEqual(await readMerges(removed), [addedArea])
+      const cleared = await save(removed, { kind: 'unmerge-cells', range: addedArea })
+      assert.deepEqual(await readMerges(cleared), [])
+      for (const [bytes, count] of [[added, 2], [shifted, 2], [removed, 1], [cleared, 0]]) {
+        const xml = await (await JSZip.loadAsync(bytes)).file(path).async('string')
+        assert.match(xml, new RegExp(`<mergeCells count="${count}">`))
+        for (const preserved of [extension, foreignMerge, comment]) assert.ok(xml.includes(preserved), preserved)
+      }
+    })
   },
 )

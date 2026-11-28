@@ -22,9 +22,9 @@ export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions
     return revisions.syncWord(token(request),fileId(request),request.body as Parameters<typeof revisions.syncWord>[2])
   })
   api.get('/api/v1/files/:id/lease', { schema: { params, querystring } }, request => leases.getLease(token(request),fileId(request)))
-  api.post('/api/v1/files/:id/lease', { bodyLimit: 4096, schema: { params, querystring, body: object(editor) } }, request => leases.acquireLease(token(request),fileId(request),request.body as { editorId: string }))
-  api.post('/api/v1/files/:id/lease/renew', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...editor, leaseEpoch: epoch }) } }, request => leases.renewLease(token(request),fileId(request),request.body as { editorId: string; leaseEpoch: number }))
-  api.post('/api/v1/files/:id/lease/takeover', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...editor, expectedEpoch: epoch }) } }, request => leases.takeoverLease(token(request),fileId(request),request.body as { editorId: string; expectedEpoch: number }))
+  api.post('/api/v1/files/:id/lease', { bodyLimit: 4096, schema: { params, querystring, body: object({...editor,docxUnlockId:id},['editorId']) } }, request => leases.acquireLease(token(request),fileId(request),request.body as { docxUnlockId?:string; editorId: string }))
+  api.post('/api/v1/files/:id/lease/renew', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...editor, leaseEpoch: epoch,docxUnlockId:id },['editorId','leaseEpoch']) } }, request => leases.renewLease(token(request),fileId(request),request.body as { docxUnlockId?:string; editorId: string; leaseEpoch: number }))
+  api.post('/api/v1/files/:id/lease/takeover', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...editor, expectedEpoch: epoch,docxUnlockId:id },['editorId','expectedEpoch']) } }, request => leases.takeoverLease(token(request),fileId(request),request.body as { docxUnlockId?:string; editorId: string; expectedEpoch: number }))
   api.delete('/api/v1/files/:id/lease', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...editor, leaseEpoch: epoch }) } }, async (request, reply) => {
     await leases.releaseLease(token(request),fileId(request),request.body as { editorId: string; leaseEpoch: number })
     return reply.code(204).send()

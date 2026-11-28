@@ -274,11 +274,13 @@ export async function altChunkToDocx(
   rId: string,
   contentTypeOf: (path: string) => Promise<string | undefined>,
   sourcePath = 'word/document.xml',
+  onRead?: (bytes: number) => void,
 ): Promise<Uint8Array | null> {
   const path = altChunkPartPath(rels, rId, sourcePath)
   const file = path ? zip.file(path) : null
   if (!path || !file) return null
   const bytes = await file.async('uint8array')
+  onRead?.(bytes.length)
   if (bytes.length === 0 || bytes.length > MAX_CHUNK_BYTES) return null
   const kind = altChunkKind(path, await contentTypeOf(path), bytes.subarray(0, 4096))
   if (kind === 'docx') return bytes

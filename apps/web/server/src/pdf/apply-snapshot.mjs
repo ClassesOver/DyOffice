@@ -1,6 +1,7 @@
 import {validatePdfFormFieldOperations} from '../../../../../packages/web-contracts/src/pdf-form-fields.ts'
 import {validatePdfStampOperation} from '../../../../../packages/web-contracts/src/pdf-stamp-ops.ts'
 import {MAX_PDF_OCR_INSERTS,MAX_PDF_TEXT_INSERTS} from '../../../../../packages/web-contracts/src/pdf-ocr-bake.ts'
+import {isPdfAttachmentName,MAX_PDF_ATTACHMENT_ADDITIONS,MAX_PDF_ATTACHMENT_BASE64,MAX_PDF_ATTACHMENT_BYTES} from '../../../../../packages/web-contracts/src/pdf-attachment-limits.ts'
 import {decodePdfImage} from './image-content-job.mjs'
 import {validatePdfDraftInserts} from './draft-inserts-job.mjs'
 import {isWebPdfLinkUrl} from '../../../../pdf/src/shared/web-link-url.ts'
@@ -147,22 +148,36 @@ function validateFormWidgetEdits(edits){
   ids.add(edit.widgetId)
  }
 }
+function validateStaticFormFills(fills){
+ const ids=new Set()
+ for(const fill of array(fills,1000)){
+  obj(fill,['id','kind','pageIndex','rect','text','fontSize','color','align'],['id','kind','pageIndex','rect'])
+  if(!text(fill.id,201)||!fill.id||ids.has(fill.id)||!page(fill.pageIndex)||!['text','check','cross'].includes(fill.kind))fail()
+  ids.add(fill.id)
+  rect(fill.rect)
+  optional(fill,'text',v=>text(v))
+  optional(fill,'fontSize',v=>num(v,0.01,1000))
+  optional(fill,'color',v=>typeof v==='string'&&/^#[0-9a-f]{6}$/i.test(v))
+  optional(fill,'align',v=>['left','center','right'].includes(v))
+ }
+}
 export function validatePdfApplySnapshot(input){
- const s=clone(input),required=['fileId','baseRevision','generation','markups','notes','textInserts','imageEdits','formEdits','formFields','rotations','deleted','order','metadata'];obj(s,[...required,'savedImageEdits','annotationAuthor','blankPages','textEdits','annotDeletes','noteEdits','stampOperations','attachments','drawings','outline','formWidgetEdits'],required)
+ const s=clone(input),required=['fileId','baseRevision','generation','markups','notes','textInserts','imageEdits','formEdits','formFields','rotations','deleted','order','metadata'];obj(s,[...required,'savedImageEdits','annotationAuthor','blankPages','textEdits','annotDeletes','noteEdits','stampOperations','attachments','drawings','outline','formWidgetEdits','staticFormFills'],required)
  if('drawings'in s)validateDrawings(s.drawings)
  if('outline'in s)validateOutline(s.outline)
  if('formWidgetEdits'in s)validateFormWidgetEdits(s.formWidgetEdits)
+ if('staticFormFills'in s)validateStaticFormFills(s.staticFormFills)
  if('attachments'in s){
   const edits=obj(s.attachments,['add','remove'],[]),added=new Set(),removed=new Set()
   let bytes=0
-  for(const file of ('add'in edits?array(edits.add,8):[])){
+  for(const file of ('add'in edits?array(edits.add,MAX_PDF_ATTACHMENT_ADDITIONS):[])){
    obj(file,['name','bytesBase64','description'],['name','bytesBase64'])
-   if(!text(file.name,255)||!file.name.trim()||file.name==='.'||file.name==='..'||/[\\/\u0000-\u001f\u007f]/.test(file.name)||added.has(file.name))fail()
+   if(typeof file.name!=='string'||!isPdfAttachmentName(file.name)||added.has(file.name))fail()
    optional(file,'description',v=>text(v,1000))
-   if(typeof file.bytesBase64!=='string'||!file.bytesBase64.length||file.bytesBase64.length>6990508)fail()
+   if(typeof file.bytesBase64!=='string'||file.bytesBase64.length>MAX_PDF_ATTACHMENT_BASE64)fail()
    const content=Buffer.from(file.bytesBase64,'base64')
    bytes+=content.length
-   if(!content.length||content.length>5*1024*1024||bytes>10*1024*1024||content.toString('base64')!==file.bytesBase64)fail()
+   if(bytes>MAX_PDF_ATTACHMENT_BYTES||content.toString('base64')!==file.bytesBase64)fail()
    added.add(file.name)
   }
   for(const name of ('remove'in edits?array(edits.remove,100):[])){

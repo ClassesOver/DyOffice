@@ -11,27 +11,11 @@
 //! whole break is refused explicitly rather than silently leaving a dangling
 //! [n] behind.
 
+import { WORKBOOK_CHART_PATH } from '../shared/workbook-chart-path.ts'
 import { removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
+import { externalWorkbookReferences, hasSharedFormula, readWorksheetTagAttribute } from './xlsx-structure.ts'
+import { elementText, escapeXmlText } from './xlsx-worksheet-xml.ts'
 import type { EntrySource, MutationPlan } from './xlsx-gateway.ts'
-
-/// A stored formula body references the link [n]: the quoted spelling
-/// '[1]Sheet Name'!A1 (quotes doubled inside) or the bare [1]Sheet1!A1
-/// (sheet-name characters run to the !, any non-ASCII included). The same two
-/// shapes the sidecar's reference scan matches.
-const QUOTED_REF = /'\[(\d+)\]((?:[^']|'')*)'/g
-const BARE_REF = /\[(\d+)\]([^\s!(),;"'^&*<>=+\-*/[\]]+)/g
-
-/// Indices of the links a formula body references.
-function referencedLinks(body: string): Set<number> {
-  const found = new Set<number>()
-  for (const re of [QUOTED_REF, BARE_REF]) {
-    re.lastIndex = 0
-    for (const match of body.matchAll(re)) {
-      found.add(Number(match[1]))
-    }
-  }
-  return found
-}
 
 /// [m] -> the link's new 1-based index after the broken set is removed.
 function renumber(index: number, broken: readonly number[]): number {
@@ -41,21 +25,23 @@ function renumber(index: number, broken: readonly number[]): number {
 /// Replaces every [m] reference of a surviving link with its new index.
 /// Broken references are left for the caller to convert (cells) or refuse.
 function renumberFormulaRefs(xml: string, broken: readonly number[]): string {
-  return xml
-    .replace(QUOTED_REF, (match, index: string, tail: string) => {
-      const n = Number(index)
-      return broken.includes(n) ? match : "'[" + renumber(n, broken) + ']' + tail + "'"
-    })
-    .replace(BARE_REF, (match, index: string, tail: string) => {
-      const n = Number(index)
-      return broken.includes(n) ? match : '[' + renumber(n, broken) + ']' + tail
-    })
+  const formula = elementText(xml)
+  const parts: string[] = []
+  let cursor = 0
+  for (const { index, start, end } of externalWorkbookReferences(formula)) {
+    if (broken.includes(index)) continue
+    const next = renumber(index, broken)
+    if (next === index) continue
+    parts.push(formula.slice(cursor, start), String(next))
+    cursor = end
+  }
+  return cursor === 0 ? xml : escapeXmlText(parts.join('') + formula.slice(cursor))
 }
 
 /// True when the formula body references one of the broken links.
 function referencesBroken(body: string, broken: readonly number[]): boolean {
-  for (const n of referencedLinks(body)) {
-    if (broken.includes(n)) return true
+  for (const reference of externalWorkbookReferences(elementText(body))) {
+    if (broken.includes(reference.index)) return true
   }
   return false
 }
@@ -63,7 +49,7 @@ function referencesBroken(body: string, broken: readonly number[]): boolean {
 /// An element body that can carry a link reference: a cell formula, a
 /// conditional-formatting rule formula, a data-validation formula, or the
 /// `<xm:f>` of an x14 rule / validation in the sheet's extension list.
-const SHEET_FORMULA_BODY = /<(f|formula|formula1|formula2|xm:f)\b([^>]*)>([\s\S]*?)<\/\1>/g
+const SHEET_FORMULA_BODY = /<(f|formula|formula1|formula2|xm:f)\b([^>]*)(?<!\/)>([\s\S]*?)<\/\1>/g
 
 /// Renumbers the surviving link references of the sheet's formula elements.
 function renumberSheetFormulaBodies(xml: string, broken: readonly number[]): string {
@@ -102,7 +88,10 @@ function assertNoBrokenSheetRefs(xml: string, broken: readonly number[]): void {
     .replace(/<v\b[^>]*>[\s\S]*?<\/v>/g, '')
     .replace(/<t\b[^>]*>[\s\S]*?<\/t>/g, '')
     .replace(SHEET_FORMULA_BODY, '')
-  if (referencesBroken(rest, broken)) {
+  const otherCarriers = /(<!\[CDATA\[[\s\S]*?\]\]>)|"([^"]*)"|'([^']*)'|>([^<]+)/g
+  for (const match of rest.matchAll(otherCarriers)) {
+    const body = match[1] ?? match[2] ?? match[3] ?? match[4] ?? ''
+    if (!referencesBroken(body, broken)) continue
     throw new Error(
       'the sheet references the external link to break outside cell formulas, ' +
         'conditional formatting and data validation; remove or rewrite that reference first',
@@ -145,35 +134,36 @@ function literalCell(cellXml: string): string {
   return '<c' + attributes + '><v>' + value + '</v></c>'
 }
 
-/// Rewrites one sheet part: broken-link formulas become literals, surviving
-/// links renumber. Instances of shared formulas carry no body and follow
-/// their anchor; a shared anchor referencing a broken link cannot be broken
-/// in place (the instances would keep computing) and fails the whole break.
+// A styled empty cell can be self-closing and must not consume the next cell.
+const CELL = /<c\b[^>]*?(?:\/>|>(?:(?!<\/c>)[\s\S])*<\/c>)/g
+const CELL_FORMULA = /(<f\b[^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/
+
+function linkFormula(cellXml: string) {
+  const formula = CELL_FORMULA.exec(cellXml)
+  if (!formula) return undefined
+  const sharedId = readWorksheetTagAttribute(formula[1]!, 't') === 'shared'
+    ? readWorksheetTagAttribute(formula[1]!, 'si')
+    : undefined
+  return { sharedId, body: formula[2] ?? '' }
+}
+
+/// Freeze each shared member's own cache. Followers carry no formula text,
+/// so collect the broken anchors before rewriting any cells.
 export function transformSheetForLinkBreak(xml: string, broken: readonly number[]): string {
-  // shared anchors: si -> the formula body inside <f>
-  const sharedBodies = new Map<string, string>()
-  for (const match of xml.matchAll(/<f t="shared"[^>]*\bsi="(\d+)"[^>]*>([\s\S]*?)<\/f>/g)) {
-    sharedBodies.set(match[1]!, match[2]!)
-  }
-  for (const match of xml.matchAll(/<f t="shared"[^>]*\bsi="(\d+)"[^>]*\/>/g)) {
-    const body = sharedBodies.get(match[1]!)
-    if (body !== undefined && referencesBroken(body, broken)) {
-      throw new Error(
-        'a shared formula references the link to break; re-enter that cell ' +
-          'as a literal first (edit the formula, then break the link)',
-      )
+  const brokenSharedGroups = new Set<string>()
+  if (hasSharedFormula(xml)) {
+    for (const [cellXml] of xml.matchAll(CELL)) {
+      const formula = linkFormula(cellXml)
+      if (formula?.sharedId !== undefined && referencesBroken(formula.body, broken)) {
+        brokenSharedGroups.add(formula.sharedId)
+      }
     }
   }
-  // A cell is either self-closing (<c r="A1" s="2"/>, a styled empty cell
-  // Excel writes by the hundred) or has a body. The optional-/> opening keeps
-  // the former from swallowing the next cell, whose </c> the old pattern
-  // would run to.
-  const cellPattern = /<c\b[^>]*?(?:\/>|>(?:(?!<\/c>)[\s\S])*<\/c>)/g
-  const transformed = xml.replace(cellPattern, (cellXml) => {
-    if (cellXml.endsWith('/>')) return cellXml
-    const body = /<f\b[^>]*>([\s\S]*?)<\/f>/.exec(cellXml)?.[1]
-    if (body === undefined || !referencesBroken(body, broken)) return cellXml
-    return literalCell(cellXml)
+  const transformed = xml.replace(CELL, (cellXml) => {
+    const formula = linkFormula(cellXml)
+    if (!formula) return cellXml
+    const shared = formula.sharedId !== undefined && brokenSharedGroups.has(formula.sharedId)
+    return shared || referencesBroken(formula.body, broken) ? literalCell(cellXml) : cellXml
   })
   // The refusal check reads the file-spelled indices: after the renumbering a
   // surviving link may legitimately take a number a broken one used to have.
@@ -394,7 +384,7 @@ export async function planExternalLinkBreak(
   }
   // chart ranges reference cells (and thus links) outside the sheet part
   for (const path of await source.paths()) {
-    if (!/^xl\/charts\/[^/]+\.xml$/.test(path)) continue
+    if (!WORKBOOK_CHART_PATH.test(path)) continue
     const xml = await source.readText(path)
     const transformed = transformChartForLinkBreak(xml, broken)
     if (transformed !== xml) {

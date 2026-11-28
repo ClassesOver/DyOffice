@@ -5,13 +5,15 @@ import { admitMutation, mutationAdmission } from './mutation-admission'
  * Extracted from App.tsx; the App component passes a DataToolsContext built
  * fresh per call so refs and state never go stale.
  */
+import { CellValueType } from '@univerjs/core'
 import { ILayoutService } from '@univerjs/preset-sheets-core'
 
 import { columnLabel } from '@genoffice/xlsx-gateway/domain/cell-address'
 import {
+  csvRows,
   decodeCsvBuffer,
   isNumericCell,
-  parseCsv,
+  sniffDelimiter,
 } from '@genoffice/xlsx-gateway/gateway/csv-import'
 import { CSV_IMPORT_DEFAULT_LIMIT_MB } from '@genoffice/xlsx-gateway/gateway/csv-limits'
 import type { AdvancedFilterColumn, AdvancedFilterCriteria } from './AdvancedFilterDialog'
@@ -91,13 +93,14 @@ export function handleImportCsv(ctx: DataToolsContext): void {
       }
       const buffer = await file.arrayBuffer()
       if (ctx.lazyWorkbookRef.current !== state) return
-      importCsvText(ctx, decodeCsvBuffer(new Uint8Array(buffer), CSV_CHARSET_BY_LANG[getLang()]))
+      const text = decodeCsvBuffer(new Uint8Array(buffer), CSV_CHARSET_BY_LANG[getLang()])
+      importCsvText(ctx, text, /\.tsv$/i.test(file.name) ? '\t' : sniffDelimiter(text))
     }).catch((error) => ctx.setMessage(error instanceof Error ? error.message : t('appCsvTooLarge')))
   }
   input.click()
 }
 
-function importCsvText(ctx: DataToolsContext, text: string): void {
+function importCsvText(ctx: DataToolsContext, text: string, delimiter: string): void {
   const runtime = ctx.univerRef.current
   const workbook = runtime?.univerAPI.getActiveWorkbook()
   const worksheet = workbook?.getActiveSheet()
@@ -106,20 +109,31 @@ function importCsvText(ctx: DataToolsContext, text: string): void {
     ctx.setMessage(t('appSelectCellFirst'))
     return
   }
-  const rows = parseCsv(text)
-  const columns = rows.reduce((width, row) => Math.max(width, row.length), 0)
+  const rows: string[][] = []
+  let columns = 0
+  for (const row of csvRows(text, delimiter)) {
+    columns = Math.max(columns, row.length)
+    if ((rows.length + 1) * columns > CSV_IMPORT_MAX_CELLS) {
+      ctx.setMessage(t('appCsvTooLarge'))
+      return
+    }
+    rows.push(row)
+  }
   if (rows.length === 0 || columns === 0) {
     ctx.setMessage(t('appCsvEmpty'))
-    return
-  }
-  if (rows.length * columns > CSV_IMPORT_MAX_CELLS) {
-    ctx.setMessage(t('appCsvTooLarge'))
     return
   }
   const values = rows.map((row) =>
     Array.from({ length: columns }, (_, index) => {
       const cell = row[index] ?? ''
-      return isNumericCell(cell) ? { v: Number(cell) } : { v: cell }
+      const numeric = isNumericCell(cell)
+      return {
+        v: numeric ? Number(cell) : cell,
+        t: numeric ? CellValueType.NUMBER : CellValueType.STRING,
+        f: null,
+        si: null,
+        p: null,
+      }
     }),
   )
   const row = range.getRow()

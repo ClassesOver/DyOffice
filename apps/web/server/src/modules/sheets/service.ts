@@ -1,15 +1,30 @@
+import { isSpreadsheetArchive, type SpreadsheetArchiveFormat } from '../../../../../../packages/web-contracts/src/api.ts'
+import {fetchRemoteTable} from '@genoffice/electron-utils/remote-table'
+import type {LeaseService} from '../leases/service.ts'
 import type {BoundWorkbookSource,FindInput,FormulaIndexSheet,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
 import {createHash,randomUUID} from 'node:crypto'
 import type { createFileService } from '../files/service.ts'
 import { authError } from '../auth/sessions.ts'
 import type {WorkbookPackageQuery} from '../../../../worker/src/native/gateway.ts'
 import {externalLinksResultSchema} from '../../../../../sheets/src/shared/external-links-contract.ts'
+import { createWorkbookPasswordCodec } from '../files/workbook-password.ts'
+
+const workbookPasswords = createWorkbookPasswordCodec()
 
 type Files = ReturnType<typeof createFileService>
 export interface SheetRange { startRow: number; endRow: number; startColumn: number; endColumn: number }
 export interface ExternalLinkBinding { index: number; fileId: string; revision: string }
+export type SheetsQueryFetcher = (source:string,signal?:AbortSignal)=>Promise<{headers:readonly string[];rows:readonly (readonly string[])[]}|null>
+export interface SheetsQueryInput { revision:string; connectionId:string; editorId:string; leaseEpoch:number }
+const fetchWorkbookQuery:SheetsQueryFetcher=(source,signal)=>fetchRemoteTable(source,{
+  directPublic:true,maxBytes:2*1024*1024,timeoutMs:10_000,...(signal?{signal}:{}),
+})
 export type SheetsPackageReader = (bytes: Buffer, signal?: AbortSignal, query?: WorkbookPackageQuery) => Promise<unknown>
 export interface SheetsNative {
+  convertCsvImport?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
+  convertTsvImport?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
+  convertLegacyXls?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
+  convertOdfSpreadsheet?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
   convertMergeSource?(input:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal):Promise<Buffer>
   readMedia?(input:Uint8Array,visualId:string,signal?:AbortSignal):Promise<unknown>
   recalculate?(input: Uint8Array, request: RecalcInput, signal?: AbortSignal): Promise<unknown>
@@ -23,30 +38,117 @@ export interface SheetsNative {
 
 /** Every operation captures an authorized immutable revision. No native process
  * session or filesystem path is accepted from the browser. */
-export function createSheetsService({ files, native, readPackage, maxConcurrent = 2 }: { files: Files; native: SheetsNative; readPackage?: SheetsPackageReader; maxConcurrent?: number }) {
+export function createSheetsService({ files, native, readPackage, leases, fetchQuery = fetchWorkbookQuery, maxConcurrent = 2 }: { files: Files; native: SheetsNative; readPackage?: SheetsPackageReader; leases?: Pick<LeaseService,'renewLease'>; fetchQuery?: SheetsQueryFetcher; maxConcurrent?: number }) {
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
+  let queryActive = false
+  // Raw bytes are authorized and read on every call. Only the isolated
+  // conversion is cached, so a cache hit cannot grant revision access.
+  const csvViews = new Map<string,Buffer>()
+  const csvViewLimit = 64 * 1024 * 1024
+  async function csvView(revision: string, source: Buffer, signal?: AbortSignal) {
+    if (!native.convertCsvImport) throw authError(415)
+    const cached = csvViews.get(revision)
+    if (cached) {
+      csvViews.delete(revision)
+      csvViews.set(revision,cached)
+      return cached
+    }
+    const bytes = await native.convertCsvImport(source,signal)
+    signal?.throwIfAborted()
+    if (bytes.length <= csvViewLimit) {
+      csvViews.delete(revision)
+      let retained = [...csvViews.values()].reduce((total,view)=>total+view.length,0)
+      while (csvViews.size >= 8 || retained + bytes.length > csvViewLimit) {
+        const oldest = csvViews.keys().next().value!
+        retained -= csvViews.get(oldest)!.length
+        csvViews.delete(oldest)
+      }
+      csvViews.set(revision,bytes)
+    }
+    return bytes
+  }
   const mergeSessions = new Map<string,{tokenDigest:string;fileId:string;revision:string;bytes:Buffer;expiresAt:number;sheets:Set<string>;timer:NodeJS.Timeout}>()
   const maxMergeBytes=50*1024*1024,maxMergeSessionBytes=100*1024*1024,maxMergeSessions=8,mergeSessionTtlMs=10*60_000
   const mergeBytes=()=>[...mergeSessions.values()].reduce((total,session)=>total+session.bytes.length,0)
   const tokenDigest=(token:string)=>createHash('sha256').update(token).digest('hex')
+  type Unlock = { tokenDigest:string; fileId:string; format:SpreadsheetArchiveFormat; revision:string; sha256:string; bytes:Buffer; password:string; preparedPasswords:Map<string,string>; expiresAt:number; timer:NodeJS.Timeout }
+  const unlocks = new Map<string, Unlock>()
+  const unlockIdleMs = 10 * 60_000, maxUnlockBytes = 64 * 1024 * 1024, maxUnlocks = 8
+  function disposeUnlock(id: string) {
+    const grant=unlocks.get(id)
+    if (grant) clearTimeout(grant.timer)
+    unlocks.delete(id)
+  }
+  function touchUnlock(id: string, grant: Unlock) {
+    clearTimeout(grant.timer)
+    grant.expiresAt=Date.now()+unlockIdleMs
+    grant.timer=setTimeout(()=>disposeUnlock(id),unlockIdleMs)
+    grant.timer.unref()
+  }
+  function ownedUnlock(token: string, fileId: string, id: string): Unlock {
+    const grant=unlocks.get(id)
+    if (!grant || grant.expiresAt<=Date.now() || grant.tokenDigest!==tokenDigest(token) || grant.fileId!==fileId) throw authError(423)
+    return grant
+  }
+  function authorizedUnlock(token:string,fileId:string,revision:string,id:string):Unlock {
+    const grant=ownedUnlock(token,fileId,id)
+    if(grant.revision!==revision)throw authError(423)
+    return grant
+  }
   function pruneMergeSessions(){const now=Date.now();for(const [id,session] of mergeSessions)if(session.expiresAt<=now){clearTimeout(session.timer);mergeSessions.delete(id)}}
   async function assertMergeContext(token:string,fileId:string,revision:string){
     const current=await files.openFile(token,fileId)
-    if(current.format!=='xlsx')throw authError(415)
+    if(!isSpreadsheetArchive(current.format))throw authError(415)
     if(current.file.revision!==revision)throw authError(409)
-    return current
+    return {...current,format:current.format}
   }
-  async function read(token: string, fileId: string, revision: string, operation: (bytes: Buffer) => Promise<unknown>, signal?: AbortSignal) {
+  async function openUnlockedRevision(token:string,fileId:string,revision:string,id:string,signal?:AbortSignal) {
+    const current=await assertMergeContext(token,fileId,revision)
+    const grant=ownedUnlock(token,fileId,id)
+    if(!current.workbookPasswordProtected)throw authError(423)
+    if(grant.revision!==revision){
+      // A save receipt can be lost. Advance only to a published head whose
+      // ciphertext this exact unlock session previously prepared.
+      const password=grant.preparedPasswords.get(current.file.sha256)
+      if(password===undefined)throw authError(423)
+      const source=await files.download(token,fileId,revision,undefined,signal)
+      const opened=await workbookPasswords.open(source.bytes,password,signal,grant.format)
+      await assertMergeContext(token,fileId,revision)
+      signal?.throwIfAborted()
+      if(ownedUnlock(token,fileId,id)!==grant||opened.file.sha256!==current.file.sha256)throw authError(423)
+      if(grant.revision!==revision){
+        if(grant.preparedPasswords.get(opened.file.sha256)!==password)throw authError(423)
+        const used=[...unlocks.values()].reduce((sum,entry)=>sum+entry.bytes.length,0)
+        if(used-grant.bytes.length+opened.bytes.length>maxUnlockBytes)throw authError(429)
+        grant.revision=revision;grant.sha256=opened.file.sha256;grant.bytes=opened.bytes;grant.password=password;grant.preparedPasswords.clear()
+      }
+    }
+    if(current.file.sha256!==grant.sha256)throw authError(423)
+    touchUnlock(id,grant)
+    return grant
+  }
+  async function read(token: string, fileId: string, revision: string, operation: (bytes: Buffer, emptyCsv?: boolean) => Promise<unknown>, signal?: AbortSignal, unlockId?: string) {
     // Admission precedes object downloads, bounding captured input memory too.
     if (active >= maxConcurrent) throw Object.assign(authError(429), { retryAfter: 1 })
     active++
     try {
       signal?.throwIfAborted()
-      const source = await files.download(token, fileId, revision)
-      if (source.format !== 'xlsx') throw authError(415)
+      if (unlockId) {
+        const grant=await openUnlockedRevision(token,fileId,revision,unlockId,signal)
+        signal?.throwIfAborted()
+        const result=await operation(grant.bytes)
+        signal?.throwIfAborted()
+        await assertMergeContext(token,fileId,revision)
+        if (authorizedUnlock(token,fileId,revision,unlockId)!==grant) throw authError(423)
+        return result
+      }
+      const source = await files.download(token, fileId, revision, undefined, signal)
+      if (!isSpreadsheetArchive(source.format) && source.format !== 'csv') throw authError(415)
+      if (source.workbookPasswordProtected) throw authError(423)
       signal?.throwIfAborted()
-      const result = await operation(source.bytes)
+      const bytes = source.format === 'csv' ? await csvView(revision, source.bytes, signal) : source.bytes
+      const result = await operation(bytes, source.format === 'csv' && source.bytes.length === 0)
       signal?.throwIfAborted()
       // Native work runs outside the database transaction. Reauthenticate and
       // check that the file is still visible before releasing its result.
@@ -55,21 +157,96 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
     } finally { active-- }
   }
   return {
-    readMedia: (token:string,fileId:string,revision:string,visualId:string,signal?:AbortSignal)=>read(token,fileId,revision,bytes=>{if(!native.readMedia)throw authError(501);return native.readMedia(bytes,visualId,signal)},signal),
-    recalculate: (token: string, fileId: string, revision: string, request: RecalcInput, signal?: AbortSignal) => read(token,fileId,revision,bytes=>{if(!native.recalculate)throw authError(501);return native.recalculate(bytes,request,signal)},signal),
-    readSheet: (token: string, fileId: string, revision: string, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal) => read(token,fileId,revision,bytes => { if (!native.readSheet) throw authError(501); return native.readSheet(bytes,sheetName,kind,signal) },signal),
-    findCells: (token:string,fileId:string,revision:string,sheetName:string,request:FindInput,signal?:AbortSignal) => read(token,fileId,revision,bytes=>{if(!native.findCells)throw authError(501);return native.findCells(bytes,sheetName,request,signal)},signal),
-    readPivotDefinition: (token:string,fileId:string,revision:string,path:string,cachePath:string,signal?:AbortSignal)=>read(token,fileId,revision,async bytes=>{
+    async unlockWorkbook(token:string,fileId:string,revision:string,password:string,signal?:AbortSignal){
+      if(token.startsWith('dsh-edit:'))throw authError(404)
+      if(active>=maxConcurrent)throw Object.assign(authError(429),{retryAfter:1})
+      active++
+      try{
+        signal?.throwIfAborted()
+        const current=await assertMergeContext(token,fileId,revision)
+        if(!current.workbookPasswordProtected)throw authError(400)
+        const source=await files.download(token,fileId,revision,undefined,signal)
+        const opened=await workbookPasswords.open(source.bytes,password,signal,current.format)
+        if(opened.file.sha256!==current.file.sha256||opened.file.size!==current.file.size)throw authError(409)
+        await assertMergeContext(token,fileId,revision)
+        signal?.throwIfAborted()
+        const used=[...unlocks.values()].reduce((sum,session)=>sum+session.bytes.length,0)
+        if(unlocks.size>=maxUnlocks||used+opened.bytes.length>maxUnlockBytes)throw Object.assign(authError(429),{retryAfter:1})
+        const unlockId=randomUUID(),timer=setTimeout(()=>disposeUnlock(unlockId),unlockIdleMs)
+        timer.unref()
+        unlocks.set(unlockId,{tokenDigest:tokenDigest(token),fileId,format:current.format,revision,sha256:opened.file.sha256,bytes:opened.bytes,password,preparedPasswords:new Map(),expiresAt:Date.now()+unlockIdleMs,timer})
+        return {unlockId}
+      }finally{active--}
+    },
+    async lockWorkbook(token:string,fileId:string,_revision:string,unlockId:string){
+      ownedUnlock(token,fileId,unlockId)
+      disposeUnlock(unlockId)
+    },
+    async openForProtectedSave(token:string,fileId:string,revision:string,id:string,signal?:AbortSignal){
+      const grant=await openUnlockedRevision(token,fileId,revision,id,signal)
+      const check=()=>{
+        if(authorizedUnlock(token,fileId,revision,id)!==grant)throw authError(423)
+        signal?.throwIfAborted()
+      }
+      return {bytes:grant.bytes,check,async seal(bytes:Buffer,password=grant.password){
+        check()
+        const sealed=await workbookPasswords.seal(bytes,password,signal,grant.format)
+        check()
+        return {...sealed,rememberSave(){
+          check()
+          if(grant.preparedPasswords.size>=32)throw authError(429)
+          grant.preparedPasswords.set(sealed.file.sha256,password)
+        }}
+      }}
+    },
+    readMedia: (token:string,fileId:string,revision:string,visualId:string,signal?:AbortSignal,unlockId?:string)=>read(token,fileId,revision,bytes=>{if(!native.readMedia)throw authError(501);return native.readMedia(bytes,visualId,signal)},signal,unlockId),
+    recalculate: (token: string, fileId: string, revision: string, request: RecalcInput, signal?: AbortSignal, unlockId?:string) => read(token,fileId,revision,bytes=>{if(!native.recalculate)throw authError(501);return native.recalculate(bytes,request,signal)},signal,unlockId),
+    readSheet: (token: string, fileId: string, revision: string, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal, unlockId?:string) => read(token,fileId,revision,bytes => { if (!native.readSheet) throw authError(501); return native.readSheet(bytes,sheetName,kind,signal) },signal,unlockId),
+    findCells: (token:string,fileId:string,revision:string,sheetName:string,request:FindInput,signal?:AbortSignal,unlockId?:string) => read(token,fileId,revision,bytes=>{if(!native.findCells)throw authError(501);return native.findCells(bytes,sheetName,request,signal)},signal,unlockId),
+    readPivotDefinition: (token:string,fileId:string,revision:string,path:string,cachePath:string,signal?:AbortSignal,unlockId?:string)=>read(token,fileId,revision,async bytes=>{
       if(!readPackage)throw authError(501)
       const metadata=await native.inspect(bytes,signal) as {sheets?:{pivotTables?:{path:string;cachePath:string|null}[]}[]}
       if(!metadata.sheets?.some(sheet=>sheet.pivotTables?.some(pivot=>pivot.path===path&&pivot.cachePath===cachePath)))throw authError(400)
       return readPackage(bytes,signal,{path,cachePath})
-    },signal),
-    listExternalLinks: (token:string,fileId:string,revision:string,signal?:AbortSignal)=>read(token,fileId,revision,async bytes=>{
+    },signal,unlockId),
+    async refreshWebQuery(token:string,fileId:string,input:SheetsQueryInput,signal?:AbortSignal,unlockId?:string){
+      if(!readPackage||!leases)throw authError(501)
+      if(queryActive)throw Object.assign(authError(429),{retryAfter:1})
+      queryActive=true
+      try{
+        const authority={editorId:input.editorId,leaseEpoch:input.leaseEpoch}
+        const check=async(checkUnlock=false)=>{
+          signal?.throwIfAborted()
+          const current=await assertMergeContext(token,fileId,input.revision)
+          if(current.officeSignatureProtected)throw authError(403)
+          await leases.renewLease(token,fileId,authority)
+          if(checkUnlock&&current.workbookPasswordProtected){
+            if(!unlockId)throw authError(423)
+            authorizedUnlock(token,fileId,input.revision,unlockId)
+          }
+        }
+        await check()
+        const {source}=await read(token,fileId,input.revision,bytes=>readPackage(bytes,signal,{webQuery:input.connectionId}),signal,unlockId) as {source?:unknown}
+        if(typeof source!=='string'||!source.length||source.length>4096)throw authError(400)
+        await check(true)
+        const table=await fetchQuery(source,signal).catch(()=>null)
+        if(!table||(!table.headers.length&&!table.rows.length))throw Object.assign(new Error('Could not read the workbook web query'),{statusCode:502})
+        const rows=[table.headers,...table.rows]
+        let cells=0,characters=0
+        for(const row of rows){
+          cells+=row.length
+          for(const cell of row)characters+=cell.length
+          if(cells>100_000||characters>2*1024*1024)throw Object.assign(new Error('Web query exceeds the table limit'),{statusCode:413})
+        }
+        await check(true)
+        return {headers:table.headers,rows:table.rows}
+      }finally{queryActive=false}
+    },
+    listExternalLinks: (token:string,fileId:string,revision:string,signal?:AbortSignal,unlockId?:string)=>read(token,fileId,revision,async bytes=>{
       if(!readPackage)throw authError(501)
       const {links}=externalLinksResultSchema.parse(await readPackage(bytes,signal,{externalLinks:true}))
       return native.refreshExternalLinks?{links,workspaceSources:true}:{links}
-    },signal),
+    },signal,unlockId),
     previewExternalLinkRefresh: (token:string,fileId:string,revision:string,bindings:readonly ExternalLinkBinding[],signal?:AbortSignal)=>read(token,fileId,revision,async bytes=>{
       if(!native.refreshExternalLinks)throw authError(501)
       const indices=new Set(bindings.map(binding=>binding.index))
@@ -80,7 +257,8 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
       for(const binding of bindings){
         signal?.throwIfAborted()
         const source=await files.download(token,binding.fileId,binding.revision,remaining)
-        if(source.format!=='xlsx')throw authError(415)
+        if(!isSpreadsheetArchive(source.format))throw authError(415)
+        if(source.workbookPasswordProtected)throw authError(423)
         remaining-=source.bytes.length
         sources.push({index:binding.index,bytes:source.bytes})
       }
@@ -92,9 +270,12 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
       }
       return report
     },signal),
-    readPackage: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token,fileId,revision,bytes => { if (!readPackage) throw authError(501); return readPackage(bytes,signal) },signal),
-    inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal, openingViewport=false) => read(token, fileId, revision, bytes => native.inspect(bytes, signal, openingViewport), signal),
-    readRange: (token: string, fileId: string, revision: string, sheetName: string, range: SheetRange, signal?: AbortSignal) => read(token, fileId, revision, bytes => native.readRange(bytes, sheetName, range, signal), signal),
+    readPackage: (token: string, fileId: string, revision: string, signal?: AbortSignal, unlockId?:string) => read(token,fileId,revision,bytes => { if (!readPackage) throw authError(501); return readPackage(bytes,signal) },signal,unlockId),
+    inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal, openingViewport=false, unlockId?:string) => read(token, fileId, revision, async (bytes, emptyCsv) => {
+      const result = await native.inspect(bytes, signal, openingViewport)
+      return emptyCsv ? { ...result as object, emptyCsv:true } : result
+    }, signal,unlockId),
+    readRange: (token: string, fileId: string, revision: string, sheetName: string, range: SheetRange, signal?: AbortSignal, unlockId?:string) => read(token, fileId, revision, bytes => native.readRange(bytes, sheetName, range, signal), signal,unlockId),
     async openMergeWorkbook(token:string,fileId:string,revision:string,input:Uint8Array,name:string,signal?:AbortSignal){
       pruneMergeSessions()
       if(!input||input.byteLength<1||input.byteLength>maxMergeBytes||typeof name!=='string'||name.length<1||name.length>255||/[\\/\x00-\x1f\x7f]/.test(name)||!/\.(xlsx|xlsm|xls|csv|tsv)$/i.test(name))throw authError(400)

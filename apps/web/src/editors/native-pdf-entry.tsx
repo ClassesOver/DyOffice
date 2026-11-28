@@ -3,25 +3,26 @@ import {createRoot} from 'react-dom/client'
 import {useLayoutEffect} from 'react'
 import {installScreenTips} from '@genoffice/ui'
 import type {AgentSkill} from '@genoffice/agent-core'
-import App,{type PdfAssistantView,type PdfHostLifecycle} from '../../../pdf/src/renderer/App'
+import App,{type PdfAssistantView,type PdfHostConversionDraft,type PdfHostLifecycle,type PdfHostProtectedCopy,type PdfHostSaveCopy} from '../../../pdf/src/renderer/App'
 import {PDF_NAV_SCHEME,parsePdfNavHref} from '../../../pdf/src/renderer/ai/pdf-nav'
 import {AGENT_TOOLS,deleteInsertedTextTool,editBlock,editInsertedTextTool,editText,insertTextTool,listInsertedTextTool,markupText,moveInsertedTextTool,moveTextBlockTool,searchText} from '../../../pdf/src/renderer/ai/tools'
 import {addNoteTool,deleteMarkupTool,deleteNoteTool,editNoteTool,readAnnotations,replyNoteTool} from '../../../pdf/src/renderer/ai/tools'
 import {applyOpsTool,getOutlineTool,insertBlankPageTool,listFormFields,setHeaderFooterTool,setWatermarkTool} from '../../../pdf/src/renderer/ai/tools'
 import {validatePdfStampOperation} from '../../../../packages/web-contracts/src/pdf-stamp-ops'
+import {isPdfAttachmentName,MAX_PDF_ATTACHMENT_ADDITIONS,MAX_PDF_ATTACHMENT_BYTES} from '../../../../packages/web-contracts/src/pdf-attachment-limits'
 import {deleteImageTool,insertImageTool,listPageImagesTool,replaceImageTool,rotateImageTool,sortImageRefs,transformImageTool} from '../../../pdf/src/renderer/ai/tools'
 import {viewToPdf} from '../../../pdf/src/renderer/annotations'
 import {findPatternsInIndex} from '../../../pdf/src/renderer/search'
 import {isScannedText} from '../../../pdf/src/renderer/ocr-layer'
 import {REDACT_PATTERNS,type RedactPattern} from '../../../pdf/src/renderer/redact-patterns'
-import type {PageImageRef,RedactionInput} from '../../../pdf/src/shared/ipc'
+import type {PageImageRef,RedactionInput,SignWithCertificateResult} from '../../../pdf/src/shared/ipc'
 import type {PdfHostImageBake} from '../../../pdf/src/shared/ipc'
 import {fileToCanvas} from '../../../pdf/src/renderer/SignatureDialog'
 import {inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
 import {normalizePdfGeneratedImage} from './pdf-generated-image'
 import {LocaleProvider} from '../../../pdf/src/renderer/i18n/locale'
-import {EDIT_FONTS,type PdfApi,type PdfPageGeometryOperation} from '../../../pdf/src/shared/ipc'
-import {openNativePdfBrowserFile} from './native-pdf-browser-file'
+import {EDIT_FONTS,type PdfApi,type PdfBrowserPrintPage,type PdfConvertFormat,type PdfPageGeometryOperation} from '../../../pdf/src/shared/ipc'
+import {openNativePdfBrowserFile,type PresentWorkspaceCopy} from './native-pdf-browser-file'
 import {MAX_PDF_DRAFT_BLANK_PAGES,MAX_PDF_EDIT_PAGES} from '../../shared/pdf-edit-structure.mjs'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import {resolveTurnImageAttachment,SharedEditorAssistant} from './shared-editor-assistant'
@@ -33,6 +34,10 @@ import {createPdfCreateDocumentSkill,createPdfDocumentCreator,type PreparedAiDoc
 import {createNativePdfPageCopies} from './native-pdf-page-copies'
 import type {PdfRedactionReview} from './pdf-redactions'
 import {browserFileName,decodeBrowserBase64,downloadBrowserFile} from './browser-download'
+import {confirmWorkspaceCopy} from './web-ai-naming'
+import {MAX_WORKSPACE_COPY_BYTES,type PdfCopyDestination} from './pdf-extraction'
+import {printInBrowser} from './browser-print'
+import {subscribeBrowserDocumentCommands,workspaceOpenAction} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
 import {createBrowserPdfCertificate} from './pdf-certificate'
 import {createBrowserPdfSavedSignatures} from './pdf-saved-signatures'
@@ -45,19 +50,33 @@ import '@genoffice/ui/screentip.css'
 import '@genoffice/ui/ribbon-collapse.css'
 import '../../../pdf/src/renderer/styles.css'
 import '@genoffice/ui/ai-panel-prefs.css'
+import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import './native-pdf-assistant.css'
 
 const element=document.getElementById('root')!
 installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
 reportDocumentLoading('reading')
 async function mount(){
+ const openWorkspaceFile=workspaceOpenAction()
  const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
+ const canChooseWorkspaceFile=!params.has('sourceRevision')&&params.get('guest')!=='1'
  const grant=await openNativePdfBrowserFile({fileId,editorId:params.get('guest')==='1'?params.get('editorId')??undefined:undefined,expectedRevision:params.get('sourceRevision')??undefined})
- const prefs=await grant.getPreferences().catch(()=>undefined)
- const editRestriction=async(bytes:Uint8Array,encrypted:boolean)=>{
+ const browserActions=new AbortController()
+ const [prefs,account]=await Promise.all([
+  grant.getPreferences().catch(()=>undefined),
+  params.get('guest')==='1'?undefined:grant.accountIdentity(browserActions.signal).catch(()=>undefined),
+ ])
+ const appearance=await installBrowserAssistantPreferences(prefs)
+ const lastZoomStorage={
+  getItem:(key:string)=>account?localStorage.getItem(`${key}:${account.join(':')}`):null,
+  setItem(key:string,value:string){
+   if(account&&(window.parent===window||window.frameElement?.getClientRects().length))localStorage.setItem(`${key}:${account.join(':')}`,value)
+  },
+ }
+ const inspectDocument=async(bytes:Uint8Array,encrypted:boolean)=>{
   grant.inspectSignatureMarker(bytes,encrypted)
-  const {nativePdfEditRestriction}=await import('./native-pdf-edit-restriction')
-  return nativePdfEditRestriction(bytes,encrypted,prefs?.language??'zh')
+  const {inspectNativePdf}=await import('./native-pdf-edit-restriction')
+  return inspectNativePdf(bytes,encrypted,prefs?.language??'zh')
  }
  if(prefs){
   document.documentElement.lang=prefs.language
@@ -67,20 +86,49 @@ async function mount(){
  const unsubscribe=()=>()=>{}
  const empty=async()=>[]
  let disposed=false,view:PdfAssistantView|undefined
- const browserActions=new AbortController()
+ let choosingAttachment=false
  const certificate=createBrowserPdfCertificate({
   path:grant.path,signal:browserActions.signal,current:grant.current,readPdf:grant.api.readFile,
-  canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length,
+  canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length&&!workspaceCopies?.hasPending(),
+  deliverSigned:deliverSignedCopy,
  })
+ const copyName=(value:string|undefined,fallback:string,extension='pdf')=>{
+  const suffix='.'+extension
+  const stem=value?.toLowerCase().endsWith(suffix)?value.slice(0,-suffix.length):value
+  const points=Array.from(browserFileName(stem??'',fallback).replace(/[\p{Cs}\u202a-\u202e\u2066-\u2069]/gu,'_'))
+  const encoder=new TextEncoder()
+  while(encoder.encode(points.join('')+suffix).length>255)points.pop()
+  return points.join('')+suffix
+ }
  const api={
-  ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.signatureGalleryAccount,browserActions.signal),
-  getUsername:grant.username,getDefaultZoom:async()=>'width' as const,
-  listEditFonts:empty,listStaticFormFills:empty,listPrinters:empty,
+  ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.accountIdentity,browserActions.signal),
+  getUsername:grant.username,getDefaultZoom:async()=>prefs?.pdfDefaultZoom??'width',
+  listEditFonts:empty,listPrinters:empty,
   onLanguageChanged:unsubscribe,onUsernameChanged:unsubscribe,onFileRenamed:unsubscribe,onSaveAsFlow:unsubscribe,
-  onCloseSaveRequest:unsubscribe,onSaveAsRequest:unsubscribe,onPrintRequest:unsubscribe,onChromePressed:unsubscribe,
+  onCloseSaveRequest:unsubscribe,onSaveAsRequest:unsubscribe,onChromePressed:unsubscribe,
+  onPrintRequest:(listener:()=>void)=>subscribeBrowserDocumentCommands({print:listener},()=>!disposed),
+  async printBrowserPages(pages:readonly PdfBrowserPrintPage[]){
+   if(disposed||!pages.length||pages.some(({src,widthPt,heightPt})=>
+    !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(src)||
+    !Number.isFinite(widthPt)||widthPt<=0||!Number.isFinite(heightPt)||heightPt<=0)){
+    throw Error(prefs?.language==='en'?'PDF printing is unavailable.':'PDF 打印不可用。')
+   }
+   const paper=pages.map(({widthPt,heightPt},index)=>`@page sheet-${index}{size:${widthPt}pt ${heightPt}pt;margin:0}`).join('')
+   const sheets=pages.map(({src,widthPt,heightPt},index)=>
+    `<section style="page:sheet-${index};width:${widthPt}pt;height:${heightPt}pt"><img src="${src}"></section>`).join('')
+   const html=`<!doctype html><style>${paper}body{margin:0}section{break-inside:avoid;overflow:hidden}section+section{break-before:page}img{display:block;width:100%;height:100%;object-fit:contain}</style>${sheets}`
+   await printInBrowser(html,grant.path.split('/').pop()??'document.pdf')
+  },
   async compareReadPdf(){
    try{
-    const [file]=await pickLocalFiles('application/pdf,.pdf',browserActions.signal)
+    const language=prefs?.language??'zh'
+    const accept='application/pdf,.pdf'
+    const file=!canChooseWorkspaceFile
+     ? (await pickLocalFiles(accept,browserActions.signal))[0]
+     : await (await import('./workspace-source-picker')).pickWorkspaceSourceFile(grant.workspaceSources,{
+      title:language==='en'?'Select a PDF to compare':'选择要比较的 PDF',
+      formats:['pdf'],language,maxBytes:MAX_WORKSPACE_COPY_BYTES,localAccept:accept,
+     },browserActions.signal)
     if(!file)return {ok:false as const,canceled:true as const}
     if(!file.size||file.size>64*1024*1024)throw Error('PDF exceeds the comparison size limit.')
     const {readPdfComparisonPages}=await import('./pdf-browser-actions')
@@ -104,27 +152,87 @@ async function mount(){
     return {ok:true as const,savedDir:archive,count:request.images.length}
    }catch(error){return {ok:false as const,error:error instanceof Error?error.message:String(error)}}
   },
-  async pickAttachmentFile(){
+  async pickAttachmentFile(pending={count:0,bytes:0}){
+   const cancelled={ok:false as const,cancelled:true as const}
+   if(choosingAttachment)return cancelled
+   const signal=browserActions.signal,base=grant.current()
+   const zh=prefs?.language==='zh'
+   choosingAttachment=true
    try{
-    const [file]=await pickLocalFiles('',browserActions.signal)
-    if(!file)return {ok:false as const,cancelled:true as const}
-    if(!file.size||file.size>5*1024*1024||file.name.length>255||/[\\/\u0000-\u001f\u007f]/.test(file.name)){
-     throw Error(prefs?.language==='zh'?'请选择名称有效且大小不超过 5 MiB 的附件。':'Choose an attachment with a valid name, up to 5 MiB.')
+    if(pending.count>=MAX_PDF_ATTACHMENT_ADDITIONS){
+     throw Error(zh?`一次最多新增 ${MAX_PDF_ATTACHMENT_ADDITIONS} 个附件。`:`Add up to ${MAX_PDF_ATTACHMENT_ADDITIONS} attachments per save.`)
+    }
+    const file=canChooseWorkspaceFile
+     ?await (await import('./workspace-source-picker')).pickWorkspaceSourceFile(grant.workspaceSources,{
+      title:zh?'选择 PDF 附件':'Choose a PDF attachment',
+      formats:['pdf','docx','xlsx','xlsm','pptx','csv'],language:zh?'zh':'en',localAccept:'',
+      maxBytes:MAX_PDF_ATTACHMENT_BYTES,maxTotalBytes:MAX_PDF_ATTACHMENT_BYTES-pending.bytes,readAsAttachment:true,
+     },signal)
+     :(await pickLocalFiles('',signal))[0]
+    if(!file)return cancelled
+    if(!isPdfAttachmentName(file.name))throw Error(zh?'请选择名称有效的附件。':'Choose an attachment with a valid name.')
+    if(file.size+pending.bytes>MAX_PDF_ATTACHMENT_BYTES){
+     const limit=MAX_PDF_ATTACHMENT_BYTES/(1024*1024)
+     throw Error(zh?`本次新增附件的总大小不能超过 ${limit} MiB。`:`New attachments can total up to ${limit} MiB per save.`)
     }
     const bytes=new Uint8Array(await file.arrayBuffer())
-    browserActions.signal.throwIfAborted()
+    signal.throwIfAborted()
+    if(grant.current()!==base)throw Error(zh?'选择附件时 PDF 已发生变化，请重新选择。':'The PDF changed while choosing an attachment. Choose it again.')
     const parts:string[]=[]
     for(let offset=0;offset<bytes.length;offset+=32768)parts.push(String.fromCharCode(...bytes.subarray(offset,offset+32768)))
     return {ok:true as const,name:file.name,bytesBase64:btoa(parts.join(''))}
-   }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+   }catch(error){return signal.aborted?cancelled:{ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+   finally{choosingAttachment=false}
   },
   async exportAttachment(path:string,name:string,data:string){
+   const signal=browserActions.signal
+   const zh=prefs?.language!=='en'
+   const unavailable=zh?'当前无法导出附件。':'The attachment is unavailable.'
    try{
-    browserActions.signal.throwIfAborted()
-    if(path!==grant.path||data.length>64*1024*1024)throw Error('PDF attachment is unavailable or too large.')
-    const targetPath=browserFileName(name,'attachment')
-    downloadBrowserFile(new Blob([decodeBrowserBase64(data)],{type:'application/octet-stream'}),targetPath)
-    return {ok:true as const,targetPath}
+    signal.throwIfAborted()
+    if(disposed||path!==grant.path||data.length>64*1024*1024)throw Error(unavailable)
+    const bytes=decodeBrowserBase64(data)
+    const download=(targetPath:string)=>{
+     downloadBrowserFile(new Blob([bytes],{type:'application/octet-stream'}),targetPath)
+     return {ok:true as const,targetPath}
+    }
+    const format=(['pdf','docx','xlsx','xlsm','pptx','csv'] as const).find(extension=>name.toLowerCase().endsWith('.'+extension))
+    const publisher=workspaceCopies
+    if(!publisher||!format||bytes.byteLength>MAX_WORKSPACE_COPY_BYTES||(!bytes.byteLength&&format!=='csv')){
+     return download(browserFileName(name,'attachment'))
+    }
+    if(ribbonBusy||ribbonPending||redacting||publisher.hasPending()){
+     throw Error(zh?'请先完成待处理的 PDF 操作。':'Finish the pending PDF operation first.')
+    }
+    const base=grant.current()
+    const active=()=>!disposed&&base===grant.current()
+    const suggested=copyName(name,'attachment',format)
+    ribbonBusy=true;ribbonError='';saveCopyNotice=''
+    try{
+     const destination=await confirmWorkspaceCopy(suggested,{
+      locale:zh?'zh':'en',signal,request:grant.workspaceRequest,fileId,
+      downloadLabel:zh?'下载附件':'Download attachment',
+     })
+     if(!destination||signal.aborted)return {ok:false as const,cancelled:true as const}
+     if(!active())throw Error(unavailable)
+     const targetPath=copyName(destination.name,'attachment',format)
+     if(destination.download)return download(targetPath)
+     if(!await publisher.publish(bytes,{name:targetPath,folderId:destination.folderId,format},active,signal,'save')){
+      throw Error(unavailable)
+     }
+     saveCopyNotice=zh?`已保存副本：${targetPath}`:`Saved copy: ${targetPath}`
+     return {ok:true as const,targetPath}
+    }catch(error){
+     ribbonPending=publisher.hasPending()
+     ribbonError=error instanceof Error?error.message:String(error)
+     if(signal.aborted)return {ok:false as const,cancelled:true as const}
+     throw Error(ribbonPending
+      ?(zh?'请确认附件的保存结果。':'Confirm the attachment’s save result.')
+      :(zh?'无法保存附件。可以再次导出并选择下载附件。':'Could not save the attachment. Export it again and choose Download attachment.'))
+    }finally{
+     ribbonBusy=false
+     if(!disposed)render()
+    }
    }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
   },
   async mergePdf(
@@ -138,47 +246,86 @@ async function mount(){
     return fail('A PDF merge is unavailable while another page operation is pending.')
    }
    const initial=grant.current()
-   ribbonBusy=true
+   const publisher=workspaceCopies
+   const locale=prefs?.language==='en'?'en':'zh'
+   if(publisher?.hasPending())return fail(locale==='en'?'Confirm the pending PDF copy before merging.':'请先确认待保存的 PDF 副本。')
+   ribbonBusy=true;ribbonError=''
    try{
-    const files=await pickLocalFiles('application/pdf,.pdf',signal,true)
+    const accept='application/pdf,.pdf'
+    let files:File[]
+    if(publisher){
+     const {PDF_MERGE_MAX_FILES,PDF_MERGE_MAX_BYTES}=await import('./pdf-merge-download')
+     const {pickWorkspaceSourceFiles}=await import('./workspace-source-picker')
+     files=await pickWorkspaceSourceFiles(grant.workspaceSources,{
+      title:locale==='en'?'Select PDFs to merge':'选择要合并的 PDF',
+      formats:['pdf'],language:locale,localAccept:accept,
+      maxFiles:PDF_MERGE_MAX_FILES,maxBytes:MAX_WORKSPACE_COPY_BYTES,maxTotalBytes:PDF_MERGE_MAX_BYTES-initial.size,
+     },signal)
+    }else{
+     files=await pickLocalFiles(accept,signal,true)
+    }
     if(!files.length)return canceled
     const {preparePdfMerge,validatePdfMergeFiles}=await import('./pdf-merge-download')
     signal.throwIfAborted()
     validatePdfMergeFiles(files)
     if(grant.current()!==initial)return fail('The PDF changed while selecting files. Retry the merge.')
+    const destination=publisher
+     ?await confirmWorkspaceCopy(suggestedName,{locale,signal,request:grant.workspaceRequest,fileId})
+     :null
+    if(publisher&&!destination)return canceled
+    if(grant.current()!==initial)return fail('The PDF changed while choosing a destination. Retry the merge.')
     if(!await flushDraft())return canceled
     const revision=grant.current()
     const unchanged=()=>grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
     const {merged,appended}=await preparePdfMerge(await grant.api.readFile(path),files,signal)
     signal.throwIfAborted()
     if(!unchanged())return fail('The PDF changed during the merge. Retry the merge.')
-    const filename=browserFileName(suggestedName.replace(/\.pdf$/i,''),'merged')+'.pdf'
+    const filename=copyName(destination?.name??suggestedName,'merged')
+    if(publisher&&destination){
+     if(merged.byteLength<=MAX_WORKSPACE_COPY_BYTES){
+      const ok=await publisher.publish(merged,{name:filename,folderId:destination.folderId},unchanged,signal)
+      if(!ok)return fail(locale==='en'?'Could not save the merged PDF.':'无法保存合并后的 PDF。')
+      return {ok:true,savedPath:publisher.getReceipts()[0]!.fileId,appendedCount:appended}
+     }
+     const message=locale==='en'
+      ?'The merged PDF exceeds the 32 MiB workspace file limit. Download it instead?'
+      :'合并后的 PDF 超过工作区 32 MiB 的文件上限。要改为下载吗？'
+     if(!window.confirm(message))return canceled
+    }
     downloadBrowserFile(new Blob([merged],{type:'application/pdf'}),filename)
     return {ok:true,savedPath:filename,appendedCount:appended}
    }catch(error){
-    return signal.aborted?canceled:fail(error instanceof Error?error.message:String(error))
+    ribbonPending=!!publisher?.hasPending()
+    ribbonError=error instanceof Error?error.message:String(error)
+    return signal.aborted?canceled:fail(ribbonError)
    }finally{
     ribbonBusy=false
+    if(!disposed)render()
    }
   },
-  async insertPdf({path,afterPageIndex}:Parameters<PdfApi['insertPdf']>[0]){
-   if(path!==grant.path||!Number.isSafeInteger(afterPageIndex)||afterPageIndex< -1)return {ok:false as const,error:'PDF insertion is unavailable.'}
-   const current=view?.doc,revision=grant.current()
-   if(!current||!view?.canAppendReport())return {ok:false as const,error:'Save or discard PDF changes before importing pages.'}
-   const check=()=>!disposed&&view?.doc===current&&grant.current()===revision
-   const source=await selectPdfToInsert(afterPageIndex)
-   if(!source)return {ok:true as const,canceled:true as const}
-   const saved=await view?.savePageRewrite(()=>grant.writer.insertPdf(afterPageIndex,source,check),check)
-   return saved?{ok:true as const,insertedCount:1}:{ok:false as const,error:'PDF page import was not confirmed. Check the editor save status before retrying.'}
-  },
   setDirty(){},
-  extractPages:({path,pages}:Parameters<PdfApi['extractPages']>[0])=>ribbonCopy(path,client=>client.extract(pages.map(page=>page+1))),
-  splitPdf:async({path,chunkSize}:Parameters<PdfApi['splitPdf']>[0])=>{
-   const result=await ribbonCopy(path,client=>client.split(chunkSize))
+  extractPages:({path,pages,suggestedName}:Parameters<PdfApi['extractPages']>[0])=>
+   ribbonSingleCopy(path,suggestedName,'pages',(client,destination,signal)=>
+    client.extract(pages.map(page=>page+1),signal,destination)),
+  splitPdf:async({path,chunkSize,baseName}:Parameters<PdfApi['splitPdf']>[0])=>{
+   const signal=browserActions.signal,base=grant.current()
+   const locale=prefs?.language==='en'?'en':'zh'
+   let canceled=false
+   const result=await ribbonCopy(path,async client=>{
+    const chosen=await confirmWorkspaceCopy(baseName,{locale,signal,request:grant.workspaceRequest,fileId,batchPdf:true})
+    if(!chosen){canceled=true;return false}
+    if(disposed||base!==grant.current())throw Error('PDF copy authorization changed.')
+    return client.split(chunkSize,signal,{name:copyName(chosen.name,'split'),folderId:chosen.folderId})
+   })
+   if(canceled)return {ok:true as const,canceled:true as const}
    return result.ok?{ok:true as const,savedDir:'',count:copies!.getReceipts().length}:result
   },
-  splitPages:({path,perPage}:Parameters<PdfApi['splitPages']>[0])=>ribbonCopy(path,client=>client.layout({kind:'split',perPage})),
-  mergePages:({path,perSheet,direction,separator}:Parameters<PdfApi['mergePages']>[0])=>ribbonCopy(path,client=>client.layout({kind:'merge',perSheet,direction,separator})),
+  splitPages:({path,perPage,suggestedName}:Parameters<PdfApi['splitPages']>[0])=>
+   ribbonSingleCopy(path,suggestedName,'split-pages',(client,destination,signal)=>
+    client.layout({kind:'split',perPage},signal,destination)),
+  mergePages:({path,perSheet,direction,separator,suggestedName}:Parameters<PdfApi['mergePages']>[0])=>
+   ribbonSingleCopy(path,suggestedName,'merged-pages',(client,destination,signal)=>
+    client.layout({kind:'merge',perSheet,direction,separator},signal,destination)),
  } satisfies Partial<PdfApi>
  const unavailable=async()=>{throw Error('PDF action is unavailable in this Web preview')}
  window.pdfApi=new Proxy<Partial<PdfApi>>(api,{get(target,key,receiver){
@@ -187,15 +334,82 @@ async function mount(){
  installScreenTips()
  const root=createRoot(element)
  let editor:PdfHostLifecycle|null=null,loading:DocumentLoadingState='reading'
+ const unsubscribeSaveShortcuts=subscribeBrowserDocumentCommands(
+  {save:()=>{void editor?.saveFromToolbar()},'save-as':()=>{void editor?.saveAsCopy()}},
+  ()=>!disposed&&editor?.status==='ready',
+ )
  let assistant:Awaited<ReturnType<typeof loadEditorAssistant>>['assistant']
  let realtime:ReturnType<typeof createEditorBridge>|undefined
  const copies=(()=>{
   try{
-   const open=(window.parent as Window&{dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>}).dyofficeOpenPdfCopy
-   return open?grant.pageCopies(open):undefined
+   const {dyofficeOpenPdfCopy:open,dyofficeRevealPdfCopy:reveal,dyofficePdfCopySaved:saved}=window.parent as Window&{
+    dyofficeOpenPdfCopy?:PresentWorkspaceCopy
+    dyofficeRevealPdfCopy?:PresentWorkspaceCopy
+    dyofficePdfCopySaved?:PresentWorkspaceCopy
+   }
+   return open?grant.pageCopies(open,reveal,saved):undefined
   }catch{return undefined}
  })()
+ const workspaceCopies=canChooseWorkspaceFile?copies:undefined
  let ribbonBusy=false,ribbonPending=false,ribbonError=''
+ async function deliverSignedCopy(bytes:Uint8Array<ArrayBuffer>,base:RevisionRef,signal:AbortSignal):Promise<SignWithCertificateResult>{
+  const publisher=workspaceCopies
+  const locale=prefs?.language==='en'?'en':'zh'
+  const active=()=>!signal.aborted&&isClean()&&grant.current()===base
+  const cancelled={ok:false,cancelled:true} as const
+  const failure={ok:false,error:'sign-failed'} as const
+  const name=copyName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-signed','document-signed')
+  const download=(path:string)=>{
+   downloadBrowserFile(new Blob([bytes],{type:'application/pdf'}),path)
+   return {ok:true,path} as const
+  }
+  if(!active())return failure
+  if(!publisher)return download(name)
+  if(ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher.hasPending())return failure
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
+  try{
+   if(bytes.byteLength>MAX_WORKSPACE_COPY_BYTES){
+    const prompt=locale==='en'
+     ?'The signed PDF exceeds the 32 MiB workspace file limit. Download the signed copy?'
+     :'签名后的 PDF 超过工作区 32 MiB 上限。要下载签名副本吗？'
+    return window.confirm(prompt)&&active()?download(name):cancelled
+   }
+   const chosen=await confirmWorkspaceCopy(name,{locale,signal,request:grant.workspaceRequest,fileId,
+    downloadLabel:locale==='en'?'Download signed copy':'下载签名副本',
+   })
+   if(!chosen||signal.aborted)return cancelled
+   if(!active())return failure
+   const path=copyName(chosen.name,'document-signed')
+   if(chosen.download)return download(path)
+   if(!await publisher.publish(bytes,{name:path,folderId:chosen.folderId},active,signal))return failure
+   return {ok:true,path,workspace:true}
+  }catch{
+   ribbonPending=publisher.hasPending()
+   if(ribbonPending){
+    ribbonError=locale==='en'?'Confirm the signed copy’s save result.':'请确认签名副本的保存结果。'
+    return {...cancelled,pending:true}
+   }
+   if(signal.aborted)return cancelled
+   return failure
+  }finally{
+   ribbonBusy=false
+   if(!disposed)render()
+  }
+ }
+ async function ribbonSingleCopy(path:string,suggestedName:string,fallback:string,
+  publish:(client:NonNullable<typeof copies>,destination:PdfCopyDestination,signal:AbortSignal)=>Promise<boolean>){
+  const signal=browserActions.signal,base=grant.current(),locale=prefs?.language==='en'?'en':'zh'
+  const name=copyName(suggestedName,fallback)
+  let canceled=false
+  const result=await ribbonCopy(path,async client=>{
+   if(!workspaceCopies)return publish(client,{name},signal)
+   const chosen=await confirmWorkspaceCopy(name,{locale,signal,request:grant.workspaceRequest,fileId})
+   if(!chosen){canceled=true;return false}
+   if(disposed||base!==grant.current())throw Error(locale==='en'?'The PDF changed while choosing a destination. Try again.':'选择保存位置时 PDF 已发生变化，请重试。')
+   return publish(client,{name:copyName(chosen.name,fallback),folderId:chosen.folderId},signal)
+  })
+  return canceled?{ok:true as const,canceled:true as const}:result
+ }
  async function ribbonCopy(path:string,run?:(client:NonNullable<typeof copies>)=>Promise<boolean>){
   const fail=(error:string)=>({ok:false as const,error})
   if(path!==grant.path||disposed||!copies||ribbonBusy||redacting)return fail('当前不能生成 PDF 副本。')
@@ -203,9 +417,10 @@ async function mount(){
   if(!run&&!ribbonPending)return fail('没有待确认的 PDF 副本。')
   ribbonBusy=true;ribbonError=''
   try{
-   const ok=run?await run(copies):await copies.confirm()
+   const ok=run?await run(copies):await copies.confirm(browserActions.signal)
    if(!ok)return fail('当前不能生成 PDF 副本。')
    ribbonPending=false
+   if(!run)saveCopyNotice=prefs?.language==='en'?'Copy saved.':'副本已保存。'
    return {ok:true as const,savedPath:copies.getReceipts().at(-1)!.fileId}
   }catch(error){
    ribbonError=error instanceof Error?error.message:'无法确认 PDF 副本。'
@@ -220,45 +435,125 @@ async function mount(){
   const state=editor?.state()
   return !disposed&&editor?.status==='ready'&&!!state&&!state.dirty&&!state.blocked
  }
- async function exportProtectedCopy(
-  path:string,
-  protection:import('../../../pdf/src/shared/ipc').PdfEncryptionInput,
-  flushDraft:()=>Promise<boolean>,
- ):Promise<string|null>{
-  const zh=prefs?.language==='zh'
-  const unavailable=zh?'当前无法生成受保护副本。':'The protected copy is unavailable.'
-  if(path!==grant.path||disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length) return unavailable
-  const signal=browserActions.signal
-  const initial=grant.current()
+ const canRewritePages=()=>!disposed&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length
+ const pickPageWorkspaceSource=!canChooseWorkspaceFile?undefined:async(signal:AbortSignal)=>{
+  const {pickWorkspaceSourceFile}=await import('./workspace-source-picker')
+  const language=prefs?.language??'zh'
+  return pickWorkspaceSourceFile(grant.workspaceSources,{
+   title:language==='en'?'Select a source PDF':'选择来源 PDF',formats:['pdf'],language,
+   maxBytes:MAX_WORKSPACE_COPY_BYTES,allowLocal:false,
+  },signal)
+ }
+ async function preparePageSource(selection:{pages:readonly number[]}|{afterPageIndex:number}){
+  if(!canRewritePages()||!isClean())return null
+  const revision=grant.current(),signal=browserActions.signal
+  const check=()=>canRewritePages()&&grant.current()===revision
   ribbonBusy=true
   try{
-   const {createProtectedPdfCopy,isCopyPasswordValid,needsDistinctOwnerPassword}=await import('./pdf-protected-copy')
-   signal.throwIfAborted()
-   if(!isCopyPasswordValid(protection.userPassword)||!isCopyPasswordValid(protection.ownerPassword)){
-    return zh?'密码须为 1 至 127 个 UTF-8 字节，且不得包含空字符。':'Use 1 to 127 UTF-8 bytes for each password and omit NUL characters.'
+   if('pages' in selection){
+    const source=await selectReplacementPdf(selection.pages,signal,prefs?.language,pickPageWorkspaceSource)
+    return source?()=>grant.writer.replacePages(selection.pages,source,check,signal):null
    }
-   if(needsDistinctOwnerPassword(protection)){
-    return zh?'限制操作权限时，请使用不同的所有者密码。':'Use a distinct owner password to restrict permissions.'
-   }
-   if(grant.current()!==initial)return unavailable
-   if(!await flushDraft())return zh?'待保存的编辑无法保存。':'Pending edits could not be saved.'
-   const revision=grant.current()
-   // The save returns before React necessarily publishes the cleared draft.
-   // Check the revision and ready state after retrieving the committed bytes.
-   const bytes=new Uint8Array(await grant.api.readFile(path))
-   const unchanged=()=>grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
-   if(!unchanged())return unavailable
-   const encrypted=await createProtectedPdfCopy(bytes,protection,signal)
-   if(!unchanged())return unavailable
-   const suggested=path.slice(path.lastIndexOf('/')+1).replace(/\.pdf$/i,'')+'-protected'
-   downloadBrowserFile(new Blob([encrypted],{type:'application/pdf'}),browserFileName(suggested,'protected')+'.pdf')
-   return null
-  }catch{
-   return unavailable
+   const source=await selectPdfToInsert(selection.afterPageIndex,signal,prefs?.language,pickPageWorkspaceSource)
+   return source?()=>grant.writer.insertPdf(selection.afterPageIndex,source,check,signal):null
   }finally{
    ribbonBusy=false
   }
  }
+ const allowAutosave=()=>canChooseWorkspaceFile&&canRewritePages()&&!recoverRedaction&&!recoverManual
+ const hostSave={
+  ...grant.writer,
+  allowAutosave,
+  async confirmAutosave(){
+   const base=grant.current()
+   const signal=AbortSignal.any([browserActions.signal,AbortSignal.timeout(10000)])
+   const current=await grant.getPreferences(signal)
+   return current.autoSave&&allowAutosave()&&grant.current()===base
+  },
+  savePageGeometry(operation:PdfPageGeometryOperation){
+   const revision=grant.current()
+   const check=()=>canRewritePages()&&grant.current()===revision
+   return grant.writer.pageGeometry(operation,check,browserActions.signal)
+  },
+  preparePageReplacement:(pages:readonly number[])=>preparePageSource({pages}),
+  preparePageImport:(afterPageIndex:number)=>preparePageSource({afterPageIndex}),
+  revisionHistory:{
+   current:()=>grant.current().revision,
+   restore:(revision:string,baseRevision:string)=>grant.writer.restoreRevision(revision,
+    ()=>canRewritePages()&&grant.current().revision===baseRevision,browserActions.signal),
+  },
+ }
+ const exportProtectedCopy:PdfHostProtectedCopy['save']=async(path,protection,flushDraft)=>{
+  const locale=prefs?.language==='en'?'en':'zh',zh=locale==='zh'
+  const unavailable=zh?'当前无法生成受保护副本。':'The protected copy is unavailable.'
+  const publisher=workspaceCopies,signal=browserActions.signal
+  if(path!==grant.path||disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher?.hasPending())return {error:unavailable}
+  const initial=grant.current(),close={close:true} as const
+  const suggested=copyName((path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-protected','protected')
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
+  try{
+   const {createProtectedPdfCopy,isCopyPasswordValid,needsDistinctOwnerPassword}=await import('./pdf-protected-copy')
+   signal.throwIfAborted()
+   if(!isCopyPasswordValid(protection.userPassword)||!isCopyPasswordValid(protection.ownerPassword)){
+    return {error:zh?'密码须为 1 至 127 个 UTF-8 字节，且不得包含空字符。':'Use 1 to 127 UTF-8 bytes for each password and omit NUL characters.'}
+   }
+   if(needsDistinctOwnerPassword(protection)){
+    return {error:zh?'限制操作权限时，请使用不同的所有者密码。':'Use a distinct owner password to restrict permissions.'}
+   }
+   const chosen=publisher?await confirmWorkspaceCopy(suggested,{
+    locale,signal,request:grant.workspaceRequest,fileId,
+    downloadLabel:zh?'下载受保护副本':'Download protected copy',
+   }):undefined
+   if(publisher&&!chosen)return null
+   if(signal.aborted||grant.current()!==initial)return {error:unavailable}
+   if(!await flushDraft())return {error:zh?'待保存的编辑无法保存。':'Pending edits could not be saved.'}
+   const revision=grant.current()
+   // The save returns before React necessarily publishes the cleared draft.
+   // Check the revision and ready state after retrieving the committed bytes.
+   const bytes=new Uint8Array(await grant.api.readFile(path))
+   const unchanged=()=>!signal.aborted&&grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
+   if(!unchanged())return {error:unavailable}
+   const encrypted=await createProtectedPdfCopy(bytes,protection,signal)
+   if(!unchanged())return {error:unavailable}
+   const name=copyName(chosen?.name??suggested,'protected')
+   if(publisher&&chosen&&!chosen.download){
+    if(encrypted.byteLength<=MAX_WORKSPACE_COPY_BYTES){
+     return await publisher.publish(encrypted,{name,folderId:chosen.folderId},unchanged,signal)?close:{error:unavailable}
+    }
+    const prompt=zh?'加密副本超过工作区 32 MiB 上限。要改为下载吗？':'The encrypted copy exceeds the 32 MiB workspace limit. Download it instead?'
+    if(!window.confirm(prompt))return null
+    if(!unchanged())return {error:unavailable}
+   }
+   downloadBrowserFile(new Blob([encrypted],{type:'application/pdf'}),name)
+   return close
+  }catch{
+   ribbonPending=!!publisher?.hasPending()
+   if(ribbonPending){
+    ribbonError=zh?'请确认加密副本的保存结果。':'Confirm the encrypted copy’s save result.'
+    return close
+   }
+   return signal.aborted?null:{error:unavailable}
+  }finally{
+   ribbonBusy=false
+   if(!disposed)render()
+  }
+ }
+ const protectedCopyHost:PdfHostProtectedCopy|undefined=globalThis.crypto?.subtle?{
+  title:workspaceCopies
+   ?(prefs?.language==='en'?'Save a protected copy':'保存受保护副本')
+   :(prefs?.language==='en'?'Download a protected copy':'下载受保护副本'),
+  description:workspaceCopies
+   ?(prefs?.language==='en'
+    ?'Choose a destination for the encrypted copy. Pending edits will be saved to the original first. The passwords apply only to the copy.'
+    :'请选择加密副本的位置。待保存的编辑会先保存到原件。密码仅用于副本。')
+   :(prefs?.language==='en'
+    ?'Continue to save pending edits to the workspace document and download an encrypted PDF. The passwords apply only to the copy.'
+    :'继续后会先保存工作区原件中的待保存编辑，再下载加密 PDF。密码仅用于副本。'),
+  action:workspaceCopies
+   ?(prefs?.language==='en'?'Choose where to save':'选择保存位置')
+   :(prefs?.language==='en'?'Download protected copy':'下载受保护副本'),
+  save:exportProtectedCopy,
+ }:undefined
  registerDisplayedRevision(()=>isClean()?grant.current().revision:undefined)
  const savedPageCount=()=>isClean()&&view?.canAppendReport()?view.doc?.numPages:undefined
  let review:PdfRedactionReview|undefined,selected=new Set<string>(),querySequence=0
@@ -332,6 +627,7 @@ async function mount(){
   if(disposed)return
   disposed=true
   browserActions.abort()
+  unsubscribeSaveShortcuts()
   window.removeEventListener('beforeunload',beforeUnload)
   closeHandoff();assistant?.dispose();root.unmount();realtime?.dispose();grant.dispose()
  }
@@ -343,7 +639,7 @@ async function mount(){
    return {...state,blocked:state.blocked||redacting||recoverRedaction||recoverManual||ribbonBusy||ribbonPending}
   },
   waitForSave:()=>editor?.waitForSave?.(),
-  save:()=>editor?.save()??Promise.resolve(false),
+  save:()=>editor?.saveForClose()??Promise.resolve(false),
   release:async()=>{},cleanup,
   confirm:()=>window.confirm('PDF 有未保存修改。保存并关闭？'),
   notify:()=>window.alert('PDF 保存尚未完成，请在文档中核对保存结果。'),
@@ -486,8 +782,9 @@ async function mount(){
     if(!current.canAppendReport())return invalid('Save or discard PDF changes before replacing pages.')
     const revision=grant.current()
     const check=()=>!disposed&&!signal?.aborted&&view?.doc===doc&&grant.current()===revision
-    const source=await selectReplacementPdf(pages,signal)
-    signal?.throwIfAborted()
+    const pickerSignal=signal?AbortSignal.any([signal,browserActions.signal]):browserActions.signal
+    const source=await selectReplacementPdf(pages,pickerSignal,prefs?.language,pickPageWorkspaceSource)
+    pickerSignal.throwIfAborted()
     if(!source)return invalid('The user canceled PDF page replacement.')
     if(!await view?.savePageRewrite(()=>grant.writer.replacePages(pages,source,check,signal),check))return invalid('PDF page replacement was not confirmed. Check the editor save status before retrying.')
     return {output:'Replaced the selected pages and saved a new revision. Re-read the updated page order.',summary:'Replace PDF pages',mutated:true}
@@ -796,7 +1093,7 @@ async function mount(){
    const page=parsePdfNavHref(href)
    return page!==null&&Number.isSafeInteger(page)&&page>=1&&page<=value.pages.length?page:null
   }
-  return assistant?.available?<SharedEditorAssistant assistant={assistant} lang={prefs?.language??'zh'} dock={value} widthKey="dyoffice:native-pdf:ai-panel-width" imageAttachmentReferences onLocalEditDone={()=>{void autoSaveBlank()}} assistantNav={{
+  return assistant?.available?<SharedEditorAssistant assistant={assistant} lang={prefs?.language??'zh'} dock={value} preset={value.preset} onPresetHandled={value.onPresetHandled} onMovePanel={side=>appearance.movePanel(side,assistant?.sessionProof)} widthKey="dyoffice:native-pdf:ai-panel-width" imageAttachmentReferences onLocalEditDone={()=>{void autoSaveBlank()}} assistantNav={{
    scheme:PDF_NAV_SCHEME,accepts:href=>!!value.doc&&citationPage(href)!==null,
    onNavigate:href=>{const page=citationPage(href);if(value.doc&&page!==null)value.gotoPage(page)},
   }}/>:null
@@ -809,10 +1106,10 @@ async function mount(){
   catch{/* Keep the dirty draft available for manual save if authority changed. */}
  }
  let notice=''
- let handoffOpen=false,assistantLoadFinished=false
+ let assistantLoadFinished=false
  const closeHandoff=mountDocumentHandoff({fileId,format:'pdf',assistant:()=>assistant??(assistantLoadFinished?null:undefined),
   pdfTools:skill.tools.map(tool=>tool.name),
-  activate:()=>{handoffOpen=true;render()},ready:()=>!disposed&&editor?.status==='ready'&&!redacting&&!ribbonBusy,
+  ready:()=>!disposed&&editor?.status==='ready'&&!redacting&&!ribbonBusy,
   clean:isClean,revision:()=>grant.current().revision,save:async check=>{
    if(!editor||!check()||!await editor.save())return false
    // Saving reloads the PDF. React publishes the clean lifecycle after the commit.
@@ -823,8 +1120,115 @@ async function mount(){
    return false
   },
  })
+ let saveCopyNotice=''
+ const reduceFileSize=async()=>{
+  const publisher=workspaceCopies,signal=browserActions.signal
+  const locale=prefs?.language==='en'?'en':'zh'
+  const failure=locale==='en'?'Could not reduce this PDF.':'无法减小此 PDF 的大小。'
+  if(disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher?.hasPending())throw Error(failure)
+  const base=grant.current()
+  const active=()=>!disposed&&grant.current()===base
+  const suggested=copyName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-small','document-small')
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
+  try{
+   const destination=publisher
+    ?await confirmWorkspaceCopy(suggested,{locale,signal,request:grant.workspaceRequest,fileId})
+    :null
+   if(publisher&&!destination)return null
+   if(!active())throw Error(failure)
+   const {blob,bytesBefore}=await grant.reduceSize(signal)
+   if(!blob.size)return {bytesBefore,bytesAfter:bytesBefore}
+   if(publisher&&destination){
+    const bytes=new Uint8Array(await blob.arrayBuffer())
+    const ok=await publisher.publish(bytes,{
+     name:copyName(destination.name,'document-small'),folderId:destination.folderId,
+    },active,signal,'save')
+    if(!ok)throw Error(failure)
+   }else downloadBrowserFile(new Blob([blob],{type:'application/pdf'}),suggested)
+   return {bytesBefore,bytesAfter:blob.size}
+  }catch(error){
+   if(signal.aborted)return null
+   ribbonPending=!!publisher?.hasPending()
+   ribbonError=error instanceof Error?error.message:failure
+   throw Error(ribbonPending
+    ?(locale==='en'?'Confirm the compressed PDF copy’s save result.':'请确认压缩副本的保存结果。')
+    :failure)
+  }finally{
+   ribbonBusy=false
+   if(!disposed)render()
+  }
+ }
+ const convertOffice=async(format:PdfConvertFormat,pdfPassword:string|undefined,draft?:PdfHostConversionDraft)=>{
+  const signal=browserActions.signal,base=grant.current()
+  const locale=prefs?.language==='en'?'en':'zh',zh=locale==='zh'
+  const officeFormat=format==='docx'||format==='xlsx'||format==='pptx'?format:undefined
+  const publisher=officeFormat?workspaceCopies:undefined
+  if(disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher?.hasPending()){
+   throw Error(zh?'请先完成待处理的 PDF 操作。':'Finish the pending PDF operation first.')
+  }
+  const active=()=>!disposed&&grant.current()===base
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
+  try{
+   const blob=await grant.convertOffice(format,pdfPassword,signal,draft)
+   signal.throwIfAborted()
+   const suggested=(grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'.'+format
+   if(publisher&&officeFormat){
+    if(blob.size<=MAX_WORKSPACE_COPY_BYTES){
+     const destination=await confirmWorkspaceCopy(copyName(suggested,'document',format),{locale,signal,request:grant.workspaceRequest,fileId})
+     if(!destination)return
+     const bytes=new Uint8Array(await blob.arrayBuffer())
+     const ok=await publisher.publish(bytes,{
+      name:copyName(destination.name,'document',format),folderId:destination.folderId,format:officeFormat,
+     },active,signal)
+     if(!ok)throw Error('Could not publish the conversion.')
+     return
+    }
+    const message=zh
+     ?'转换结果超过工作区 32 MiB 的文件上限。要改为下载吗？'
+     :'The converted file exceeds the 32 MiB workspace file limit. Download it instead?'
+    if(!window.confirm(message))return
+   }
+   if(active())downloadBrowserFile(blob,copyName(suggested,'document',format))
+  }catch(error){
+   if(signal.aborted)return
+   if(publisher?.hasPending()){
+    ribbonPending=true
+    ribbonError=error instanceof Error?error.message:String(error)
+    throw Error(zh?'请确认转换副本的保存结果。':'Confirm the converted copy’s save result.')
+   }
+   const code=(error as {code?:string})?.code
+   let message=zh?'无法转换此 PDF。':'Could not convert this PDF.'
+   if(code==='PDF_COPY_RESTRICTED')message=zh?'此 PDF 限制复制内容。':'This PDF restricts copying its contents.'
+   if(code==='PDF_CONVERSION_NEEDS_OCR')message=zh?'请先识别扫描件中的文字，再转换格式。':'Recognize the text in this scan before converting it.'
+   if(code==='PDF_CONVERSION_NO_TEXT')message=zh?'此 PDF 没有可导出为 Markdown 的文字。':'This PDF has no text to export as Markdown.'
+   if(code==='PDF_CONVERSION_LIMIT'||code==='OUTPUT_LIMIT')message=zh?'此 PDF 超出转换大小限制。':'This PDF exceeds the conversion size limit.'
+   throw Object.assign(new Error(message),{code})
+  }finally{
+   ribbonBusy=false
+   if(!disposed)render()
+  }
+ }
+ const saveCopy: PdfHostSaveCopy = async (draft,count,modified,stamps,imageBakes)=>{
+  if(disposed||ribbonBusy||ribbonPending||redacting)return null
+  const locale=prefs?.language==='en'?'en':'zh',signal=browserActions.signal
+  const base=grant.current()
+  ribbonBusy=true;saveCopyNotice=''
+  try{
+   const chosen=await confirmWorkspaceCopy(grant.path.split('/').pop()??'document.pdf',{locale,signal,request:grant.workspaceRequest,fileId})
+   if(!chosen)return null
+   if(disposed||base!==grant.current())throw Error('PDF copy authorization changed.')
+   const name=browserFileName(chosen.name.replace(/\.pdf$/i,''),'document')+'.pdf'
+   const result=await grant.writer.saveCopy(draft,count,name,modified,stamps,imageBakes,signal,chosen.folderId)
+   if(result.ok)saveCopyNotice=locale==='zh'?`已保存副本：${name}`:`Saved copy: ${name}`
+   return result
+  }finally{ribbonBusy=false;if(!disposed)render()}
+ }
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
-  <App hostEditRestriction={editRestriction} hostSave={grant.writer} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
+  <App hostAssistantOpenState hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} hostProtectCopy={protectedCopyHost} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available?value=><Dock value={value}/>:undefined}
+   hostCertificateWorkspaceIntro={workspaceCopies?(prefs?.language==='en'
+    ?'Sign the saved PDF and choose where to save the copy. The certificate file and password stay in this browser.'
+    :'为已保存的 PDF 签名并选择副本的保存位置。证书文件和密码仅在当前浏览器中处理。'):undefined}
+   hostSavePrintSelection={!!workspaceCopies}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">
@@ -861,6 +1265,7 @@ async function mount(){
     </svg>
    }}
    hostDownloadUrl={()=>`/api/v1/files/${encodeURIComponent(fileId)}/content?revision=${encodeURIComponent(grant.current().revision)}&download=1`}/>
+  {saveCopyNotice&&<div className="native-pdf-assistant-status" role="status">{saveCopyNotice}</div>}
   {notice&&<div className="native-pdf-assistant-status" role="status">{notice}</div>}
  </LocaleProvider>)
  render()
@@ -884,7 +1289,7 @@ async function mount(){
   if(disposed){result.assistant?.dispose();return}
   assistantLoadFinished=true;assistant=result.assistant
   assistant?.documents.register(target)
-  notice=editorAssistantNotice(result,prefs?.showAssistant,prefs?.language??'zh')
+  notice=editorAssistantNotice(result,prefs?.language??'zh')
   const channel=assistant?.channel
   if(channel)realtime=createEditorBridge({origin:location.origin,fileId,editorId,onEvent:event=>{
    if(event.type==='assistant-channels')channel.observe(event.channels)

@@ -306,16 +306,16 @@
       "size": 1446
     },
     "apps/web/package-lock.json": {
-      "sha256": "732e53424612df1f083f5ae72ec31ff484a0079f7241a1900d139f03f404cf73",
-      "size": 282805
+      "sha256": "a309c836e22c270463aa96aaa9384bd987eede652ac3761cb5aec04fb07a8b40",
+      "size": 285948
     },
     "apps/web/package.json": {
-      "sha256": "f9a792f48d61533db9c5306ec8c8d9bba03b01be813854c53d254a11f923cb43",
-      "size": 3518
+      "sha256": "c08104f8830a2584e4a5e70527234d6f6b380020cdca0c451682e071407ed744",
+      "size": 3574
     },
     "package-lock.json": {
-      "sha256": "9f023ab59037aaf21d2ab3a74d0333b89c356061949c28549f3b7e63f1f6f51c",
-      "size": 570373
+      "sha256": "113d311a7faeddb59ed0cf5e4a267c537c00477b9c20fcc6f92ec21e2d6fe212",
+      "size": 570437
     },
     "package.json": {
       "sha256": "007f667adb65cb7419e8d76c396d6c5418334e59e23e74a56b76f9dfee3020c7",

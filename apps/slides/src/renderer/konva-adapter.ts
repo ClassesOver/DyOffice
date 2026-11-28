@@ -19,6 +19,7 @@ import type {
 } from '@genoffice/pptx-render'
 import { patternGrid } from '@genoffice/pptx-render'
 import { classifyCjkScript } from '../shared/cjk-script'
+import { hasEmbeddedFontFamily } from './doc-fonts'
 
 /**
  * Konva container props for a placed box: rotation and flip pivot on the box CENTER
@@ -1606,7 +1607,9 @@ const NO_SYNTHETIC_BOLD = new Set(['lucida sans unicode', 'lucida sans', 'lucida
 
 export function displayFontFamily(name: string): string {
   const stack = FONT_STACK[name.normalize('NFKC').toLowerCase()]
-  if (stack) return stack
+  if (stack) {
+    return hasEmbeddedFontFamily(name) ? `"${name.replace(/["\\]/g, '\\$&')}", ${stack}` : stack
+  }
   // Unknown fonts first get script detection by family name and same-script fallback, so Japanese/Korean/Traditional glyphs don't render as Simplified Chinese shapes
   const script = classifyCjkScript(name)
   if (script === 'ja') return `'${name}', ${SERIF_HINT_RE.test(name) ? JA_SERIF : JA_SANS}`

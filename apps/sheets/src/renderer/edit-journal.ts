@@ -27,6 +27,7 @@ import {
 } from '@genoffice/xlsx-gateway/domain/cell-address'
 import { fillDisplayColor, resolveStyleColor } from '@genoffice/xlsx-gateway/domain/style-color'
 import { renameRefSheet, splitSheetRef } from '@genoffice/xlsx-gateway/domain/chart-visual'
+import type { PrintTitleSpan } from '@genoffice/xlsx-gateway/gateway/xlsx-page-setup'
 import { CHART_CATEGORY_WIRE_MAX, CHART_TEXT_WIRE_MAX } from '../shared/desktop-api'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import { ADDABLE_SHAPE_TYPES } from '@genoffice/xlsx-gateway/shared/shape-types'
@@ -246,7 +247,7 @@ export interface EditJournal {
   /// pivotCacheDefinition part paths whose pivots were recomputed this
   /// session; the save flags them refreshOnLoad so Excel rebuilds its cache.
   readonly pivotCacheRefresh: Set<string>
-  /// Pivots whose layout grew during refresh: cachePath → new output area. On
+  /// Pivots whose layout grew during refresh, keyed by the pivot table part. On
   /// save, the pivotTableDefinition's location ref is widened to the new area
   /// (multiple refreshes of the same pivot keep only the last one). When relayout
   /// (an A3 layout edit) is present, the saver regenerates from the new layout
@@ -254,6 +255,7 @@ export interface EditJournal {
   readonly pivotRefreshUpdates: Map<
     string,
     {
+      cachePath: string
       sheetId: string
       newOutputRef: string
       relayout?: WorkbookPivotAdd
@@ -300,6 +302,8 @@ export interface PageSetupJournalState {
   printTitles?: string | null
   /// A structural edit deleted the pending title rows. Keep saved title columns.
   clearPrintTitleRows?: true
+  /// The user cleared both axes before setting new title rows.
+  clearPrintTitleColumns?: true
   /// Frozen pane counts (0/0 = unfrozen); saved as sheetView <pane>.
   frozenRows?: number
   frozenColumns?: number
@@ -373,13 +377,15 @@ export function recordPivotCacheRefresh(journal: EditJournal, cachePath: string)
 /// regenerates definition/cacheDefinition from it.
 export function recordPivotRefreshUpdate(
   journal: EditJournal,
+  pivotPath: string,
   cachePath: string,
   sheetId: string,
   newOutputRef: string,
   relayout?: WorkbookPivotAdd,
 ): void {
   mutationAdmission(journal).assertWritable()
-  journal.pivotRefreshUpdates.set(cachePath, {
+  journal.pivotRefreshUpdates.set(pivotPath, {
+    cachePath,
     sheetId,
     newOutputRef,
     ...(relayout === undefined ? {} : { relayout }),
@@ -394,7 +400,11 @@ export function recordPageSetup(
   mutationAdmission(journal).assertWritable()
   const state = journal.pageSetup.get(sheetId) ?? {}
   const next = { ...state, ...patch }
-  if (patch.printTitles !== undefined) delete next.clearPrintTitleRows
+  if (patch.printTitles !== undefined) {
+    delete next.clearPrintTitleRows
+    if (patch.printTitles === null) delete next.clearPrintTitleColumns
+    else if (state.printTitles === null) next.clearPrintTitleColumns = true
+  }
   journal.pageSetup.set(sheetId, next)
 }
 
@@ -1053,6 +1063,7 @@ export interface VisualEditEntry extends VisualArrangeChanges {
   readonly drawingIndex: number
   readonly remove?: true
   readonly anchor?: WorkbookVisualObject['anchor']
+  readonly anchorSize?: WorkbookVisualEdit['anchorSize']
   /// New xfrm ext in EMU (a rotated shape resized through its AABB).
   readonly frameSize?: { readonly width: number; readonly height: number }
   /// `#rrggbb` or "none" — the shape's spPr paint.
@@ -1065,6 +1076,7 @@ export interface VisualEditEntry extends VisualArrangeChanges {
 export interface VisualEditChanges extends VisualArrangeChanges {
   readonly remove?: true
   readonly anchor?: WorkbookVisualObject['anchor']
+  readonly anchorSize?: WorkbookVisualEdit['anchorSize']
   readonly frameSize?: { width: number; height: number }
   readonly fillColor?: string
   readonly lineColor?: string
@@ -1107,6 +1119,7 @@ export function recordVisualEdit(
   // A removal wins over any earlier move; a later move revives nothing.
   const remove = changes.remove ?? previous?.remove
   const anchor = changes.anchor ?? previous?.anchor
+  const anchorSize = visual.anchor.explicitTo ? undefined : (changes.anchorSize ?? previous?.anchorSize)
   const frameSize = changes.frameSize ?? previous?.frameSize
   const fillColor = changes.fillColor ?? previous?.fillColor
   const lineColor = changes.lineColor ?? previous?.lineColor
@@ -1117,6 +1130,7 @@ export function recordVisualEdit(
     drawingIndex: visual.drawingIndex,
     ...(remove ? { remove: true as const } : {}),
     ...(anchor ? { anchor } : {}),
+    ...(anchorSize ? { anchorSize } : {}),
     ...(frameSize ? { frameSize } : {}),
     ...(remove
       ? {}
@@ -1204,6 +1218,7 @@ export function toSaveVisualEdits(journal: EditJournal): WorkbookVisualEdit[] {
       drawingIndex: entry.drawingIndex,
       ...(entry.remove ? { remove: true as const } : {}),
       ...(entry.anchor ? { anchor: entry.anchor } : {}),
+      ...(entry.anchorSize ? { anchorSize: entry.anchorSize } : {}),
       ...(entry.frameSize ? { frameSize: entry.frameSize } : {}),
       ...(entry.fillColor ? { fillColor: entry.fillColor } : {}),
       ...(entry.lineColor ? { lineColor: entry.lineColor } : {}),
@@ -1556,6 +1571,7 @@ function shiftVisualAnchor(
   anchor: WorkbookVisualObject['anchor'],
   shift: RowColumnShift,
 ): WorkbookVisualObject['anchor'] {
+  if (anchor.absolute) return anchor
   if (shift.swap) {
     // Judged as a pair: only anchors fully inside one swapped block move;
     // anchors outside or spanning the blocks stay, straddles stay untouched
@@ -1628,25 +1644,53 @@ function shiftGridSpan(
   return { start: moved.start, end: Math.min(moved.end, size - 1) }
 }
 
-function shiftPrintArea(ref: string, shift: RowColumnShift): string | null {
+/// A title span includes lines inserted between its endpoints.
+export function shiftPrintTitleSpan(
+  span: PrintTitleSpan,
+  ops: readonly StructuralJournalOp[],
+): PrintTitleSpan | null {
+  let { start, end } = span
+  for (const op of ops) {
+    if (!('index' in op)) continue
+    const shift = toRowColumnShift(op)
+    if (shift.axis !== span.axis) continue
+    const moved = shiftGridSpan(start, end, shift)
+    if (!moved) return null
+    start = moved.start
+    end = moved.end
+  }
+  return { axis: span.axis, start, end }
+}
+
+export function shiftPrintArea(ref: string, ops: readonly StructuralJournalOp[]): string | null {
   let area
   try {
     area = parseRange(ref)
   } catch {
     return ref
   }
-  const rows = shift.axis === 'row'
-  const start = rows ? area.startRow : area.startColumn
-  const end = rows ? area.endRow : area.endColumn
-  const moved = shiftGridSpan(start, end, shift)
-  if (!moved) return null
-  if (moved.start === start && moved.end === end) return ref
-  const first = formatAddress(
-    rows ? moved.start : area.startRow,
-    rows ? area.startColumn : moved.start,
-  )
+  const updated = { ...area }
+  for (const op of ops) {
+    if (!('index' in op)) continue
+    const shift = toRowColumnShift(op)
+    const rows = shift.axis === 'row'
+    const moved = rows
+      ? shiftGridSpan(updated.startRow, updated.endRow, shift)
+      : shiftGridSpan(updated.startColumn, updated.endColumn, shift)
+    if (!moved) return null
+    if (rows) {
+      updated.startRow = moved.start
+      updated.endRow = moved.end
+    } else {
+      updated.startColumn = moved.start
+      updated.endColumn = moved.end
+    }
+  }
+  if (updated.startRow === area.startRow && updated.endRow === area.endRow &&
+      updated.startColumn === area.startColumn && updated.endColumn === area.endColumn) return ref
+  const first = formatAddress(updated.startRow, updated.startColumn)
   if (!ref.includes(':')) return first
-  const last = formatAddress(rows ? moved.end : area.endRow, rows ? area.endColumn : moved.end)
+  const last = formatAddress(updated.endRow, updated.endColumn)
   return `${first}:${last}`
 }
 
@@ -1920,7 +1964,11 @@ export function recordStructuralOp(
   if (pageSetup) {
     const next = { ...pageSetup }
     if (typeof pageSetup.printArea === 'string') {
-      next.printArea = shiftPrintArea(pageSetup.printArea, shift)
+      next.printArea = pageSetup.printArea
+        .split(',')
+        .map((area) => shiftPrintArea(area, [rowColumnOp]))
+        .filter((area) => area !== null)
+        .join(',') || null
     }
     if (axis === 'row' && typeof pageSetup.printTitles === 'string') {
       const moved = shiftPrintTitleRows(pageSetup.printTitles, shift)
@@ -2425,7 +2473,7 @@ export function unescapeCssLeadingDigit(family: string): string {
   return family.replace(/^\\3([0-9]) /, '$1')
 }
 
-function extractRichText(p: unknown): { text: string; runs?: WorkbookRichRun[] } | undefined {
+export function extractRichText(p: unknown): { text: string; runs?: WorkbookRichRun[] } | undefined {
   if (typeof p !== 'object' || p === null) return undefined
   const body = (p as Record<string, unknown>).body
   if (typeof body !== 'object' || body === null) return undefined
@@ -2433,8 +2481,7 @@ function extractRichText(p: unknown): { text: string; runs?: WorkbookRichRun[] }
   if (typeof dataStream !== 'string') return undefined
   // Univer streams paragraph breaks as \r; the file model (and xlsx) use \n.
   const text = dataStream
-    .replace(/\r?\n$/, '')
-    .replace(/\r$/, '')
+    .replace(/(?:\r\n|[\r\n])$/, '')
     .replace(/\r/g, '\n')
   const runs = extractRichRuns(text, (body as Record<string, unknown>).textRuns)
   return runs === undefined ? { text } : { text, runs }

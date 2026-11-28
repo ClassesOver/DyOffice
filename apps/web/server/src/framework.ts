@@ -5,6 +5,17 @@ import { randomUUID } from 'node:crypto'
 import { sendJson } from '../http-response.mjs'
 import { isAssistantErrorCode } from '../../../../packages/web-contracts/src/assistant-errors.ts'
 
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    workspaceAssetPrefix?: string
+  }
+}
+
+function isWorkspaceAsset(request: FastifyRequest): boolean {
+  const prefix = request.routeOptions.config.workspaceAssetPrefix
+  return prefix !== undefined && new URL(request.url, 'http://localhost').pathname.startsWith(prefix)
+}
+
 function sendSafeError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
   const errorStatus = (error as { statusCode?: number } | null)?.statusCode
   const status = typeof errorStatus === 'number' && errorStatus >= 400 && errorStatus < 600
@@ -50,9 +61,14 @@ export async function createApiShell(limits?: { max: number; timeWindow: number 
     reply.raw.setHeader('Referrer-Policy', 'no-referrer')
   })
   app.setErrorHandler(sendSafeError)
+  const apiMax = limits?.max ?? 600
+  // An editor loads many build resources per document. Give those resources a
+  // separate bounded budget so they cannot exhaust the quota for opening files.
   await app.register(rateLimit, {
-    global: true, max: limits?.max ?? 600, timeWindow: limits?.timeWindow ?? 60_000,
-    keyGenerator: request => request.ip,
+    global: true,
+    max: request => isWorkspaceAsset(request) ? apiMax * 4 : apiMax,
+    timeWindow: limits?.timeWindow ?? 60_000,
+    keyGenerator: request => isWorkspaceAsset(request) ? request.ip + ':workspace-assets' : request.ip,
   })
   return app
 }

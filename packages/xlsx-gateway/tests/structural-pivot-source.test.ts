@@ -52,6 +52,7 @@ const CACHE_DEFINITION = `<?xml version="1.0" encoding="UTF-8"?>
 <pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <cacheSource type="worksheet"><worksheetSource ref="A1:C100" sheet="Data"/></cacheSource>
 </pivotCacheDefinition>`
+const CACHE_PATH = 'xl/pivotCache/pivotCacheDefinition1.xml'
 
 const PIVOT_PATH = 'xl/pivotTables/report.xml'
 const PIVOT_XML = `<p:pivotTableDefinition xmlns:p="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="Sales" cacheId="1">
@@ -62,9 +63,13 @@ const REPORT_RELS = `<Relationships xmlns="http://schemas.openxmlformats.org/pac
   <Relationship Target="../pivotTables/report.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Id="rId1"/>
 </Relationships>`
 
-async function fixture(): Promise<Buffer> {
+async function fixture(
+  cachePath = CACHE_PATH,
+  cacheXml = CACHE_DEFINITION,
+  pivotXml = PIVOT_XML,
+): Promise<Buffer> {
   const zip = new JSZip()
-  zip.file('[Content_Types].xml', CONTENT_TYPES)
+  zip.file('[Content_Types].xml', CONTENT_TYPES.replace(CACHE_PATH, encodeURI(cachePath)))
   zip.file('_rels/.rels', PACKAGE_RELS)
   zip.file('xl/workbook.xml', WORKBOOK)
   zip.file('xl/_rels/workbook.xml.rels', WORKBOOK_RELS)
@@ -80,17 +85,38 @@ async function fixture(): Promise<Buffer> {
   )
   zip.file('xl/worksheets/sheet3.xml', worksheetXml())
   zip.file('xl/worksheets/_rels/sheet2.xml.rels', REPORT_RELS)
-  zip.file(PIVOT_PATH, PIVOT_XML)
-  zip.file('xl/pivotCache/pivotCacheDefinition1.xml', CACHE_DEFINITION)
+  zip.file(PIVOT_PATH, pivotXml)
+  zip.file(cachePath, cacheXml)
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
-async function plan(ops: SheetStructuralOps[]) {
-  const source = await createBufferEntrySource(await fixture())
+async function plan(ops: SheetStructuralOps[], options: Parameters<typeof fixture> = []) {
+  const source = await createBufferEntrySource(await fixture(...options))
   return planCellEditsToXlsx(source, [], ops)
 }
 
 describe('structural edits against a pivot cache source sheet', () => {
+  it('protects the source of a cache with a custom package part name', async () => {
+    await expect(
+      plan(
+        [{ sheetName: 'Data', ops: [{ kind: 'insert-rows', index: 0, count: 1 }] }],
+        ['xl/cache/report source.xml'],
+      ),
+    ).rejects.toThrow(StructuralShiftError)
+  })
+
+  it('ignores a foreign cache-shaped part when finding protected source sheets', async () => {
+    const foreign = CACHE_DEFINITION.replace(
+      'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
+      'urn:example:cache',
+    )
+    await expect(
+      plan(
+        [{ sheetName: 'Data', ops: [{ kind: 'insert-rows', index: 0, count: 1 }] }],
+        [CACHE_PATH, foreign],
+      ),
+    ).resolves.toBeDefined()
+  })
   it('refuses a row insert on the sheet the cache reads from', async () => {
     await expect(
       plan([{ sheetName: 'Data', ops: [{ kind: 'insert-rows', index: 0, count: 1 }] }]),
@@ -112,6 +138,16 @@ describe('structural edits against a pivot cache source sheet', () => {
 })
 
 describe('structural edits on the sheet hosting a pivot report', () => {
+  it('moves the worksheet pivot location and preserves a foreign location namesake', async () => {
+    const foreign = '<location xmlns="urn:example:pivot" ref="A1:B2"/>'
+    const pivot = PIVOT_XML.replace('<p:location', foreign + '<p:location')
+    const result = await plan(
+      [{ sheetName: 'Report', ops: [{ kind: 'insert-rows', index: 0, count: 1 }] }],
+      [CACHE_PATH, CACHE_DEFINITION, pivot],
+    )
+    expect(result.replaced.get(PIVOT_PATH)).toContain(foreign)
+    expect(result.replaced.get(PIVOT_PATH)).toContain('ref="F6:G9"')
+  })
   it('moves the report with the rows containing its filters and body', async () => {
     const mutation = await plan([
       {

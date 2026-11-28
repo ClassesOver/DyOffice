@@ -79,6 +79,7 @@ export interface ChartEditing {
 
 export interface ShapeEditChanges {
   readonly anchor?: WorkbookVisualObject['anchor']
+  readonly anchorSize?: { readonly width: number; readonly height: number }
   /// New a:xfrm ext in EMU — rides along when resizing a rotated shape,
   /// whose anchor stores the rotated AABB rather than the true frame.
   readonly frameSize?: { readonly width: number; readonly height: number }
@@ -154,10 +155,19 @@ function shapeRunStyle(run: ShapeParagraph['runs'][number] | undefined, withDeco
   }
 }
 
-function isEditableChart(visual: WorkbookVisualObject): boolean {
+export function canEditChartAnchor(visual: WorkbookVisualObject): boolean {
   if (visual.kind !== 'chart') return false
   if (visual.id.startsWith('added-') || visual.id.startsWith('demo-')) return true
   return visual.drawingPath !== undefined && visual.drawingIndex !== undefined
+}
+
+function isGroupedChart(visual: WorkbookVisualObject): boolean {
+  return (
+    visual.kind === 'chart' &&
+    visual.chartPath !== undefined &&
+    visual.drawingPath !== undefined &&
+    visual.drawingIndex === undefined
+  )
 }
 
 const chartColors = [
@@ -208,6 +218,97 @@ const activeInstallations = new WeakMap<UniverRuntime, VisualInstallation>()
 
 export function installedVisualFrames(sheetId: string): readonly InstalledVisualFrame[] {
   return installedFrames.get(sheetId) ?? []
+}
+
+export function measureWorkbookVisualFrame(
+  worksheet: UniverWorksheet,
+  visual: WorkbookVisualObject,
+): { frame: InstalledVisualFrame; framed: boolean } {
+  // An out-of-bounds anchor would throw in getRange and take every other
+  // visual down with it — clamp the display range to the sheet.
+  const maxRows = worksheet.getMaxRows()
+  const maxColumns = worksheet.getMaxColumns()
+  let fromRow = Math.min(visual.anchor.fromRow, maxRows - 1)
+  let fromColumn = Math.min(visual.anchor.fromColumn, maxColumns - 1)
+  let toRow = Math.min(visual.anchor.toRow, maxRows - 1)
+  let toColumn = Math.min(visual.anchor.toColumn, maxColumns - 1)
+  // Pixel-exact frame (Excel twoCellAnchor semantics): each marker is a
+  // cell plus an EMU offset inside it, so the box runs from the `from`
+  // marker to the `to` marker — not across the whole cell range.
+  const columnWidth = (index: number): number => Math.max(worksheet.getColumnWidth(index), 1)
+  const rowHeight = (index: number): number => Math.max(worksheet.getRowHeight(index), 1)
+  const rawX = markerFrom(fromColumn, visual.anchor.fromColumnOffset)
+  const rawY = markerFrom(fromRow, visual.anchor.fromRowOffset)
+  let marginX = visual.groupTransform ? rawX.offset : Math.max(0, rawX.offset)
+  let marginY = visual.groupTransform ? rawY.offset : Math.max(0, rawY.offset)
+  const explicitTo = visual.anchor.explicitTo === true
+  let width = markerSpan(
+    { index: fromColumn, offset: marginX },
+    clampExplicitTo(markerFrom(toColumn, visual.anchor.toColumnOffset), explicitTo, columnWidth),
+    columnWidth,
+  )
+  let height = markerSpan(
+    { index: fromRow, offset: marginY },
+    clampExplicitTo(markerFrom(toRow, visual.anchor.toRowOffset), explicitTo, rowHeight),
+    rowHeight,
+  )
+  if (visual.groupTransform) {
+    const fromX = walkMarker(rawX, 0, columnWidth, maxColumns - 1)
+    const fromY = walkMarker(rawY, 0, rowHeight, maxRows - 1)
+    fromColumn = fromX.index
+    fromRow = fromY.index
+    // Keep any part beyond the sheet origin in the float's geometry.
+    marginX = markerSpan({ index: fromColumn, offset: 0 }, rawX, columnWidth)
+    marginY = markerSpan({ index: fromRow, offset: 0 }, rawY, rowHeight)
+    toColumn = walkMarker(fromX, width + marginX - fromX.offset, columnWidth, maxColumns - 1).index
+    toRow = walkMarker(fromY, height + marginY - fromY.offset, rowHeight, maxRows - 1).index
+  }
+  // A rotated shape's anchor holds its rotated bounds while xfrm ext keeps
+  // the true frame; both share the same center. The float container clips
+  // (Univer overflow-hidden), so re-anchor it to the AABB of the rotated
+  // true frame — the component centers the ext box inside and rotates it.
+  if (visual.rotation && visual.frameWidth && visual.frameHeight && width > 0 && height > 0) {
+    const extWidth = visual.frameWidth / EMU_PER_PIXEL
+    const extHeight = visual.frameHeight / EMU_PER_PIXEL
+    const radians = (visual.rotation * Math.PI) / 180
+    const aabbWidth =
+      Math.abs(extWidth * Math.cos(radians)) + Math.abs(extHeight * Math.sin(radians))
+    const aabbHeight =
+      Math.abs(extWidth * Math.sin(radians)) + Math.abs(extHeight * Math.cos(radians))
+    const fromX = walkMarker(
+      { index: fromColumn, offset: marginX },
+      (width - aabbWidth) / 2,
+      columnWidth,
+      maxColumns - 1,
+    )
+    const fromY = walkMarker(
+      { index: fromRow, offset: marginY },
+      (height - aabbHeight) / 2,
+      rowHeight,
+      maxRows - 1,
+    )
+    fromColumn = fromX.index
+    fromRow = fromY.index
+    marginX = fromX.offset
+    marginY = fromY.offset
+    toColumn = walkMarker(fromX, aabbWidth, columnWidth, maxColumns - 1).index
+    toRow = walkMarker(fromY, aabbHeight, rowHeight, maxRows - 1).index
+    width = aabbWidth
+    height = aabbHeight
+  }
+  // Degenerate anchors (a zero marker span on BOTH axes): keep the legacy
+  // behavior of filling the clamped cell range. Any real span stays a
+  // marker frame with a 1px floor — tiny icons and hairlines (a line's
+  // thin axis spans 0) must not balloon to their cell range, which turned
+  // zero-height rules into cell-tall diagonals and icon parts into
+  // cell-sized blobs.
+  const framed = visual.groupTransform !== undefined || width > 0 || height > 0
+  const frameWidth = Math.max(width, 1)
+  const frameHeight = Math.max(height, 1)
+  return {
+    framed,
+    frame: { visual, fromRow, fromColumn, toRow, toColumn, marginX, marginY, width: frameWidth, height: frameHeight },
+  }
 }
 
 export function installWorkbookVisuals(
@@ -261,7 +362,7 @@ export function installWorkbookVisuals(
       isEditableShape(visual) ||
       isEditableAddedImage(visual) ||
       isEditableFileVisual(visual) ||
-      isEditableChart(visual)
+      canEditChartAnchor(visual)
     // Lazy grids are sized to the data, but session-added visuals anchor
     // beyond it (default: two columns right of the data) — grow the grid so
     // the float keeps its frame instead of being clamped into a sliver.
@@ -271,99 +372,21 @@ export function installWorkbookVisuals(
     if (visual.anchor.toColumn >= worksheet.getMaxColumns()) {
       worksheet.setColumnCount(visual.anchor.toColumn + 1)
     }
-    // An out-of-bounds anchor would throw in getRange and take every other
-    // visual down with it — clamp the display range to the sheet.
-    const maxRows = worksheet.getMaxRows()
-    const maxColumns = worksheet.getMaxColumns()
-    let fromRow = Math.min(visual.anchor.fromRow, maxRows - 1)
-    let fromColumn = Math.min(visual.anchor.fromColumn, maxColumns - 1)
-    let toRow = Math.min(visual.anchor.toRow, maxRows - 1)
-    let toColumn = Math.min(visual.anchor.toColumn, maxColumns - 1)
-    // Pixel-exact frame (Excel twoCellAnchor semantics): each marker is a
-    // cell plus an EMU offset inside it, so the box runs from the `from`
-    // marker to the `to` marker — not across the whole cell range.
-    const columnWidth = (index: number): number => Math.max(worksheet.getColumnWidth(index), 1)
-    const rowHeight = (index: number): number => Math.max(worksheet.getRowHeight(index), 1)
-    let marginX = Math.max(0, visual.anchor.fromColumnOffset / EMU_PER_PIXEL)
-    let marginY = Math.max(0, visual.anchor.fromRowOffset / EMU_PER_PIXEL)
-    const explicitTo = visual.anchor.explicitTo === true
-    let width = markerSpan(
-      { index: fromColumn, offset: marginX },
-      clampExplicitTo(markerFrom(toColumn, visual.anchor.toColumnOffset), explicitTo, columnWidth),
-      columnWidth,
-    )
-    let height = markerSpan(
-      { index: fromRow, offset: marginY },
-      clampExplicitTo(markerFrom(toRow, visual.anchor.toRowOffset), explicitTo, rowHeight),
-      rowHeight,
-    )
-    // A rotated shape's anchor holds its rotated bounds while xfrm ext keeps
-    // the true frame; both share the same center. The float container clips
-    // (Univer overflow-hidden), so re-anchor it to the AABB of the rotated
-    // true frame — the component centers the ext box inside and rotates it.
-    if (visual.rotation && visual.frameWidth && visual.frameHeight && width > 0 && height > 0) {
-      const extWidth = visual.frameWidth / EMU_PER_PIXEL
-      const extHeight = visual.frameHeight / EMU_PER_PIXEL
-      const radians = (visual.rotation * Math.PI) / 180
-      const aabbWidth =
-        Math.abs(extWidth * Math.cos(radians)) + Math.abs(extHeight * Math.sin(radians))
-      const aabbHeight =
-        Math.abs(extWidth * Math.sin(radians)) + Math.abs(extHeight * Math.cos(radians))
-      const fromX = walkMarker(
-        { index: fromColumn, offset: marginX },
-        (width - aabbWidth) / 2,
-        columnWidth,
-        maxColumns - 1,
-      )
-      const fromY = walkMarker(
-        { index: fromRow, offset: marginY },
-        (height - aabbHeight) / 2,
-        rowHeight,
-        maxRows - 1,
-      )
-      fromColumn = fromX.index
-      fromRow = fromY.index
-      marginX = fromX.offset
-      marginY = fromY.offset
-      toColumn = walkMarker(fromX, aabbWidth, columnWidth, maxColumns - 1).index
-      toRow = walkMarker(fromY, aabbHeight, rowHeight, maxRows - 1).index
-      width = aabbWidth
-      height = aabbHeight
-    }
+    const { frame: geometry, framed } = measureWorkbookVisualFrame(worksheet, visual)
+    const { fromRow, fromColumn, toRow, toColumn, marginX, marginY, width: frameWidth, height: frameHeight } = geometry
     const range = worksheet.getRange(
       fromRow,
       fromColumn,
       Math.max(1, toRow + 1 - fromRow),
       Math.max(1, toColumn + 1 - fromColumn),
     )
-    // Degenerate anchors (a zero marker span on BOTH axes): keep the legacy
-    // behavior of filling the clamped cell range. Any real span stays a
-    // marker frame with a 1px floor — tiny icons and hairlines (a line's
-    // thin axis spans 0) must not balloon to their cell range, which turned
-    // zero-height rules into cell-tall diagonals and icon parts into
-    // cell-sized blobs.
-    const framed = width > 0 || height > 0
-    const frameWidth = Math.max(width, 1)
-    const frameHeight = Math.max(height, 1)
-    if (framed) {
-      frames.push({
-        visual,
-        fromRow,
-        fromColumn,
-        toRow,
-        toColumn,
-        marginX,
-        marginY,
-        width: frameWidth,
-        height: frameHeight,
-      })
-    }
+    if (framed) frames.push(geometry)
     // RTL sheets mirror the float too (Excel keeps logical anchors; the box
     // lands mirrored). Univer positions the DOM from the anchor cell's
     // mirrored left edge, so restate the margin as "mirrored box left minus
     // that edge": colWidth(from) - marginX - width.
     const rtl = worksheet.getSheet().getConfig().rightToLeft === BooleanNumber.TRUE
-    const anchoredMarginX = rtl ? columnWidth(fromColumn) - marginX - frameWidth : marginX
+    const anchoredMarginX = rtl ? Math.max(worksheet.getColumnWidth(fromColumn), 1) - marginX - frameWidth : marginX
     const layout = framed
       ? floatDomLayout({
           width: frameWidth,
@@ -655,7 +678,24 @@ export interface ShapeFrame {
   readonly height: number
 }
 
-function WorkbookVisual({
+function groupVisualLayout(
+  transform: WorkbookVisualObject['groupTransform'],
+  frame: ShapeFrame | undefined,
+) {
+  if (!transform || !frame) return undefined
+  const width = transform.width / EMU_PER_PIXEL
+  const height = transform.height / EMU_PER_PIXEL
+  return {
+    frame: { width, height },
+    style: {
+      width: `${((width || 1) / frame.width) * 100}cqw`,
+      height: `${((height || 1) / frame.height) * 100}cqh`,
+      transform: `translate(-50%, -50%) matrix(${transform.matrix.join(', ')}, 0, 0)`,
+    },
+  }
+}
+
+export function WorkbookVisual({
   file,
   visual,
   chartEditing,
@@ -666,19 +706,32 @@ function WorkbookVisual({
   readonly chartEditing?: ChartEditing | undefined
   readonly frame?: ShapeFrame | undefined
 }): React.JSX.Element {
+  const group = groupVisualLayout(visual.groupTransform, frame)
+  const localFrame = group?.frame ?? frame
   if (visual.kind === 'chart' && visual.chart) {
+    if (chartEditing && isGroupedChart(visual)) {
+      return (
+        <GroupedChartVisual
+          visual={visual}
+          chart={visual.chart}
+          chartEditing={chartEditing}
+          frame={localFrame}
+          groupStyle={group?.style}
+        />
+      )
+    }
     return (
       <ChartVisual
         chart={visual.chart}
         visualId={visual.id}
         chartPath={visual.chartPath}
         chartEditing={chartEditing}
-        frame={frame}
+        frame={localFrame}
+        groupStyle={group?.style}
+        flipH={visual.flipH}
+        flipV={visual.flipV}
       />
     )
-  }
-  if (visual.kind === 'image') {
-    return <ImageVisual file={file} visual={visual} frame={frame} />
   }
   if (visual.kind === 'ole') {
     return <OleVisual file={file} visual={visual} />
@@ -686,7 +739,75 @@ function WorkbookVisual({
   if (visual.kind === 'slicer') {
     return <SlicerVisual visual={visual} />
   }
-  return <ShapeVisual file={file} visual={visual} frame={frame} />
+  const content =
+    visual.kind === 'image'
+      ? <ImageVisual file={file} visual={visual} frame={localFrame} />
+      : <ShapeVisual file={file} visual={visual} frame={localFrame} />
+  return group ? (
+    <div className="xlsx-group-viewport">
+      <div className="xlsx-group-content" style={group.style}>{content}</div>
+    </div>
+  ) : content
+}
+
+function GroupedChartVisual({
+  visual,
+  chart,
+  chartEditing,
+  frame,
+  groupStyle,
+}: {
+  readonly visual: WorkbookVisualObject
+  readonly chart: ChartMetadata
+  readonly chartEditing: ChartEditing
+  readonly frame?: ShapeFrame | undefined
+  readonly groupStyle?: React.CSSProperties | undefined
+}): React.JSX.Element {
+  const isSelected = useIsSelected(visual.id)
+  const [editorRequest, setEditorRequest] = useState(0)
+  return (
+    <div
+      className={`shape-editable grouped-chart${isSelected ? ' selected' : ''}`}
+      tabIndex={0}
+      onFocus={() => {
+        if (selectedVisual?.id !== visual.id) selectVisual(visual)
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || (event.target as Element).closest('button, .chart-editor')) return
+        event.preventDefault()
+        event.stopPropagation()
+        event.currentTarget.focus({ preventScroll: true })
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return
+        if (event.key === 'Escape') {
+          event.currentTarget.blur()
+          clearVisualSelection(visual.id)
+        } else if (event.key !== 'Delete' && event.key !== 'Backspace') {
+          return
+        }
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+      onDoubleClick={(event) => {
+        if (!(event.target as Element).closest('button, .chart-editor')) {
+          setEditorRequest((count) => count + 1)
+        }
+      }}
+    >
+      <ChartVisual
+        chart={chart}
+        visualId={visual.id}
+        chartPath={visual.chartPath}
+        chartEditing={chartEditing}
+        frame={frame}
+        groupStyle={groupStyle}
+        flipH={visual.flipH}
+        flipV={visual.flipV}
+        openEditorSignal={editorRequest}
+      />
+    </div>
+  )
 }
 
 /// A drag commit tears down and re-registers every float DOM, dropping the
@@ -764,26 +885,31 @@ export interface VisualSelectionListener {
 /// churn drop focus, but the id survives and the remounted wrapper re-renders
 /// selected. A module singleton avoids threading callbacks through every
 /// install call site; the app mirrors it for the contextual ribbon tab.
-let selectedVisualId: string | null = null
+let selectedVisual: WorkbookVisualObject | null = null
 /// Shift-click extends the selection; the primary (last clicked) stays in
-/// selectedVisualId, the others ride here for Align / Distribute.
+/// selectedVisual, the others ride here for Align / Distribute.
 let extraSelectedIds: string[] = []
 const selectionSubscribers = new Set<() => void>()
 let selectionListener: VisualSelectionListener | null = null
 
 function selectVisual(visual: WorkbookVisualObject | null, extend = false): void {
   const nextId = visual?.id ?? null
+  const previousId = selectedVisual?.id ?? null
   const previousExtras = extraSelectedIds
-  if (extend && nextId !== null && selectedVisualId !== null && selectedVisualId !== nextId) {
+  // A grouped chart's anchor belongs to its group, so it cannot join an
+  // Align / Distribute selection.
+  const extendSelection =
+    extend && selectedVisual !== null && !isGroupedChart(selectedVisual)
+  selectedVisual = visual
+  if (extendSelection && nextId !== null && previousId !== null && previousId !== nextId) {
     extraSelectedIds = [
-      ...extraSelectedIds.filter((id) => id !== nextId && id !== selectedVisualId),
-      selectedVisualId,
+      ...extraSelectedIds.filter((id) => id !== nextId && id !== previousId),
+      previousId,
     ]
-  } else if (!extend || nextId === null) {
+  } else if (!extendSelection || nextId === null) {
     extraSelectedIds = []
   }
-  if (nextId !== selectedVisualId || previousExtras !== extraSelectedIds) {
-    selectedVisualId = nextId
+  if (nextId !== previousId || previousExtras !== extraSelectedIds) {
     for (const notify of selectionSubscribers) notify()
     // Element selection never outlives its chart's selection.
     if (selectedChartElement && selectedChartElement.visualId !== nextId) {
@@ -797,7 +923,7 @@ function selectVisual(visual: WorkbookVisualObject | null, extend = false): void
 
 /// Every selected visual id, primary last.
 export function selectedVisualIds(): readonly string[] {
-  return selectedVisualId === null ? [] : [...extraSelectedIds, selectedVisualId]
+  return selectedVisual === null ? [] : [...extraSelectedIds, selectedVisual.id]
 }
 
 export function subscribeVisualSelection(notify: () => void): () => void {
@@ -808,7 +934,7 @@ export function subscribeVisualSelection(notify: () => void): () => void {
 /// Clears the selection; with `onlyId`, only when that visual is selected
 /// (deleting one visual must not deselect another).
 export function clearVisualSelection(onlyId?: string): void {
-  if (onlyId !== undefined && onlyId !== selectedVisualId) {
+  if (onlyId !== undefined && onlyId !== selectedVisual?.id) {
     if (extraSelectedIds.includes(onlyId)) {
       extraSelectedIds = extraSelectedIds.filter((id) => id !== onlyId)
       for (const notify of selectionSubscribers) notify()
@@ -864,7 +990,7 @@ function useIsSelected(visualId: string): boolean {
       selectionSubscribers.add(notify)
       return () => selectionSubscribers.delete(notify)
     },
-    () => selectedVisualId === visualId || extraSelectedIds.includes(visualId),
+    () => selectedVisual?.id === visualId || extraSelectedIds.includes(visualId),
   )
 }
 
@@ -968,7 +1094,7 @@ export function clampExplicitTo(
 }
 
 /// Pixel distance between two markers (negative when `to` sits before `from`).
-function markerSpan(
+export function markerSpan(
   from: AnchorMarker,
   to: AnchorMarker,
   sizeOf: (index: number) => number,
@@ -979,6 +1105,25 @@ function markerSpan(
   let cells = 0
   for (let index = low; index < high; index += 1) cells += sizeOf(index)
   return span + (from.index <= to.index ? cells : -cells)
+}
+
+/// Keep an edited absolute anchor in sheet coordinates even after walking
+/// its corners through visible rows and columns.
+export function toAbsoluteAnchor(
+  anchor: WorkbookVisualObject['anchor'],
+  columnWidth: (index: number) => number,
+  rowHeight: (index: number) => number,
+): WorkbookVisualObject['anchor'] {
+  const origin = markerFrom(0, 0)
+  const offset = (index: number, emu: number, sizeOf: (index: number) => number) =>
+    Math.round(markerSpan(origin, markerFrom(index, emu), sizeOf) * EMU_PER_PIXEL)
+  return {
+    absolute: true, fromColumn: 0, fromRow: 0, toColumn: 0, toRow: 0,
+    fromColumnOffset: offset(anchor.fromColumn, anchor.fromColumnOffset, columnWidth),
+    fromRowOffset: offset(anchor.fromRow, anchor.fromRowOffset, rowHeight),
+    toColumnOffset: offset(anchor.toColumn, anchor.toColumnOffset, columnWidth),
+    toRowOffset: offset(anchor.toRow, anchor.toRowOffset, rowHeight),
+  }
 }
 
 function EditableShapeVisual({
@@ -1172,7 +1317,7 @@ function EditableShapeVisual({
         height: Math.max(1, Math.round(extHeight * EMU_PER_PIXEL)),
       }
     }
-    const next = {
+    const markers = {
       fromRow: fromY.index,
       fromColumn: fromX.index,
       fromRowOffset: Math.round(fromY.offset * EMU_PER_PIXEL),
@@ -1182,6 +1327,7 @@ function EditableShapeVisual({
       toRowOffset: Math.round(toY.offset * EMU_PER_PIXEL),
       toColumnOffset: Math.round(toX.offset * EMU_PER_PIXEL),
     }
+    const next = anchor.absolute ? toAbsoluteAnchor(markers, columnWidth, rowHeight) : markers
     if (
       next.fromRow === anchor.fromRow &&
       next.fromColumn === anchor.fromColumn &&
@@ -1194,7 +1340,11 @@ function EditableShapeVisual({
     )
       return false
     pendingFocusId = visual.id
-    onEdit(visual.id, { anchor: next, ...(frameSize ? { frameSize } : {}) })
+    const anchorSize = mode === 'resize' ? {
+      width: Math.max(1, Math.round(markerSpan(fromX, toX, columnWidth) * EMU_PER_PIXEL)),
+      height: Math.max(1, Math.round(markerSpan(fromY, toY, rowHeight) * EMU_PER_PIXEL)),
+    } : undefined
+    onEdit(visual.id, { anchor: next, ...(anchorSize ? { anchorSize } : {}), ...(frameSize ? { frameSize } : {}) })
     return true
   }
 
@@ -1363,6 +1513,8 @@ function EditableShapeVisual({
           chartPath={visual.chartPath}
           chartEditing={chartEditing}
           frame={frame}
+          flipH={visual.flipH}
+          flipV={visual.flipV}
           onRemove={() => {
             onEdit(visual.id, { remove: true })
             clearVisualSelection(visual.id)
@@ -1481,6 +1633,16 @@ const LINE_DASH_PATTERNS: Record<string, readonly number[]> = {
   sysDot: [1, 1],
 }
 
+function presetDashPattern(preset: string | undefined): readonly number[] | undefined {
+  return preset !== undefined && Object.hasOwn(LINE_DASH_PATTERNS, preset)
+    ? LINE_DASH_PATTERNS[preset]
+    : undefined
+}
+
+function chartDashArray(preset: string | undefined, width: number): string | undefined {
+  return presetDashPattern(preset)?.map((unit) => unit * width).join(' ')
+}
+
 /// DrawingML gradient angle (degrees clockwise, 0 = left-to-right) to SVG
 /// linearGradient endpoints in objectBoundingBox units. The bounding-box
 /// stretch matches lin@scaled gradients closely enough for cell-anchored
@@ -1507,10 +1669,11 @@ function ShapeVisual({
   const gradientId = `shape-fill-${shapeId}`
   const clipId = `shape-clip-${shapeId}`
   // a:blipFill: the image paints clipped to the geometry, under the stroke.
-  const { url: fillImage } = useWorkbookMediaUrl(
+  const { url: fillImage, unavailable: fillUnavailable } = useWorkbookMediaUrl(
     visual.fillMediaPath && file ? file.sessionId : undefined,
     visual.id,
   )
+  const pendingFill = Boolean(visual.fillMediaPath && file && !fillImage && !fillUnavailable)
   const type = visual.shapeType ?? ''
   const gradient = visual.fillGradient
   const customPath = visual.customPath
@@ -1551,8 +1714,8 @@ function ShapeVisual({
   // An unflipped OOXML line runs top-left → bottom-right; flips mirror the
   // endpoints (the gallery preview draws ascending, which is the flipV form).
   const isStraightLine = type === 'line' || type === 'straightConnector1'
-  const lineX0 = visual.flipH ? boxWidth : 0
-  const lineY0 = visual.flipV ? boxHeight : 0
+  const lineX0 = visual.groupTransform?.width === 0 ? boxWidth / 2 : visual.flipH ? boxWidth : 0
+  const lineY0 = visual.groupTransform?.height === 0 ? boxHeight / 2 : visual.flipV ? boxHeight : 0
   // Same geometry source as the gallery previews (and the other apps'
   // renderers), so every insertable preset draws its real silhouette.
   // custGeom paths keep their own coordinate space and scale into the box.
@@ -1590,7 +1753,7 @@ function ShapeVisual({
     transforms.push(`scale(${visual.flipH ? -1 : 1}, ${visual.flipV ? -1 : 1})`)
   }
   const strokeWidth = visual.lineWidth ?? 1
-  let dashPattern = visual.lineDash ? LINE_DASH_PATTERNS[visual.lineDash] : undefined
+  let dashPattern = presetDashPattern(visual.lineDash)
   // Round-capped dot patterns render as true circles via zero-length dashes:
   // the stretched viewBox distorts dash lengths but not the cap circle.
   if (dashPattern && visual.lineCap === 'rnd' && dashPattern[0] === 1 && dashPattern.length === 2) {
@@ -1736,6 +1899,7 @@ function ShapeVisual({
     return (
       <div
         className="xlsx-shape-drawn xlsx-shape-rotated"
+        data-print-pending={pendingFill || undefined}
         style={shapeTextScaleStyle(frame?.width)}
       >
         <div
@@ -1750,6 +1914,7 @@ function ShapeVisual({
   return (
     <div
       className="xlsx-shape-drawn"
+      data-print-pending={pendingFill || undefined}
       style={{
         ...shapeTextScaleStyle(frame?.width),
         ...(transforms.length ? { transform: transforms.join(' ') } : {}),
@@ -1992,7 +2157,10 @@ function ChartVisual({
   chartPath,
   chartEditing,
   frame,
+  groupStyle,
   onRemove,
+  flipH,
+  flipV,
   openEditorSignal = 0,
 }: {
   readonly chart: ChartMetadata
@@ -2001,7 +2169,10 @@ function ChartVisual({
   readonly chartEditing?: ChartEditing | undefined
   /// Unzoomed frame size; the rendered figure over it is the sheet zoom.
   readonly frame?: ShapeFrame | undefined
+  readonly groupStyle?: React.CSSProperties | undefined
   readonly onRemove?: (() => void) | undefined
+  readonly flipH?: boolean | undefined
+  readonly flipV?: boolean | undefined
   /// Bumped by the wrapper on double-click to open the inline editor.
   readonly openEditorSignal?: number
 }): React.JSX.Element {
@@ -2096,7 +2267,7 @@ function ChartVisual({
           }
         }
         if (!retry) {
-          if (!cancelled && entries.size > 0) setHydration(entries)
+          if (!cancelled) setHydration(entries)
           return
         }
         await new Promise((resolve) => setTimeout(resolve, 900))
@@ -2132,6 +2303,7 @@ function ChartVisual({
     bodyRef,
     frame?.width,
     `${chart.chartTypes.join()}|${pendingEdit?.chartType ?? ''}|${primarySeries !== undefined}`,
+    groupStyle !== undefined,
   )
   // The chart area fill sits under the HTML legend too; the file's axis or
   // title text color (else light ink on a dark fill) stays readable on it
@@ -2147,11 +2319,24 @@ function ChartVisual({
     ...(areaInk ? { color: areaInk, '--chart-ink': areaInk } : {}),
     ...(chart.dataLabelStyle?.color ? { '--chart-dlbl-color': chart.dataLabelStyle.color } : {}),
     ...(chart.dataLabelStyle?.size ? { '--chart-dlbl-pt': chart.dataLabelStyle.size } : {}),
+    ...(flipV ? { flexDirection: 'column-reverse' } : {}),
   } as React.CSSProperties
+  // Reflect the drawing while leaving the chart's editor controls upright.
+  const contentTransform =
+    flipH || flipV ? `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})` : undefined
+  const figureClass = groupStyle ? 'xlsx-chart xlsx-chart-viewport' : 'xlsx-chart'
+  const figureStyle = groupStyle ? undefined : areaStyle
+  const surfaceClass = groupStyle ? 'xlsx-chart xlsx-group-content' : 'xlsx-chart-content'
+  const surfaceStyle = groupStyle ? { ...areaStyle, ...groupStyle } : undefined
+  const pendingPrintData = Boolean(needsHydration && readVector && hydration === null)
   if (!primarySeries) {
     // No cached points and nothing hydrated: Excel shows a silent empty
     // frame, never a diagnostic.
-    return <figure className="xlsx-chart" style={areaStyle} />
+    return (
+      <figure className={figureClass} style={figureStyle} data-print-pending={pendingPrintData || undefined}>
+        {groupStyle && <div className={surfaceClass} style={surfaceStyle} />}
+      </figure>
+    )
   }
   const types = chart.chartTypes
   const isDoughnut = types.includes('doughnutChart')
@@ -2219,8 +2404,9 @@ function ChartVisual({
   const plotAreaFill = chart.plotAreaFill
   return (
     <figure
-      className="xlsx-chart"
-      style={areaStyle}
+      className={figureClass}
+      style={figureStyle}
+      data-print-pending={pendingPrintData || undefined}
       onClick={() => {
         if (selectedEl) setChartElementSelection(visualId, null)
       }}
@@ -2261,149 +2447,157 @@ function ChartVisual({
           onCancel={() => setIsEditing(false)}
         />
       )}
-      {chart.title !== '' && (
-        <figcaption
-          className={selectedEl?.kind === 'title' ? 'chart-el-selected' : undefined}
-          style={{
-            ...(chart.titleStyle?.size ? { fontSize: `${chart.titleStyle.size}pt` } : {}),
-            ...(chart.titleStyle?.bold === false ? { fontWeight: 400 } : {}),
-            ...(chart.titleStyle?.color ? { color: chart.titleStyle.color } : {}),
-          }}
-          onClick={
-            selectElement
-              ? (event) => {
-                  event.stopPropagation()
-                  selectElement({ kind: 'title' })
-                }
-              : undefined
-          }
-        >
-          {chart.title}
-        </figcaption>
-      )}
-      <div className={`chart-body chart-legend-${chart.legend ?? 'default'}`} ref={bodyRef}>
-        {isPie ? (
-          <PieChart
-            series={primarySeries}
-            isDoughnut={isDoughnut}
-            legend={chart.legend}
-            dataLabels={chart.dataLabels}
-            dataLabelPosition={chart.dataLabelPosition}
-            dataLabelFormat={chart.dataLabelFormat}
-            dataLabelStyle={chart.dataLabelStyle}
-            holeSizePct={chart.holeSizePct}
-            categoryFormat={categoryFormat}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isRadar ? (
-          <RadarChart
-            seriesList={populated}
-            dataLabels={chart.dataLabels}
-            categoryFormat={categoryFormat}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            valueAxis={valueScaleInput}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isScatter ? (
-          <ScatterChart
-            seriesList={populated}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            xAxis={chart.xAxis}
-            scatterStyle={chart.scatterStyle}
-            categoryFormat={categoryFormat}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isArea ? (
-          <AreaChart
-            seriesList={populated}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            grouping={chart.grouping}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            categoryFormat={categoryFormat}
-            categoryHidden={categoryAxisHidden}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : isLine ? (
-          <LineChart
-            seriesList={populated}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            grouping={chart.grouping}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            categoryFormat={categoryFormat}
-            categoryHidden={categoryAxisHidden}
-            lineMarkers={chart.lineMarkers}
-            dispBlanksAs={chart.dispBlanksAs}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
-        ) : (
-          <BarChart
-            seriesList={isCombo ? comboBars : populated}
-            seriesIndices={barSeriesIdx}
-            categorySeries={isCombo ? comboCategorySeries(populated) : undefined}
-            isHorizontal={chart.barDirection === 'bar'}
-            lineSeriesList={isCombo ? comboLines : undefined}
-            axisTitles={effectiveAxisTitles}
-            dataLabels={chart.dataLabels}
-            dataLabelPosition={chart.dataLabelPosition}
-            dataLabelFormat={chart.dataLabelFormat}
-            dataLabelStyle={chart.dataLabelStyle}
-            grouping={chart.grouping}
-            gridlines={chart.gridlines}
-            valueAxis={valueScaleInput}
-            secondaryAxis={chart.secondaryYAxis}
-            gapWidthPct={chart.gapWidthPct}
-            categoryFormat={categoryFormat}
-            categoryReversed={(isHorizontalBar ? chart.yAxis : chart.xAxis)?.reversed === true}
-            categoryHidden={categoryAxisHidden}
-            lineMarkers={chart.lineMarkers}
-            dispBlanksAs={chart.dispBlanksAs}
-            textBox={textBox}
-            categoryAxis={categoryAxisText}
-            plotAreaFill={plotAreaFill}
-            onElement={selectElement}
-            selectedEl={selectedEl}
-          />
+      <div className={surfaceClass} style={surfaceStyle}>
+        {chart.title !== '' && (
+          <figcaption
+            className={selectedEl?.kind === 'title' ? 'chart-el-selected' : undefined}
+            style={{
+              transform: contentTransform,
+              ...(chart.titleStyle?.size ? { fontSize: `${chart.titleStyle.size}pt` } : {}),
+              ...(chart.titleStyle?.bold === false ? { fontWeight: 400 } : {}),
+              ...(chart.titleStyle?.color ? { color: chart.titleStyle.color } : {}),
+            }}
+            onClick={
+              selectElement
+                ? (event) => {
+                    event.stopPropagation()
+                    selectElement({ kind: 'title' })
+                  }
+                : undefined
+            }
+          >
+            {chart.title}
+          </figcaption>
         )}
-        {!isPie &&
-          chart.legend !== 'none' &&
-          (chart.legend !== undefined || populated.length > 1) && (
-            <SeriesLegend
+        <div
+          className={`chart-body chart-legend-${chart.legend ?? 'default'}`}
+          ref={bodyRef}
+          style={{ transform: contentTransform }}
+        >
+          {isPie ? (
+            <PieChart
+              series={primarySeries}
+              isDoughnut={isDoughnut}
+              legend={chart.legend}
+              dataLabels={chart.dataLabels}
+              dataLabelPosition={chart.dataLabelPosition}
+              dataLabelFormat={chart.dataLabelFormat}
+              dataLabelStyle={chart.dataLabelStyle}
+              holeSizePct={chart.holeSizePct}
+              categoryFormat={categoryFormat}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isRadar ? (
+            <RadarChart
               seriesList={populated}
-              lineSwatches={legendUsesLineSwatches(types)}
-              lineSwatchIndices={isCombo ? comboLineIdx : undefined}
-              selected={selectedEl?.kind === 'legend'}
-              onSelect={
-                selectElement
-                  ? (event) => {
-                      event.stopPropagation()
-                      selectElement({ kind: 'legend' })
-                    }
-                  : undefined
-              }
+              dataLabels={chart.dataLabels}
+              categoryFormat={categoryFormat}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              valueAxis={valueScaleInput}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isScatter ? (
+            <ScatterChart
+              seriesList={populated}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              xAxis={chart.xAxis}
+              scatterStyle={chart.scatterStyle}
+              dispBlanksAs={chart.dispBlanksAs}
+              categoryFormat={categoryFormat}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isArea ? (
+            <AreaChart
+              seriesList={populated}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              grouping={chart.grouping}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              categoryFormat={categoryFormat}
+              categoryHidden={categoryAxisHidden}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : isLine ? (
+            <LineChart
+              seriesList={populated}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              grouping={chart.grouping}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              categoryFormat={categoryFormat}
+              categoryHidden={categoryAxisHidden}
+              lineMarkers={chart.lineMarkers}
+              dispBlanksAs={chart.dispBlanksAs}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
+            />
+          ) : (
+            <BarChart
+              seriesList={isCombo ? comboBars : populated}
+              seriesIndices={barSeriesIdx}
+              categorySeries={isCombo ? comboCategorySeries(populated) : undefined}
+              isHorizontal={chart.barDirection === 'bar'}
+              lineSeriesList={isCombo ? comboLines : undefined}
+              axisTitles={effectiveAxisTitles}
+              dataLabels={chart.dataLabels}
+              dataLabelPosition={chart.dataLabelPosition}
+              dataLabelFormat={chart.dataLabelFormat}
+              dataLabelStyle={chart.dataLabelStyle}
+              grouping={chart.grouping}
+              gridlines={chart.gridlines}
+              valueAxis={valueScaleInput}
+              secondaryAxis={chart.secondaryYAxis}
+              gapWidthPct={chart.gapWidthPct}
+              categoryFormat={categoryFormat}
+              categoryReversed={(isHorizontalBar ? chart.yAxis : chart.xAxis)?.reversed === true}
+              categoryHidden={categoryAxisHidden}
+              lineMarkers={chart.lineMarkers}
+              dispBlanksAs={chart.dispBlanksAs}
+              textBox={textBox}
+              categoryAxis={categoryAxisText}
+              plotAreaFill={plotAreaFill}
+              onElement={selectElement}
+              selectedEl={selectedEl}
             />
           )}
+          {!isPie &&
+            chart.legend !== 'none' &&
+            (chart.legend !== undefined || populated.length > 1) && (
+              <SeriesLegend
+                seriesList={populated}
+                lineSwatches={legendUsesLineSwatches(types)}
+                lineSwatchIndices={isCombo ? comboLineIdx : undefined}
+                selected={selectedEl?.kind === 'legend'}
+                onSelect={
+                  selectElement
+                    ? (event) => {
+                        event.stopPropagation()
+                        selectElement({ kind: 'legend' })
+                      }
+                    : undefined
+                }
+              />
+            )}
+        </div>
       </div>
       {menu && chartEditing && (
         <VisualContextMenu
@@ -2667,19 +2861,21 @@ function useChartTextBox(
   bodyRef: React.RefObject<HTMLDivElement | null>,
   frameWidth: number | undefined,
   chartKey: string,
+  groupTransformed: boolean,
 ): ChartTextBox | undefined {
   const [box, setBox] = useState<ChartTextBox | undefined>(undefined)
   useEffect(() => {
     const body = bodyRef.current
     const svg = body?.querySelector('svg.chart-svg')
-    const figure = body?.parentElement
+    const figure = body?.closest('.xlsx-chart')
     if (!body || !svg || typeof ResizeObserver === 'undefined') return undefined
     const measure = (): void => {
       const rect = svg.getBoundingClientRect()
-      const zoom = frameWidth && figure ? figure.getBoundingClientRect().width / frameWidth || 1 : 1
+      const framePixels = groupTransformed ? figure?.clientWidth : figure?.getBoundingClientRect().width
+      const zoom = frameWidth && framePixels ? framePixels / frameWidth : 1
       const next = {
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
+        width: groupTransformed ? svg.clientWidth : Math.round(rect.width),
+        height: groupTransformed ? svg.clientHeight : Math.round(rect.height),
         zoom: Number(zoom.toFixed(3)),
       }
       setBox((previous) =>
@@ -2696,7 +2892,7 @@ function useChartTextBox(
     if (figure) observer.observe(figure)
     measure()
     return () => observer.disconnect()
-  }, [bodyRef, frameWidth, chartKey])
+  }, [bodyRef, frameWidth, chartKey, groupTransformed])
   return box
 }
 
@@ -3424,6 +3620,8 @@ export function BarChart({
     return {
       stroke,
       width: series.lineWidth ?? 3,
+      lineDash: series.lineDash,
+      smooth: series.smooth,
       markerColor: stroke ?? seriesColor(series, paletteIndex),
       segments: lineSegments(
         Math.min(series.values.length, visibleCount),
@@ -3584,12 +3782,13 @@ export function BarChart({
         <g key={`combo-${lineIndex}`}>
           {stroke !== null &&
             line.segments.map((segment, segmentIndex) => (
-              <polyline
+              <SeriesStroke
                 key={segmentIndex}
-                points={segment.map((index) => `${comboX(index)},${line.y(index)}`).join(' ')}
-                fill="none"
+                points={segment.map((index) => [comboX(index), line.y(index)])}
+                smooth={line.smooth}
                 stroke={stroke}
                 strokeWidth={line.width}
+                lineDash={line.lineDash}
               />
             ))}
           {symbol !== null &&
@@ -3702,13 +3901,14 @@ function MarkerGlyph({
   y,
   symbol,
   color,
+  radius: r = 4,
 }: {
   readonly x: number
   readonly y: number
   readonly symbol: string
   readonly color: string
+  readonly radius?: number
 }): React.JSX.Element {
-  const r = 4
   if (symbol === 'diamond') {
     return (
       <polygon points={`${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`} fill={color} />
@@ -4318,15 +4518,15 @@ export function LineChart({
         const width = series.lineWidth ?? 3
         const values = displayValues(seriesIndex)
         const denominator = Math.max(1, values.length - 1)
-        const pointAt = (index: number): string =>
-          `${60 + (index / denominator) * 500},${
-            280 - Math.max(0, Math.min(1, ((values[index] ?? 0) - bounds.min) / (span || 1))) * 240
-          }`
         return seriesSegments(series).map((segment, segmentIndex) => (
-          <polyline
+          <SeriesStroke
             key={`${seriesIndex}-${segmentIndex}`}
-            points={segment.map(pointAt).join(' ')}
-            fill="none"
+            points={segment.map((index) => [
+              60 + (index / denominator) * 500,
+              280 - Math.max(0, Math.min(1, ((values[index] ?? 0) - bounds.min) / (span || 1))) * 240,
+            ])}
+            smooth={series.smooth}
+            lineDash={series.lineDash}
             stroke={stroke}
             strokeWidth={
               selectedEl?.kind === 'series' && selectedEl.seriesIndex === seriesIndex
@@ -4682,7 +4882,7 @@ function AreaChart({
 
 /// Spider chart: one spoke per category, rings at quarter steps, one closed
 /// polygon per series.
-function RadarChart({
+export function RadarChart({
   seriesList,
   dataLabels,
   categoryFormat,
@@ -4756,6 +4956,8 @@ function RadarChart({
       })}
       {seriesList.map((series, seriesIndex) => {
         const isSel = selectedEl?.kind === 'series' && selectedEl.seriesIndex === seriesIndex
+        const width = series.lineWidth ?? 2.5
+        const strokeWidth = isSel ? Math.max(4, width + 1.5) : width
         return (
           <polygon
             key={seriesIndex}
@@ -4763,9 +4965,8 @@ function RadarChart({
             fill={seriesColor(series, seriesIndex)}
             fillOpacity="0.18"
             stroke={isSel ? '#107C41' : (lineStroke(series, seriesIndex) ?? 'none')}
-            strokeWidth={
-              isSel ? Math.max(4, (series.lineWidth ?? 2.5) + 1.5) : (series.lineWidth ?? 2.5)
-            }
+            strokeWidth={strokeWidth}
+            strokeDasharray={chartDashArray(series.lineDash, strokeWidth)}
             onClick={
               onElement
                 ? (event) => {
@@ -4801,6 +5002,36 @@ function formatScatterTick(value: number, format: string | undefined): string {
   return String(Number(value.toPrecision(4)))
 }
 
+function smoothChartPath(points: readonly (readonly [number, number])[]): string {
+  const first = points[0]!
+  let path = `M${first.join(',')}`
+  for (let index = 1; index < points.length; index++) {
+    const start = points[index - 1]!
+    const end = points[index]!
+    const before = points[index - 2] ?? start
+    const after = points[index + 1] ?? end
+    // Convert the neighboring-point tangents to cubic Bézier controls.
+    const firstControl = start.map((value, axis) => value + (end[axis]! - before[axis]!) / 6)
+    const secondControl = end.map((value, axis) => value - (after[axis]! - start[axis]!) / 6)
+    path += ` C${firstControl.join(',')} ${secondControl.join(',')} ${end.join(',')}`
+  }
+  return path
+}
+
+function SeriesStroke({ points, smooth, stroke, strokeWidth, lineDash, onClick }: {
+  readonly points: readonly (readonly [number, number])[]
+  readonly smooth?: boolean | undefined
+  readonly stroke: string
+  readonly strokeWidth: number
+  readonly lineDash?: string | undefined
+  readonly onClick?: React.MouseEventHandler<SVGElement> | undefined
+}): React.JSX.Element {
+  const style = { fill: 'none', stroke, strokeWidth, strokeDasharray: chartDashArray(lineDash, strokeWidth), onClick }
+  return smooth && points.length > 2
+    ? <path d={smoothChartPath(points)} {...style} />
+    : <polyline points={points.map((point) => point.join(',')).join(' ')} {...style} />
+}
+
 export function ScatterChart({
   seriesList,
   axisTitles,
@@ -4809,6 +5040,7 @@ export function ScatterChart({
   valueAxis,
   xAxis,
   scatterStyle,
+  dispBlanksAs,
   categoryFormat,
   textBox,
   categoryAxis,
@@ -4836,16 +5068,20 @@ export function ScatterChart({
       }
     | undefined
   readonly scatterStyle?: string | undefined
+  readonly dispBlanksAs?: ChartMetadata['dispBlanksAs']
   readonly categoryFormat?: string | undefined
 } & ChartElementProps): React.JSX.Element {
+  const styleWantsSmooth = scatterStyle === 'smooth' || scatterStyle === 'smoothMarker'
+  const styleWantsLines = styleWantsSmooth || scatterStyle === 'line' || scatterStyle === 'lineMarker'
+  const styleWantsMarkers = scatterStyle !== 'none' && scatterStyle !== 'line' && scatterStyle !== 'smooth'
   const points = seriesList.map((series) => {
     const xValues = series.categories.map((value, index) => {
       const parsed = Number.parseFloat(value)
       return Number.isFinite(parsed) ? parsed : index
     })
-    // Blank cache slots are 0 fillers, not data — Excel plots no point.
-    const blankSet = new Set(series.blanks ?? [])
-    return { series, xValues, blankSet }
+    const blankSet = new Set(dispBlanksAs === 'zero' ? undefined : series.blanks)
+    const marker = series.marker ?? (styleWantsMarkers ? 'circle' : 'none')
+    return { series, xValues, blankSet, marker }
   })
   const allX = points.flatMap((entry) =>
     entry.xValues.filter((_, index) => !entry.blankSet.has(index)),
@@ -4856,9 +5092,6 @@ export function ScatterChart({
   if (allY.length === 0) return <></>
   const boundsX = scatterAxisBounds(allX, xAxis)
   const boundsY = scatterAxisBounds(allY, valueAxis)
-  // lineMarker / smoothMarker / line / smooth connect the points; a series
-  // whose spPr line is an explicit noFill stays marker-only.
-  const styleWantsLines = scatterStyle !== undefined && scatterStyle !== 'marker'
   const xFormat = xAxis?.numFmt ?? categoryFormat
   const plotX = (value: number): number =>
     60 + Math.max(0, Math.min(1, (value - boundsX.min) / (boundsX.max - boundsX.min))) * 520
@@ -4877,6 +5110,26 @@ export function ScatterChart({
       valueAxis?.labelSize ?? AXIS_LABEL_PT,
     ),
   )
+  const renderStroke = (series: ChartSeries, xValues: readonly number[], seriesIndex: number) => {
+    const stroke = lineStroke(series, seriesIndex)
+    if (!styleWantsLines || stroke === null) return null
+    const attrs = {
+      smooth: series.smooth ?? styleWantsSmooth,
+      stroke,
+      strokeWidth: series.lineWidth ?? 2,
+      lineDash: series.lineDash,
+      onClick: onElement ? (event: React.MouseEvent<SVGElement>) => {
+        event.stopPropagation()
+        onElement({ kind: 'series', seriesIndex })
+      } : undefined,
+    }
+    const segments = lineSegments(series.values.length, series.blanks, dispBlanksAs ?? 'span')
+    return segments.map((segment) => {
+      if (segment.length < 2) return null
+      const coordinates = segment.map(index => [plotX(xValues[index] ?? 0), plotY(series.values[index]!)] as const)
+      return <SeriesStroke key={segment[0]} points={coordinates} {...attrs} />
+    })
+  }
   return (
     <svg
       className="chart-svg"
@@ -4934,34 +5187,14 @@ export function ScatterChart({
           )}
         </g>
       ))}
-      {points.map(({ series, xValues, blankSet }, seriesIndex) => (
+      {points.map(({ series, xValues, blankSet, marker }, seriesIndex) => (
         <g key={seriesIndex}>
-          {styleWantsLines && series.lineColor !== 'none' && series.values.length > 1 && (
-            <polyline
-              points={series.values
-                .map((value, index) =>
-                  blankSet.has(index) ? null : `${plotX(xValues[index] ?? 0)},${plotY(value)}`,
-                )
-                .filter((point) => point !== null)
-                .join(' ')}
-              fill="none"
-              stroke={
-                series.lineColor && series.lineColor !== 'none'
-                  ? series.lineColor
-                  : seriesColor(series, seriesIndex)
-              }
-              strokeWidth={series.lineWidth ?? 2}
-            />
-          )}
-          {series.marker !== 'none' &&
+          {renderStroke(series, xValues, seriesIndex)}
+          {marker !== 'none' &&
             series.values.map((value, index) =>
               blankSet.has(index) ? null : (
-                <circle
+                <g
                   key={index}
-                  cx={plotX(xValues[index] ?? 0)}
-                  cy={plotY(value)}
-                  r={isSelectedPoint(selectedEl, seriesIndex, index) ? 6 : 4}
-                  fill={seriesColor(series, seriesIndex)}
                   opacity="0.85"
                   {...(isSelectedPoint(selectedEl, seriesIndex, index)
                     ? { stroke: '#107C41', strokeWidth: 2 }
@@ -4974,7 +5207,15 @@ export function ScatterChart({
                         }
                       : undefined
                   }
-                />
+                >
+                  <MarkerGlyph
+                    x={plotX(xValues[index] ?? 0)}
+                    y={plotY(value)}
+                    symbol={marker}
+                    color={seriesColor(series, seriesIndex)}
+                    radius={isSelectedPoint(selectedEl, seriesIndex, index) ? 6 : 4}
+                  />
+                </g>
               ),
             )}
           {dataLabels === 'value' &&

@@ -8,6 +8,7 @@ import { INumfmtService } from '@univerjs/sheets'
 
 import { ConditionalFormattingService } from '@univerjs/preset-sheets-conditional-formatting'
 
+import type { WorkbookExportCsvRequest } from '../shared/desktop-api'
 import { MAX_CSV_EXPORT_CHARS } from '../shared/ipc-channels'
 import { settleFormulas } from './formula-settle'
 import { formulaViewSheets } from './formula-view'
@@ -230,38 +231,48 @@ export function sheetHasFormulas(sheet: CsvWorksheet): boolean {
   return found
 }
 
-export async function handleExportCsv(ctx: CsvExportContext, targetPath?: string): Promise<void> {
+export async function captureActiveSheetCsv(
+  ctx: Omit<CsvExportContext, 'requestSaveAs'>,
+): Promise<WorkbookExportCsvRequest | null> {
   const runtime = ctx.univerRef.current
-  if (!runtime || !activeCsvSheet(runtime)) return
+  if (!runtime || !activeCsvSheet(runtime)) return null
   const state = ctx.lazyWorkbookRef.current
   if (state && !state.flags.preloadComplete) {
     ctx.setMessage(t('appCsvExportNeedsFullLoad'))
-    return
+    return null
   }
+  await settleFormulas(runtime)
+  // The formula pass awaited: take the sheet again, it may have changed meanwhile.
+  const active = activeCsvSheet(runtime)
+  if (!active || ctx.univerRef.current !== runtime || ctx.lazyWorkbookRef.current !== state) return null
+  const { sheet, sheetCount } = active
+  const content = serializeActiveSheetCsv(
+    sheet,
+    state,
+    cellPatternLookup(runtime, sheet.getSheetId(), state?.file.date1904 === true),
+  )
+  if (content === 'too-large') {
+    ctx.setMessage(t('appCsvExportTooLarge'))
+    return null
+  }
+  const baseName = (state?.file.name ?? 'Book1').replace(/\.[^.]+$/, '')
+  return {
+    fileName: `${baseName}.csv`,
+    content,
+    hasFormulas:
+      sheetHasFormulas(sheet) ||
+      (state?.formulaText.get(sheet.getSheetId())?.size ?? 0) > 0 ||
+      state?.formulaTextTruncated.has(sheet.getSheetId()) === true,
+    ...(sheetCount > 1 ? { activeSheetName: sheet.getSheetName() } : {}),
+  }
+}
+
+export async function handleExportCsv(ctx: CsvExportContext, targetPath?: string): Promise<void> {
   try {
-    await settleFormulas(runtime)
-    // The formula pass awaited: take the sheet again, it may have changed meanwhile.
-    const active = activeCsvSheet(runtime)
-    if (!active || ctx.lazyWorkbookRef.current !== state) return
-    const { sheet, sheetCount } = active
-    const content = serializeActiveSheetCsv(
-      sheet,
-      state,
-      cellPatternLookup(runtime, sheet.getSheetId()),
-    )
-    if (content === 'too-large') {
-      ctx.setMessage(t('appCsvExportTooLarge'))
-      return
-    }
-    const baseName = (state?.file.name ?? 'Book1').replace(/\.[^.]+$/, '')
+    const request = await captureActiveSheetCsv(ctx)
+    if (!request) return
     const result = await window.desktopApi.exportCsv({
-      fileName: `${baseName}.csv`,
-      content,
-      hasFormulas:
-        sheetHasFormulas(sheet) ||
-        (state?.formulaText.get(sheet.getSheetId())?.size ?? 0) > 0 ||
-        state?.formulaTextTruncated.has(sheet.getSheetId()) === true,
-      ...(sheetCount > 1 ? { activeSheetName: sheet.getSheetName() } : {}),
+      ...request,
       ...(targetPath === undefined ? {} : { targetPath }),
     })
     if (result.canceled) {
@@ -273,8 +284,8 @@ export async function handleExportCsv(ctx: CsvExportContext, targetPath?: string
     // miss, and a CSV Save As keeps the window on the source workbook — with
     // no prominent confirmation the export reads as "nothing was saved".
     const exported =
-      sheetCount > 1
-        ? t('appCsvExportedActiveOnly', { name: sheet.getSheetName(), path: result.path })
+      request.activeSheetName !== undefined
+        ? t('appCsvExportedActiveOnly', { name: request.activeSheetName, path: result.path })
         : t('appCsvExported', { path: result.path })
     ctx.setMessage(exported)
     showToast(exported)

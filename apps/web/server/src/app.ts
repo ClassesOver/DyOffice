@@ -28,7 +28,7 @@ import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
 import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
 import { registerAdminSyntheticProbe } from './modules/providers/synthetic-probe.ts'
 import { createSheetsSaveService, type SheetsPlanner, type SheetsWorkbookPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
-import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
+import { createSheetsService, type SheetsNative, type SheetsPackageReader, type SheetsQueryFetcher } from './modules/sheets/service.ts'
 import { registerSheetsRoutes } from './modules/sheets/routes.ts'
 import { createSlidesSaveService } from './modules/slides/save.ts'
 import { createSlidesService, type SlidesSessionHost } from './modules/slides/service.ts'
@@ -90,6 +90,7 @@ export interface LocalWebConfig {
   rateLimit?: { max: number; windowMs: number };
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; insecureHttpDev?: boolean; passwords?: PasswordService;
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativePdf?: boolean; nativePdfDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string; dshEditorOrigin?: string;
+  sheetsQueryFetcher?: SheetsQueryFetcher;
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
   sourcesEgressTargets?: readonly SourceEgressTarget[];
@@ -271,9 +272,14 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerStyleTemplateRoutes(app,createStyleTemplateService(transactions),sessions,csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
     if (config.objectStore && files) {
-      const leases = createLeaseService({ transactions, assertOfficeWritable:files.assertOfficeWritable })
+      const leases = createLeaseService({ transactions, assertOfficeWritable:files.assertOfficeLeaseAllowed })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
-      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration })
+      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration },{
+        tsv:config.sheetsNative?.convertTsvImport,
+        xls:config.sheetsNative?.convertLegacyXls,
+        ods:config.sheetsNative?.convertOdfSpreadsheet,
+        ots:config.sheetsNative?.convertOdfSpreadsheet,
+      },Boolean(config.nativeSheetsDirectory && config.sheetsNative?.convertCsvImport))
       registerMcpRoutes(app,transactions,files,csrf,config.objectStore,config.filePolicy,
         config.sheetsPlanner && config.sheetsWorkbookPlanner && config.sheetsNative?.savePlan ? {
           native: config.sheetsNative as SheetsSaveNative,
@@ -288,8 +294,9 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       if (config.realtimeCommands) registerCommandRoutes(app, { sessions,csrf,
         createRequestCommands: createCommandRequestFactory(transactions, config.realtimeCommands.lookupTool) })
       if (config.sheetsNative) {
-        const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner,planFromWorkbook:config.sheetsWorkbookPlanner}) : undefined
-        registerSheetsRoutes(app,createSheetsService({files,native:config.sheetsNative,readPackage:config.sheetsPackageReader}),sessions,csrf,saves)
+        const sheets=createSheetsService({files,native:config.sheetsNative,readPackage:config.sheetsPackageReader,leases,fetchQuery:config.sheetsQueryFetcher})
+        const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner,planFromWorkbook:config.sheetsWorkbookPlanner,protectedWorkbooks:sheets}) : undefined
+        registerSheetsRoutes(app,sheets,sessions,csrf,saves)
       }
       if (config.slidesHost) {
         const slides = createSlidesService({files,leases,revisions,host:config.slidesHost})
@@ -299,6 +306,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       if (config.nativeJobs) registerJobRoutes(app,createJobService({ transactions,enabledTypes: ['xlsx.roundtrip'] }),sessions,csrf)
       if (nativeDocs) app.route({
         method: ['GET','HEAD'], url: '/native-docx/*',
+        config: { workspaceAssetPrefix: '/native-docx/assets/' },
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
           if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
@@ -320,6 +328,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       })
       if (nativePdf) app.route({
         method: ['GET','HEAD'], url: '/native-pdf/*',
+        config: { workspaceAssetPrefix: '/native-pdf/assets/' },
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
           if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
@@ -338,12 +347,14 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       })
       if (nativeSlides) app.route({
         method: ['GET','HEAD'], url: '/native-pptx/*',
+        config: { workspaceAssetPrefix: '/native-pptx/assets/' },
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
           if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
           // 'wasm-unsafe-eval' keeps harfbuzzjs font shaping working; media-src covers
           // PPTX-embedded audio/video played through the slides renderer.
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
+          // The GLB renderer fetches inline data URLs for bundled textures and buffers.
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources} data:; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
           await authorizeNative(request,sessions)
         },
         handler: async (request,reply) => {
@@ -361,6 +372,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       })
       if (nativeSheets) app.route({
         method: ['GET','HEAD'], url: '/native-xlsx/*',
+        config: { workspaceAssetPrefix: '/native-xlsx/assets/' },
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
           if (new URL(request.url,config.origin).searchParams.get('guest')==='1') reply.raw.setHeader('Referrer-Policy','same-origin')
@@ -371,7 +383,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-xlsx'.length)
           if (path === '/' || path === '/index.html') {
             const opened = await files.openFile(editorFileToken(request),url.searchParams.get('fileId') ?? '')
-            if (opened.format !== 'xlsx') throw authError(404)
+            if (opened.format !== 'xlsx' && opened.format !== 'xlsm' && !(opened.format === 'csv' && config.sheetsNative?.convertCsvImport)) throw authError(404)
           }
           // No source fallback and no arbitrary file paths: only verified build assets.
           const response = reply.raw

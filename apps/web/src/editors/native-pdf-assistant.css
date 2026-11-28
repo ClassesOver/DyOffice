@@ -17,10 +17,11 @@
 }
 
 @media (max-width: 760px) {
-  .shared-assistant-dock .ai-panel-width-handle {
+  .shared-assistant-dock .ai-panel-width-handle,
+  .shared-assistant-dock .ai-panel-side-button {
     display: none;
   }
-  .app-main:has(> .shared-assistant-dock) {
+  .app-main:has(> .shared-assistant-dock:not(.ai-dock-off)) {
     flex-direction: column;
   }
   .app-main > .app-content {
@@ -35,6 +36,9 @@
   .app-main > .shared-assistant-dock.collapsed {
     width: 100%;
     height: 38px;
+  }
+  .app-main > .shared-assistant-dock.ai-dock-off {
+    display: none;
   }
   .app-main > .shared-assistant-dock > .ai-rail {
     flex-direction: row;

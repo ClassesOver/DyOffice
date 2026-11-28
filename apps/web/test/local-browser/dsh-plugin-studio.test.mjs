@@ -213,15 +213,33 @@ test('changing overflow without resizing updates the interactive clip in both di
  await page.setViewportSize({width:900,height:1100})
  await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
  const viewport=page.locator('#chat-viewport')
- await viewport.evaluate(el=>Object.assign(el.style,{height:'510px',overflow:'visible'}))
- const bounds=await viewport.boundingBox()
- const point={x:bounds.x+50,y:bounds.y+bounds.height+55}
+ const anchor=card.locator('.dsh-office-frame')
+ await expect(anchor).toBeVisible()
+ // Model earlier chat content ahead of the card. Clip through the frame,
+ // not a fixed offset that may land on the card header when layout changes.
+ await viewport.evaluate(el=>{
+  const earlier=document.createElement('div')
+  earlier.style.height='460px'
+  el.prepend(earlier)
+ })
+ const viewportTop=(await viewport.boundingBox()).y
+ const frameBounds=await anchor.boundingBox()
+ const frameBottom=Math.min(frameBounds.y+frameBounds.height,page.viewportSize().height)
+ assert.ok(frameBottom-frameBounds.y>40)
+ const clipY=frameBounds.y+(frameBottom-frameBounds.y)/2
+ await viewport.evaluate((el,height)=>Object.assign(el.style,{height:height+'px',overflow:'visible'}),clipY-viewportTop)
+ const viewportBounds=await viewport.boundingBox()
+ const point={x:frameBounds.x+50,y:(clipY+frameBottom)/2}
+ const inside={...point,y:(frameBounds.y+clipY)/2}
  const hit=()=>page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.tagName,point)
  await expect.poll(hit).toBe('IFRAME')
  await viewport.evaluate(el=>el.style.overflow='hidden')
  await expect.poll(hit).not.toBe('IFRAME')
+ assert.deepEqual(await viewport.boundingBox(),viewportBounds)
+ await expect.poll(()=>page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.tagName,inside)).toBe('IFRAME')
  await viewport.evaluate(el=>el.style.overflow='visible')
  await expect.poll(hit).toBe('IFRAME')
+ assert.deepEqual(await viewport.boundingBox(),viewportBounds)
 })
 
 for(const state of ['writing','saved'])test(`a stale ${state} popup releases chat until it confirms the task again`,async t=>{

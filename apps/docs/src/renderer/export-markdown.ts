@@ -26,13 +26,13 @@ function imageExt(src: string): string | null {
  * blocks become a display formula, a field's visible text, a picture, or
  * nothing. Pictures are collected for the writer and referenced by name.
  */
-export function documentToMarkdown(editor: Editor): MarkdownExport {
+export function documentToMarkdown(editor: Editor, { includeImages = true } = {}): MarkdownExport {
   const top = editor.state.doc
   const parts: string[] = []
   const images: MarkdownImage[] = []
   const named = new Map<string, string>()
   const image = (src: string): string | null => {
-    if (!src) return null
+    if (!includeImages || !src) return null
     let name = named.get(src)
     if (!name) {
       const ext = imageExt(src)

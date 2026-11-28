@@ -1307,6 +1307,8 @@ export interface PrintSlidesOp {
   order?: 'horizontal' | 'vertical'
   /** Border around full-page slides */
   frame?: boolean
+  /** Suggested PDF name when the browser print dialog is used. */
+  pdfName?: string
   /** A printer the dialog picked: present = print silently with these job
    *  options (macOS routes through lp); absent = the system print dialog. */
   job?: PrintJobOptions
@@ -1387,6 +1389,8 @@ export interface SlidesApi {
   /** snap the host window in/out of instant fullscreen for the slideshow
    *  (macOS simpleFullScreen — skips the animated Space transition) */
   setShowFullScreen: (on: boolean) => Promise<void>
+  /** Browser host starts fullscreen while the show command still has user activation. */
+  requestShowFullScreen?: () => void
   openPptx: (fitWidthPx: number) => Promise<OpenResult | null>
   openPptxPath: (path: string, fitWidthPx: number) => Promise<OpenResult | null>
   /** Office-private faces referenced by layouts so far; the renderer registers them as FontFaces
@@ -1615,7 +1619,7 @@ export interface SlidesApi {
     slideIndex: number,
     kind: 'video' | 'audio',
     fitWidthPx: number,
-  ) => Promise<{ slide: RenderSlide; sourceId: string } | null>
+  ) => Promise<AddMediaResult | null>
   /** Insert renderer-recorded or dropped media; placed centered on the slide or the drop point */
   addMediaBytes: (op: AddMediaBytesOp) => Promise<AddMediaResult | null>
   /** Read an audio/video element's media data (double-click playback); embedded media converts to dataUrl, external links return as-is */
@@ -1767,6 +1771,8 @@ export interface SlidesApi {
   savePicture: (op: SavePictureOp) => Promise<SavePictureResult>
   /** Main process printToPDF via a hidden window, written to disk */
   exportPdf: (op: ExportPdfOp) => Promise<ExportPdfResult>
+  /** The browser owns printer selection and job options. */
+  browserPrintDialog?: boolean
   /** Print: with job = silent (macOS named printers spool through lp); without = system dialog */
   printSlides: (op: PrintSlidesOp) => Promise<{ ok: boolean; error?: string }>
   /** installed printers for the in-app print dialog */

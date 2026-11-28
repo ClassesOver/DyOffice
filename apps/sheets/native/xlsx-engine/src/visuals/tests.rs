@@ -515,7 +515,8 @@ fn shape_with_blip_fill_keeps_geometry_and_carries_fill_media() {
         "rId1".to_owned(),
         Relationship {
             target: "../media/image1.png".into(),
-            relationship_type: String::new(),
+            relationship_type: "image".to_owned(),
+            external: false,
         },
     )]);
     let anchor = DrawingAnchor {
@@ -528,6 +529,7 @@ fn shape_with_blip_fill_keeps_geometry_and_carries_fill_media() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let visual = shape_visual(
         document.root_element(),
@@ -547,6 +549,76 @@ fn shape_with_blip_fill_keeps_geometry_and_carries_fill_media() {
         Some("xl/media/image1.png")
     );
     assert_eq!(visual.fill_media_type.as_deref(), Some("image/png"));
+}
+
+#[test]
+fn drawing_media_uses_internal_svg_when_the_primary_image_is_unavailable() {
+    let drawing_path = "xl/drawings/drawing1.xml";
+    let extension = |id: &str| format!(
+        r#"<a:extLst><a:ext uri="svg"><f:svgBlip r:embed="raster"/><v:svgBlip r:embed="{id}"/></a:ext></a:extLst>"#
+    );
+    let picture = |id: u32, name: &str, raster: &str, vector: &str| format!(
+        r#"<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{id}" name="{name}"/></xdr:nvPicPr>
+        <xdr:blipFill><a:blip r:embed="{raster}">{}</a:blip></xdr:blipFill></xdr:pic>"#,
+        extension(vector),
+    );
+    let anchor = |object: String| format!(
+        r#"<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>
+        <xdr:ext cx="1000" cy="2000"/>{object}</xdr:oneCellAnchor>"#
+    );
+    let shape = format!(
+        r#"<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="4" name="Shape"/></xdr:nvSpPr>
+        <xdr:spPr><a:prstGeom prst="heart"/><a:blipFill><a:blip>{}</a:blip></a:blipFill></xdr:spPr></xdr:sp>"#,
+        extension("vector"),
+    );
+    let drawing = format!(
+        r#"<xdr:wsDr {XDR} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        xmlns:v="http://schemas.microsoft.com/office/drawing/2016/SVG/main" xmlns:f="urn:foreign">{}{}{}{}</xdr:wsDr>"#,
+        anchor(picture(1, "Fallback", "missing", "vector")),
+        anchor(picture(2, "Raster", "raster", "vector")),
+        anchor(picture(3, "External", "missing", "external")),
+        anchor(shape),
+    );
+    let rel = |id: &str, file: &str, mode: &str| format!(
+        r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{file}" {mode}/>"#
+    );
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}{}{}{}<Relationship xmlns="urn:foreign" Id="vector" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/outside.svg"/></Relationships>"#,
+        rel("missing", "missing.png", ""),
+        rel("raster", "raster.png", ""),
+        rel("vector", "vector.svg", ""),
+        rel("external", "outside.svg", r#"TargetMode="External""#),
+    );
+    let (_dir, path) = crate::tests::open_fixture(&[
+        (drawing_path, &drawing),
+        ("xl/drawings/_rels/drawing1.xml.rels", &rels),
+        ("xl/media/raster.png", "png"),
+        ("xl/media/vector.svg", "<svg/>"),
+        ("xl/media/outside.svg", "<svg/>"),
+    ]);
+    let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
+    let objects = read_drawing(
+        &mut archive,
+        drawing_path,
+        "sheet-1",
+        0,
+        &ColorContext::default(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &mut SourceFormats::default(),
+    )
+    .unwrap();
+    let images = objects.iter().map(|object| {
+        (object.name.as_deref(), object.media_path.as_deref(), object.fill_media_path.as_deref())
+    }).collect::<Vec<_>>();
+    assert_eq!(
+        images,
+        vec![
+            (Some("Fallback"), Some("xl/media/vector.svg"), None),
+            (Some("Raster"), Some("xl/media/raster.png"), None),
+            (Some("Shape"), None, Some("xl/media/vector.svg")),
+        ],
+    );
 }
 
 #[test]
@@ -577,8 +649,7 @@ fn sole_unnamed_series_keeps_placeholder_title() {
 fn theme_colors() -> ColorContext {
     ColorContext {
         theme: (0..12).map(|slot| (slot as u8, 0x22, 0x33)).collect(),
-        fill_styles: Vec::new(),
-        indexed: Vec::new(),
+        ..ColorContext::default()
     }
 }
 
@@ -595,6 +666,7 @@ fn parses_absolute_anchor_as_offsets_from_origin() {
         .find(|node| node.has_tag_name("absoluteAnchor"))
         .unwrap();
     let anchor = parse_anchor(anchor_node).unwrap();
+    assert!(anchor.absolute);
     assert_eq!(anchor.from_row, 0);
     assert_eq!(anchor.from_column, 0);
     assert_eq!(anchor.from_column_offset, 1_440_000);
@@ -637,6 +709,7 @@ fn expands_group_children_through_child_space() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let mut visuals = Vec::new();
     let mut counter = 0;
@@ -652,6 +725,7 @@ fn expands_group_children_through_child_space() {
         &HashMap::new(),
         &mut visuals,
         0,
+        GroupMapping::default(),
     )
     .unwrap();
     assert_eq!(visuals.len(), 1, "hidden child must be skipped");
@@ -672,17 +746,86 @@ fn expands_group_children_through_child_space() {
 }
 
 #[test]
+fn rotates_a_nested_group_before_parent_scaling() {
+    let xml = format!(
+        r#"<xdr:wsDr {XDR}><xdr:grpSp>
+          <xdr:grpSpPr><a:xfrm><a:ext cx="400" cy="200"/>
+            <a:chOff x="0" y="0"/><a:chExt cx="200" cy="200"/></a:xfrm></xdr:grpSpPr>
+          <xdr:grpSp>
+            <xdr:grpSpPr><a:xfrm rot="5400000" flipV="true">
+              <a:off x="100" y="50"/><a:ext cx="80" cy="40"/>
+              <a:chOff x="0" y="0"/><a:chExt cx="80" cy="40"/></a:xfrm></xdr:grpSpPr>
+            <xdr:sp><xdr:spPr><a:xfrm><a:off x="10" y="5"/><a:ext cx="20" cy="10"/></a:xfrm>
+              <a:prstGeom prst="rightArrow"/></xdr:spPr></xdr:sp>
+          </xdr:grpSp>
+          <xdr:sp><xdr:spPr><a:xfrm rot="5400000" flipV="true"><a:off x="10" y="5"/>
+            <a:ext cx="20" cy="10"/></a:xfrm><a:prstGeom prst="rightArrow"/></xdr:spPr></xdr:sp>
+        </xdr:grpSp></xdr:wsDr>"#
+    );
+    let document = Document::parse(&xml).unwrap();
+    let group = direct_child(document.root_element(), "grpSp").unwrap();
+    let anchor = DrawingAnchor {
+        from_row: 2,
+        from_column: 1,
+        from_row_offset: 0,
+        from_column_offset: 0,
+        to_row: 2,
+        to_column: 1,
+        to_row_offset: 0,
+        to_column_offset: 0,
+        explicit_to: false,
+        absolute: false,
+    };
+    let mut visuals = Vec::new();
+    expand_group(
+        group,
+        &anchor,
+        (0.0, 0.0, 400.0, 200.0),
+        "visual-1",
+        &mut 0,
+        "sheet1",
+        &ColorContext::default(),
+        "xl/drawings/drawing1.xml",
+        &HashMap::new(),
+        &mut visuals,
+        0,
+        GroupMapping::default(),
+    )
+    .unwrap();
+    let child = &visuals[0];
+    assert_eq!(child.anchor.from_column_offset, 250);
+    assert_eq!(child.anchor.to_column_offset, 270);
+    assert_eq!(child.anchor.from_row_offset, 40);
+    assert_eq!(child.anchor.to_row_offset, 60);
+    let transform = child.group_transform.as_ref().unwrap();
+    assert_eq!(transform.matrix, [0.0, 1.0, 2.0, 0.0]);
+    assert_eq!((transform.width, transform.height), (20.0, 10.0));
+    let shape = &visuals[1];
+    assert_eq!(shape.anchor.from_column_offset, 30);
+    assert_eq!(shape.anchor.to_column_offset, 50);
+    assert_eq!(shape.anchor.from_row_offset, 0);
+    assert_eq!(shape.anchor.to_row_offset, 20);
+    assert_eq!(shape.group_transform.as_ref().unwrap().matrix, transform.matrix);
+    assert!(shape.rotation.is_none());
+}
+
+#[test]
 fn expands_group_chart_children_with_their_part_path() {
     let xml = format!(
         r#"<xdr:wsDr {XDR} xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:grpSp>
               <xdr:nvGrpSpPr><xdr:cNvPr id="1" name="g"/></xdr:nvGrpSpPr>
-              <xdr:grpSpPr><a:xfrm>
+              <xdr:grpSpPr><a:xfrm flipV="1">
                 <a:off x="0" y="0"/><a:ext cx="200" cy="100"/>
                 <a:chOff x="0" y="0"/><a:chExt cx="200" cy="100"/>
               </a:xfrm></xdr:grpSpPr>
               <xdr:graphicFrame>
                 <xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="chart child"/></xdr:nvGraphicFramePr>
-                <xdr:xfrm><a:off x="20" y="30"/><a:ext cx="40" cy="10"/></xdr:xfrm>
+                <xdr:xfrm flipH="true"><a:off x="20" y="30"/><a:ext cx="40" cy="10"/></xdr:xfrm>
+                <a:graphic><a:graphicData><c:chart r:id="rId7"/></a:graphicData></a:graphic>
+              </xdr:graphicFrame>
+              <xdr:graphicFrame>
+                <xdr:nvGraphicFramePr><xdr:cNvPr id="3" name="rotated chart child"/></xdr:nvGraphicFramePr>
+                <xdr:xfrm rot="5400000" flipH="true"><a:off x="20" y="30"/><a:ext cx="40" cy="10"/></xdr:xfrm>
                 <a:graphic><a:graphicData><c:chart r:id="rId7"/></a:graphicData></a:graphic>
               </xdr:graphicFrame>
             </xdr:grpSp></xdr:wsDr>"#
@@ -702,12 +845,14 @@ fn expands_group_chart_children_with_their_part_path() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let relationships = HashMap::from([(
         "rId7".to_owned(),
         Relationship {
             target: "../charts/chart1.xml".to_owned(),
             relationship_type: String::new(),
+            external: false,
         },
     )]);
     let mut visuals = Vec::new();
@@ -724,22 +869,32 @@ fn expands_group_chart_children_with_their_part_path() {
         &relationships,
         &mut visuals,
         0,
+        GroupMapping::default(),
     )
     .unwrap();
-    assert_eq!(visuals.len(), 1);
+    assert_eq!(visuals.len(), 2);
     let child = &visuals[0];
     assert_eq!(child.kind, "chart");
     assert_eq!(child.chart_path.as_deref(), Some("xl/charts/chart1.xml"));
     assert!(child.chart.is_none(), "data is backfilled by read_drawing");
     assert_eq!(child.name.as_deref(), Some("chart child"));
     assert_eq!(child.anchor.from_column_offset, 20);
-    assert_eq!(child.anchor.from_row_offset, 30);
+    assert_eq!(child.anchor.from_row_offset, 60);
     assert_eq!(child.anchor.to_column_offset, 60);
-    assert_eq!(child.anchor.to_row_offset, 40);
+    assert_eq!(child.anchor.to_row_offset, 70);
+    assert!(child.flip_h && child.flip_v);
     assert!(
         child.drawing_index.is_none(),
         "group children are read-only"
     );
+    let rotated = &visuals[1];
+    assert_eq!(rotated.anchor.from_column_offset, 35);
+    assert_eq!(rotated.anchor.to_column_offset, 45);
+    assert_eq!(rotated.anchor.from_row_offset, 45);
+    assert_eq!(rotated.anchor.to_row_offset, 85);
+    let transform = rotated.group_transform.as_ref().unwrap();
+    assert_eq!(transform.matrix, [0.0, 1.0, -1.0, 0.0]);
+    assert_eq!((transform.width, transform.height), (40.0, 10.0));
 }
 
 #[test]
@@ -765,6 +920,7 @@ fn rotated_shape_reports_true_frame_extent() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let visual = shape_visual(
         shape,
@@ -805,6 +961,7 @@ fn text_box_visual(body_pr: &str) -> VisualObject {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: true,
+        absolute: false,
     };
     shape_visual(
         shape,
@@ -864,7 +1021,7 @@ fn maps_data_labels_from_plot_or_series() {
         )
     };
     assert_eq!(
-        metadata(&plot("<c:dLbls><c:showVal val=\"1\"/></c:dLbls>"))
+        metadata(&plot("<c:dLbls><c:showVal/></c:dLbls>"))
             .data_labels
             .as_deref(),
         Some("value")
@@ -884,7 +1041,7 @@ fn maps_data_labels_from_plot_or_series() {
         Some("category-percent")
     );
     assert_eq!(
-        metadata(&plot("<c:dLbls><c:delete val=\"1\"/></c:dLbls>"))
+        metadata(&plot("<c:dLbls><c:delete/><c:showVal val=\"1\"/></c:dLbls>"))
             .data_labels
             .as_deref(),
         Some("none")
@@ -938,8 +1095,8 @@ fn reads_per_point_labels_and_series_label_mode() {
         r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="stacked"/>
 <c:ser><c:idx val="0"/><c:order val="0"/><c:dLbls>
 <c:dLbl><c:idx val="0"/><c:layout><c:manualLayout><c:x val="-3.5074946635165727E-3"/><c:y val="-0.31619290890264545"/></c:manualLayout></c:layout><c:dLblPos val="ctr"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/></c:dLbl>
-<c:dLbl><c:idx val="1"/><c:layout><c:manualLayout><c:x val="5.1730278597851252E-3"/><c:y val="-0.25438597272216551"/></c:manualLayout></c:layout><c:dLblPos val="ctr"/><c:showVal val="1"/></c:dLbl>
-<c:dLbl><c:idx val="2"/><c:delete val="1"/></c:dLbl>
+<c:dLbl><c:idx val="1"/><c:layout><c:manualLayout><c:x val="5.1730278597851252E-3"/><c:y val="-0.25438597272216551"/></c:manualLayout></c:layout><c:dLblPos val="ctr"/><c:showVal/></c:dLbl>
+<c:dLbl><c:idx val="2"/><c:delete/><c:showVal val="1"/></c:dLbl>
 <c:dLbl><c:idx val="3"/><c:layout><c:manualLayout><c:x val="0.01"/><c:y val="-0.1"/></c:manualLayout></c:layout></c:dLbl>
 <c:dLblPos val="ctr"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/></c:dLbls>
 <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>286.08</c:v></c:pt><c:pt idx="1"><c:v>243</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
@@ -1159,8 +1316,8 @@ fn multi_level_categories_use_the_innermost_level_only() {
 }
 
 #[test]
-fn reads_series_line_width_in_px() {
-    let body = r#"<c:plotArea><c:lineChart><c:ser><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></c:spPr></c:ser><c:ser/></c:lineChart></c:plotArea>"#;
+fn reads_series_line_width_in_px_and_preset_dashes() {
+    let body = r#"<c:plotArea><c:lineChart><c:ser><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="dashDot"/></a:ln></c:spPr></c:ser><c:ser/></c:lineChart></c:plotArea>"#;
     let chart = metadata(body);
     // 12700 EMU = 1pt = 4/3 px.
     let width = chart.series[0].line_width.unwrap();
@@ -1169,6 +1326,8 @@ fn reads_series_line_width_in_px() {
     let json = serde_json::to_value(&chart).unwrap();
     assert!(json["series"][0].get("lineWidth").is_some());
     assert!(json["series"][1].get("lineWidth").is_none());
+    assert_eq!(json["series"][0]["lineDash"], "dashDot");
+    assert!(json["series"][1].get("lineDash").is_none());
 }
 
 #[test]
@@ -1638,12 +1797,14 @@ fn blip_fill_shape_never_falls_back_to_style_fill_ref() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: true,
+        absolute: false,
     };
     let relationships = HashMap::from([(
         "rId1".to_owned(),
         Relationship {
             target: "../media/image1.png".to_owned(),
-            relationship_type: String::new(),
+            relationship_type: "image".to_owned(),
+            external: false,
         },
     )]);
     let visual = shape_visual(
@@ -1677,6 +1838,7 @@ fn unit_anchor() -> DrawingAnchor {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: true,
+        absolute: false,
     }
 }
 
@@ -1775,17 +1937,24 @@ fn resolves_style_fill_ref_theme_gradient() {
             <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
             <a:gradFill rotWithShape="1"><a:gsLst>
                 <a:gs pos="0"><a:schemeClr val="phClr"/></a:gs>
+                <a:gs pos="25000"><a:srgbClr val="CB6633"><a:shade val="50000"/></a:srgbClr></a:gs>
+                <a:gs pos="50000"><a:schemeClr val="accent2"/></a:gs>
+                <a:gs pos="75000"><a:sysClr val="windowText"/></a:gs>
                 <a:gs pos="100000"><a:schemeClr val="phClr"><a:tint val="50000"/></a:schemeClr></a:gs>
             </a:gsLst><a:lin ang="16200000" scaled="0"/></a:gradFill>
+            <a:gradFill><a:gsLst>
+                <a:gs pos="0"><a:srgbClr val="0000AA"/></a:gs>
+                <a:gs pos="100000"><a:srgbClr val="AA0000"/></a:gs>
+            </a:gsLst></a:gradFill>
             </a:fillStyleLst>"#;
     let document = Document::parse(theme).unwrap();
-    let fill_styles: Vec<Option<ThemeGradient>> = document
+    let fill_styles = document
         .root_element()
         .children()
         .filter(|node| node.is_element())
-        .map(parse_theme_gradient)
-        .collect();
-    assert!(fill_styles[0].is_none());
+        .map(parse_theme_fill)
+        .collect::<Vec<_>>();
+    assert!(matches!(fill_styles[0], Some(ThemeFill::Solid(_))));
     let colors = ColorContext {
         fill_styles,
         ..theme_colors()
@@ -1795,22 +1964,107 @@ fn resolves_style_fill_ref_theme_gradient() {
             <a:fillRef idx="2"><a:schemeClr val="accent1"/></a:fillRef>
             </xdr:style>"#;
     let document = Document::parse(style).unwrap();
-    let gradient = style_fill_gradient(Some(document.root_element()), &colors).expect("gradient");
+    let gradient = style_fill(Some(document.root_element()), &colors).1.expect("gradient");
     assert_eq!(gradient.angle, 270.0);
-    // accent1 = theme slot 4 = (0x04, 0x22, 0x33); second stop is a 50% tint.
-    assert_eq!(gradient.stops[0].position, 0.0);
-    assert_eq!(gradient.stops[0].color, "#042233");
-    assert_eq!(gradient.stops[1].position, 1.0);
-    assert_eq!(gradient.stops[1].color, "#829199");
+    let stops = gradient
+        .stops
+        .iter()
+        .map(|stop| (stop.position, stop.color.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stops,
+        [
+            (0.0, "#042233"),
+            (0.25, "#66331A"),
+            (0.5, "#052233"),
+            (0.75, "#000000"),
+            (1.0, "#829199"),
+        ]
+    );
 
-    // idx 1 is the solid entry; idx 1001+ (bgFillStyleLst) is out of range.
+    let fixed = style.replace(r#"idx="2"><a:schemeClr val="accent1"/>"#, r#"idx="3">"#);
+    let document = Document::parse(&fixed).unwrap();
+    let gradient = style_fill(Some(document.root_element()), &colors).1.expect("fixed colors");
+    assert_eq!(gradient.stops[0].color, "#0000AA");
+    assert_eq!(gradient.stops[1].color, "#AA0000");
+
+    let reference = style.replace(r#"<a:schemeClr val="accent1"/>"#, r#"<a:srgbClr val="FF0000"/>"#);
+    let document = Document::parse(&reference).unwrap();
+    let gradient = style_fill(Some(document.root_element()), &colors).1.expect("RGB reference");
+    assert_eq!(gradient.stops[0].color, "#FF0000");
+    assert_eq!(gradient.stops[1].color, "#66331A");
+
+    // idx 1 is the solid entry; there is no background list in this fixture.
     for idx in ["1", "1001", "0"] {
         let style = format!(
             r#"<xdr:style xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:fillRef idx="{idx}"><a:schemeClr val="accent1"/></a:fillRef></xdr:style>"#
         );
         let document = Document::parse(&style).unwrap();
-        assert!(style_fill_gradient(Some(document.root_element()), &colors).is_none());
+        assert!(style_fill(Some(document.root_element()), &colors).1.is_none());
     }
+}
+
+#[test]
+fn reads_theme_background_fill_styles_for_shapes() {
+    use std::io::Write;
+
+    let palette = ["lt1", "dk1", "lt2", "dk2", "accent1", "accent2", "accent3", "accent4",
+        "accent5", "accent6", "hlink", "folHlink"]
+        .into_iter()
+        .map(|slot| {
+            let color = if slot == "accent2" { "00CC00" } else { "042233" };
+            format!(r#"<a:{slot}><a:srgbClr val="{color}"/></a:{slot}>"#)
+        })
+        .collect::<String>();
+    let theme = format!(
+        r#"<a:theme {XDR}><a:themeElements><a:clrScheme>{palette}</a:clrScheme>
+          <a:fmtScheme><a:bgFillStyleLst>
+            <a:solidFill><a:srgbClr val="008800"/></a:solidFill>
+            <a:gradFill><a:gsLst>
+              <a:gs pos="0"><a:schemeClr val="phClr"/></a:gs>
+              <a:gs pos="100000"><a:srgbClr val="AA0000"/></a:gs>
+            </a:gsLst></a:gradFill>
+            <a:pattFill prst="pct50"><a:fgClr><a:schemeClr val="phClr"/></a:fgClr>
+              <a:bgClr><a:schemeClr val="accent2"/></a:bgClr></a:pattFill>
+            <a:noFill/>
+          </a:bgFillStyleLst></a:fmtScheme>
+        </a:themeElements></a:theme>"#
+    );
+    let theme_path = "xl/theme/shape-paint.xml";
+    let drawing_path = "xl/drawings/drawing1.xml";
+    let mut writer = zip::ZipWriter::new(tempfile::tempfile().unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    writer.start_file(theme_path, options).unwrap();
+    writer.write_all(theme.as_bytes()).unwrap();
+    writer.start_file(drawing_path, options).unwrap();
+    write!(writer, "<xdr:wsDr {XDR}>").unwrap();
+    for (idx, fill) in [(1001, ""), (1002, ""), (1003, ""), (1004, ""), (1000, ""),
+        (1002, r#"<a:solidFill><a:srgbClr val="010203"/></a:solidFill>"#)] {
+        write!(writer, r#"<xdr:oneCellAnchor>
+          <xdr:from><xdr:col>0</xdr:col><xdr:row>1</xdr:row></xdr:from>
+          <xdr:ext cx="900000" cy="450000"/><xdr:sp>
+            <xdr:spPr><a:prstGeom prst="rect"/>{fill}</xdr:spPr>
+            <xdr:style><a:fillRef idx="{idx}"><a:schemeClr val="accent1"/></a:fillRef></xdr:style>
+          </xdr:sp><xdr:clientData/>
+        </xdr:oneCellAnchor>"#).unwrap();
+    }
+    writer.write_all(b"</xdr:wsDr>").unwrap();
+    let mut archive = ZipArchive::new(writer.finish().unwrap()).unwrap();
+    let colors = read_theme_palette(&mut archive, theme_path).unwrap();
+    let visuals = read_drawing(
+        &mut archive, drawing_path, "sheet1", 0, &colors, &HashSet::new(),
+        &HashMap::new(), &mut SourceFormats::new(Vec::new(), &[]),
+    ).unwrap();
+    assert_eq!(visuals.len(), 6);
+    assert_eq!(visuals[0].fill_color.as_deref(), Some("#008800"));
+    let gradient = visuals[1].fill_gradient.as_ref().expect("background gradient");
+    assert_eq!(gradient.stops[0].color, "#042233");
+    assert_eq!(gradient.stops[1].color, "#AA0000");
+    assert_eq!(visuals[2].fill_color.as_deref(), Some("#027719"));
+    assert_eq!(visuals[3].fill_color.as_deref(), Some("none"));
+    assert_eq!(visuals[4].fill_color.as_deref(), Some("none"));
+    assert_eq!(visuals[5].fill_color.as_deref(), Some("#010203"));
+    assert!(visuals[5].fill_gradient.is_none());
 }
 
 /// A combo chart tags every series with its own plot group: one bar series
@@ -1827,8 +2081,8 @@ fn combo_series_carry_their_plot_group() {
             <c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>Meetings</c:v></c:pt></c:strCache></c:strRef></c:tx><c:marker><c:symbol val="none"/></c:marker>
             <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1858</c:v></c:pt><c:pt idx="1"><c:v>1889</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
             <c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>Deals</c:v></c:pt></c:strCache></c:strRef></c:tx><c:marker><c:symbol val="none"/></c:marker>
-            <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1120</c:v></c:pt><c:pt idx="1"><c:v>1125</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
-            <c:marker val="1"/><c:axId val="1559070815"/><c:axId val="1419985231"/></c:lineChart>
+            <c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1120</c:v></c:pt><c:pt idx="1"><c:v>1125</c:v></c:pt></c:numCache></c:numRef></c:val><c:smooth val="0"/></c:ser>
+            <c:marker val="1"/><c:smooth/><c:axId val="1559070815"/><c:axId val="1419985231"/></c:lineChart>
         <c:catAx><c:axId val="1559191455"/><c:axPos val="b"/><c:crossAx val="1419995791"/></c:catAx>
         <c:valAx><c:axId val="1419995791"/><c:axPos val="l"/><c:crossAx val="1559191455"/></c:valAx>
         <c:valAx><c:axId val="1419985231"/><c:axPos val="r"/><c:crossAx val="1559070815"/></c:valAx>
@@ -1837,6 +2091,9 @@ fn combo_series_carry_their_plot_group() {
     let chart = metadata(combo);
     assert_eq!(chart.chart_types, vec!["barChart", "lineChart"]);
     assert!(chart.secondary_y_axis.is_some());
+    assert_eq!(chart.series[0].smooth, None);
+    assert_eq!(chart.series[1].smooth, Some(true));
+    assert_eq!(chart.series[2].smooth, Some(false));
     let plots = chart
         .series
         .iter()
@@ -2077,7 +2334,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
     let xml = format!(
         r#"<xdr:wsDr {XDR} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:grpSp>
               <xdr:nvGrpSpPr><xdr:cNvPr id="1" name="g"/></xdr:nvGrpSpPr>
-              <xdr:grpSpPr><a:xfrm>
+              <xdr:grpSpPr><a:xfrm flipH="true">
                 <a:off x="0" y="0"/><a:ext cx="200" cy="100"/>
                 <a:chOff x="0" y="0"/><a:chExt cx="100" cy="50"/>
               </a:xfrm></xdr:grpSpPr>
@@ -2086,9 +2343,14 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
                 <xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill>
                 <xdr:spPr><a:xfrm rot="5400000" flipV="1"><a:off x="10" y="10"/><a:ext cx="40" cy="20"/></a:xfrm></xdr:spPr>
               </xdr:pic>
-              <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="S" descr="Grouped box"/></xdr:nvSpPr>
-                <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm>
-                <a:prstGeom prst="rect"/></xdr:spPr></xdr:sp>
+              <xdr:grpSp><xdr:grpSpPr><a:xfrm flipH="1" flipV="true">
+                <a:off x="50" y="5"/><a:ext cx="40" cy="30"/>
+                <a:chOff x="0" y="0"/><a:chExt cx="40" cy="30"/>
+              </a:xfrm></xdr:grpSpPr>
+                <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="S" descr="Grouped box"/></xdr:nvSpPr>
+                  <xdr:spPr><a:xfrm rot="2700000"><a:off x="5" y="2"/><a:ext cx="10" cy="10"/></a:xfrm>
+                  <a:prstGeom prst="rect"/></xdr:spPr></xdr:sp>
+              </xdr:grpSp>
             </xdr:grpSp></xdr:wsDr>"#
     );
     let document = Document::parse(&xml).unwrap();
@@ -2102,6 +2364,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         Relationship {
             target: "../media/image1.png".to_owned(),
             relationship_type: "image".to_owned(),
+            external: false,
         },
     );
     relationships.insert(
@@ -2109,6 +2372,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         Relationship {
             target: "https://example.com".to_owned(),
             relationship_type: "hyperlink".to_owned(),
+            external: false,
         },
     );
     let anchor = DrawingAnchor {
@@ -2121,6 +2385,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         to_row_offset: 0,
         to_column_offset: 0,
         explicit_to: false,
+        absolute: false,
     };
     let mut visuals = Vec::new();
     let mut counter = 0;
@@ -2136,6 +2401,7 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
         &relationships,
         &mut visuals,
         0,
+        GroupMapping::default(),
     )
     .unwrap();
     assert_eq!(visuals.len(), 2);
@@ -2143,13 +2409,22 @@ fn grouped_children_read_alt_text_hyperlink_and_picture_xfrm() {
     assert_eq!(picture.kind, "image");
     assert_eq!(picture.alt_text.as_deref(), Some("Grouped logo"));
     assert_eq!(picture.hyperlink.as_deref(), Some("https://example.com"));
-    assert_eq!(picture.rotation, Some(90.0));
-    assert!(picture.flip_v && !picture.flip_h);
+    assert_eq!(picture.anchor.from_column_offset, 100);
+    assert_eq!(picture.anchor.to_column_offset, 180);
+    assert_eq!(picture.rotation, Some(-90.0));
+    assert!(picture.flip_v && picture.flip_h);
     // Child ext 40x20 in a 2x child space scales to the group's EMU.
     assert_eq!(picture.frame_width, Some(80.0));
     assert_eq!(picture.frame_height, Some(40.0));
     assert!(picture.edit_as.is_none());
-    assert_eq!(visuals[1].alt_text.as_deref(), Some("Grouped box"));
+    let shape = &visuals[1];
+    assert_eq!(shape.alt_text.as_deref(), Some("Grouped box"));
+    assert_eq!(shape.anchor.from_column_offset, 30);
+    assert_eq!(shape.anchor.from_row_offset, 46);
+    assert!(shape.flip_v && !shape.flip_h);
+    assert_eq!(shape.rotation, Some(-45.0));
+    assert_eq!(shape.frame_width, Some(20.0));
+    assert_eq!(shape.frame_height, Some(20.0));
 }
 
 #[test]
@@ -2176,6 +2451,7 @@ fn anchor_properties_read_edit_as_alt_text_hyperlink_and_picture_xfrm() {
         Relationship {
             target: "https://example.com".to_owned(),
             relationship_type: "hyperlink".to_owned(),
+            external: false,
         },
     );
     let mut picture = text_box_visual("");

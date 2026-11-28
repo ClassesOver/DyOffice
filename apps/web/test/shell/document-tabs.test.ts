@@ -1,7 +1,198 @@
 import {expect,test,vi} from 'vitest'
-import {createDocumentTabs} from '../../src/shell/document-tabs'
+import {createDocumentTabs,tabCloseTargets,tabMoveIndex} from '../../src/shell/document-tabs'
 const a={id:'file-a',format:'docx' as const,name:'合同.docx',src:'/native-docx/?fileId=file-a'}
 const b={id:'file-b',format:'xlsx' as const,name:'预算.xlsx',src:'/native-xlsx/?fileId=file-b'}
+const c={id:'file-c',format:'pdf' as const,name:'说明.pdf',src:'/native-pdf/?fileId=file-c'}
+const d={id:'file-d',format:'pptx' as const,name:'汇报.pptx',src:'/native-pptx/?fileId=file-d'}
+
+test('idle sleep preserves the tab and skips dirty, pinned and visible editors',async()=>{
+ let clock=0
+ const tabs=createDocumentTabs({now:()=>clock})
+ for(const file of [a,b,c,d])tabs.open(file)
+ const dirty=vi.fn(()=>false),clean=vi.fn(()=>true),pinned=vi.fn(()=>true),visible=vi.fn(()=>true)
+ tabs.setSleepGuard(a.id,dirty);tabs.setSleepGuard(b.id,clean)
+ tabs.setSleepGuard(c.id,pinned);tabs.setSleepGuard(d.id,visible)
+ tabs.setPinned(c.id,true)
+ expect(await tabs.sleepIdleTabs({maxLiveTabs:1,idleMs:10})).toEqual([])
+ clock=20
+ expect(await tabs.sleepIdleTabs({maxLiveTabs:1,idleMs:10})).toEqual([b.id])
+ expect(tabs.list().find(tab=>tab.id===b.id)?.dormant).toBe(true)
+ expect(tabs.documents()).toEqual([a,b,c,d])
+ expect(tabs.renderedDocuments()).toEqual([a,c,d])
+ expect(pinned).not.toHaveBeenCalled()
+ expect(visible).not.toHaveBeenCalled()
+ tabs.activate(b.id)
+ expect(tabs.list().find(tab=>tab.id===b.id)).toMatchObject({active:true})
+ expect(tabs.list().find(tab=>tab.id===b.id)?.dormant).toBeUndefined()
+ expect(tabs.renderedDocuments()).toEqual([a,b,c,d])
+})
+
+test('selecting a split pane during disposal remounts it after release',async()=>{
+ let clock=0
+ const tabs=createDocumentTabs({now:()=>clock})
+ tabs.open(a);tabs.open(b)
+ let release!:(ok:boolean)=>void
+ tabs.setSleepGuard(a.id,()=>new Promise<boolean>(resolve=>{release=resolve}))
+ const oldGeneration=tabs.renderGeneration(a.id)
+ clock=20
+ const sweep=tabs.sleepIdleTabs({maxLiveTabs:1,idleMs:10})
+ await Promise.resolve()
+ tabs.splitBeside(a.id)
+ release(true)
+ await sweep
+ expect(tabs.splitView()).toEqual({left:b.id,right:a.id})
+ expect(tabs.renderedDocuments()).toEqual([a,b])
+ expect(tabs.renderGeneration(a.id)).not.toBe(oldGeneration)
+})
+
+test('split view loads a second pane and follows selection or closing without unloading drafts',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.restoreEntries([a,b,c],a.id)
+ tabs.splitBeside(b.id)
+ expect(tabs.splitView()).toEqual({left:a.id,right:b.id})
+ expect(tabs.renderedDocuments()).toEqual([a,b])
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe(a.id)
+ tabs.activate(b.id)
+ expect(tabs.splitView()).toEqual({left:a.id,right:b.id})
+ tabs.activate(c.id)
+ expect(tabs.splitView()).toBeNull()
+ expect(tabs.renderedDocuments()).toEqual([a,b,c])
+ tabs.activate('home')
+ tabs.splitBeside(a.id)
+ expect(tabs.splitView()).toEqual({left:'home',right:a.id})
+ tabs.setGuard(a.id,()=>true)
+ await tabs.close(a.id)
+ expect(tabs.splitView()).toBeNull()
+})
+
+test('a tab relocation can be cancelled after the close prompt without removing the source',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.open(a)
+ let permitted=true
+ const dispose=vi.fn()
+ tabs.setGuard(a.id,async canDispose=>{
+  await Promise.resolve()
+  permitted=false
+  if(canDispose&&!canDispose())return false
+  dispose()
+  return true
+ })
+ expect(await tabs.close(a.id,{canDispose:()=>permitted,remember:false})).toBe(false)
+ expect(tabs.documents()).toEqual([a])
+ expect(dispose).not.toHaveBeenCalled()
+ tabs.setGuard(a.id,()=>true)
+ expect(await tabs.close(a.id,{remember:false})).toBe(true)
+ expect(tabs.canReopenClosed()).toBe(false)
+})
+
+test('pinning restores and loads the background editor without reordering or selecting it',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.restoreEntries([a,b,c],a.id,[b.id,'missing'])
+ expect(tabs.list().map(({id,pinned})=>[id,!!pinned])).toEqual([
+  ['home',false],[a.id,false],[b.id,true],[c.id,false],
+ ])
+ expect(tabs.renderedDocuments()).toEqual([a,b])
+ tabs.setPinned(c.id,true)
+ tabs.setPinned(b.id,false)
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe(a.id)
+ expect(tabCloseTargets(tabs.list(),a.id,'closeRight')).toEqual([b.id,c.id])
+ tabs.setGuard(c.id,()=>true)
+ expect(await tabs.close(c.id)).toBe(true)
+ await tabs.reopenClosed(async()=>c)
+ expect(tabs.list().find(tab=>tab.id===c.id)?.pinned).toBeUndefined()
+})
+
+test('relative moves stay between document tabs and leave selection and mounted editors alone',()=>{
+ const tabs=createDocumentTabs()
+ tabs.restoreEntries([a,b,c],a.id)
+ expect(tabMoveIndex(tabs.list(),'home',1)).toBeUndefined()
+ expect(tabMoveIndex(tabs.list(),a.id,-1)).toBeUndefined()
+ expect(tabMoveIndex(tabs.list(),c.id,1)).toBeUndefined()
+ expect(tabMoveIndex(tabs.list(),'missing',-1)).toBeUndefined()
+ tabs.reorder(c.id,tabMoveIndex(tabs.list(),c.id,-1)!)
+ tabs.reorder(a.id,tabMoveIndex(tabs.list(),a.id,1)!)
+ expect(tabs.list().map(tab=>tab.id)).toEqual(['home',c.id,a.id,b.id])
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe(a.id)
+ expect(tabs.renderedDocuments()).toEqual([a])
+})
+
+test('reopen uses the most recently closed document still available and never adds a duplicate',async()=>{
+ const tabs=createDocumentTabs()
+ for(const file of [a,b,c]){
+  tabs.open(file);tabs.setGuard(file.id,()=>true)
+ }
+ await tabs.closeMany([a.id,b.id,c.id])
+ const resolve=vi.fn(async id=>{
+  if(id===c.id)throw Object.assign(Error('trashed'),{status:404})
+  return id===b.id?{...b,name:'Renamed.xlsx'}:a
+ })
+ expect(tabs.canReopenClosed()).toBe(true)
+ await tabs.reopenClosed(resolve)
+ expect(resolve.mock.calls.map(([id])=>id)).toEqual([c.id,b.id])
+ expect(tabs.documents()).toEqual([{...b,name:'Renamed.xlsx'}])
+ tabs.open(a)
+ expect(tabs.canReopenClosed()).toBe(false)
+})
+
+test('cancelled and citation closes stay out of reopen history, while transient failures keep the entry',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.open({...a,sourceRevision:'r1'});tabs.setGuard(a.id,()=>true)
+ await tabs.close(a.id)
+ tabs.open(b);tabs.setGuard(b.id,()=>false)
+ await tabs.close(b.id)
+ expect(tabs.canReopenClosed()).toBe(false)
+ tabs.setGuard(b.id,()=>true);await tabs.close(b.id)
+ await expect(tabs.reopenClosed(async()=>{throw Object.assign(Error('busy'),{status:503})})).rejects.toThrow('busy')
+ expect(tabs.canReopenClosed()).toBe(true)
+ await tabs.reopenClosed(async()=>b)
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe(b.id)
+})
+
+test('an in-flight reopen respects a newer tab selection and retains its history entry',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.open(a);tabs.setGuard(a.id,()=>true);await tabs.close(a.id)
+ let finish!:(file:typeof a)=>void
+ const resolve=vi.fn(()=>new Promise<typeof a>(done=>{finish=done}))
+ const reopening=tabs.reopenClosed(resolve)
+ await Promise.resolve()
+ tabs.open(b);finish(a)
+ await reopening
+ expect(tabs.documents()).toEqual([b])
+ expect(tabs.canReopenClosed()).toBe(true)
+})
+
+test('bulk close targets follow tab order and exclude Home',()=>{
+ const tabs=createDocumentTabs()
+ tabs.restoreEntries([a,b,c,d],a.id)
+ tabs.reorder(d.id,2)
+ expect(tabCloseTargets(tabs.list(),d.id,'closeRight')).toEqual([b.id,c.id])
+ expect(tabCloseTargets(tabs.list(),d.id,'closeOthers')).toEqual([a.id,b.id,c.id])
+ expect(tabCloseTargets(tabs.list(),d.id,'closeAll')).toEqual([a.id,d.id,b.id,c.id])
+ expect(tabCloseTargets(tabs.list(),'missing','closeRight')).toEqual([])
+})
+
+test('batch close stops at the first refused editor and leaves later tabs untouched',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.open(a);tabs.open(b);tabs.open(c)
+ const closeOrder:string[]=[]
+ tabs.setGuard(a.id,()=>{closeOrder.push(a.id);return true})
+ tabs.setGuard(b.id,()=>{closeOrder.push(b.id);return false})
+ tabs.setGuard(c.id,()=>{closeOrder.push(c.id);return true})
+ await tabs.closeMany([a.id,b.id,c.id])
+ expect(closeOrder).toEqual([a.id,b.id])
+ expect(tabs.list().map(tab=>tab.id)).toEqual(['home',b.id,c.id])
+})
+
+test('closing all skips missing tabs and never mounts dormant editors',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.restoreEntries([a,b,c],a.id)
+ const renders:string[][]=[]
+ tabs.subscribe(()=>renders.push(tabs.renderedDocuments().map(tab=>tab.id)))
+ tabs.setGuard(a.id,async()=>true)
+ await tabs.closeMany(['home','missing',a.id,b.id,c.id])
+ expect(renders.flat()).toEqual([])
+ expect(tabs.list()).toEqual([{id:'home',kind:'home',title:'首页',closable:false,active:true}])
+})
 
 test('a citation only reuses a mounted editor if it proves that it displays the cited saved revision',()=>{
  let displayed:string|undefined
@@ -223,4 +414,37 @@ test('activating a restored entry retains already mounted editors and does not r
  tabs.setGuard(a.id,()=>false);tabs.activate(b.id)
  expect(tabs.renderedDocuments()).toEqual([a,b]);expect(await tabs.close(a.id)).toBe(false)
  expect(()=>tabs.restoreEntries([b],'home')).toThrow()
+})
+
+test('workspace restore mounts both split panes while keeping unrelated tabs dormant',()=>{
+ const tabs=createDocumentTabs()
+ const layout={left:a.id,right:b.id,width:65}
+ tabs.restoreEntries([a,b,c],b.id,[],layout)
+ expect(tabs.splitView()).toEqual(layout)
+ expect(tabs.renderedDocuments().map(file=>file.id)).toEqual([a.id,b.id])
+ tabs.resizeSplit(80)
+ expect(tabs.splitView()).toEqual(layout)
+ tabs.resizeSplit(55)
+ expect(tabs.splitView()?.width).toBe(55)
+ tabs.activate(c.id)
+ expect(tabs.splitView()).toBeNull()
+})
+
+test('swapping the two panes preserves the active tab, divider and mounted documents',()=>{
+ const tabs=createDocumentTabs()
+ tabs.restoreEntries([a,b],a.id)
+ tabs.splitBeside(b.id)
+ tabs.resizeSplit(65)
+ tabs.swapSplit()
+ expect(tabs.splitView()).toEqual({left:b.id,right:a.id,width:65})
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe(a.id)
+ expect(tabs.renderedDocuments()).toEqual([a,b])
+ tabs.endSplit()
+ tabs.swapSplit()
+ expect(tabs.splitView()).toBeNull()
+
+ const fresh=createDocumentTabs()
+ fresh.restoreEntries([a,b],a.id,[],{left:a.id,right:'home',width:55})
+ expect(fresh.splitView()).toEqual({left:a.id,right:'home',width:55})
+ expect(fresh.renderedDocuments()).toEqual([a])
 })

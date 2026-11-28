@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { applyPrintAreas } from '../src/gateway/xlsx-page-setup'
 import { renameSheetReferencesInDefinedNames } from '../src/gateway/xlsx-sheets'
 import { shiftDefinedNames, StructuralShiftError } from '../src/gateway/xlsx-structure'
 
@@ -10,6 +11,36 @@ function workbook(names: string): string {
 }
 
 describe('workbook print names through structural edits', () => {
+  it('renames and shifts only names in the workbook namespace', () => {
+    const foreignSection = '<e:definedNames><e:definedName>Data!$A$1</e:definedName></e:definedNames>'
+    const foreignName = '<e:definedName name="Foreign">Data!$B$2</e:definedName>'
+    const input = `<workbook xmlns="${NS}" xmlns:e="urn:example">${foreignSection}<definedNames>${foreignName}<definedName name="Actual">Data!$C$3</definedName></definedNames></workbook>`
+    const renamed = renameSheetReferencesInDefinedNames(input, 'Data', 'Renamed')
+    const shifted = shiftDefinedNames(renamed, 'Renamed', [{ kind: 'insert-rows', index: 0, count: 1 }])
+    expect(shifted).toBe(input.replace('Data!$C$3', 'Renamed!$C$4'))
+  })
+
+  it('updates only workbook print settings and preserves the actual title columns', () => {
+    const foreignTitles = '<e:definedName name="_xlnm.Print_Titles" localSheetId="0">Data!$Z:$Z</e:definedName>'
+    const foreignArea = '<e:definedName name="_xlnm.Print_Area" localSheetId="0">Data!$A$88</e:definedName>'
+    const actual = '<s:definedName name="_xlnm.Print_Titles" localSheetId="0">Data!$A:$B</s:definedName>'
+    const input = `<s:workbook xmlns:s="${NS}" xmlns:e="urn:example"><s:sheets><s:sheet name="Data"/></s:sheets><s:definedNames>${foreignTitles}${foreignArea}${actual}</s:definedNames></s:workbook>`
+    expect(applyPrintAreas(input, [{ sheetName: 'Data', printTitles: '2:3', printArea: 'A1:B4' }])).toBe(
+      input.replace(actual, actual.replace('Data!$A:$B', "'Data'!$A:$B,'Data'!$2:$3") +
+        `<s:definedName name="_xlnm.Print_Area" localSheetId="0">'Data'!$A$1:$B$4</s:definedName>`),
+    )
+  })
+
+  it('adds and clears a workbook print area independently of a foreign names section', () => {
+    const sheets = '<s:sheets><s:sheet name="Data"/></s:sheets>'
+    const foreign = '<e:definedNames><e:definedName name="_xlnm.Print_Area" localSheetId="0">Data!$A$88</e:definedName></e:definedNames>'
+    const input = `<s:workbook xmlns:s="${NS}" xmlns:e="urn:example">${sheets}${foreign}</s:workbook>`
+    const saved = applyPrintAreas(input, [{ sheetName: 'Data', printArea: 'A1' }])
+    expect(saved).toBe(input.replace(sheets, sheets +
+      `<s:definedNames><s:definedName name="_xlnm.Print_Area" localSheetId="0">'Data'!$A$1</s:definedName></s:definedNames>`))
+    expect(applyPrintAreas(saved, [{ sheetName: 'Data', printArea: null }])).toBe(input)
+  })
+
   it('shifts aliased print areas and both print title axes', () => {
     const input = workbook(
       `<s:definedName localSheetId='0' name='_xlnm.Print_Area'>'Data'!$B$2:$D$3</s:definedName>` +

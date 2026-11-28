@@ -7,6 +7,7 @@ import {fileFixture,importFile} from '../helpers/files.mjs'
 import {createLeaseService} from '../../server/src/modules/leases/service.ts'
 import {createRevisionService} from '../../server/src/modules/revisions/service.ts'
 import {createPdfService} from '../../server/src/modules/pdf/service.ts'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 
 test('PDF extraction creates one replayable new file and preserves the authorized source',async t=>{
  const f=await fileFixture(t,{buildApp:false}),doc=await PDFDocument.create()
@@ -19,11 +20,18 @@ test('PDF extraction creates one replayable new file and preserves the authorize
  const note=await pdf.stageAnnotate(f.alice.token,initial.fileId,{...authority,baseRevision:initial.revision,operations:[{page:3,text:'Three',type:'note',contents:'Keep this comment.'}]})
  const source=await revisions.commitRevision(f.alice.token,note.commitInput)
  const original=await f.files.readFile(f.alice.token,initial.fileId,source.revision)
- const input={...authority,baseRevision:source.revision,pages:[3,1],name:'selected.pdf'}
+ const workspace=createWorkspaceService(f.transactions)
+ const folder=await workspace.createFolder(f.alice.token,{name:'Extracted pages',parentId:null})
+ const other=await workspace.createFolder(f.bob.token,{name:'Private pages',parentId:null})
+ const input={...authority,baseRevision:source.revision,pages:[3,1],name:'selected.pdf',folderId:folder.id}
  await assert.rejects(pdf.stageExtractPages(f.bob.token,initial.fileId,input),error=>error.statusCode===404)
  await assert.rejects(pdf.stageExtractPages(f.alice.token,initial.fileId,{...input,leaseEpoch:lease.leaseEpoch+1}),error=>error.statusCode===409)
  await assert.rejects(pdf.stageExtractPages(f.alice.token,initial.fileId,{...input,baseRevision:initial.revision}),error=>error.statusCode===409)
  await assert.rejects(pdf.stageExtractPages(f.alice.token,initial.fileId,{...input,pages:[4]}),error=>error.statusCode===400)
+ await assert.rejects(pdf.stageExtractPages(f.alice.token,initial.fileId,{...input,folderId:other.id}),{statusCode:404})
+ await assert.rejects(pdf.stagePageLayout(f.alice.token,initial.fileId,{
+  ...authority,baseRevision:source.revision,operation:{kind:'split',perPage:2},folderId:other.id,
+ }),{statusCode:404})
  const cancelled=new AbortController();cancelled.abort()
  await assert.rejects(pdf.stageExtractPages(f.alice.token,initial.fileId,input,cancelled.signal))
  const prepared=await pdf.stageExtractPages(f.alice.token,initial.fileId,input)
@@ -35,6 +43,7 @@ test('PDF extraction creates one replayable new file and preserves the authorize
  assert.equal(created.file.fileId,prepared.fileId)
  assert.equal(created.file.sha256,prepared.sha256)
  assert.equal(created.file.size,prepared.size)
+ assert.deepEqual((await workspace.listFiles(f.alice.token,{folderId:folder.id})).files.map(file=>file.name),['selected.pdf'])
  const bytes=await f.files.readFile(f.alice.token,created.file.fileId,created.file.revision)
  const task=getDocument({data:Uint8Array.from(bytes),disableFontFace:true,useSystemFonts:true})
  try{

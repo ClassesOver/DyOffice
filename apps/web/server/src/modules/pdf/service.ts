@@ -38,9 +38,12 @@ import type { createFileService } from '../files/service.ts'
 import type { createLeaseService } from '../leases/service.ts'
 import type { createRevisionService } from '../revisions/service.ts'
 import { authError } from '../auth/sessions.ts'
+import { validateFileName } from '../files/validation-core.ts'
 import {createPdfOcr} from '../../pdf/ocr.ts'
 import { inspectPdf } from '../../pdf/capabilities.mjs'
 import {createIsolatedPdfSignaturesQueryJob,pdfSignatureSafetyCodes} from '../../pdf/signatures-query.mjs'
+import {createIsolatedPdfOfficeConversionJob,pdfOfficeConversionCodes,type PdfOfficeConversion} from '../../pdf/convert-office-job.mjs'
+import {createIsolatedPdfReductionJob,isUnchangedPdfReduction,pdfReductionSafetyCodes} from '../../pdf/reduce-size-job.mjs'
 import type {PdfSignatureInfo} from '../../../../../pdf/src/shared/ipc.ts'
 import { createPdfRotationJob } from '../../pdf/rotation-job.mjs'
 import { createPdfSavePreparation } from '../../pdf/save-preparation.mjs'
@@ -113,17 +116,26 @@ export interface PdfPageOpsUploadInput extends Omit<PdfUploadInput,'operations'>
 export interface PdfExtractPagesInput extends Omit<PdfUploadInput,'operations'|'idempotencyKey'> {
   pages:readonly number[]
   name?:string
+  folderId?:string
 }
 
-export interface PdfSplitInput extends Omit<PdfExtractPagesInput,'pages'|'name'> {pagesPerFile:number}
+export interface PdfSplitInput extends Omit<PdfExtractPagesInput,'pages'> {pagesPerFile:number}
 
-export interface PdfPageLayoutInput extends Omit<PdfExtractPagesInput,'pages'|'name'> {operation:PdfPageLayoutOperation}
+export interface PdfPageLayoutInput extends Omit<PdfExtractPagesInput,'pages'> {operation:PdfPageLayoutOperation}
 
 export interface PdfApplyOpsUploadInput {baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string;snapshot:unknown}
 export interface PdfDraftInsertsUploadInput {baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string;operation:PdfDraftInserts}
 export type PdfRedactedCopyInput={baseRevision:string;editorId:string;leaseEpoch:number;name?:string}&
  ({patterns?:PdfRedactPattern[];ids:string[];regions?:never}|{regions:unknown;ids?:never;patterns?:never})
 export interface PdfReplacePagesInput {baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string;pages?:number[];afterPageIndex?:number}
+function validatePdfCopyName(name:string|undefined) {
+  if(name!==undefined&&validateFileName(name)!=='pdf')throw authError(400)
+}
+function appendPdfCopySuffix(name:string,suffix:string) {
+  const stem=Array.from(name.replace(/\.pdf$/i,''))
+  while(Buffer.byteLength(stem.join('')+suffix)>255)stem.pop()
+  return stem.join('')+suffix
+}
 /** HTTP errors pass through; known job safety codes become 400 with that detail; anything else is a 500. */
 function mapJobError(error:unknown,safetyCodes:ReadonlySet<string>,failDetail:string):never{
   if((error as {statusCode?:number})?.statusCode)throw error
@@ -142,6 +154,9 @@ export function createPdfService({
   revisions: Revisions
 }) {
   const recognizeOcr = createPdfOcr()
+  const officeConversion = createIsolatedPdfOfficeConversionJob()
+  const reduction = createIsolatedPdfReductionJob()
+  let convertingOffice = false
   const processor = createPdfRotationJob()
   const preparation = createPdfSavePreparation({ files, leases, revisions, processor })
   // Shared by the stage* methods: run the pinned save preparation and map job failures.
@@ -151,12 +166,12 @@ export function createPdfService({
     catch(error){mapJobError(error,safetyCodes,failDetail)}
   }
   /** Read-only job over the exact pinned revision: verify source and output binding, then re-check freshness. */
-  async function runPinnedQuery(token:string,fileId:string,revision:string,job:{execute(bytes:Buffer,raw:string,signal?:AbortSignal):Promise<{bytes:Buffer;inputSha256:string;size:number;sha256:string}>},raw:string,signal?:AbortSignal):Promise<Buffer>{
+  async function runPinnedQuery(token:string,fileId:string,revision:string,job:{execute(bytes:Buffer,raw:string,signal?:AbortSignal):Promise<{bytes:Buffer;inputSha256:string;size:number;sha256:string}>},raw:string,signal?:AbortSignal,maxBytes?:number):Promise<Buffer>{
     const check=()=>signal?.throwIfAborted()
     check();const current=await files.openFile(token,fileId);check()
     if(current.format!=='pdf')throw authError(415)
     if(current.file.revision!==revision)throw authError(409)
-    const source=await files.download(token,fileId,revision);check()
+    const source=await files.download(token,fileId,revision,maxBytes,signal);check()
     const inputSha256=createHash('sha256').update(source.bytes).digest('hex')
     if(source.format!=='pdf'||current.file.sha256!==inputSha256)throw authError(409)
     const result=await job.execute(source.bytes,raw,signal);check()
@@ -195,6 +210,7 @@ export function createPdfService({
 
   return {
     async stageSplit(token:string,fileId:string,input:PdfSplitInput,signal?:AbortSignal){
+      validatePdfCopyName(input.name)
       let pagesPerFile:number
       try{pagesPerFile=validatePdfSplitSize(input.pagesPerFile)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
@@ -222,9 +238,9 @@ export function createPdfService({
         if(after.file.sha256!==inputSha256)throw authError(409)
         const prepared=[]
         for(let index=0;index<result.files.length;index++){
-          const output=result.files[index]!,name=`${source.name.replace(/\.pdf$/i,'').slice(0,230)}-part-${index+1}.pdf`
+          const output=result.files[index]!,name=appendPdfCopySuffix(input.name??source.name,`-${input.name===undefined?'part-':''}${index+1}.pdf`)
           check()
-          const upload=await files.stageUpload(token,{name,size:output.size});uploads.push(upload);check()
+          const upload=await files.stageUpload(token,{name,size:output.size,...(input.folderId===undefined?{}:{folderId:input.folderId})});uploads.push(upload);check()
           await files.receiveUpload(token,upload.uploadId,output.bytes);check()
           prepared.push({uploadId:upload.uploadId,fileId:upload.fileId,sha256:output.sha256,size:output.size})
         }
@@ -241,6 +257,7 @@ export function createPdfService({
       }
     },
     async stagePageLayout(token:string,fileId:string,input:PdfPageLayoutInput,signal?:AbortSignal){
+      validatePdfCopyName(input.name)
       let operation:PdfPageLayoutOperation
       try{operation=validatePdfPageLayout(input.operation)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
@@ -266,8 +283,8 @@ export function createPdfService({
         if(!Buffer.isBuffer(result.bytes)||result.bytes.length<1||result.bytes.length>64*1024*1024||result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw new Error('PDF_OUTPUT_BINDING')
         const after=await authorize()
         if(after.file.sha256!==inputSha256)throw authError(409)
-        const name=`${source.name.replace(/\.pdf$/i,'').slice(0,230)}-${operation.kind==='split'?'split-pages':'merged-pages'}.pdf`
-        upload=await files.stageUpload(token,{name,size:result.size});check()
+        const name=input.name??appendPdfCopySuffix(source.name,operation.kind==='split'?'-split-pages.pdf':'-merged-pages.pdf')
+        upload=await files.stageUpload(token,{name,size:result.size,...(input.folderId===undefined?{}:{folderId:input.folderId})});check()
         await files.receiveUpload(token,upload.uploadId,result.bytes);check()
         const final=await authorize()
         if(final.file.sha256!==inputSha256)throw authError(409)
@@ -284,7 +301,7 @@ export function createPdfService({
     async stageExtractPages(token:string,fileId:string,input:PdfExtractPagesInput,signal?:AbortSignal){
       let pages:readonly number[]
       try{pages=validatePdfExtractPages(input.pages)}catch{throw authError(400)}
-      if(input.name!==undefined&&(typeof input.name!=='string'||!input.name.trim()||input.name.length>255||!input.name.toLowerCase().endsWith('.pdf')))throw authError(400)
+      validatePdfCopyName(input.name)
       const check=()=>signal?.throwIfAborted()
       const authorize=async()=>{
         check()
@@ -308,8 +325,8 @@ export function createPdfService({
         if(!Buffer.isBuffer(result.bytes)||result.bytes.length<1||result.bytes.length>64*1024*1024||result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw new Error('PDF_OUTPUT_BINDING')
         const after=await authorize()
         if(after.file.sha256!==inputSha256)throw authError(409)
-        const name=input.name?.trim()||`${source.name.replace(/\.pdf$/i,'').slice(0,240)}-pages.pdf`
-        upload=await files.stageUpload(token,{name,size:result.size});check()
+        const name=input.name??appendPdfCopySuffix(source.name,'-pages.pdf')
+        upload=await files.stageUpload(token,{name,size:result.size,...(input.folderId===undefined?{}:{folderId:input.folderId})});check()
         await files.receiveUpload(token,upload.uploadId,result.bytes);check()
         const final=await authorize()
         if(final.file.sha256!==inputSha256)throw authError(409)
@@ -681,6 +698,54 @@ export function createPdfService({
         }
         throw error
       }
+    },
+
+    async reduceSize(token:string,fileId:string,revision:string,signal:AbortSignal){
+      try{
+        const bytes=await runPinnedQuery(token,fileId,revision,reduction,
+          JSON.stringify({version:1,action:'reduceSize',operations:[]}),signal,64*1024*1024)
+        return isUnchangedPdfReduction(bytes)?Buffer.alloc(0):bytes
+      }catch(error){
+        signal.throwIfAborted()
+        if((error as {code?:string})?.code==='BUSY')throw Object.assign(authError(429),{retryAfter:1})
+        mapJobError(error,pdfReductionSafetyCodes,'PDF_REDUCTION_FAILED')
+      }
+    },
+
+    async convertOffice(token:string,fileId:string,{revision,format,password,snapshot}:PdfOfficeConversion&{revision:string;snapshot?:unknown},signal:AbortSignal){
+      if(convertingOffice)throw Object.assign(authError(429),{retryAfter:1})
+      convertingOffice=true
+      try{
+        const maxBytes=32*1024*1024
+        let bytes:Buffer
+        let name:string|undefined
+        if(snapshot!==undefined){
+          const draft=validatePdfApplySnapshot(snapshot)
+          if(draft.fileId!==fileId||draft.baseRevision!==revision||password!==undefined)throw authError(400)
+          try{
+            bytes=await runPinnedQuery(token,fileId,revision,createIsolatedPdfApplyOpsQueryJob(),
+              JSON.stringify({version:1,action:'applyOpsQuery',snapshot:draft}),signal,maxBytes)
+          }catch(error){mapJobError(error,pdfApplyOpsSafetyCodes,'PDF_CONVERSION_DRAFT_FAILED')}
+          if(format==='html')name=(await files.openFile(token,fileId)).name
+        }else{
+          const source=await files.download(token,fileId,revision,maxBytes,signal)
+          if(source.format!=='pdf')throw authError(415)
+          bytes=source.bytes
+          if(format==='html')name=source.name
+        }
+        const title=name?.replace(/\.pdf$/i,'')
+        const raw=JSON.stringify({version:1,action:'convertOffice',operation:{format,password,title}})
+        const result=await officeConversion.execute(bytes,raw,signal)
+        await files.assertReadableRevision(token,fileId,revision,signal)
+        if(snapshot!==undefined&&(await files.openFile(token,fileId)).file.revision!==revision)throw authError(409)
+        signal.throwIfAborted()
+        return result.bytes
+      }catch(error){
+        signal.throwIfAborted()
+        const code=(error as {code?:string})?.code
+        if(snapshot!==undefined&&code&&pdfApplyOpsSafetyCodes.has(code))throw authError(400)
+        mapJobError(error,pdfOfficeConversionCodes,'PDF_OFFICE_CONVERSION_FAILED')
+      }finally{convertingOffice=false}
     },
 
     async querySignatures(token:string,fileId:string,revision:string,signal?:AbortSignal):Promise<{revision:string;signatures:PdfSignatureInfo[]}>{

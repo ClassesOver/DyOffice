@@ -111,4 +111,14 @@ describe('parseSheetElements decoding', () => {
       '<workbook><sheets><sheet r:id="rId7" sheetId="1" name="S"/></sheets></workbook>'
     expect(parseSheetElements(workbookXml)[0]?.relationshipId).toBe('rId7')
   })
+
+  it('resolves worksheet relationship attributes by the nearest namespace binding', () => {
+    const relationship = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const workbookXml = `<workbook xmlns:p="${relationship}"><sheets xmlns:r="urn:extension">` +
+      '<sheet r:id="foreign" name="A" sheetId="1" p:id = \'rId7\'/>' +
+      `<sheet xmlns:p="urn:extension" xmlns:q="${relationship}" p:id="foreign" q:id="rId8" name="B" sheetId="2"/>` +
+      '<sheet r:id="foreign" name="C" sheetId="3"/>' +
+      '</sheets></workbook>'
+    expect(parseSheetElements(workbookXml).map(({ relationshipId }) => relationshipId)).toEqual(['rId7', 'rId8', undefined])
+  })
 })

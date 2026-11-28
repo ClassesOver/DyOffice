@@ -725,24 +725,49 @@ function pictureTargetReady(ctx: VisualActionContext): boolean {
   return true
 }
 
+type PicturePlacement = PictureAnchor & { sheetId: string }
+
+function picturePlacement(ctx: VisualActionContext, anchor: PictureAnchor | null): PicturePlacement | null {
+  const workbook = ctx.univerRef.current?.univerAPI.getActiveWorkbook()
+  const worksheet = workbook?.getActiveSheet()
+  const range = workbook?.getActiveRange()
+  if (!worksheet || !range) {
+    ctx.setMessage(t('appSelectCellFirst'))
+    return null
+  }
+  return {
+    sheetId: worksheet.getSheetId(),
+    row: anchor?.row ?? range.getRow(),
+    column: anchor?.column ?? range.getColumn(),
+  }
+}
+
 /// Shared by the file picker, clipboard paste and drag-and-drop: validates
 /// the file, measures it and anchors the picture at `anchor` (or the active
 /// cell).
 export function handleInsertPictureFile(
   ctx: VisualActionContext,
-  file: File,
+  input: File | (() => Promise<File | null>),
   anchor: PictureAnchor | null = null,
 ): void {
   if (!pictureTargetReady(ctx)) return
-  const problem = pictureFileProblem(file)
-  if (problem) {
-    ctx.setMessage(t(problem === 'too-large' ? 'appPictureTooLarge' : 'appPictureBadType'))
-    return
-  }
   const state = ctx.lazyWorkbookRef.current
   if (!state || !admitMutation(state.editJournal, ctx.setMessage)) return
-  const mediaType = pictureMediaType(file.type)
+  const placement = picturePlacement(ctx, anchor)
+  if (!placement) return
   void mutationAdmission(state.editJournal).run(async () => {
+    const file = typeof input === 'function' ? await input() : input
+    if (ctx.lazyWorkbookRef.current !== state) return
+    if (!file) {
+      ctx.setMessage(t('appPictureBadType'))
+      return
+    }
+    const problem = pictureFileProblem(file)
+    if (problem) {
+      ctx.setMessage(t(problem === 'too-large' ? 'appPictureTooLarge' : 'appPictureBadType'))
+      return
+    }
+    const mediaType = pictureMediaType(file.type)
     const dataUrl = await new Promise<string | null>((resolve) => {
       const reader = new FileReader()
       reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
@@ -759,7 +784,7 @@ export function handleInsertPictureFile(
     })
     if (ctx.lazyWorkbookRef.current !== state) return
     mutationAdmission(state.editJournal).assertWritable()
-    insertPictureVisual(ctx, dataUrl, mediaType, file.name, size.width, size.height, anchor)
+    insertPictureVisual(ctx, dataUrl, mediaType, file.name, size.width, size.height, placement)
   }).catch((error) => ctx.setMessage(error instanceof Error ? error.message : String(error)))
 }
 
@@ -875,23 +900,14 @@ function insertPictureVisual(
   fileName: string,
   naturalWidth: number,
   naturalHeight: number,
-  anchor: PictureAnchor | null = null,
+  placement = picturePlacement(ctx, null),
 ): void {
   const runtime = ctx.univerRef.current
   const state = ctx.lazyWorkbookRef.current
-  if (!runtime || !state) return
-  const workbook = runtime.univerAPI.getActiveWorkbook()
-  const worksheet = workbook?.getActiveSheet()
-  const range = workbook?.getActiveRange()
-  if (!workbook || !worksheet || !range) {
-    ctx.setMessage(t('appSelectCellFirst'))
-    return
-  }
-  const sheetId = worksheet.getSheetId()
+  if (!runtime || !state || !placement) return
+  const { sheetId, row, column } = placement
   if (isSheetRemoved(state.editJournal, sheetId)) return
   const { columns, rows } = fitPictureFrame(naturalWidth, naturalHeight)
-  const row = anchor?.row ?? range.getRow()
-  const column = anchor?.column ?? range.getColumn()
   const visual: WorkbookVisualObject = {
     id: `added-image-${Date.now().toString(36)}-${state.editJournal.visualAdds.length + 1}`,
     sheetId,

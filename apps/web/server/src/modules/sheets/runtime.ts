@@ -39,9 +39,9 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   const createGatewayProcess=nodeEngine ? createCrossPlatformProcess : createCalculationProcess
   const execSha=await executableHash(process.execPath,160*1024*1024)
   const allowedEngineCommands=['open','close','read_range','read_formula_cells','read_row_outline','read_media','find_cells','recalc_cells','save_archive'] as const
-  const calculationCommands=['open','close','recalc_cells','refresh_bound_external_links'] as const
+  const calculationCommands=['open','close','recalc_cells','refresh_bound_external_links','convert_legacy_xls', 'convert_odf_spreadsheet'] as const
   const rustSandbox=rust&&createCalculationProcess({...rust,deploymentId,
-    allowedCommands:nodeEngine?calculationCommands:[...allowedEngineCommands,'refresh_bound_external_links'],
+    allowedCommands:nodeEngine?calculationCommands:[...allowedEngineCommands,'refresh_bound_external_links','convert_legacy_xls', 'convert_odf_spreadsheet'],
   })
   const sandbox=nodeEngine
     ? createCrossPlatformProcess({binary:process.execPath,sha256:execSha,deploymentId,script:{path:resolve(nodeEngine),sha256:await executableHash(resolve(nodeEngine),32*1024*1024)},allowedCommands:allowedEngineCommands})
@@ -77,6 +77,10 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
       recalculate:refresh?.recalculate ?? (!nodeEngine ? native.recalculate : undefined),
       refreshExternalLinks:refresh?.refreshExternalLinks,
       convertMergeSource:gateway.convertMergeSource,
+      convertCsvImport:gateway.convertCsvImport,
+      convertTsvImport:gateway.convertTsvImport,
+      convertLegacyXls:refresh?.convertLegacyXls,
+      convertOdfSpreadsheet:refresh?.convertOdfSpreadsheet,
     },sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsWorkbookPlanner:gateway.planFromWorkbook,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
     nativeSheetsDirectory:resolve(environment.DYOFFICE_NATIVE_XLSX_DIRECTORY ?? fileURLToPath(new URL('../../../../dist-sheets/',import.meta.url))),
     async close(){controller.abort();await Promise.allSettled([...active])},

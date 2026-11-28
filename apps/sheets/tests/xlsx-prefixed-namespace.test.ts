@@ -13,7 +13,7 @@ import {
   ensureRelationshipNamespace,
   normalizeOoxmlPartPrefix,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-namespace'
-import { maxRelationshipId, parseSheetElements } from '@genoffice/xlsx-gateway/gateway/xlsx-sheets'
+import { maxRelationshipId, parseSheetElements, removeRelationshipById } from '@genoffice/xlsx-gateway/gateway/xlsx-sheets'
 
 const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -86,6 +86,45 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
   })
 
+  it('uses the existing equivalent default namespace for prefixed elements', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}" xmlns="${MAIN_NS}"><x:sheetData><row/></x:sheetData></x:worksheet>`
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toContain('<sheetData><row/></sheetData></worksheet>')
+    expect(normalized.match(/\bxmlns=/g)).toHaveLength(1)
+  })
+
+  it('normalizes aliases of the default namespace and preserves foreign prefixes', () => {
+    const xml = `<worksheet xmlns="${MAIN_NS}" xmlns:sheet-data="${MAIN_NS}" xmlns:ext="urn:ext">` +
+      '<sheet-data:sheetData><row><sheet-data:c ext:flag="1"/></row></sheet-data:sheetData><ext:c/></worksheet>'
+    expect(normalizeOoxmlPartPrefix(xml)).toContain('<sheetData><row><c ext:flag="1"/></row></sheetData><ext:c/></worksheet>')
+  })
+
+  it('uses a locally declared alias throughout its scope and respects local rebindings', () => {
+    const xml = `<worksheet xmlns="${MAIN_NS}" xmlns:s="urn:foreign">` +
+      `<s:sheetData xmlns:s="${MAIN_NS}"><s:row><s:c/><s:c xmlns:s="urn:foreign"/></s:row></s:sheetData>` +
+      '<s:c/></worksheet>'
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<sheetData xmlns:s="${MAIN_NS}"><row><c/><s:c xmlns:s="urn:foreign"/></row></sheetData><s:c/>`,
+    )
+  })
+
+  it('preserves the scope of a nested equivalent default namespace', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><custom>` +
+      `<x:sheetData xmlns="${MAIN_NS}"><row/></x:sheetData><other/></custom></x:worksheet>`
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<custom xmlns=""><sheetData xmlns="${MAIN_NS}"><row/></sheetData><other/></custom>`,
+    )
+  })
+
+  it('keeps foreign and empty default namespaces while normalizing SpreadsheetML elements', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><x:ext xmlns='urn:foreign'>` +
+      '<item><x:tag/><bare xmlns=""/></item></x:ext><x:sheetData/></x:worksheet>'
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<ext xmlns="${MAIN_NS}"><item xmlns="urn:foreign"><tag xmlns="${MAIN_NS}"/><bare xmlns=""/></item></ext>` +
+      '<sheetData/></worksheet>',
+    )
+  })
+
   it('leaves parts of other namespaces alone', () => {
     const chart =
       '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
@@ -93,16 +132,21 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalizeOoxmlPartPrefix(chart)).toBe(chart)
   })
 
-  it('bails out when a default namespace is already bound', () => {
-    const xml = `<x:workbook xmlns:x="${MAIN_NS}" xmlns="urn:other">` + '<x:sheets/></x:workbook>'
-    expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
+  it('restores a foreign root default on unqualified descendants', () => {
+    const xml = `<x:workbook xmlns:x="${MAIN_NS}" xmlns='urn:other'>` +
+      '<x:sheets/><x:ext><payload><item/><x:tag/></payload></x:ext></x:workbook>'
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toMatch(/^<workbook\s/)
+    expect(normalized).toContain(`<sheets/><ext><payload xmlns="urn:other"><item/><tag xmlns="${MAIN_NS}"/></payload></ext></workbook>`)
   })
 
-  it('bails out when the prefix is rebound deeper in the tree', () => {
+  it('normalizes the root prefix outside a foreign rebinding', () => {
     const xml =
-      `<x:workbook xmlns:x="${MAIN_NS}"><x:sheets>` +
-      '<x:ext xmlns:x="urn:other"/></x:sheets></x:workbook>'
-    expect(normalizeOoxmlPartPrefix(xml)).toBe(xml)
+      `<x:workbook xmlns:x="${MAIN_NS}"><x:ext xmlns:x="urn:other"><x:item/>` +
+      `<x:tag xmlns:x="${MAIN_NS}"/></x:ext><x:sheets/></x:workbook>`
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(
+      `<x:ext xmlns:x="urn:other"><x:item/><tag xmlns:x="${MAIN_NS}"/></x:ext><sheets/></workbook>`,
+    )
   })
 
   it('keeps the prefix binding when attributes still use it', () => {
@@ -112,9 +156,52 @@ describe('normalizeOoxmlPartPrefix', () => {
     expect(normalized).toContain(`xmlns:x="${MAIN_NS}"`)
     expect(normalized).toContain('<oleObject x:custom="1"/>')
   })
+
+  it('normalizes real tags while leaving literal namespace declarations and tags alone', () => {
+    const prolog = '<!-- <x:worksheet xmlns:x="urn:fake"> -->'
+    const content = '<!-- <x:c xmlns="urn:fake"/> --><![CDATA[<x:c xmlns:x="urn:fake"/>]]>'
+    const xml = `${prolog}<x:worksheet xmlns:x='${MAIN_NS}'>` +
+      `<x:sheetData><x:row><x:c><x:is><x:t>${content}</x:t></x:is></x:c></x:row></x:sheetData></x:worksheet>`
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toContain(`${prolog}<worksheet xmlns="${MAIN_NS}"`)
+    expect(normalized).toContain(`<sheetData><row><c><is><t>${content}</t></is></c></row></sheetData>`)
+  })
+
+  it('keeps a real single-quoted prefix rebinding in its original scope', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><x:ext xmlns:x='urn:other'/></x:worksheet>`
+    expect(normalizeOoxmlPartPrefix(xml)).toContain("<x:ext xmlns:x='urn:other'/></worksheet>")
+  })
+
+  it('rewrites the namespace declaration without changing identical text inside another attribute', () => {
+    const literal = `custom=" xmlns:x='${MAIN_NS}'"`
+    const xml = `<x:worksheet ${literal} xmlns:x='${MAIN_NS}'/>`
+    expect(normalizeOoxmlPartPrefix(xml)).toContain(`<worksheet ${literal} xmlns="${MAIN_NS}"`)
+  })
+
+  it('leaves unqualified elements in their original namespace', () => {
+    for (const name of ['custom', '扩展']) {
+      const xml = `<x:worksheet xmlns:x="${MAIN_NS}"><x:ext><${name}><x:tag/></${name}></x:ext></x:worksheet>`
+      expect(normalizeOoxmlPartPrefix(xml)).toContain(`<ext><${name} xmlns=""><tag xmlns="${MAIN_NS}"/></${name}></ext>`)
+    }
+  })
+
+  it('keeps a prefix referenced by markup compatibility attributes', () => {
+    const xml = `<x:worksheet xmlns:x="${MAIN_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">` +
+      '<mc:AlternateContent><mc:Choice Requires="x"><x:sheetData/></mc:Choice></mc:AlternateContent></x:worksheet>'
+    const normalized = normalizeOoxmlPartPrefix(xml)
+    expect(normalized).toContain(`xmlns:x="${MAIN_NS}"`)
+    expect(normalized).toContain('<mc:Choice Requires="x"><sheetData/></mc:Choice>')
+  })
 })
 
 describe('non-numeric relationship ids', () => {
+  it('removes an encoded relationship by its ID without touching lookalikes', () => {
+    const drawing = '<Relationship xmlns:ext="urn:example" ext:Id="rId1" Id="rId2" Type="drawing" Target="drawing.xml"/>'
+    const comment = '<!-- <Relationship Id="rId1"/> -->'
+    const rels = '<Relationships>' + comment + drawing +
+      "<Relationship Id = 'rId&#49;' Type='worksheet' Target='sheet.xml'></Relationship></Relationships>"
+    expect(removeRelationshipById(rels, 'rId1')).toBe('<Relationships>' + comment + drawing + '</Relationships>')
+  })
   it('maxRelationshipId ignores them so new ids start fresh without colliding', () => {
     expect(maxRelationshipId(workbookRels)).toBe(0)
     expect(workbookRels).not.toContain('Id="rId1"')

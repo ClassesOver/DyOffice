@@ -75,10 +75,10 @@ function useSlideImages(slides: RenderSlide[] | null): Map<string, HTMLImageElem
   return images
 }
 
-export function AudienceView() {
+export function AudienceView({target=window}:{target?:Window}={}) {
   const { t } = useI18n()
   const [slides, setSlides] = useState<RenderSlide[] | null>(null)
-  const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
+  const [size, setSize] = useState({ w: target.innerWidth, h: target.innerHeight })
   const images = useSlideImages(slides)
   const [sync, setSync] = useState<ShowSyncState | null>(null)
   const [allAnims, setAllAnims] = useState<AnimationItem[][] | null>(null)
@@ -179,10 +179,10 @@ export function AudienceView() {
   }, [])
 
   useEffect(() => {
-    const onResize = () => setSize({ w: window.innerWidth, h: window.innerHeight })
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
+    const onResize = () => setSize({ w: target.innerWidth, h: target.innerHeight })
+    target.addEventListener('resize', onResize)
+    return () => target.removeEventListener('resize', onResize)
+  }, [target])
 
   // Navigation input sent back to the presenter (this side doesn't change state); Esc ends the whole show
   useEffect(() => {
@@ -204,9 +204,9 @@ export function AudienceView() {
         window.slidesApi.audienceNav('prev')
       }
     }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
+    target.addEventListener('keydown', onKey, true)
+    return () => target.removeEventListener('keydown', onKey, true)
+  }, [target])
 
   const slide = sync && slides ? slides[sync.idx] : null
   const player = useAnimPlayer(slide?.heightPx ?? 540, slide?.widthPx ?? 960)

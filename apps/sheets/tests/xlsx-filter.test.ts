@@ -5,7 +5,7 @@ import {
   applyCellEditsToXlsx,
   assertOnlyTouchedEntriesChanged,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
-import { applyFilterState, FilterEditError } from '@genoffice/xlsx-gateway/gateway/xlsx-filter'
+import { applyFilterState, applyTableFilterState, FilterEditError } from '@genoffice/xlsx-gateway/gateway/xlsx-filter'
 import { buildStructureFixture } from './fixture-builder'
 
 const AREA = { startRow: 0, endRow: 9, startColumn: 0, endColumn: 3 }
@@ -18,6 +18,20 @@ const worksheet = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadshe
     <row r="5" ht="20" customHeight="1"><c r="A5"><v>4</v></c></row>
   </sheetData>
 </worksheet>`
+
+describe('applyTableFilterState', () => {
+  it('keeps the local filter namespace and attributes when replacing criteria', () => {
+    const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const wrapper = `<f:autoFilter xmlns:f='${ns}' xmlns:e='urn:example' e:label='A > B'`
+    const table = `<table xmlns="${ns}">${wrapper} ref='A1:D10'/></table>`
+    const xml = applyTableFilterState(table, { area: AREA, headerRowCount: 1, totalsRowCount: 0 }, {
+      range: AREA,
+      columns: [{ colId: 1, values: ['New'] }],
+    })
+    expect(xml).toContain(`${wrapper} ref="A1:D10"><f:filterColumn colId="1">` +
+      '<f:filters><f:filter val="New"/></f:filters></f:filterColumn></f:autoFilter>')
+  })
+})
 
 describe('applyFilterState', () => {
   it('writes a values filter with hidden rows and creates missing row elements', () => {

@@ -18,6 +18,50 @@ const RELS =
   '</Relationships>'
 
 describe('applyHyperlinkEdits', () => {
+  it('reserves an existing encoded relationship ID when allocating a new hyperlink', () => {
+    const rels = RELS.replace('Id="rId3"', 'Id="rId&#49;"')
+    const patch = applyHyperlinkEdits(WORKSHEET, rels, [{ row: 0, column: 1, target: 'https://new.example' }])
+    expect(patch.worksheetXml).toContain('<hyperlink ref="B1" r:id="rId2"/>')
+    expect(patch.relsXml).toContain('Id="rId&#49;"')
+  })
+
+  it('retains a shared relationship when the surviving reference encodes part of its ID', () => {
+    const xml = WORKSHEET.replace('<pageMargins',
+      '<hyperlinks><hyperlink ref="A1" r:id="rId3"/><hyperlink ref="B1" r:id="rId&#51;"/></hyperlinks><pageMargins',
+    )
+    const patch = applyHyperlinkEdits(xml, RELS, [{ row: 0, column: 0, target: null }])
+    expect(patch.relsXml).toBe(RELS)
+    expect(patch.worksheetXml).toContain('<hyperlink ref="B1" r:id="rId&#51;"/>')
+  })
+
+  it('edits the actual relationship records and preserves comments and foreign Id attributes', () => {
+    const comment = '<!-- </Relationships> -->'
+    const drawing = '<Relationship xmlns:ext="urn:extension" ext:Id="rId3" Id="rId1" Type="drawing" Target="../drawings/drawing1.xml"/>'
+    const rels = RELS.replace('<Relationship Id="rId3"', () => comment + drawing + '<Relationship Id = "rId3"')
+      .replace('TargetMode="External"/>', 'TargetMode="External"></Relationship>')
+    const xml = WORKSHEET.replace('<pageMargins', '<hyperlinks><hyperlink ref="A1" r:id="rId3"/></hyperlinks><pageMargins')
+    const patch = applyHyperlinkEdits(xml, rels, [{ row: 0, column: 0, target: 'https://new.example' }])
+    expect(patch.relsXml).toContain(comment + drawing)
+    expect(patch.relsXml).not.toContain('https://old.example')
+    expect(patch.relsXml).toMatch(/<Relationship Id="rId2" [^>]+Target="https:\/\/new\.example"[^>]+\/><\/Relationships>$/)
+  })
+
+  it('replaces or removes a range hyperlink through its anchor without leaving a duplicate', () => {
+    const withRange = WORKSHEET.replace('<pageMargins',
+      '<hyperlinks><hyperlink ref="$a$1:$B$2" r:id="rId3"/><hyperlink ref="A1" location="Stale!A1"/>' +
+      '<hyperlink ref="C1" r:id="rId3"/></hyperlinks><pageMargins',
+    )
+    const replacement = applyHyperlinkEdits(withRange, RELS, [{ row: 0, column: 0, target: '#Data!B2' }])
+    expect(replacement.worksheetXml).toContain('<hyperlink ref="$a$1:$B$2" location="Data!B2"/>')
+    expect(replacement.worksheetXml).not.toContain('Stale!')
+    expect(replacement.relsXml).toBe(RELS)
+
+    const removal = applyHyperlinkEdits(replacement.worksheetXml, replacement.relsXml, [{ row: 0, column: 0, target: null }])
+    expect(removal.worksheetXml).not.toContain('$a$1:$B$2')
+    expect(removal.worksheetXml).toContain('<hyperlink ref="C1" r:id="rId3"/>')
+    expect(removal.relsXml).toBe(RELS)
+  })
+
   it('adds an external link, creating the hyperlinks section and the rels file', () => {
     const patch = applyHyperlinkEdits(WORKSHEET, null, [
       { row: 0, column: 0, target: 'https://example.com/a&b' },
@@ -91,6 +135,35 @@ describe('applyHyperlinkEdits', () => {
     const patch = applyHyperlinkEdits(withLinks, RELS, [{ row: 0, column: 0, target: null }])
     expect(patch.worksheetXml).toContain('<hyperlink ref="B1" r:id="rId3"/>')
     expect(patch.relsXml).toContain('rId3')
+  })
+
+  it('retains a shared relationship referenced by a different namespace alias', () => {
+    const remaining = "<hyperlink ref='B1' link:id = 'rId3'/>"
+    const withLinks = WORKSHEET.replace('<pageMargins',
+      '<hyperlinks xmlns:link="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      `<hyperlink ref="A1" r:id="rId3"/>${remaining}</hyperlinks><pageMargins`,
+    )
+    const patch = applyHyperlinkEdits(withLinks, RELS, [{ row: 0, column: 0, target: null }])
+    expect(patch.worksheetXml).toContain(remaining)
+    expect(patch.relsXml).toBe(RELS)
+    expect(patch.relsChanged).toBe(false)
+    const last = applyHyperlinkEdits(patch.worksheetXml, patch.relsXml, [{ row: 0, column: 1, target: null }])
+    expect(last.worksheetXml).not.toContain('<hyperlinks')
+    expect(last.relsXml).not.toContain('rId3')
+  })
+
+  it('binds new external links locally when the inherited r prefix belongs to an extension', () => {
+    const relationships = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const foreign = 'xmlns:r="urn:extension"'
+    const rootBinding = WORKSHEET.replace(`xmlns:r="${relationships}"`, foreign)
+    const sectionBinding = WORKSHEET.replace('<pageMargins', `<hyperlinks ${foreign}/><pageMargins`)
+    for (const xml of [rootBinding, sectionBinding]) {
+      const patch = applyHyperlinkEdits(xml, null, [{ row: 0, column: 0, target: 'https://new.example' }])
+      expect(patch.worksheetXml).toContain(foreign)
+      expect(patch.worksheetXml).toContain(`<hyperlink ref="A1" xmlns:r="${relationships}" r:id="rId1"/>`)
+      const removed = applyHyperlinkEdits(patch.worksheetXml, patch.relsXml, [{ row: 0, column: 0, target: null }])
+      expect(removed.relsXml).not.toContain('https://new.example')
+    }
   })
 
   it('reclaims and allocates ids in a rels part that uses single quotes', () => {

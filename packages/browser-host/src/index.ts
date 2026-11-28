@@ -1,11 +1,13 @@
+import { isCsvImportLimitMb } from '../../xlsx-gateway/src/gateway/csv-limits.ts'
 import { HostError, hostError } from '../../web-contracts/src/errors.ts'
 import type { RevisionRef, SaveInput } from '../../web-contracts/src/api.ts'
-import { isRevisionRef, isSaveInput } from '../../web-contracts/src/api.ts'
+import { isRevisionRef, isSaveInput, isSpreadsheetArchive } from '../../web-contracts/src/api.ts'
 import { UNSUPPORTED_CAPABILITIES } from '../../web-contracts/src/host.ts'
 import type { BrowserHost, CapabilityCatalog } from '../../web-contracts/src/host.ts'
+import { ASSISTANT_PREFERENCES_FIELDS, DOCUMENT_THEME_MODES, isAssistantPreferences } from '../../web-contracts/src/preferences.ts'
 
 const CAPABILITIES = new Set(['unsupported', 'read_only', 'editable'])
-const ALLOWED_PREFS = new Set(['theme', 'language', 'authorName', 'autoSave', 'showAssistant'])
+const ALLOWED_PREFS = new Set(['theme', 'documentTheme', 'language', 'authorName', 'autoSave', 'autoSaveUpdatedAt', 'showAssistant', 'csvImportLimitMb', ...ASSISTANT_PREFERENCES_FIELDS])
 function nonempty(value: string, field: string): void {
   if (typeof value !== 'string' || !value.length) throw new HostError('INVALID_RESPONSE', `Missing ${field}`)
 }
@@ -53,13 +55,15 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       nonempty(fileId, 'fileId')
       if (!adapter.open) throw hostError('UNSUPPORTED', 'open')
       const result = await adapter.open(fileId)
-      if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf'].includes(result.format) || !isSameOriginPath(result.downloadEndpoint)) throw hostError('INVALID_RESPONSE', 'open')
+      if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf','csv','xlsm'].includes(result.format) || !isSameOriginPath(result.downloadEndpoint)) throw hostError('INVALID_RESPONSE', 'open')
       if (result.name !== undefined && (typeof result.name !== 'string' || !result.name.length || result.name.length > 255 || /[\\/\u0000-\u001f]/.test(result.name))) throw hostError('INVALID_RESPONSE', 'file name')
       return {
         ...(result.name === undefined ? {} : { name: result.name }),
         ...(result.format !== 'pdf' && result.autoNamePending === true ? { autoNamePending: true as const } : {}),
         ...(result.format === 'pdf' && result.pdfAutoNamePending === true ? { pdfAutoNamePending: true as const } : {}),
         ...(result.format !== 'pdf' && result.officeSignatureProtected === true ? { officeSignatureProtected: true as const } : {}),
+        ...(isSpreadsheetArchive(result.format) && result.workbookPasswordProtected === true ? { workbookPasswordProtected: true as const } : {}),
+        ...(result.format === 'docx' && result.documentPasswordProtected === true ? { documentPasswordProtected: true as const } : {}),
         file: publicRevision(result.file),
         format: result.format,
         downloadEndpoint: result.downloadEndpoint,
@@ -92,6 +96,10 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       if (!adapter.getPreferences) throw hostError('UNSUPPORTED', 'getPreferences')
       const prefs = await adapter.getPreferences()
       if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs) || !['light','dark','system'].includes(prefs.theme) || typeof prefs.language !== 'string') throw hostError('INVALID_RESPONSE', 'getPreferences')
+      if (prefs.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(prefs.documentTheme)) throw hostError('INVALID_RESPONSE', 'getPreferences')
+      if (prefs.csvImportLimitMb !== undefined && !isCsvImportLimitMb(prefs.csvImportLimitMb)) throw hostError('INVALID_RESPONSE', 'getPreferences')
+      if (!isAssistantPreferences(prefs)) throw hostError('INVALID_RESPONSE', 'getPreferences')
+      if (prefs.autoSaveUpdatedAt !== undefined && (!Number.isSafeInteger(prefs.autoSaveUpdatedAt) || prefs.autoSaveUpdatedAt < 1)) throw hostError('INVALID_RESPONSE', 'getPreferences')
       if (prefs.authorName !== undefined && (typeof prefs.authorName !== 'string' || prefs.authorName.length > 100)) throw hostError('INVALID_RESPONSE', 'getPreferences')
       for (const name of ['autoSave', 'showAssistant'] as const) {
         if (prefs[name] !== undefined && typeof prefs[name] !== 'boolean') throw hostError('INVALID_RESPONSE', 'getPreferences')

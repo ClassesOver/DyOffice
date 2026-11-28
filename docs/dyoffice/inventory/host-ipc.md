@@ -21,10 +21,10 @@
 | App | `browser-native` | `server-api` | `isolated-worker` | `unsupported` | `desktop-only` | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | docs | 23 | 49 | 8 | 15 | 23 | 118 |
-| sheets | 18 | 42 | 24 | 20 | 11 | 115 |
+| sheets | 25 | 43 | 26 | 11 | 11 | 116 |
 | slides | 160 | 46 | 1 | 7 | 12 | 226 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 211 | 169 | 59 | 52 | 54 | 545 |
+| **all** | 218 | 170 | 61 | 43 | 54 | 546 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -57,6 +57,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `local-integrations` | `unsupported` | 4 | T19 | None; HTTP MCP is the external integration path | Zotero and the CLI talk to local processes on the user's machine; a server must not run them. |
 | `spellcheck` | `unsupported` | 9 | T07 | Browser built-in spellcheck attribute only | Browsers expose no programmatic dictionary API; Electron webFrame/session spellchecker has no Web equivalent. |
 | `printer-enumeration` | `unsupported` | 6 | T07 | Browser print dialog | Web pages cannot enumerate printers or driver options. |
+| `xlsx-browser-print-dialog` | `browser-native` | 1 | T07 | Local capability for the browser print/save dialog | Only the Web bridge enables this flag. Native preload disables it so the renderer retains its desktop print and file options; the flag itself performs no IPC. |
 | `print` | `browser-native` | 6 | T07 | window.print() of a print-only document/PDF iframe | Printing goes through the browser dialog; CUPS/driver options are not available (see printer-enumeration). |
 | `pdf-export-chromium` | `isolated-worker` | 5 | T08 | Export job (headless Chromium/engine in worker) -> download | Desktop uses Electron printToPDF / main-process engines; Web runs the same render in a sandboxed worker for identical output. |
 | `save-dialog-targets` | `desktop-only` | 6 | T07 | Browser download / in-app confirmation | Native save dialogs choose host paths; browsers download. |
@@ -74,8 +75,11 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `docx-crypto-conversion` | `isolated-worker` | 5 | T07 | Authorized job; password never logged or persisted | Encryption and altChunk HTML conversion run in main today (html2docx has 3 Node-importing files); compound-file itself is Node-free, so a browser port is a T07 option to evaluate. |
 | `xlsx-sidecar` | `isolated-worker` | 22 | T09 | XLSX worker job (Rust sidecar under T08 sandbox), output via T06 | These are served by the native Rust XLSX sidecar; native build is blocked on the verification host (compatibility.md). |
 | `xlsx-external-link-list` | `isolated-worker` | 1 | T09 | Revision-bound workbook link metadata | The gateway reads stored package relationships and cached sheet names without accessing link targets. |
-| `xlsx-external-data` | `unsupported` | 5 | T15 | Read-only data sources (T15) are the governed replacement | Workbook connections and external links reach arbitrary local files/servers; enabling them server-side needs T15 egress and credential policy. |
-| `xlsx-cross-window-pick` | `unsupported` | 7 | T09 | None in first release | Picking a range in another open workbook relies on shell-managed sibling tabs. |
+| `xlsx-workbook-query-list` | `isolated-worker` | 1 | T09 | List refreshable Web queries from the saved workbook package | The authorized package reader extracts connection metadata from the revision. Encrypted workbooks require the current unlock. |
+| `xlsx-workbook-query-refresh` | `server-api` | 1 | T15 | Resolve a saved connection and fetch its public table using the egress policy | The server checks the revision, editor lease and any workbook unlock before returning bounded table rows to the editor. |
+| `xlsx-external-data` | `unsupported` | 3 | T15 | The Web host uses the workspace external-links panel | The panel binds readable workspace files by ID and revision. Its save planner handles break operations and source changes. |
+| `xlsx-workbook-pick-targets` | `isolated-worker` | 1 | T09 | Match saved external-link metadata to live workbook tabs | The browser compares the authorized revision's link targets with workbooks currently open in the same workspace. |
+| `xlsx-cross-window-pick` | `browser-native` | 6 | T09 | Pick a range from a linked workbook tab in the same workspace | The workspace relays a validated grid selection from the designated live workbook to the original formula dialog. |
 | `slides-presenter` | `browser-native` | 10 | T10 | Second window + BroadcastChannel (Presentation API where available) | Presenter/audience windows are coordinated through main today; same-origin windows can coordinate directly. |
 | `slides-deck-session` | `browser-native` | 126 | T10 | Deck session in a browser worker reusing pptx-ops; open/save through T06 | The deck model and journaled ops live in the Electron main process today. @genoffice/pptx-ops has no Node imports in src; @genoffice/pptx-engine has 3 Node-importing files that must be isolated before relocation. |
 | `pdf-signing` | `unsupported` | 5 | T11 | None; signature validity is displayed only | Signing uses OS certificate stores (system-certificates.ts execs platform tools) and node-forge private keys on the client machine. |
@@ -98,7 +102,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktop.getAuthorName` | request | invoke `app:get-author-name` | 1 | `server-api` | `principal-identity` |
 | `desktop.onAuthorNameChanged` | subscription | on `app:author-name-changed` | 1 | `server-api` | `principal-identity` |
 | `desktop.getAiPanelPrefs` | request | invoke `app:get-ai-panel-prefs` | 1 | `server-api` | `personal-preferences` |
-| `desktop.setAiPanelPrefs` | request | invoke `app:set-ai-panel-prefs` | 1 | `server-api` | `personal-preferences` |
+| `desktop.setAiPanelPrefs` | request | invoke `app:set-ai-panel-prefs` | 2 | `server-api` | `personal-preferences` |
 | `desktop.onAiPanelPrefsChanged` | subscription | on `app:ai-panel-prefs-changed` | 1 | `server-api` | `personal-preferences` |
 | `desktop.onChromePressed` | subscription | on `app:chrome-pressed` | 1 | `desktop-only` | `shell-chrome` |
 | `desktop.zoteroCommand` | request | invoke `zotero:command` | 1 | `unsupported` | `local-integrations` |
@@ -209,6 +213,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 
 | Member | Lifecycle | IPC | Calls | Class | Rule |
 | --- | --- | --- | ---: | --- | --- |
+| `desktopApi.browserPrintDialog` | local | — | 2 | `browser-native` | `xlsx-browser-print-dialog` |
 | `desktopApi.saveEditsInlineMaxBytes` | local | — | 2 | `browser-native` | `xlsx-inline-save-hint` |
 | `desktopApi.getLanguage` | request | invoke `app:get-language` | 1 | `browser-native` | `ui-locale-theme` |
 | `desktopApi.openSourcePath` | request | invoke `home:open-path` | 1 | `desktop-only` | `os-paths` |
@@ -223,7 +228,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.cancelImport` | request | invoke `$IPC_CHANNELS.cancelImport` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.onAutoSaveDefaultChanged` | subscription | on `app:auto-save-default-changed` | 1 | `server-api` | `personal-preferences` |
 | `desktopApi.getAiPanelPrefs` | request | invoke `app:get-ai-panel-prefs` | 1 | `server-api` | `personal-preferences` |
-| `desktopApi.setAiPanelPrefs` | request | invoke `app:set-ai-panel-prefs` | 1 | `server-api` | `personal-preferences` |
+| `desktopApi.setAiPanelPrefs` | request | invoke `app:set-ai-panel-prefs` | 2 | `server-api` | `personal-preferences` |
 | `desktopApi.onAiPanelPrefsChanged` | subscription | on `app:ai-panel-prefs-changed` | 1 | `server-api` | `personal-preferences` |
 | `desktopApi.onChromePressed` | subscription | on `app:chrome-pressed` | 1 | `desktop-only` | `shell-chrome` |
 | `desktopApi.selectWorkbook` | request | invoke `$IPC_CHANNELS.selectWorkbook` | 2 | `server-api` | `file-lifecycle` |
@@ -236,21 +241,21 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.readWorkbookRange` | request | invoke `$IPC_CHANNELS.readWorkbookRange` | 11 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.readWorkbookFormulas` | request | invoke `$IPC_CHANNELS.readWorkbookFormulas` | 4 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.findWorkbookCells` | request | invoke `$IPC_CHANNELS.findWorkbookCells` | 2 | `isolated-worker` | `xlsx-sidecar` |
-| `desktopApi.listWorkbookConnections` | request | invoke `$IPC_CHANNELS.listWorkbookConnections` | 1 | `unsupported` | `xlsx-external-data` |
-| `desktopApi.refreshWorkbookConnection` | request | invoke `$IPC_CHANNELS.refreshWorkbookConnection` | 1 | `unsupported` | `xlsx-external-data` |
+| `desktopApi.listWorkbookConnections` | request | invoke `$IPC_CHANNELS.listWorkbookConnections` | 1 | `isolated-worker` | `xlsx-workbook-query-list` |
+| `desktopApi.refreshWorkbookConnection` | request | invoke `$IPC_CHANNELS.refreshWorkbookConnection` | 1 | `server-api` | `xlsx-workbook-query-refresh` |
 | `desktopApi.readWorkbookRowOutline` | request | invoke `$IPC_CHANNELS.readWorkbookRowOutline` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.recalcWorkbook` | request | invoke `$IPC_CHANNELS.recalcWorkbook` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.listExternalLinks` | request | invoke `$IPC_CHANNELS.listExternalLinks` | 3 | `isolated-worker` | `xlsx-external-link-list` |
 | `desktopApi.updateExternalLinks` | request | invoke `$IPC_CHANNELS.updateExternalLinks` | 1 | `unsupported` | `xlsx-external-data` |
 | `desktopApi.readExternalLinkUsage` | request | invoke `$IPC_CHANNELS.readExternalLinkUsage` | 1 | `unsupported` | `xlsx-external-data` |
 | `desktopApi.selectExternalLinkSource` | request | invoke `$IPC_CHANNELS.selectExternalLinkSource` | 1 | `unsupported` | `xlsx-external-data` |
-| `desktopApi.listWorkbookTabs` | request | invoke `$IPC_CHANNELS.listWorkbookTabs` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.armWorkbookPick` | request | invoke `$IPC_CHANNELS.armWorkbookPick` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.sendWorkbookPickSelection` | request | invoke `$IPC_CHANNELS.sendWorkbookPickSelection` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.cancelWorkbookPick` | request | invoke `$IPC_CHANNELS.cancelWorkbookPick` | 3 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.onWorkbookPickArmed` | subscription | on `$IPC_CHANNELS.workbookPickArmed` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.onWorkbookPickSelected` | subscription | on `$IPC_CHANNELS.workbookPickSelected` | 1 | `unsupported` | `xlsx-cross-window-pick` |
-| `desktopApi.onWorkbookPickCancelled` | subscription | on `$IPC_CHANNELS.workbookPickCancelled` | 1 | `unsupported` | `xlsx-cross-window-pick` |
+| `desktopApi.listWorkbookTabs` | request | invoke `$IPC_CHANNELS.listWorkbookTabs` | 1 | `isolated-worker` | `xlsx-workbook-pick-targets` |
+| `desktopApi.armWorkbookPick` | request | invoke `$IPC_CHANNELS.armWorkbookPick` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.sendWorkbookPickSelection` | request | invoke `$IPC_CHANNELS.sendWorkbookPickSelection` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.cancelWorkbookPick` | request | invoke `$IPC_CHANNELS.cancelWorkbookPick` | 3 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.onWorkbookPickArmed` | subscription | on `$IPC_CHANNELS.workbookPickArmed` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.onWorkbookPickSelected` | subscription | on `$IPC_CHANNELS.workbookPickSelected` | 1 | `browser-native` | `xlsx-cross-window-pick` |
+| `desktopApi.onWorkbookPickCancelled` | subscription | on `$IPC_CHANNELS.workbookPickCancelled` | 2 | `browser-native` | `xlsx-cross-window-pick` |
 | `desktopApi.revealLinkSource` | notify | send `$IPC_CHANNELS.revealLinkSource` | 1 | `desktop-only` | `shell-chrome` |
 | `desktopApi.readWorkbookMedia` | request | invoke `$IPC_CHANNELS.readWorkbookMedia` | 5 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.readLocalImage` | request | invoke `$IPC_CHANNELS.readLocalImage` | 1 | `desktop-only` | `os-paths` |
@@ -267,7 +272,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.writeWorkbookRecovery` | request | invoke `$IPC_CHANNELS.writeWorkbookRecovery` | 1 | `browser-native` | `dirty-and-drafts` |
 | `desktopApi.autoRenameWorkbook` | request | invoke `$IPC_CHANNELS.autoRenameWorkbook` | 1 | `server-api` | `file-lifecycle` |
 | `desktopApi.exportPdf` | request | invoke `$IPC_CHANNELS.exportPdf` | 2 | `isolated-worker` | `pdf-export-chromium` |
-| `desktopApi.printWorkbook` | request | invoke `$IPC_CHANNELS.printWorkbook` | 1 | `browser-native` | `print` |
+| `desktopApi.printWorkbook` | request | invoke `$IPC_CHANNELS.printWorkbook` | 2 | `browser-native` | `print` |
 | `desktopApi.listPrinters` | request | invoke `$IPC_CHANNELS.listPrinters` | 1 | `unsupported` | `printer-enumeration` |
 | `desktopApi.exportCsv` | request | invoke `$IPC_CHANNELS.exportCsv` | 1 | `browser-native` | `download-outputs` |
 | `desktopApi.confirmCsvSave` | request | invoke `$IPC_CHANNELS.csvSaveConfirm` | 1 | `desktop-only` | `save-dialog-targets` |
@@ -434,7 +439,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `slidesApi.insertMedia` | request | invoke `slides:insert-media` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.addMediaBytes` | request | invoke `slides:add-media-bytes` | 2 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getMediaData` | request | invoke `slides:media-data` | 3 | `browser-native` | `slides-deck-session` |
-| `slidesApi.releaseMediaData` | local | — | 3 | `browser-native` | `slides-browser-media-lifecycle` |
+| `slidesApi.releaseMediaData` | local | — | 4 | `browser-native` | `slides-browser-media-lifecycle` |
 | `slidesApi.pickModel3d` | request | invoke `slides:pick-model3d` | 1 | `browser-native` | `local-pickers` |
 | `slidesApi.addModel3d` | request | invoke `slides:add-model3d` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getModel3dData` | request | invoke `slides:model3d-data` | 2 | `browser-native` | `slides-deck-session` |
@@ -646,3 +651,14 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `projectApi.appendChat` | request | invoke `project:appendChat` | 1 | `server-api` | `chat-history` |
 | `projectApi.loadChat` | request | invoke `project:loadChat` | 1 | `server-api` | `chat-history` |
 | `projectApi.rebindChat` | request | invoke `project:rebindChat` | 1 | `server-api` | `chat-history` |
+
+## Browser-only renderer APIs
+
+The Web host supplies these optional members from the shared renderer interfaces.
+
+| Editor | Optional member |
+| --- | --- |
+| docs | `desktop.pickComparisonDocx` |
+| slides | `slidesApi.browserPrintDialog` |
+| slides | `slidesApi.requestShowFullScreen` |
+| pdf | `pdfApi.printBrowserPages` |

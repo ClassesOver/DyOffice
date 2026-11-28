@@ -56,6 +56,7 @@ test('native Sheets gate builds original renderer and Rust and runs real edit-sa
  assert.match(job,/node-version: '22\.23\.5'/)
  assert.match(job,/playwright install chromium --with-deps/)
  assert.match(job,/PLAYWRIGHT_BROWSERS_PATH:.*github.workspace/)
+ assert.match(job,/run: npm run build:web:shell\n\s+- name: Test real native editor and authorized save-reopen path/)
  assert.match(job,/sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,PLAYWRIGHT_BROWSERS_PATH/)
  assert.match(job,/ci-host-services\.sh/)
  assert.match(job,/rustup toolchain install 1\.93\.0/)
@@ -72,17 +73,28 @@ test('T01 CI executes the documented selectable unit command and watches its run
   assert.equal((workflow.match(/'tools\/run-web-unit\.mjs'/g) ?? []).length, 2)
 })
 
+test('Chromium source analysis starts an already installed DBHub entry', () => {
+  const dbhub = readFileSync(new URL('../../apps/web/server/src/modules/sources/dbhub.ts', import.meta.url), 'utf8')
+  const pin = /const DEFAULT_PACKAGE = '([^']+)'/.exec(dbhub)?.[1]
+  assert.ok(pin, 'DBHub must have a pinned package version')
+  const browser = workflow.indexOf('Verify the local workspace and four native editors in Chromium')
+  const provision = workflow.indexOf('Install pinned DBHub for Chromium source tests')
+  assert.ok(provision >= 0 && provision < browser)
+  assert.ok(workflow.slice(provision, browser).includes(pin))
+  assert.match(workflow.slice(browser), /DYOFFICE_DBHUB_ENTRY: .*dyoffice-dbhub\/node_modules\/@bytebase\/dbhub\/dist\/index\.js/)
+})
+
 test('Office tool coverage checks a fresh trace after the Chromium suite, including Word writing', () => {
-  const office = workflow.match(/Verify the local workspace and four native editors in Chromium\n([\s\S]*?)(?=^      - name:)/m)?.[1]
+  const office = workflow.match(/Verify the local workspace and four native editors in Chromium\n([\s\S]*?)(?=^ {6}- name:)/m)?.[1]
   assert.ok(office, 'the Chromium job must collect the tool trace')
   assert.match(office, /DYOFFICE_TEST_AI_TOOL_TRACE: \$\{\{ runner\.temp \}\}/)
   assert.match(office, /: > "\$DYOFFICE_TEST_AI_TOOL_TRACE"\n.*node --import tsx --test.*writer-draft-save.*\n.*node --import tsx apps\/web\/test\/helpers\/office-tool-coverage\.mjs "\$DYOFFICE_TEST_AI_TOOL_TRACE"/)
   assert.match(office, /set -o pipefail/)
   assert.match(office, /office-tool-coverage\.mjs "\$DYOFFICE_TEST_AI_TOOL_TRACE" 2>&1 \| tee "\$RUNNER_TEMP\/dyoffice-office-tool-coverage\.txt"/)
-  const artifact = workflow.match(/Retain Office AI tool coverage evidence\n([\s\S]*?)(?=^      - name:)/m)?.[1]
+  const artifact = workflow.match(/Retain Office AI tool coverage evidence\n([\s\S]*?)(?=^ {6}- name:)/m)?.[1]
   assert.ok(artifact, 'tool effects must be auditable after the runner exits')
   assert.match(artifact, /if: always\(\)/)
   assert.match(artifact, /uses: actions\/upload-artifact@/)
   assert.match(artifact, /name: office-ai-tool-coverage/)
-  assert.match(artifact, /path: \|\n            \$\{\{ runner\.temp \}\}\/dyoffice-office-tool-trace\.jsonl\n            \$\{\{ runner\.temp \}\}\/dyoffice-office-tool-coverage\.txt/)
+  assert.match(artifact, /path: \|\n {12}\$\{\{ runner\.temp \}\}\/dyoffice-office-tool-trace\.jsonl\n {12}\$\{\{ runner\.temp \}\}\/dyoffice-office-tool-coverage\.txt/)
 })

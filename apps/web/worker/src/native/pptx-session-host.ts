@@ -1,3 +1,4 @@
+import type {SlidesEmbeddedTypeface} from '../../../../slides/src/shared/embedded-font-limits'
 import type {CustomShowInfo,HeaderFooterState,LinkTarget,SectionInfo,SlideAnimation,SlideShapeKey,SlideTransitionKind} from '@genoffice/pptx-engine'
 export type AnimationItem={sourceId:string;targetName:string}&Omit<SlideAnimation,'spid'>
 type LinkTargetOp=LinkTarget
@@ -11,6 +12,7 @@ export type RunLink = {sourceId:string;paraIndex:number;runIndex:number;target:L
 import { fork } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import {WEB_SLIDE_MEDIA_MAX_BYTES} from '../../../../slides/src/shared/media-kinds'
 
 /** Parent-side seam for one forked PPTX session child. Untrusted packages are parsed and
  * mutated only inside the child; this module deliberately imports no @genoffice engine code,
@@ -50,7 +52,12 @@ export type SlidesRecordingCommand =
   | {kind:'save';slides:Array<{slideIndex:number;bytes:Uint8Array;durationMs:number;advanceMs:number}>}
   | {kind:'clear';indexes:number[]}
 export type SlidesEmbeddedMedia = {kind:'audio'|'video';dataUrl:string}
-export const MAX_PPTX_MEDIA_BYTES = 8 * 1024 * 1024
+export type SlidesMediaInsert = {slide:number;kind:'audio'|'video';ext:string;bytes:Uint8Array;name?:string;fitWidthPx:number;centerPx?:{x:number;y:number}}
+export type SlidesModel3dCommand = {slide:number;poster?:Uint8Array}&(
+  | {mode:'insert';bytes:Uint8Array;name:string;aspect:number;fitWidthPx:number}
+  | {mode:'view';sourceId:string;rot:{ax:number;ay:number;az:number}}
+)
+export const MAX_PPTX_MEDIA_BYTES = WEB_SLIDE_MEDIA_MAX_BYTES
 export const MAX_PPTX_RECORDING_BYTES = 12 * 1024 * 1024
 export const MAX_PPTX_RECORDING_SLIDES = 200
 export const MAX_PPTX_ADVANCE_MS = 24 * 60 * 60 * 1000
@@ -64,6 +71,7 @@ export type SlidesPasteCommand =
   | {kind:'duplicate';index:number;sourceIds:string[];dx:number;dy:number}
 export type SlidesPasteView<Slide=SlidesRenderSlideLike> = Omit<SlidesStepView,'slides'> & {slides:Slide[];order:string[];index:number;count:number;sourceIds:string[]}
 export interface SlidesOutlineView { count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]; sections: SectionInfo[]; defaultFont?: string; writeProtected?: true }
+export type SlidesUnlockResult = 'unlocked' | 'incorrect' | 'unsupported' | 'retry'
 export interface PptxChildSession {
   apply(expectedGeneration: number, ops: unknown, signal?: AbortSignal, options?: { isolation?: 'atomic' | 'per_op'; dryRun?: boolean }): Promise<SlidesApplyView>
   editChart(expectedGeneration:number,slide:number,sourceId:string,patch:Record<string,unknown>,signal?:AbortSignal):Promise<{generation:number;stateGeneration:number;canUndo:boolean;canRedo:boolean;slide:SlidesRenderSlideLike;sourceId:string}>
@@ -74,6 +82,11 @@ export interface PptxChildSession {
   applyImage(expectedGeneration:number,input:SlidesImageCommand,signal?:AbortSignal):Promise<SlidesApplyView>
   mediaData(expectedGeneration:number,slide:number,sourceId:string,signal?:AbortSignal):Promise<SlidesEmbeddedMedia|null>
   applyRecording(expectedGeneration:number,input:SlidesRecordingCommand,signal?:AbortSignal):Promise<SlidesApplyView|null>
+  insertMedia(expectedGeneration:number,input:SlidesMediaInsert,signal?:AbortSignal):Promise<SlidesApplyView>
+  fontFaces(expectedGeneration:number,signal?:AbortSignal):Promise<Array<Omit<SlidesEmbeddedTypeface,'bytes'>>>
+  fontData(expectedGeneration:number,sourceId:string,signal?:AbortSignal):Promise<Uint8Array|null>
+  model3dData(expectedGeneration:number,slide:number,sourceId:string,signal?:AbortSignal):Promise<Uint8Array|null>
+  editModel3d(expectedGeneration:number,input:SlidesModel3dCommand,signal?:AbortSignal):Promise<SlidesApplyView>
   undo(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesStepView>
   redo(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesStepView>
   beginHistoryBatch(expectedGeneration:number,signal?:AbortSignal):Promise<boolean>
@@ -94,10 +107,11 @@ export interface PptxChildSession {
   customShows(expectedGeneration: number, signal?: AbortSignal): Promise<CustomShowInfo[]>
   renderAll(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesRenderSlideLike[]>
   outline(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesOutlineView>
+  unlockEditing(expectedGeneration: number, password: string, signal?: AbortSignal): Promise<SlidesUnlockResult>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{ generation: number; bytes: Uint8Array }>
   close(): void
 }
-interface ChildMessage { recording?:SlidesRecordingCommand; copy?:SlidesCopyCommand; paste?:SlidesPasteCommand; snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
+interface ChildMessage { password?:string;  model?:SlidesModel3dCommand; media?:SlidesMediaInsert; recording?:SlidesRecordingCommand; copy?:SlidesCopyCommand; paste?:SlidesPasteCommand; snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
 export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; experimental?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL; signal?: AbortSignal }
 /** Mirrors the in-process session gate: no oversized package is ever handed to a child. */
 const MAX_INPUT_BYTES = 32 * 1024 * 1024
@@ -192,6 +206,26 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
       if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
       return call({m:'applyRecording',expected,recording})
     },
+    insertMedia(expected,media,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'insertMedia',expected,media})
+    },
+    fontFaces(expected,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'fontFaces',expected})
+    },
+    fontData(expected,sourceId,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'fontData',expected,sourceId})
+    },
+    model3dData(expected,slide,sourceId,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'model3dData',expected,slide,sourceId})
+    },
+    editModel3d(expected,model,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'editModel3d',expected,model})
+    },
     applyImage(expected,input,signal){
       if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
       return call({m:'applyImage',expected,image:input})
@@ -219,6 +253,11 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
     customShows(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'customShows',expected}) },
     renderAll(expected,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'renderAll',expected,width}) },
     outline(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'outline',expected}) },
+    async unlockEditing(expected,password,signal){
+      signal?.throwIfAborted()
+      const status=await call<SlidesUnlockResult>({m:'unlockEditing',expected,password})
+      return status
+    },
     exportBytes(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'export',expected}) },
     close(){
       if (closed) return

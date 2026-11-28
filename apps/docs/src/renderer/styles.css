@@ -5871,6 +5871,10 @@ th[data-rev-fmt] {
   color: var(--docs-paper-ink);
 }
 
+.pv-print-links {
+  display: none;
+}
+
 .pv-clip {
   overflow: hidden;
 }
@@ -12086,7 +12090,7 @@ body.docs-crop-active
   accent-color: var(--accent);
 }
 
-.print-options .print-range-input {
+.print-options .print-text-input {
   display: block;
   width: 100%;
   box-sizing: border-box;
@@ -12099,15 +12103,15 @@ body.docs-crop-active
   background: var(--surface);
 }
 
-.print-options .print-range-input:focus {
+.print-options .print-text-input:focus {
   border-color: var(--accent);
 }
 
-.print-options .print-range-input:disabled {
+.print-options .print-text-input:disabled {
   opacity: 0.55;
 }
 
-.print-options .print-range-input.invalid {
+.print-options .print-text-input.invalid {
   border-color: var(--danger);
 }
 
@@ -12776,6 +12780,23 @@ body.docs-crop-active
 
   .pv-pageno {
     display: none;
+  }
+
+  .pv-print-links {
+    display: block;
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .pv-print-links > * {
+    position: absolute;
+  }
+
+  .pv-print-links > span {
+    left: 0;
+    width: 1px;
+    height: 1px;
   }
 
   /* forced breaks are disabled inside the clone, and page-break fields keep placeholders matching canvas measurement */

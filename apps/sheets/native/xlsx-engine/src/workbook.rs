@@ -3,9 +3,26 @@
 //! defined names.
 
 use super::*;
+use quick_xml::{NsReader, name::ResolveResult};
+use roxmltree::Node;
+
+pub(crate) const WORKBOOK_PATH: &str = "xl/workbook.xml";
+
+const OFFICE_RELATIONSHIPS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const STRICT_OFFICE_RELATIONSHIPS: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+
+fn workbook_children<'a, 'input>(
+    parent: Node<'a, 'input>,
+    name: &'static str,
+) -> impl Iterator<Item = Node<'a, 'input>> {
+    parent.children().filter(move |node| {
+        node.has_tag_name(name) && node.tag_name().namespace() == parent.tag_name().namespace()
+    })
+}
 
 pub(crate) fn read_sheet_declarations(
-    archive: &mut ZipArchive<File>,
+    workbook: Node<'_, '_>,
 ) -> Result<
     (
         Vec<SheetDeclaration>,
@@ -15,92 +32,100 @@ pub(crate) fn read_sheet_declarations(
     ),
     SidecarError,
 > {
-    let xml = read_zip_string(archive, "xl/workbook.xml")?;
-    let mut reader = Reader::from_str(&xml);
+    let child = |name| workbook_children(workbook, name).next();
+    let enabled = |value| matches!(value, Some("1" | "true"));
+    let date_1904 = enabled(child("workbookPr").and_then(|node| node.attribute("date1904")));
+    let protection = child("workbookProtection").map(|node| WorkbookProtectionInfo {
+        lock_structure: enabled(node.attribute("lockStructure")),
+        has_password: node.attribute("workbookPassword").is_some()
+            || node.attribute("workbookHashValue").is_some(),
+    });
+    let active_tab = child("bookViews")
+        .into_iter()
+        .flat_map(|node| workbook_children(node, "workbookView"))
+        .filter_map(|node| node.attribute("activeTab"))
+        .last()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0);
     let mut sheets = Vec::new();
-    let mut protection = None;
-    let mut active_tab = 0usize;
-    let mut date_1904 = false;
-    loop {
-        match reader.read_event()? {
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"workbookPr" =>
-            {
-                date_1904 = attribute_value(&reader, &element, b"date1904")?
-                    .is_some_and(|value| value == "1" || value == "true");
-            }
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"workbookView" =>
-            {
-                if let Some(value) = attribute_value(&reader, &element, b"activeTab")? {
-                    active_tab = value.parse::<usize>().unwrap_or(0);
-                }
-            }
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"workbookProtection" =>
-            {
-                let lock_structure = attribute_value(&reader, &element, b"lockStructure")?
-                    .is_some_and(|value| value == "1" || value == "true");
-                let has_password = attribute_value(&reader, &element, b"workbookPassword")?
-                    .is_some()
-                    || attribute_value(&reader, &element, b"workbookHashValue")?.is_some();
-                protection = Some(WorkbookProtectionInfo {
-                    lock_structure,
-                    has_password,
-                });
-            }
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"sheet" =>
-            {
-                let name = attribute_value(&reader, &element, b"name")?
-                    .ok_or_else(|| SidecarError::Workbook("Sheet has no name.".into()))?;
-                let sheet_id = attribute_value(&reader, &element, b"sheetId")?
-                    .ok_or_else(|| SidecarError::Workbook("Sheet has no sheetId.".into()))?;
-                let relationship_id =
-                    attribute_value(&reader, &element, b"id")?.ok_or_else(|| {
-                        SidecarError::Workbook("Sheet has no relationship id.".into())
-                    })?;
-                let state = attribute_value(&reader, &element, b"state")?;
-                let very_hidden = state.as_deref() == Some("veryHidden");
-                let hidden = very_hidden || state.as_deref() == Some("hidden");
-                sheets.push(SheetDeclaration {
-                    name,
-                    sheet_id,
-                    relationship_id,
-                    hidden,
-                    very_hidden,
-                });
-            }
-            Event::Eof => break,
-            _ => {}
-        }
+    for sheet in child("sheets")
+        .into_iter()
+        .flat_map(|node| workbook_children(node, "sheet"))
+    {
+        let name = sheet
+            .attribute("name")
+            .ok_or_else(|| SidecarError::Workbook("Sheet has no name.".into()))?;
+        let sheet_id = sheet
+            .attribute("sheetId")
+            .ok_or_else(|| SidecarError::Workbook("Sheet has no sheetId.".into()))?;
+        let relationship_id = sheet
+            .attribute((OFFICE_RELATIONSHIPS, "id"))
+            .or_else(|| sheet.attribute((STRICT_OFFICE_RELATIONSHIPS, "id")))
+            .or_else(|| sheet.attribute("id"));
+        let state = sheet.attribute("state");
+        sheets.push(SheetDeclaration {
+            name: name.to_owned(),
+            sheet_id: sheet_id.to_owned(),
+            relationship_id: relationship_id.map(str::to_owned),
+            hidden: matches!(state, Some("hidden" | "veryHidden")),
+            very_hidden: state == Some("veryHidden"),
+        });
     }
     Ok((sheets, protection, active_tab, date_1904))
 }
 
+pub(crate) struct WorkbookRelationships {
+    pub(crate) targets: HashMap<String, String>,
+    pub(crate) theme: String,
+    pub(crate) styles: String,
+    pub(crate) shared_strings: String,
+}
+
 pub(crate) fn read_workbook_relationships(
     archive: &mut ZipArchive<File>,
-) -> Result<HashMap<String, String>, SidecarError> {
-    let xml = read_zip_string(archive, "xl/_rels/workbook.xml.rels")?;
-    let mut reader = Reader::from_str(&xml);
-    let mut relationships = HashMap::new();
-    loop {
-        match reader.read_event()? {
-            Event::Start(element) | Event::Empty(element)
-                if element.local_name().as_ref() == b"Relationship" =>
-            {
-                if let (Some(id), Some(target)) = (
-                    attribute_value(&reader, &element, b"Id")?,
-                    attribute_value(&reader, &element, b"Target")?,
-                ) {
-                    relationships.insert(id, target);
+) -> Result<WorkbookRelationships, SidecarError> {
+    let path = "xl/_rels/workbook.xml.rels";
+    let xml = read_zip_string(archive, path)?;
+    let document = visuals::parse_document(&xml, path)?;
+    let relationships = || {
+        document.root_element().children().filter(|node| {
+            node.has_tag_name("Relationship") && node.attribute("TargetMode") != Some("External")
+        })
+    };
+    let part_path = |kind: &str, fallback: &str| {
+        relationships()
+            .find_map(|node| {
+                let (_, suffix) = node.attribute("Type")?.rsplit_once('/')?;
+                if suffix == kind {
+                    node.attribute("Target")
+                } else {
+                    None
                 }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    Ok(relationships)
+            })
+            .map_or_else(
+                || Ok(fallback.to_owned()),
+                |target| crate::archive::resolve_relationship_target("xl/workbook.xml", target),
+            )
+    };
+    Ok(WorkbookRelationships {
+        targets: relationships()
+            .filter(|node| {
+                // Preserve compatibility with older parts that omitted Type.
+                node.attribute("Type").is_none_or(|kind| {
+                    kind.ends_with("/worksheet") || kind.ends_with("/chartsheet")
+                })
+            })
+            .filter_map(|node| {
+                Some((
+                    node.attribute("Id")?.to_owned(),
+                    node.attribute("Target")?.to_owned(),
+                ))
+            })
+            .collect(),
+        theme: part_path("theme", "xl/theme/theme1.xml")?,
+        styles: part_path("styles", "xl/styles.xml")?,
+        shared_strings: part_path("sharedStrings", "xl/sharedStrings.xml")?,
+    })
 }
 
 pub(crate) fn normalize_worksheet_path(target: &str) -> Result<String, SidecarError> {
@@ -504,85 +529,125 @@ pub(crate) fn dimensions_from_reference(reference: &str) -> Result<(usize, usize
 
 pub(crate) fn read_shared_strings(
     archive: &mut ZipArchive<File>,
+    path: &str,
     colors: &ColorContext,
 ) -> Result<Vec<SharedString>, SidecarError> {
-    let Ok(entry) = zip_entry(archive, "xl/sharedStrings.xml") else {
+    let Ok(entry) = zip_entry(archive, path) else {
         return Ok(Vec::new());
     };
-    let mut reader = Reader::from_reader(BufReader::new(entry));
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Element {
+        Table,
+        Item,
+        Run,
+        RunProperties,
+        RunProperty,
+        Text,
+        Other,
+    }
+
+    let mut reader = NsReader::from_reader(BufReader::new(entry));
     let mut buffer = Vec::new();
+    let mut parents = Vec::new();
+    let mut table_namespace = Vec::new();
     let mut strings = Vec::new();
     let mut current = String::new();
     let mut runs: Vec<RichRun> = Vec::new();
     let mut current_run: Option<RichRun> = None;
-    let mut in_text = false;
     let mut text_preserve = false;
     let mut text_node = String::new();
-    let mut in_phonetic = false;
     loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(element) if element.local_name().as_ref() == b"si" => {
-                current.clear();
-                runs.clear();
-                current_run = None;
-            }
-            Event::Start(element) if element.local_name().as_ref() == b"r" => {
-                current_run = Some(RichRun::default());
-            }
-            // Phonetic guide text (<rPh><t>…</t></rPh>) is ruby annotation,
-            // not cell content.
-            Event::Start(element) if element.local_name().as_ref() == b"rPh" => {
-                in_phonetic = true;
-            }
-            Event::End(element) if element.local_name().as_ref() == b"rPh" => {
-                in_phonetic = false;
-            }
-            Event::Start(element) | Event::Empty(element) if current_run.is_some() => {
-                if element.local_name().as_ref() == b"t" {
-                    in_text = true;
-                    text_preserve = preserves_space(&reader, &element)?;
-                    text_node.clear();
-                } else if let Some(run) = current_run.as_mut() {
-                    apply_run_property(run, &reader, &element, colors)?;
+        let event = reader.read_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let start = matches!(event, Event::Start(_));
+                let (resolved, local) = reader.resolve_element(element.name());
+                let namespace = match resolved {
+                    ResolveResult::Unbound => Some(&[][..]),
+                    ResolveResult::Bound(namespace) => Some(namespace.into_inner()),
+                    ResolveResult::Unknown(_) => None,
+                };
+                let parent = parents.last().copied();
+                let tag = if parent.is_none()
+                    && local.as_ref() == b"sst"
+                    && matches!(
+                        namespace,
+                        Some(
+                            b"" | b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                                | b"http://purl.oclc.org/ooxml/spreadsheetml/main"
+                        )
+                    ) {
+                    table_namespace = namespace.unwrap_or_default().to_vec();
+                    Element::Table
+                } else if namespace == Some(table_namespace.as_slice()) {
+                    match (parent, local.as_ref()) {
+                        (Some(Element::Table), b"si") => Element::Item,
+                        (Some(Element::Item), b"r") => Element::Run,
+                        (Some(Element::Run), b"rPr") => Element::RunProperties,
+                        (Some(Element::RunProperties), _) => Element::RunProperty,
+                        (Some(Element::Item | Element::Run), b"t") => Element::Text,
+                        _ => Element::Other,
+                    }
+                } else {
+                    Element::Other
+                };
+
+                match tag {
+                    // Empty items still occupy a shared-string index.
+                    Element::Item if !start => strings.push(SharedString {
+                        text: String::new(),
+                        runs: None,
+                    }),
+                    Element::Run if start => current_run = Some(RichRun::default()),
+                    Element::Run => runs.push(RichRun::default()),
+                    Element::RunProperty => {
+                        if let Some(run) = &mut current_run {
+                            apply_run_property(run, &reader, element, colors)?;
+                        }
+                    }
+                    Element::Text if start => {
+                        text_preserve = preserves_space(&reader, element)?;
+                    }
+                    _ => {}
+                }
+                if start {
+                    parents.push(tag);
                 }
             }
-            Event::Start(element) if element.local_name().as_ref() == b"t" => {
-                in_text = !in_phonetic;
-                text_preserve = preserves_space(&reader, &element)?;
-                text_node.clear();
+            Event::Text(text) if parents.last() == Some(&Element::Text) => {
+                text_node.push_str(&decode_text(&text)?);
             }
-            Event::Text(text) if in_text => text_node.push_str(&decode_text(&text)?),
-            Event::CData(text) if in_text => text_node.push_str(&decode_cdata(&text)?),
-            Event::GeneralRef(reference) if in_text => {
+            Event::CData(text) if parents.last() == Some(&Element::Text) => {
+                text_node.push_str(&decode_cdata(&text)?);
+            }
+            Event::GeneralRef(reference) if parents.last() == Some(&Element::Text) => {
                 text_node.push_str(&general_ref_text(&reference)?);
             }
-            Event::End(element) if element.local_name().as_ref() == b"t" => {
-                if in_text {
+            Event::End(_) => match parents.pop() {
+                Some(Element::Text) => {
                     let text = text_node_content(std::mem::take(&mut text_node), text_preserve);
                     current.push_str(&text);
                     if let Some(run) = &mut current_run {
                         run.text.push_str(&text);
                     }
                 }
-                in_text = false;
-            }
-            Event::End(element) if element.local_name().as_ref() == b"r" => {
-                if let Some(run) = current_run.take() {
-                    runs.push(run);
+                Some(Element::Run) => {
+                    if let Some(run) = current_run.take() {
+                        runs.push(run);
+                    }
                 }
-            }
-            Event::End(element) if element.local_name().as_ref() == b"si" => {
-                let mut finished = std::mem::take(&mut runs);
-                for run in &mut finished {
-                    normalize_cell_text(&mut run.text);
+                Some(Element::Item) => {
+                    for run in &mut runs {
+                        normalize_cell_text(&mut run.text);
+                    }
+                    normalize_cell_text(&mut current);
+                    strings.push(SharedString {
+                        text: std::mem::take(&mut current),
+                        runs: qualify_runs(std::mem::take(&mut runs)),
+                    });
                 }
-                let mut text = current.clone();
-                normalize_cell_text(&mut text);
-                strings.push(SharedString {
-                    text,
-                    runs: qualify_runs(finished),
-                });
-            }
+                _ => {}
+            },
             Event::Eof => break,
             _ => {}
         }
@@ -655,97 +720,64 @@ pub(crate) struct SheetPrintNames {
 }
 
 pub(crate) fn read_defined_names(
-    archive: &mut ZipArchive<File>,
-) -> Result<
-    (
-        Vec<DefinedName>,
-        HashMap<usize, SheetPrintNames>,
-        HashSet<usize>,
-    ),
-    SidecarError,
-> {
-    let xml = read_zip_string(archive, "xl/workbook.xml")?;
-    let mut reader = Reader::from_str(&xml);
+    workbook: Node<'_, '_>,
+    sheet_count: usize,
+) -> (
+    Vec<DefinedName>,
+    HashMap<usize, SheetPrintNames>,
+    HashSet<usize>,
+) {
     let mut names = Vec::new();
     let mut print_names: HashMap<usize, SheetPrintNames> = HashMap::new();
-    // Sheets with ANY localSheetId-scoped definedName, including hidden and
-    // _xlnm.* built-ins the editor never models — the save's duplicate guard
-    // matches the raw attribute, so the host's early gate must too.
-    let mut scoped_sheets: HashSet<usize> = HashSet::new();
-    struct Pending {
-        name: String,
-        hidden: bool,
-        sheet_index: Option<usize>,
-        formula: String,
-    }
-    let mut current: Option<Pending> = None;
-    loop {
-        match reader.read_event()? {
-            Event::Start(element) if element.local_name().as_ref() == b"definedName" => {
-                let name = attribute_value(&reader, &element, b"name")?.unwrap_or_default();
-                let hidden = attribute_value(&reader, &element, b"hidden")?
-                    .is_some_and(|value| value == "1" || value == "true");
-                let sheet_index = attribute_value(&reader, &element, b"localSheetId")?
-                    .and_then(|value| value.parse::<usize>().ok());
-                current = (!name.is_empty()).then_some(Pending {
-                    name,
-                    hidden,
-                    sheet_index,
-                    formula: String::new(),
-                });
+    let mut scoped_sheets = HashSet::new();
+    for defined in workbook_children(workbook, "definedNames")
+        .take(1)
+        .flat_map(|section| workbook_children(section, "definedName"))
+    {
+        let Some(name) = defined.attribute("name").filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let sheet_index = defined
+            .attribute("localSheetId")
+            .and_then(|index| index.trim().parse::<usize>().ok());
+        if let Some(index) = sheet_index {
+            if index >= sheet_count {
+                continue;
             }
-            Event::Text(text) => {
-                if let Some(defined) = &mut current {
-                    defined.formula.push_str(&decode_text(&text)?);
-                }
-            }
-            Event::CData(text) => {
-                if let Some(defined) = &mut current {
-                    defined.formula.push_str(&decode_cdata(&text)?);
-                }
-            }
-            Event::GeneralRef(reference) => {
-                if let Some(defined) = &mut current {
-                    defined.formula.push_str(&general_ref_text(&reference)?);
-                }
-            }
-            Event::End(element) if element.local_name().as_ref() == b"definedName" => {
-                if let Some(defined) = current.take() {
-                    if let Some(sheet_index) = defined.sheet_index {
-                        scoped_sheets.insert(sheet_index);
+            // Hidden and built-in names also affect duplication.
+            scoped_sheets.insert(index);
+        }
+        if defined.children().any(|node| node.is_element()) {
+            continue;
+        }
+        let formula: String = defined
+            .children()
+            .filter(|node| node.is_text())
+            .filter_map(|node| node.text())
+            .collect();
+        if formula.is_empty() {
+            continue;
+        }
+        if name.starts_with("_xlnm") {
+            // Print names feed PDF export. Other built-ins stay file-only.
+            if let Some(index) = sheet_index.filter(|_| formula.len() <= 2_000) {
+                match name {
+                    "_xlnm.Print_Area" => {
+                        print_names.entry(index).or_default().area = Some(formula)
                     }
-                    if defined.formula.is_empty() {
-                        continue;
+                    "_xlnm.Print_Titles" => {
+                        print_names.entry(index).or_default().titles = Some(formula);
                     }
-                    if defined.name.starts_with("_xlnm") {
-                        // Print names feed the PDF export; other _xlnm.*
-                        // built-ins stay file-only. Oversized refs exceed the
-                        // wire cap and are dropped.
-                        if defined.formula.len() > 2_000 {
-                            continue;
-                        }
-                        if let Some(sheet_index) = defined.sheet_index {
-                            let entry = print_names.entry(sheet_index).or_default();
-                            if defined.name == "_xlnm.Print_Area" {
-                                entry.area = Some(defined.formula);
-                            } else if defined.name == "_xlnm.Print_Titles" {
-                                entry.titles = Some(defined.formula);
-                            }
-                        }
-                    // Hidden names stay file-only (the save preserves them
-                    // verbatim; the editor never models them).
-                    } else if !defined.hidden {
-                        names.push(DefinedName {
-                            name: defined.name,
-                            formula: strip_future_function_markers(&defined.formula),
-                            sheet_index: defined.sheet_index,
-                        });
-                    }
+                    _ => {}
                 }
             }
-            Event::Eof => break,
-            _ => {}
+        } else if !matches!(defined.attribute("hidden"), Some("1" | "true")) {
+            names.push(DefinedName {
+                name: name.to_owned(),
+                formula: strip_future_function_markers(&formula),
+                sheet_index,
+            });
         }
     }
-    Ok((names, print_names, scoped_sheets))
+    (names, print_names, scoped_sheets)
 }

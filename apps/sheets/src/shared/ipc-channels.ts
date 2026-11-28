@@ -41,6 +41,11 @@ export const MAX_CREATE_DOCUMENT_CONTENT_CHARS = 2_000_000
 /// sidecar skips pictures over 2 MiB, so three slots fit under this cap.
 export const MAX_PDF_TEMPLATE_CHARS = 12_000_000
 
+/// Allow a pending print-area union to grow as structural edits move its addresses.
+export const MAX_PRINT_AREA_SAVE_CHARS = 2_000
+/// Workbook formulas repeat the quoted worksheet name for each saved area.
+export const MAX_PRINT_AREA_FORMULA_CHARS = 8_192
+
 /// VML shape id of a header/footer picture slot: left/center/right ×
 /// header/footer, with an EVEN or FIRST suffix for the page variants.
 export const HEADER_FOOTER_PICTURE_POSITION = /^[LCR][HF](EVEN|FIRST)?$/

@@ -1,4 +1,4 @@
-import {PDFName,PDFDict,PDFArray} from 'pdf-lib'
+import {PDFName,PDFDict,PDFArray} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {hasUnsupportedPdfForm} from '../../../shared/pdf-edit-structure.mjs'
 import {openEditablePdf} from './editable-document.mjs'
 import {assertPdfManagedStamps} from './stamps-job.mjs'

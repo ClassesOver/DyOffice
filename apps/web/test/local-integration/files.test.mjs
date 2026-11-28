@@ -1,8 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { readFile, readdir, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { PDFDocument } from 'pdf-lib'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { restrictedOrigin } from '../helpers/restricted.mjs'
 import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
@@ -11,6 +13,102 @@ import { password } from '../helpers/identity.mjs'
 
 const credential = token => ({ kind: 'session', token })
 const own = (f, callback) => f.transactions.withPrincipalTransaction(credential(f.alice.token), callback)
+
+test('encrypted PDF imports and duplicates preserve ciphertext and cannot acquire a replacement revision', async t => {
+  const f=await fileFixture(t,{buildApp:false}),token=f.alice.token
+  const bytes=await readFile(new URL('../../../pdf/tests/fixtures/enc256.pdf',import.meta.url))
+  const original=(await importFile(f,token,bytes,'Encrypted.pdf')).file
+  const prepared=await f.files.prepareDuplicate(token,original.fileId)
+  const duplicate=(await f.files.finishDuplicate(token,original.fileId,prepared.uploadId,prepared.revision,'en')).file
+  const {createLeaseService}=await import('../../server/src/modules/leases/service.ts')
+  const {createRevisionService}=await import('../../server/src/modules/revisions/service.ts')
+  const leases=createLeaseService({transactions:f.transactions})
+  const guardedLeases=createLeaseService({transactions:f.transactions,assertOfficeWritable:f.files.assertOfficeLeaseAllowed})
+  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
+  const plaintext=await PDFDocument.create()
+  plaintext.addPage()
+  const replacement=Buffer.from(await plaintext.save())
+  for(const file of [original,duplicate]){
+    const editorId=randomUUID()
+    await assert.rejects(guardedLeases.acquireLease(token,file.fileId,{editorId}),{statusCode:423})
+    const {leaseEpoch}=await leases.acquireLease(token,file.fileId,{editorId})
+    await assert.rejects(revisions.stageUpload(token,file.fileId,{
+      size:replacement.length,baseRevision:file.revision,leaseEpoch,editorId,
+    }),{statusCode:423})
+    assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),bytes)
+    assert.equal((await f.files.openFile(token,file.fileId)).file.revision,file.revision)
+    await assert.rejects(f.files.readFile(f.bob.token,file.fileId,file.revision),{statusCode:404})
+  }
+  const editable=(await importFile(f,token,replacement,'Editable.pdf')).file
+  const editorId=randomUUID(),{leaseEpoch}=await leases.acquireLease(token,editable.fileId,{editorId})
+  const upload=await revisions.stageUpload(token,editable.fileId,{
+    size:bytes.length,baseRevision:editable.revision,leaseEpoch,editorId,
+  })
+  await assert.rejects(f.files.receiveUpload(token,upload.uploadId,bytes),{statusCode:400})
+})
+
+test('upload publication files a copy in the selected folder without overwriting an existing file', async t => {
+  const f=await fileFixture(t),bytes=await docxBytes(),token=f.alice.token
+  const {createWorkspaceService}=await import('../../server/src/modules/workspace/service.ts')
+  const workspace=createWorkspaceService(f.transactions)
+  const folder=await workspace.createFolder(token,{name:'Converted',parentId:null})
+  const foreign=await workspace.createFolder(f.bob.token,{name:'Private',parentId:null})
+  const original=(await importFile(f,token,bytes,'report.docx')).file
+  await workspace.moveFile(token,original.fileId,{folderId:folder.id})
+  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+  const headers={origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+token,'x-csrf-token':csrf.sessionToken(token)}
+  const stage=folderId=>f.app.inject({method:'POST',url:'/api/v1/files/uploads',headers,payload:{name:'report.docx',size:bytes.length,folderId}})
+  assert.equal((await stage(foreign.id)).statusCode,404)
+  const staged=await stage(folder.id)
+  assert.equal(staged.statusCode,201,staged.body)
+  const pending=staged.json()
+  await f.files.receiveUpload(token,pending.uploadId,bytes)
+  const finish=()=>f.app.inject({method:'POST',url:`/api/v1/uploads/${pending.uploadId}/finish`,headers})
+  const saved=await finish()
+  assert.equal(saved.statusCode,200,saved.body)
+  const copy=saved.json().file
+  assert.notEqual(copy.fileId,original.fileId)
+  assert.deepEqual((await finish()).json(),saved.json())
+  const listing=await workspace.listFiles(token,{folderId:folder.id})
+  assert.deepEqual(new Set(listing.files.map(file=>file.id)),new Set([original.fileId,copy.fileId]))
+  assert.ok(listing.files.every(file=>file.name==='report.docx'))
+  assert.deepEqual((await workspace.listFiles(token,{folderId:'root'})).files,[])
+  assert.deepEqual((await f.files.openFile(token,original.fileId)).file,original)
+  const removed=await workspace.createFolder(token,{name:'Removed',parentId:null})
+  const orphan=(await stage(removed.id)).json()
+  await f.files.receiveUpload(token,orphan.uploadId,bytes)
+  await workspace.deleteFolder(token,removed.id)
+  await assert.rejects(f.files.finishUpload(token,orphan.uploadId),{statusCode:404})
+  await assert.rejects(f.files.openFile(token,orphan.fileId),{statusCode:404})
+})
+
+test('duplicate publishes exactly one independent copy in the source folder and can recover the finish receipt', async t => {
+  const f=await fileFixture(t),bytes=await docxBytes()
+  const source=await importFile(f,f.alice.token,bytes,'report.docx')
+  const id=source.file.fileId
+  const {createWorkspaceService}=await import('../../server/src/modules/workspace/service.ts')
+  const workspace=createWorkspaceService(f.transactions)
+  const folder=await workspace.createFolder(f.alice.token,{name:'Reports',parentId:null})
+  await workspace.moveFile(f.alice.token,id,{folderId:folder.id})
+  await workspace.setStar(f.alice.token,id,{starred:true})
+  await assert.rejects(()=>f.files.prepareDuplicate(f.bob.token,id),{statusCode:404})
+  const pending=await f.files.prepareDuplicate(f.alice.token,id)
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+  const finish=()=>f.files.finishDuplicate(f.alice.token,id,pending.uploadId,pending.revision,'en')
+  const [copy,retry]=await Promise.all([finish(),finish()])
+  assert.equal(copy.name,'report Copy.docx')
+  assert.deepEqual(copy,retry)
+  assert.notEqual(copy.file.fileId,id)
+  assert.notEqual(copy.file.revision,source.file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,copy.file.fileId,copy.file.revision),bytes)
+  assert.deepEqual(await f.files.openFile(f.alice.token,id),source)
+  const copied=(await workspace.listFiles(f.alice.token,{view:'all',id:copy.file.fileId})).files[0]
+  assert.equal(copied.folderId,folder.id)
+  assert.equal(copied.starred,false)
+  const next=await f.files.prepareDuplicate(f.alice.token,id)
+  assert.equal((await f.files.finishDuplicate(f.alice.token,id,next.uploadId,next.revision,'en')).name,'report Copy 2.docx')
+  assert.equal((await f.files.usage(f.alice.token)).storedBytes,bytes.length*3)
+})
 
 test('four-format import publishes exact originals only after explicit finish and never leaks object keys', async t => {
   const f = await fileFixture(t)
@@ -475,4 +573,113 @@ test('a finishing import holds authority through commit before account disable m
     const { password } = await import('../helpers/identity.mjs'), fresh = await f.sessions.login('alice',password)
     assert.deepEqual(await f.files.readFile(fresh.token,opened.file.fileId,opened.file.revision),bytes)
   } finally { release.resolve(); await Promise.allSettled([finishing,disable].filter(Boolean)) }
+})
+
+test('editor assets use a bounded quota separate from document entry and file APIs',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'office-assets-quota-'))
+ t.after(()=>rm(directory,{recursive:true,force:true}))
+ await mkdir(join(directory,'.vite'))
+ await mkdir(join(directory,'assets'))
+ await writeFile(join(directory,'index.html'),'<title>PDF editor</title>')
+ await writeFile(join(directory,'assets/editor.js'),'void 0')
+ await writeFile(join(directory,'.vite/manifest.json'),'{"entry":{"file":"assets/editor.js"}}')
+ await writeFile(join(directory,'.vite/native-assets.json'),'[]')
+ const f=await fileFixture(t,{buildApp:false})
+ const {buildLocalApp}=await import('../../server/src/app.ts')
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin:restrictedOrigin,csrfKey:f.csrfKey,objectStore:f.objects,
+  nativePdfDirectory:directory,localShellDirectory:directory,rateLimit:{max:2,windowMs:60000},
+ })
+ f.cleanup.unshift(()=>app.close())
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300])
+ const {file}=await importFile(f,f.alice.token,Buffer.from(await pdf.save()),'quota.pdf')
+ const headers=signedHeaders(f)
+ const pdfAsset='/native-pdf/assets/editor.js', shellAsset='/assets/editor.js'
+ assert.equal((await app.inject({url:pdfAsset,remoteAddress:'192.0.2.5'})).statusCode,401)
+ assert.equal((await app.inject({url:'/native-pdf/assets/private.js',headers,remoteAddress:'192.0.2.6'})).statusCode,404)
+ const entry='/native-pdf/?fileId='+file.fileId, metadata='/api/v1/files/'+file.fileId
+ const request=(url,method='GET')=>app.inject({url,method,headers})
+ for(const url of [pdfAsset,shellAsset,pdfAsset]){
+  const result=await request(url)
+  assert.equal(result.statusCode,200,url)
+  assert.equal(result.headers['cache-control'],'private, no-store')
+ }
+ assert.equal((await request(entry)).statusCode,200)
+ assert.equal((await request(metadata)).statusCode,200)
+ assert.equal((await request('/native-pdf/index.html?fileId='+file.fileId)).statusCode,429)
+ assert.equal((await request('/native-pdf/assets/../index.html?fileId='+file.fileId)).statusCode,429)
+ for(let i=0;i<5;i++) assert.equal((await request(i%2?pdfAsset:shellAsset,'HEAD')).statusCode,200)
+ assert.equal((await request(pdfAsset)).statusCode,429)
+})
+
+test('a zero-byte CSV survives upload, download, duplicate and version restore without adding bytes', async t => {
+  const f=await fileFixture(t),token=f.alice.token,empty=Buffer.alloc(0)
+  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+  const headers={cookie:'__Host-dyoffice-session='+token,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(token)}
+  const upload=await f.app.inject({method:'POST',url:'/api/v1/files/uploads',headers,payload:{name:'Blank.CSV',size:0}})
+  assert.equal(upload.statusCode,201,upload.body)
+  const {uploadId,fileId}=upload.json(),base='/api/v1/uploads/'+uploadId
+  const ready=await f.app.inject({method:'PUT',url:base+'/content',headers:{...headers,'content-type':'application/octet-stream'},payload:empty})
+  assert.equal(ready.statusCode,200,ready.body)
+  const finished=await f.app.inject({method:'POST',url:base+'/finish',headers})
+  assert.equal(finished.statusCode,200,finished.body)
+  const {file,format,name,downloadEndpoint}=finished.json()
+  assert.equal(file.size,0)
+  assert.equal(file.sha256,createHash('sha256').update(empty).digest('hex'))
+  assert.equal(format,'csv')
+  assert.equal(name,'Blank.CSV')
+  const original=await f.app.inject({method:'GET',url:downloadEndpoint,headers})
+  assert.equal(original.statusCode,200,original.body)
+  assert.equal(original.headers['content-length'],'0')
+  assert.deepEqual(original.rawPayload,empty)
+  await assert.rejects(f.files.stageUpload(token,{name:'Blank.xlsx',size:0}),{statusCode:400})
+  const duplicate=await f.files.prepareDuplicate(token,fileId)
+  const copy=await f.files.finishDuplicate(token,fileId,duplicate.uploadId,duplicate.revision,'en')
+  assert.equal(copy.file.size,0)
+  assert.deepEqual(await f.files.readFile(token,copy.file.fileId,copy.file.revision),empty)
+
+  const {createLeaseService}=await import('../../server/src/modules/leases/service.ts')
+  const {createRevisionService}=await import('../../server/src/modules/revisions/service.ts')
+  const leases=createLeaseService({transactions:f.transactions})
+  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
+  const editorId=randomUUID(),{leaseEpoch}=await leases.acquireLease(token,fileId,{editorId})
+  const text=Buffer.from('filled\r\n')
+  const draft=await revisions.stageUpload(token,fileId,{size:text.length,baseRevision:file.revision,leaseEpoch,editorId})
+  await f.files.receiveUpload(token,draft.uploadId,text)
+  const commit=async(uploadId,baseRevision)=>revisions.commitRevision(token,{fileId,uploadId,baseRevision,leaseEpoch,idempotencyKey:randomUUID()})
+  const saved=await commit(draft.uploadId,file.revision)
+  const undo=await revisions.stageRestore(token,fileId,{revision:file.revision,baseRevision:saved.revision,leaseEpoch,editorId})
+  const restored=await commit(undo.uploadId,saved.revision)
+  assert.equal(restored.size,0)
+  assert.deepEqual(await f.files.readFile(token,fileId,restored.revision),empty)
+  assert.deepEqual(await f.files.readFile(token,fileId,saved.revision),text)
+})
+
+test('generated CSV writes BOM-prefixed worksheet values with a unique workspace name', async t => {
+  const f=await fileFixture(t,{buildApp:false}),token=f.alice.token
+  const {createApiShell}=await import('../../server/src/framework.ts')
+  const {registerFileRoutes}=await import('../../server/src/modules/files/routes.ts')
+  const app=await createApiShell();t.after(()=>app.close())
+  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+  registerFileRoutes(app,f.files,f.sessions,csrf,undefined,{},true)
+  const existing=await importFile(f,token,Buffer.from('existing'),'地区_收入.CSV')
+  const headers={cookie:'__Host-dyoffice-session='+token,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(token),'content-type':'application/octet-stream'}
+  const url='/api/v1/ai/csv-documents?'+new URLSearchParams({title:'地区/收入'})
+  const payload=Buffer.from('地区,数值\r\n华东,007\r\n')
+  const create=options=>app.inject({method:'POST',url,headers,payload,...options})
+  assert.equal((await create({headers:{...headers,'x-csrf-token':'invalid'}})).statusCode,403)
+  assert.equal((await create({payload:Buffer.from([0xff])})).statusCode,400)
+  const created=await Promise.all([create(),create()])
+  assert.ok(created.every(response=>response.statusCode===200),created.map(response=>response.body).join('\n'))
+  const files=created.map(response=>response.json())
+  assert.deepEqual(files.map(file=>file.name).sort(),['地区_收入-2.csv','地区_收入-3.csv'])
+  assert.notEqual(files[0].file.fileId,files[1].file.fileId)
+  for(const result of files){
+    assert.equal(result.format,'csv')
+    assert.deepEqual(await f.files.readFile(token,result.file.fileId,result.file.revision),Buffer.concat([Buffer.from([0xef,0xbb,0xbf]),payload]))
+    await assert.rejects(f.files.openFile(f.bob.token,result.file.fileId),{statusCode:404})
+  }
+  assert.deepEqual(await f.files.readFile(token,existing.file.fileId,existing.file.revision),Buffer.from('existing'))
 })

@@ -2,6 +2,8 @@
 /// stored `&X` forms and the `&[Page]`-style names the Excel UI shows; an
 /// unknown code is kept as the literal text Excel prints.
 
+import { resolveStyleColor, THEME_SLOT_NAMES } from '@genoffice/xlsx-gateway/domain/style-color'
+
 export interface HeaderFooterFields {
   readonly page: number
   readonly total: number
@@ -13,6 +15,11 @@ export interface HeaderFooterFields {
   readonly picture?: string | undefined
 }
 
+export interface HeaderFooterTheme {
+  readonly colors?: readonly string[] | undefined
+  readonly fonts?: { readonly major: string; readonly minor: string } | undefined
+}
+
 const NAMED_CODES: Record<string, string> = {
   page: 'P',
   pages: 'N',
@@ -22,6 +29,103 @@ const NAMED_CODES: Record<string, string> = {
   tab: 'A',
   path: 'Z',
   picture: 'G',
+}
+
+const FORMAT_CODE = /^&(?:"(?<font>[^"]*)"|(?<size>\d{1,3})|K(?<color>[0-9a-f]{6}|\d{2}\.?[+-]\d{2,3})|(?<toggle>[BIUESXYOH]))/i
+
+export function matchHeaderFooterFormat(text: string, index: number): RegExpExecArray | null {
+  return FORMAT_CODE.exec(text.slice(index))
+}
+
+interface HeaderFooterStyle {
+  fontFamily?: string
+  fontSizePt?: number
+  color?: string
+  bold?: boolean
+  italic?: boolean
+  underline?: 'single' | 'double'
+  strike?: boolean
+  baseline?: 'sup' | 'sub'
+}
+
+export function* headerFooterRuns(text: string, theme?: HeaderFooterTheme): Iterable<{
+  text: string
+  style: Readonly<HeaderFooterStyle>
+}> {
+  const style: HeaderFooterStyle = {}
+  let start = 0
+  let index = text.indexOf('&')
+  while (index !== -1) {
+    if (text[index + 1] === '&') {
+      index = text.indexOf('&', index + 2)
+      continue
+    }
+    const format = matchHeaderFooterFormat(text, index)
+    if (format === null) {
+      index = text.indexOf('&', index + 1)
+      continue
+    }
+    if (index > start) yield { text: text.slice(start, index), style: { ...style } }
+    const { font, size, color, toggle } = format.groups ?? {}
+    if (font !== undefined) {
+      const separator = font.lastIndexOf(',')
+      const family = (separator === -1 ? font : font.slice(0, separator)).trim()
+      if (family === '+' || family === '-') {
+        const face = family === '+' ? theme?.fonts?.major : theme?.fonts?.minor
+        if (face) style.fontFamily = face
+        else delete style.fontFamily
+      } else if (family !== '') {
+        style.fontFamily = family
+      }
+      const face = separator === -1 ? '' : font.slice(separator + 1).trim().toLowerCase()
+      if (/^(regular|bold|italic|bold italic|italic bold)$/.test(face)) {
+        style.bold = face.includes('bold')
+        style.italic = face.includes('italic')
+      }
+    } else if (size !== undefined && Number(size) > 0) {
+      style.fontSizePt = Number(size)
+    } else if (color !== undefined) {
+      if (/^[0-9a-f]{6}$/i.test(color)) {
+        style.color = `#${color.toUpperCase()}`
+      } else {
+        // Stored theme indexes use the same zero-based palette order as cell styles.
+        const slot = Math.min(Number(color.slice(0, 2)), THEME_SLOT_NAMES.length - 1)
+        const percent = Number(color.slice(color[2] === '.' ? 3 : 2))
+        const tint = Math.max(-100, Math.min(100, percent)) / 100
+        style.color = resolveStyleColor({ theme: slot, tint }, theme?.colors)
+      }
+    } else {
+      const code = toggle?.toUpperCase()
+      switch (code) {
+        case 'B':
+          style.bold = !style.bold
+          break
+        case 'I':
+          style.italic = !style.italic
+          break
+        case 'S':
+          style.strike = !style.strike
+          break
+        case 'E':
+        case 'U': {
+          const underline = code === 'E' ? 'double' : 'single'
+          if (style.underline === underline) delete style.underline
+          else style.underline = underline
+          break
+        }
+        case 'X':
+        case 'Y': {
+          const baseline = code === 'X' ? 'sup' : 'sub'
+          if (style.baseline === baseline) delete style.baseline
+          else if (style.baseline === undefined) style.baseline = baseline
+          break
+        }
+      }
+    }
+    start = index + format[0].length
+    index = text.indexOf('&', start)
+  }
+  if (start < text.length) yield { text: text.slice(start), style: { ...style } }
 }
 
 export function expandHeaderFooterCodes(text: string, fields: HeaderFooterFields): string {
@@ -58,16 +162,21 @@ export function expandHeaderFooterCodes(text: string, fields: HeaderFooterFields
       code = named
       length = close + 1 - index
     }
-    // &P+n / &P-n offsets the page number.
-    let pageOffset = 0
-    if (code === 'P') {
-      const offset = /^([+-])(\d{1,4})/.exec(text.slice(index + length))
-      if (offset) {
-        pageOffset = Number(offset[2]) * (offset[1] === '-' ? -1 : 1)
-        length += offset[0].length
+    if (code === 'P' || code === 'N') {
+      let value = code === 'P' ? fields.page : fields.total
+      const suffix = /^[+-]\d+/.exec(text.slice(index + length))?.[0]
+      if (suffix !== undefined) {
+        const offset = Number(suffix)
+        if (Number.isSafeInteger(offset) && Number.isSafeInteger(value + offset)) {
+          value += offset
+          length += suffix.length
+        }
       }
+      out += String(value)
+      index += length
+      continue
     }
-    const expanded = expandCode(code, fields, pageOffset)
+    const expanded = expandCode(code, fields)
     if (expanded === null) {
       out += `&${next}`
       index += 2
@@ -79,12 +188,8 @@ export function expandHeaderFooterCodes(text: string, fields: HeaderFooterFields
   return out
 }
 
-function expandCode(code: string, fields: HeaderFooterFields, pageOffset: number): string | null {
+function expandCode(code: string, fields: HeaderFooterFields): string | null {
   switch (code) {
-    case 'P':
-      return String(fields.page + pageOffset)
-    case 'N':
-      return String(fields.total)
     case 'D':
       return fields.date.toLocaleDateString()
     case 'T':

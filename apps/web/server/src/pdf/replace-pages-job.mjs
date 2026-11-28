@@ -1,6 +1,9 @@
-import {PDFName} from 'pdf-lib'
+import {PDFArray,PDFName} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {openEditablePdf} from './editable-document.mjs'
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
+import {openPdfForInserts,pdfInsertFormState} from './insert-form-integrity.mjs'
+import {cleanupDeletedPageForms} from './deleted-page-forms.mjs'
+import {detachPdfStampManagement} from '../../../../pdf/src/shared/managed-page-stamps.ts'
 import {fail,hash} from './job-common.mjs'
 const MAX=64*1024*1024
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
@@ -32,25 +35,48 @@ export function createPdfReplacePagesJob(){
  return {async execute(frame,raw,signal){
   check(signal);if(busy)fail('BUSY');const {target,source}=splitPdfReplacePagesFrame(frame),selection=parsePdfReplacePagesRequest(raw);busy=true
   try{
-   const targetDoc=await openEditablePdf(target),sourceDoc=await openEditablePdf(source)
+   const options={allowAcroForm:true}
+   const managed=await capturePdfManagedStamps(target,options)
+   const targetDoc=await openPdfForInserts(managed.bytes,{planning:true}),sourceDoc=await openPdfForInserts(source,{planning:true})
    const pages=Array.isArray(selection)?selection:undefined,afterPageIndex='afterPageIndex'in selection?selection.afterPageIndex:undefined
    if(pages?.some(page=>page>targetDoc.getPageCount()))fail('INVALID_PDF_REPLACE_PAGES')
    if(afterPageIndex!==undefined&&afterPageIndex>=targetDoc.getPageCount())fail('INVALID_PDF_INSERT_PAGES')
    const count=targetDoc.getPageCount()-(pages?.length??0)+sourceDoc.getPageCount();if(count<1||count>100)fail('PDF_EDIT_LIMIT')
-   const managed=await capturePdfManagedStamps(target);await capturePdfManagedStamps(source)
+   const formKey=PDFName.of('AcroForm'),targetForm=targetDoc.catalog.lookup(formKey),sourceHasForm=sourceDoc.catalog.has(formKey)
+   if(pages&&targetForm){
+    cleanupDeletedPageForms(targetDoc,pages.map(page=>String(targetDoc.getPage(page-1).ref)))
+   }
+   let combinesForms=false
+   if(sourceHasForm&&targetForm){
+    const roots=targetForm.lookup(PDFName.of('Fields'))
+    if(!(roots instanceof PDFArray))fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
+    combinesForms=roots.size()>0
+    if(!combinesForms)targetDoc.catalog.delete(formKey)
+   }
+   const working=targetForm&&(pages||sourceHasForm)
+    ?Buffer.from(await targetDoc.save({useObjectStreams:false,updateFieldAppearances:false})):managed.bytes
+   const replaced=new Set(pages)
+   const expectedPages=targetDoc.getPages().filter((_,index)=>!replaced.has(index+1))
+   const at=pages?pages[0]-1:afterPageIndex+1
+   // Project the single form tree onto its pages in the output. Pages from the other document have no widgets.
+   let expectedForm=combinesForms?undefined:sourceHasForm
+    ?pdfInsertFormState(sourceDoc,{pages:[...Array(at).fill(null),...sourceDoc.getPages(),...Array(expectedPages.length-at).fill(null)]})
+    :pdfInsertFormState(targetDoc,{pages:[...expectedPages.slice(0,at),...Array(sourceDoc.getPageCount()).fill(null),...expectedPages.slice(at)]})
    // Imported managed overlays remain visible source content. Detach management
    // only: target's global config is reapplied separately over the final pages.
-   for(const page of sourceDoc.getPages())page.node.delete(PDFName.of('DyOfficeStamps'))
-   const imported=Buffer.from(await sourceDoc.save({useObjectStreams:false,addDefaultPage:false}));check(signal)
+   detachPdfStampManagement(sourceDoc)
+   const imported=Buffer.from(await sourceDoc.save({useObjectStreams:false,addDefaultPage:false,updateFieldAppearances:false}));check(signal)
    const save=await import('../../../../pdf/src/main/save-pdf.ts')
+   const inspect=combinesForms?doc=>{expectedForm=pdfInsertFormState(doc)}:undefined
    const result=pages
-    ?await save.replacePagesBytes(managed.bytes,imported,pages.map(page=>page-1))
-    :await save.insertPdfBytes(managed.bytes,imported,afterPageIndex)
+    ?await save.replacePagesBytes(working,imported,pages.map(page=>page-1),inspect)
+    :await save.insertPdfBytes(working,imported,afterPageIndex,inspect)
    check(signal)
-   const bytes=await reapplyPdfManagedStamps(Buffer.from(result.merged),managed.operations);check(signal)
+   const bytes=await reapplyPdfManagedStamps(Buffer.from(result.merged),managed.operations,{...options,signal});check(signal)
    if(bytes.length>MAX)fail('OUTPUT_LIMIT')
    const inserted='inserted'in result?result.inserted:result.count
-   if((await openEditablePdf(bytes)).getPageCount()!==count||pages&&result.removed!==pages.length||inserted!==sourceDoc.getPageCount())fail('PDF_REPLACE_VERIFY_FAILED')
+   const reopened=await openEditablePdf(bytes,options)
+   if(reopened.getPageCount()!==count||pages&&result.removed!==pages.length||inserted!==sourceDoc.getPageCount()||pdfInsertFormState(reopened)!==expectedForm)fail('PDF_REPLACE_VERIFY_FAILED')
    return {bytes,inputSha256:hash(target),sourceSha256:hash(source),sha256:hash(bytes),size:bytes.length}
   }catch(error){check(signal);if(pdfReplacePagesSafetyCodes.has(error?.code))throw error;fail('NATIVE_FAILED')}finally{busy=false}
  }}

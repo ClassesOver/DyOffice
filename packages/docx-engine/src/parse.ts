@@ -33,7 +33,7 @@ import { computeListMarkerInfos, type ListItemRef } from './list-markers'
 import { FONT_TABLE_PART_PATH, parseFontTable, readEmbeddedFonts } from './font-table'
 import { DEFAULT_THEME_COLORS, THEME_PART_PATH, readThemeColors, readThemeFonts } from './theme'
 import { PAGE_MARK, SECTION_PAGES_MARK, TOTAL_PAGES_MARK } from './types'
-import { assertZipWithinLimits, loadDocxZip } from './zip-load'
+import { assertZipWithinLimits, loadDocxZip, type ZipLimits } from './zip-load'
 import { altChunkToDocx, hasAltChunkHtmlConverter } from './alt-chunk'
 import type {
   FormulaDisplay,
@@ -375,17 +375,30 @@ export interface ParseExtras {
 }
 
 export interface ParseOptions {
+  /** A caller may apply a smaller decompression budget to secondary inputs. */
+  zipLimits?: ZipLimits
   /** expand w:altChunk parts into display blocks (off inside the chunk's own parse) */
   expandAltChunks?: boolean
   /** run the property resolver beside the legacy path and collect disagreements in extras.resolveDiff */
   shadowResolve?: boolean
 }
 
-export async function parseDocx(
+export function parseDocx(
   bytes: Uint8Array,
   options: ParseOptions = {},
 ): Promise<ParsedDoc & { extras: ParseExtras }> {
-  const zip = await loadDocxZip(bytes)
+  return parseDocxWithinBudget(bytes, options, options.zipLimits && { ...options.zipLimits })
+}
+
+async function parseDocxWithinBudget(
+  bytes: Uint8Array,
+  options: ParseOptions,
+  budget?: ZipLimits,
+): Promise<ParsedDoc & { extras: ParseExtras }> {
+  const zip = await loadDocxZip(bytes, budget, budget && ((usage) => {
+    budget.maxParts -= usage.parts
+    budget.maxTotalBytes -= usage.bytes
+  }))
   assertZipWithinLimits(zip)
   const docPath = await resolveMainDocumentPath(zip)
   if (!docPath) {
@@ -598,7 +611,7 @@ export async function parseDocx(
       continue
     }
     if (el.name === 'w:altChunk' && options.expandAltChunks !== false) {
-      const expanded = await expandAltChunk(xml, zip, rels, styles, numbering, docPath)
+      const expanded = await expandAltChunk(xml, zip, rels, styles, numbering, docPath, budget)
       if (expanded.length > 0) {
         // the chunk element keeps its bytes under the first block; the rest
         // anchor to empty ranges so an untouched save re-emits nothing for them
@@ -875,6 +888,7 @@ async function expandAltChunk(
   styles: Map<string, StyleInfo>,
   numbering: Map<string, NumberingDef>,
   sourcePath = 'word/document.xml',
+  budget?: ZipLimits,
 ): Promise<Block[]> {
   const rId = /\br:id\s*=\s*["']([^"']+)["']/.exec(xml)?.[1]
   if (!rId) return []
@@ -888,6 +902,14 @@ async function expandAltChunk(
         return overrides.get(`/${path}`) ?? defaults.get(path.split('.').pop()?.toLowerCase() ?? '')
       },
       sourcePath,
+      budget && ((bytes) => {
+        // A package may reference the same chunk more than once. Charge every read.
+        budget.maxParts--
+        budget.maxTotalBytes -= bytes
+        if (budget.maxParts < 0 || budget.maxTotalBytes < 0) {
+          throw new Error('Embedded document exceeds the package limit')
+        }
+      }),
     )
     if (!bytes) {
       // no converter here (a Worker parse): the host parses again where one is installed
@@ -896,7 +918,7 @@ async function expandAltChunk(
       }
       return []
     }
-    const sub = await parseDocx(bytes, { expandAltChunks: false })
+    const sub = await parseDocxWithinBudget(bytes, { expandAltChunks: false }, budget)
     for (const [id, info] of sub.styles) if (!styles.has(id)) styles.set(id, info)
     let nextNumId = 1
     for (const id of numbering.keys()) nextNumId = Math.max(nextNumId, (Number(id) || 0) + 1)
@@ -934,7 +956,8 @@ async function expandAltChunk(
       if (block.table) remapTable(block.table)
     }
     return blocks
-  } catch {
+  } catch (error) {
+    if (budget) throw error
     return []
   }
 }

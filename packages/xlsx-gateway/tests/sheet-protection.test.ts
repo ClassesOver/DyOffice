@@ -143,6 +143,19 @@ describe('sheetProtection permission mapping', () => {
 })
 
 describe('applySheetProtection', () => {
+  it('recognizes single-quoted password protection and retains local namespace bindings', () => {
+    const guarded = SHEET.replace('</sheetData>', "</sheetData><sheetProtection sheet='1' password='CBEB'/>")
+    expect(readSheetProtection(guarded)?.password).toEqual({ legacy: 'CBEB' })
+    expect(() => applySheetProtection(guarded, false)).toThrow(/password/)
+
+    const namespace = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    const imported = SHEET.replace('<worksheet>', `<worksheet xmlns="${namespace}">`)
+      .replace('</sheetData>', `</sheetData><s:sheetProtection xmlns:s="${namespace}" sheet="0"/>`)
+    const saved = applySheetProtection(imported, { protected: true, allow: DEFAULT_SHEET_PROTECTION_ALLOW })
+    expect(saved).toContain(`<s:sheetProtection xmlns:s="${namespace}" sheet="1"`)
+    expect(readSheetProtection(saved)?.protected).toBe(true)
+  })
+
   it('writes flags and hash on protect and removes the element when verified', () => {
     const protectedXml = applySheetProtection(SHEET, {
       protected: true,

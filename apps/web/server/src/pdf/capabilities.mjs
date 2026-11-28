@@ -1,5 +1,5 @@
 import { inflateSync } from 'node:zlib'
-import { PDFArray, PDFDict, PDFDocument, PDFName } from 'pdf-lib'
+import { PDFArray, PDFDict, PDFDocument, PDFName } from '../../../../pdf/src/shared/pdf-lib.ts'
 
 function reject(code, status = 400) {
   throw Object.assign(new Error(code), { code, status })

@@ -1,4 +1,4 @@
-import {PDFDocument} from 'pdf-lib'
+import {PDFDocument} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {rotatePdfPages} from './rotate.mjs'
 import {fail,check,hash} from './job-common.mjs'
 

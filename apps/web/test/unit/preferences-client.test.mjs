@@ -60,3 +60,103 @@ test('a preference read started before a later uncertain save cannot unlock anot
  await assert.rejects(client.updatePreferences({theme:'dark'}),/尚未确认/)
  assert.equal(writes,1)
 })
+
+test('workspace session and sleep opt-outs round trip and reject malformed preference receipts',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ assert.equal((await client.updatePreferences({restoreSession:false})).restoreSession,false)
+ assert.equal((await client.updatePreferences({sleepInactiveTabs:false})).sleepInactiveTabs,false)
+ const saved=await client.getPreferences()
+ assert.equal(saved.restoreSession,false)
+ assert.equal(saved.sleepInactiveTabs,false)
+ value={...value,sleepInactiveTabs:'false'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})
+
+test('PDF zoom preferences round trip and reject unknown modes',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ for(const pdfDefaultZoom of ['page','last','width']){
+  assert.equal((await client.updatePreferences({pdfDefaultZoom})).pdfDefaultZoom,pdfDefaultZoom)
+  assert.equal((await client.getPreferences()).pdfDefaultZoom,pdfDefaultZoom)
+ }
+ value={...value,pdfDefaultZoom:'actual'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})
+
+test('document appearance is independent of the workspace theme',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ const saved=await client.updatePreferences({theme:'dark',documentTheme:'light'})
+ assert.equal(saved.theme,'dark')
+ assert.equal(saved.documentTheme,'light')
+ assert.equal((await client.updatePreferences({documentTheme:'follow'})).documentTheme,'follow')
+ value={...value,documentTheme:'system'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})
+
+test('assistant appearance round trips and rejects malformed receipts',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ const appearance={aiFontSize:'custom',aiCustomFontSize:21,aiSpellcheck:false}
+ assert.deepEqual(await client.updatePreferences(appearance),{...initial,...appearance})
+ assert.deepEqual(await client.getPreferences(),{...initial,...appearance})
+ for(const invalid of [{aiFontSize:'huge'},{aiCustomFontSize:33},{aiCustomFontSize:12.5},{aiSpellcheck:'false'}]){
+  value={...initial,...appearance,...invalid}
+  await assert.rejects(client.getPreferences(),/无法确认/)
+ }
+})
+
+test('assistant startup preference persists both choices and rejects a non-boolean receipt',async()=>{
+ let response=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')response={...response,...patch}
+  return response
+ })
+ for(const aiOpenInNewDocs of [true,false]){
+  assert.equal((await client.updatePreferences({aiOpenInNewDocs})).aiOpenInNewDocs,aiOpenInNewDocs)
+  assert.equal((await client.getPreferences()).aiOpenInNewDocs,aiOpenInNewDocs)
+ }
+ response={...response,aiOpenInNewDocs:'false'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})
+
+test('assistant panel side round trips as a strict left or right preference',async()=>{
+ let response=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')response={...response,...patch}
+  return response
+ })
+ for(const aiPanelSide of ['right','left']){
+  assert.equal((await client.updatePreferences({aiPanelSide})).aiPanelSide,aiPanelSide)
+  assert.equal((await client.getPreferences()).aiPanelSide,aiPanelSide)
+ }
+ response={...response,aiPanelSide:'bottom'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})
+
+test('selection Ask AI preference persists both choices and rejects a non-boolean receipt',async()=>{
+ let response=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')response={...response,...patch}
+  return response
+ })
+ for(const aiShowAskTrigger of [false,true]){
+  assert.equal((await client.updatePreferences({aiShowAskTrigger})).aiShowAskTrigger,aiShowAskTrigger)
+  assert.equal((await client.getPreferences()).aiShowAskTrigger,aiShowAskTrigger)
+ }
+ response={...response,aiShowAskTrigger:'false'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})

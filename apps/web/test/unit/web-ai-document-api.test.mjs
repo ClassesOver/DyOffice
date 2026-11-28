@@ -2,12 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createWebWorkbookDocumentApi,downloadWebCsv} from '../../src/editors/web-ai-document-api.ts'
 
-test('Web workbook document API routes CSV exports to its authenticated creator and preserves other document types',async()=>{
+test('Web workbook document API delegates document creation and keeps manual CSV export separate',async()=>{
  const calls=[],base={async createDocument(input){calls.push(['base',input]);return {ok:true,path:'/doc'}}}
  const api=createWebWorkbookDocumentApi(base,async input=>calls.push(['csv',input]))
- assert.deepEqual(await api.createDocument({type:'csv',title:'Sales',content:'Month,Total'}),{ok:true,downloaded:true})
+ assert.deepEqual(await api.createDocument({type:'csv',title:'Sales',content:'Month,Total'}),{ok:true,path:'/doc'})
  assert.deepEqual(await api.createDocument({type:'xlsx',title:'Sales',content:'Month,Total'}),{ok:true,path:'/doc'})
- assert.deepEqual(calls,[['csv',{type:'csv',title:'Sales',content:'Month,Total'}],['base',{type:'xlsx',title:'Sales',content:'Month,Total'}]])
+ assert.deepEqual(calls,[['base',{type:'csv',title:'Sales',content:'Month,Total'}],['base',{type:'xlsx',title:'Sales',content:'Month,Total'}]])
 })
 
 test('CSV export downloads UTF-8 bytes with a safe filename and releases the object URL',async()=>{

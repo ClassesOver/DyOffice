@@ -44,6 +44,21 @@ test('a PPTX with a modification verifier renders and retains its original while
  assert.equal((await f.files.usage(f.alice.token)).reservedBytes,reserved)
  assert.equal((await f.files.openFile(f.alice.token,fileId)).file.revision,f.input.baseRevision)
  assert.deepEqual(await f.files.readFile(f.alice.token,fileId,f.input.baseRevision),original)
+
+ const unlock=password=>f.sessions.unlockEditing(f.alice.token,fileId,{...request,password})
+ await assert.rejects(f.sessions.unlockEditing(f.alice.token,fileId,{...request,generation:1,password:'Synthetic PPTX modify password'}),{statusCode:409})
+ assert.deepEqual(await unlock('Incorrect password'),{status:'incorrect',generation:0})
+ await assert.rejects(()=>f.sessions.apply(f.alice.token,fileId,{...request,ops:ops('e_904989a1','still locked')}),{statusCode:403})
+ assert.deepEqual(await unlock('Synthetic PPTX modify password'),{status:'unlocked',generation:0})
+ assert.equal((await f.sessions.open(f.alice.token,fileId,request)).writeProtected,undefined)
+ const applied=await f.sessions.apply(f.alice.token,fileId,{...request,ops:ops('e_904989a1','unlocked draft')})
+ assert.equal(applied.transaction.applied,true)
+ const editorId=randomUUID()
+ const next=await f.leases.takeoverLease(f.alice.token,fileId,{editorId,expectedEpoch:request.leaseEpoch})
+ const newRequest={...request,editorId,leaseEpoch:next.leaseEpoch}
+ assert.equal((await f.sessions.open(f.alice.token,fileId,newRequest)).writeProtected,true)
+ await assert.rejects(()=>f.sessions.apply(f.alice.token,fileId,{...newRequest,ops:ops('e_904989a1','new editor locked')}),{statusCode:403})
+ await assert.rejects(unlock('Synthetic PPTX modify password'),{statusCode:409})
 })
 
 test('a session export stages a T06 upload and commits exactly once, preserving unrelated parts',async t=>{

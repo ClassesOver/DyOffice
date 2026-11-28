@@ -70,7 +70,7 @@ export async function startNativeWorker(environment: NodeJS.ProcessEnv = process
     await sandbox.run(Buffer.from('worker-startup'),async () => {},{ signal: controller.signal }); check()
     const transactions=createPrincipalTransactions({ pool: businessPool,deploymentId })
     const files=createFileService({ transactions,objects: storage.objectStore,...storage.filePolicy })
-    const leases=createLeaseService({ transactions,assertOfficeWritable:files.assertOfficeWritable }),revisions=createRevisionService({ transactions,objects: storage.objectStore,files,...storage.filePolicy })
+    const leases=createLeaseService({ transactions,assertOfficeWritable: file => files.assertOfficeWritable(file) }),revisions=createRevisionService({ transactions,objects: storage.objectStore,files,...storage.filePolicy })
     const store=createJobWorkerStore({ pool: workerPool,deploymentId,reconcileMs: 1000 })
     const executor=createXlsxJobExecutor({ store,files,leases,revisions,native: createXlsxNativeWorker(sandbox),heartbeatMs: 1000 })
     queue=await createJobQueue({ url: redisUrl,name: 'dyoffice-native-' + deploymentId,onError: warn }); check()

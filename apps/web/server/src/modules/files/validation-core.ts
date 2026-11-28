@@ -2,12 +2,14 @@ import { createHash } from 'node:crypto'
 import { crc32 } from 'node:zlib'
 import { fromBufferPromise } from 'yauzl'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
-import { PDFDocument } from 'pdf-lib'
-import type { OfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
+import { decodeCsvBuffer } from '@genoffice/xlsx-gateway/gateway/csv-import'
+import type { WorkspaceFileFormat } from '../../../../../../packages/web-contracts/src/api.ts'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
+import { validatePdf } from './pdf-validation.mjs'
 
 export const uploadLimits = Object.freeze({ maxBytes: MAX_OBJECT_BYTES, maxEntries: 4096, maxPartBytes: 32 * 1024 * 1024, maxInflatedBytes: 128 * 1024 * 1024, maxXmlBytes: 4 * 1024 * 1024 })
 export interface FileValidationPolicy { maxBytes: number; maxEntries: number; maxPartBytes: number; maxInflatedBytes: number; maxXmlBytes: number }
+export type FileValidationOptions = Partial<FileValidationPolicy> & { allowEncryptedPdf?: boolean }
 type Limits = FileValidationPolicy
 const opcSignatureOrigin = 'http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/origin'
 const opcSignatureTypes = new Set([
@@ -18,14 +20,15 @@ const opcSignatureTypes = new Set([
 const definitions = {
   docx: { path: 'word/document.xml', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', root: 'document', namespace: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
   xlsx: { path: 'xl/workbook.xml', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', root: 'workbook', namespace: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  xlsm: { path: 'xl/workbook.xml', type: 'application/vnd.ms-excel.sheet.macroEnabled.main+xml', root: 'workbook', namespace: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', mime: 'application/vnd.ms-excel.sheet.macroEnabled.12' },
   pptx: { path: 'ppt/presentation.xml', type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml', root: 'presentation', namespace: 'http://schemas.openxmlformats.org/presentationml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
 } as const
 
-export function validateFileName(name: string): OfficeFormat {
+export function validateFileName(name: string): WorkspaceFileFormat {
   if (typeof name !== 'string' || name.trim() !== name || Buffer.byteLength(name) > 255 || name.startsWith('.') || /[\\/\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u.test(name)) throw storageError(400)
   const format = name.split('.').at(-1)?.toLowerCase()
-  if (!['docx','xlsx','pptx','pdf'].includes(format ?? '') || !name.includes('.')) throw storageError(400)
-  return format as OfficeFormat
+  if (!['docx','xlsx','pptx','pdf','csv','xlsm'].includes(format ?? '') || !name.includes('.')) throw storageError(400)
+  return format as WorkspaceFileFormat
 }
 
 function xmlRoot(bytes: Buffer, expected: string, namespace: string): Record<string, unknown> {
@@ -63,8 +66,7 @@ function signatureAttribute(value: unknown) {
   })
 }
 
-async function validateOffice(bytes: Buffer, format: keyof typeof definitions, limits: Limits) {
-  const definition = definitions[format]
+async function readBoundedZip(bytes: Buffer, limits: Limits, isStructuralPart: (name: string) => boolean, allowVba = false) {
   // Reject ZIP64, split archives and trailing junk before opening any entries.
   let end = -1
   for (let at = bytes.length - 22; at >= Math.max(0, bytes.length - 22 - 65535); at--) {
@@ -81,12 +83,12 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
     for await (const entry of zip.eachEntry()) {
       if (++count > limits.maxEntries || entry.uncompressedSize > limits.maxPartBytes || total + entry.uncompressedSize > limits.maxInflatedBytes) throw storageError(413)
       const name = entry.fileName
-      if (names.has(name.toLowerCase()) || name.includes('\\') || name.includes('\0') || name.split('/').some(segment => segment === '..' || segment === '.') || name.startsWith('/') || /vbaProject/i.test(name) || entry.isEncrypted() || ![0,8].includes(entry.compressionMethod) || entry.versionNeededToExtract >= 45 || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw storageError(400)
+      if (names.has(name.toLowerCase()) || name.includes('\\') || name.includes('\0') || name.split('/').some(segment => segment === '..' || segment === '.') || name.startsWith('/') || (!allowVba && /vbaProject/i.test(name)) || entry.isEncrypted() || ![0,8].includes(entry.compressionMethod) || entry.versionNeededToExtract >= 45 || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw storageError(400)
       names.add(name.toLowerCase())
       const header = await zip.readLocalFileHeaderPromise(entry)
       if (!header.fileName.equals(entry.fileNameRaw) || header.generalPurposeBitFlag !== entry.generalPurposeBitFlag || header.compressionMethod !== entry.compressionMethod || header.fileDataStart + entry.compressedSize > directory) throw storageError(400)
       if (!(entry.generalPurposeBitFlag & 8) && (header.crc32 !== entry.crc32 || header.compressedSize !== entry.compressedSize || header.uncompressedSize !== entry.uncompressedSize)) throw storageError(400)
-      const structural = ['[Content_Types].xml','_rels/.rels',definition.path].includes(name)
+      const structural = isStructuralPart(name)
       if (structural && entry.uncompressedSize > limits.maxXmlBytes) throw storageError(413)
       const chunks: Buffer[] = [], stream = await zip.openReadStreamPromise(entry)
       let size = 0, crc = 0
@@ -102,11 +104,43 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
       if (structural) parts.set(name, Buffer.concat(chunks, size))
     }
   } finally { zip.close() }
-  if (!['[Content_Types].xml','_rels/.rels',definition.path].every(name => parts.has(name))) throw storageError(400)
+  return parts
+}
+
+function validateImportXml(parts: Map<string, Buffer>) {
+  for (const xml of parts.values()) {
+    const source = new TextDecoder('utf-8', { fatal: true }).decode(xml)
+    if (/<!\s*(?:DOCTYPE|ENTITY)/i.test(source) || XMLValidator.validate(source) !== true) throw storageError(400)
+  }
+}
+
+export async function validateOdfInput(bytes: Buffer) {
+  const parts = await readBoundedZip(bytes, uploadLimits, name => name === 'content.xml' || name === 'styles.xml')
+  if (!parts.has('content.xml')) throw storageError(400)
+  validateImportXml(parts)
+}
+
+export async function validateHwpxInput(bytes: Uint8Array) {
+  if (bytes.byteLength > uploadLimits.maxBytes) throw storageError(413)
+  const zip = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const parts = await readBoundedZip(zip, uploadLimits, name => /\.(xml|hpf)$/i.test(name))
+  if (!parts.has('Contents/header.xml')) throw storageError(400)
+  validateImportXml(parts)
+}
+
+async function validateOffice(bytes: Buffer, format: keyof typeof definitions, limits: Limits) {
+  const definition = definitions[format]
+  const required = ['[Content_Types].xml','_rels/.rels',definition.path]
+  const parts = await readBoundedZip(bytes, limits, name => required.includes(name), format === 'xlsm')
+  if (!required.every(name => parts.has(name))) throw storageError(400)
   const types = xmlRoot(parts.get('[Content_Types].xml')!, 'Types', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const overrides = children(types, 'Override', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const contentTypes = [...children(types,'Default', 'http://schemas.openxmlformats.org/package/2006/content-types'),...overrides].map(item => String(item['@_ContentType']))
-  if (overrides.filter(item => item['@_PartName'] === '/' + definition.path && item['@_ContentType'] === definition.type).length !== 1 || contentTypes.some(type => /macroEnabled|vbaProject/i.test(type))) throw storageError(400)
+  if (overrides.filter(item => item['@_PartName'] === '/' + definition.path && item['@_ContentType'] === definition.type).length !== 1) throw storageError(400)
+  // VBA is an opaque archive part of an explicitly macro-enabled spreadsheet.
+  // Ordinary Office packages keep their existing macro rejection.
+  if (contentTypes.some(type => /macroEnabled|vbaProject/i.test(type) &&
+      (format !== 'xlsm' || (type !== definition.type && !/^application\/vnd\.ms-office\.vbaProject(?:Signature(?:Agile|V3)?)?$/i.test(type))))) throw storageError(400)
   const relations = xmlRoot(parts.get('_rels/.rels')!, 'Relationships', 'http://schemas.openxmlformats.org/package/2006/relationships')
   const relationships = children(relations,'Relationship', 'http://schemas.openxmlformats.org/package/2006/relationships')
   const roots = relationships.filter(item => item['@_Type'] === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument')
@@ -116,21 +150,23 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
     contentTypes.some(type => opcSignatureTypes.has(signatureAttribute(type).toLowerCase()))
 }
 
-export async function validateUploadInternal(bytes: Buffer, name: string, policy: Partial<Limits> = {}) {
+export async function validateUploadInternal(bytes: Buffer, name: string, { allowEncryptedPdf = false, ...policy }: FileValidationOptions = {}) {
   const format = validateFileName(name), limits = { ...uploadLimits,...policy }
   if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw storageError(400)
-  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw storageError(400)
+  if (!Buffer.isBuffer(bytes) || (bytes.length === 0 && format !== 'csv')) throw storageError(400)
   if (bytes.length > limits.maxBytes || bytes.length > MAX_OBJECT_BYTES) throw storageError(413)
   let officeSignatureProtected = false
   try {
-    if (format === 'pdf') {
-      if (!/^%PDF-(?:1\.[0-9]|2\.0)/.test(bytes.subarray(0, 9).toString('ascii')) || !/%%EOF\s*$/.test(bytes.subarray(-1024).toString('latin1'))) throw storageError(400)
-      const document = await PDFDocument.load(bytes, { ignoreEncryption: false, throwOnInvalidObject: true, updateMetadata: false })
-      if (document.getPageCount() < 1) throw storageError(400)
-    } else officeSignatureProtected = await validateOffice(bytes, format, limits)
+    if (format === 'csv') {
+      const text = decodeCsvBuffer(bytes)
+      // Tab and line breaks are valid CSV data. Binary office packages are not.
+      if (bytes.subarray(0,5).toString('ascii') === '%PDF-' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text) ||
+          bytes.subarray(0,4).toString('hex') === '504b0304' || bytes.subarray(0,8).toString('hex') === 'd0cf11e0a1b11ae1') throw storageError(400)
+    } else if (format === 'pdf') return Object.freeze(await validatePdf(bytes, allowEncryptedPdf))
+    else officeSignatureProtected = await validateOffice(bytes, format, limits)
   } catch (error) {
     if ((error as { statusCode?: number }).statusCode === 413) throw error
     throw storageError(400)
   }
-  return Object.freeze({ format, mime: format === 'pdf' ? 'application/pdf' : definitions[format].mime, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), officeSignatureProtected })
+  return Object.freeze({ format, mime: format === 'csv' ? 'text/csv' : definitions[format].mime, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), officeSignatureProtected })
 }

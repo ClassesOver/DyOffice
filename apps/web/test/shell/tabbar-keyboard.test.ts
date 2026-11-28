@@ -43,3 +43,39 @@ test('unhandled shortcuts and close-button arrows do not change or close tabs',a
  const button=tab(1).querySelector<HTMLButtonElement>('.tab-close')!;button.focus();await key(button,'ArrowRight')
  expect(activate).not.toHaveBeenCalled();expect(document.activeElement).toBe(button)
 })
+
+test('Web tab rename keeps the title extension and submits the file identity exactly once',async()=>{
+ const renameTabFile=vi.fn(async()=>{})
+ await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(TabBar,{renameTabFile})})))
+ await act(async()=>tab(1).dispatchEvent(new MouseEvent('mousedown',{button:0,detail:2,bubbles:true,cancelable:true})))
+ const input=tab(1).querySelector<HTMLInputElement>('.tab-rename-input')!
+ expect(input?.value).toBe('A.pdf')
+ await act(async()=>{
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'Meeting')
+  input.dispatchEvent(new Event('input',{bubbles:true}))
+ })
+ await key(input,'Enter')
+ expect(renameTabFile).toHaveBeenCalledExactlyOnceWith('a','Meeting.pdf')
+ expect(activate).not.toHaveBeenCalled()
+})
+
+test('Delete closes the focused document through its guard and restores tab strip focus only after removal',async()=>{
+ const closeWithKeyboard=vi.fn(async(id:string)=>{
+  items=items.filter(item=>item.id!==id).map(item=>({...item,active:item.id==='b'}))
+  changed(items)
+  return true
+ })
+ await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(TabBar,{closeTabWithKeyboard:closeWithKeyboard})})))
+ await key(tab(0),'Delete')
+ expect(closeWithKeyboard).not.toHaveBeenCalled()
+ closeWithKeyboard.mockResolvedValueOnce(false)
+ tab(1).focus()
+ await key(tab(1),'Delete')
+ expect(document.activeElement).toBe(tab(1))
+ expect(tab(1).getAttribute('aria-label')).toBe('A.pdf')
+ await key(tab(1),'Delete')
+ expect(closeWithKeyboard).toHaveBeenCalledTimes(2)
+ expect(closeWithKeyboard).toHaveBeenLastCalledWith('a')
+ expect(tab(1).getAttribute('aria-label')).toBe('B.pdf')
+ expect(document.activeElement).toBe(tab(1))
+})

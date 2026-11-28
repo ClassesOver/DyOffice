@@ -10,6 +10,7 @@ import {chromium,expect} from '@playwright/test'
 import JSZip from 'jszip'
 import { PNG } from 'pngjs'
 import {imageSizeFromBytes} from '@genoffice/pptx-render'
+import {syncRedactExt} from '@genoffice/pptx-engine'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {launchTestBrowser} from '../helpers/browser.mjs'
@@ -50,6 +51,75 @@ async function openDeck({page,origin}, fileId, theme, count=2) {
 }
 
 const deckFixture = new URL('../fixtures/slides/acceptance.pptx',import.meta.url)
+
+test('Web lays out and draws PPTX text with its embedded font',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f
+  await f.preferences.update(f.alice.token,{theme:'light'})
+  const font=await readFile(new URL('../../../docs/src/renderer/fonts/LiberationMono-Regular.ttf',import.meta.url))
+  const family='宋体',marker='iiiiiiiiiiii'
+  const deck=await JSZip.loadAsync(await readFile(deckFixture))
+  const slidePath='ppt/slides/slide1.xml'
+  const slideXml=await deck.file(slidePath).async('string')
+  deck.file(slidePath,slideXml.replace(
+    '<a:r><a:rPr/><a:t>Acceptance title</a:t></a:r>',
+    `<a:r><a:rPr><a:latin typeface="${family}"/></a:rPr><a:t>${marker}</a:t></a:r>`,
+  ))
+  const fallback=await deck.generateAsync({type:'nodebuffer'})
+  const presPath='ppt/presentation.xml',relsPath='ppt/_rels/presentation.xml.rels'
+  deck.file(presPath,(await deck.file(presPath).async('string')).replace('</p:presentation>',
+    `<p:embeddedFontLst><p:embeddedFont><p:font typeface="${family}"/><p:regular r:id="rId900"/></p:embeddedFont></p:embeddedFontLst></p:presentation>`))
+  deck.file(relsPath,(await deck.file(relsPath).async('string')).replace('</Relationships>',
+    '<Relationship Id="rId900" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/acceptance.fntdata"/></Relationships>'))
+  deck.file('[Content_Types].xml',(await deck.file('[Content_Types].xml').async('string')).replace('</Types>',
+    '<Default Extension="fntdata" ContentType="application/x-fontdata"/></Types>'))
+  deck.file('ppt/fonts/acceptance.fntdata',font)
+  const source=await deck.generateAsync({type:'nodebuffer'})
+  const {file}=await importFile(f,f.alice.token,source,'With embedded font.pptx')
+  const plain=await importFile(f,f.alice.token,fallback,'Without embedded font.pptx')
+  const width=()=>page.evaluate(async marker=>{
+    const [slide]=await window.slidesApi.getRenderSlides()
+    return slide.nodes.flatMap(node=>node.text?.lines.flatMap(line=>line.runs)??[])
+      .find(run=>run.text===marker)?.widthPx??0
+  },marker)
+  const browsersHasFont=(target=page)=>target.evaluate(family=>Array.from(document.fonts).some(
+    face=>face.family===family&&face.status==='loaded',
+  ),family)
+  await openDeck(f,plain.file.fileId,'light')
+  const fallbackWidth=await width()
+  assert.ok(fallbackWidth>0)
+  assert.equal(await browsersHasFont(),false)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(browsersHasFont,{timeout:15000}).toBe(true)
+  assert.ok(await width()>fallbackWidth*1.7)
+  assert.match(await page.evaluate(name=>window.__genofficeDisplayFontFamily(name),family),/^"宋体",/)
+  await page.getByText('Slide Show',{exact:true}).first().click()
+  await page.getByRole('button',{name:'Presenter View',exact:true}).click()
+  const popup=page.waitForEvent('popup')
+  await page.getByRole('button',{name:'Open Audience Window',exact:true}).click()
+  const audience=await popup
+  await expect.poll(()=>browsersHasFont(audience),{timeout:15000}).toBe(true)
+  await page.getByRole('button',{name:/End Show/}).click()
+  await expect(page.locator('.presenter')).toHaveCount(0)
+
+  await page.locator('.notes-pane textarea').fill('Keep the original embedded face')
+  await page.keyboard.press('Control+s')
+  const revision=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision,{timeout:15000}).not.toBe(file.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  assert.deepEqual(await saved.file('ppt/fonts/acceptance.fntdata').async('nodebuffer'),font)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(browsersHasFont,{timeout:15000}).toBe(true)
+  const stripped=await page.evaluate(async({family,marker})=>{
+    const [slide]=await window.slidesApi.getRenderSlides()
+    const node=slide.nodes.find(node=>node.text?.lines.some(line=>line.runs.some(run=>run.text===marker)))
+    await window.slidesApi.editText({slideIndex:0,sourceId:node.sourceId,paragraphs:[{runs:[{text:'🦔',fontFamily:family}]}]})
+    return window.slidesApi.save()
+  },{family,marker})
+  assert.equal(stripped.ok,true)
+  await expect.poll(browsersHasFont,{timeout:15000}).toBe(false)
+  const edited=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  assert.equal(edited.file('ppt/fonts/acceptance.fntdata'),null)
+})
 
 test('Web speaker notes warn on reload and save with Ctrl+S while focused',{timeout:90000},async t=>{
   const f=await fixture(t),{page}=f
@@ -223,6 +293,30 @@ test('PPTX displays modification protection and downloads the unmodified saved v
   assert.equal(download.suggestedFilename(),'write-protected.pptx')
   assert.deepEqual(await readFile(await download.path()),original)
   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+
+  await page.getByRole('button',{name:'Enter modification password',exact:true}).click()
+  const field=page.getByLabel('Modification password',{exact:true})
+  const unlock=page.getByRole('button',{name:'Unlock editing',exact:true})
+  await field.fill('Incorrect password')
+  await unlock.click()
+  await expect(page.getByText('Incorrect modification password.',{exact:true})).toBeVisible()
+  await expect(page.getByText('Write-protected presentation',{exact:true})).toBeVisible()
+  await field.fill('Synthetic PPTX modify password')
+  await unlock.click()
+  await expect(page.getByText('Write-protected presentation',{exact:true})).toHaveCount(0)
+  await page.locator('.ribbon-tab-file').click()
+  await expect(page.locator('.dyoffice-slides-download')).toBeEnabled()
+  assert.equal(await page.evaluate(async()=>{
+    await window.slidesApi.setNotes({slideIndex:0,text:'Edited after entering the modification password'})
+    return (await window.slidesApi.save()).ok
+  }),true)
+  const saved=(await f.files.openFile(f.alice.token,file.fileId)).file
+  assert.notEqual(saved.revision,file.revision)
+  const edited=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,saved.revision))
+  assert.ok((await edited.file(presentation).async('string')).includes(verifier))
+  await page.reload()
+  await expect(page.getByText('Write-protected presentation',{exact:true})).toBeVisible()
+  await expect.poll(()=>page.evaluate(()=>window.slidesApi?.getNotes(0))).toBe('Edited after entering the modification password')
 })
 
 test('PPTX exports the same visible-slide PNG and JPEG images in both UI themes without committing', {timeout:120000}, async t => {
@@ -448,9 +542,277 @@ test('PPTX keeps the section of a middle slide cut and pasted back at its origin
   assert.deepEqual(await actual(),sections)
 })
 
+test('Web PowerPoint keeps the AutoSave override with its original deck and account',{timeout:120000},async t=>{
+  const f=await fixture(t),{page,origin}=f
+  await f.preferences.update(f.alice.token,{theme:'light',autoSave:false})
+  await f.preferences.update(f.bob.token,{language:'en',theme:'light',autoSave:false})
+  const bytes=await readFile(deckFixture)
+  const first=(await importFile(f,f.alice.token,bytes,'First deck.pptx')).file
+  const second=(await importFile(f,f.alice.token,bytes,'Second deck.pptx')).file
+  const other=(await importFile(f,f.bob.token,bytes,'Other account.pptx')).file
+  const toggle=page.locator('.autosave-toggle input')
+  await openDeck(f,first.fileId,'light')
+  await expect(toggle).not.toBeChecked()
+  await page.locator('.autosave-toggle').click()
+  await expect(toggle).toBeChecked()
+  await openDeck(f,second.fileId,'light')
+  await expect(toggle).not.toBeChecked()
+  await openDeck(f,first.fileId,'light')
+  await expect(toggle).toBeChecked()
+
+  const notes='Persisted with the deck AutoSave override'
+  await page.locator('.notes-pane textarea').fill(notes)
+  await page.locator('.thumb').first().click()
+  await page.evaluate(()=>window.dispatchEvent(new Event('blur')))
+  const revision=async()=> (await f.files.openFile(f.alice.token,first.fileId)).file.revision
+  await expect.poll(revision,{timeout:15000}).not.toBe(first.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,first.fileId,await revision()))
+  const noteParts=await Promise.all(saved.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(part=>part.async('string')))
+  assert.ok(noteParts.some(xml=>xml.includes(notes)))
+  await expect.poll(()=>page.evaluate(()=>window.slidesApi.isDirty())).toBe(false)
+  await openDeck(f,first.fileId,'light')
+  await expect(page.locator('.notes-pane textarea')).toHaveValue(notes)
+
+  const request=page.context().request
+  const csrf=async()=> (await(await request.get(origin+'/api/v1/auth/csrf')).json()).csrfToken
+  assert.equal((await request.post(origin+'/api/v1/auth/logout',{headers:{origin,'x-csrf-token':await csrf()}})).status(),204)
+  assert.equal((await request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':await csrf()},data:{username:'bob',password}})).status(),200)
+  await openDeck(f,other.fileId,'light')
+  await expect(toggle).not.toBeChecked()
+})
+
+test('Web PowerPoint AI Beautify attaches only eligible slide screenshots for the selected model',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f
+  await f.preferences.update(f.alice.token,{theme:'light',showAssistant:true,autoSave:false})
+  const deck=await JSZip.loadAsync(await readFile(deckFixture))
+  const slide='ppt/slides/slide2.xml'
+  const originalRun='<a:rPr/><a:t>Acceptance title</a:t>'
+  const xml=await deck.file(slide).async('string')
+  assert.ok(xml.includes(originalRun))
+  deck.file(slide,xml.replace(originalRun,syncRedactExt('<a:rPr/>','a:rPr','Fixture withholding')+'<a:t>Withhold this fixture text</a:t>'))
+  const original=await deck.generateAsync({type:'nodebuffer'})
+  const {file}=await importFile(f,f.alice.token,original,'Beautify.pptx')
+  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[
+    {id:'vision',label:'Vision',model:'gpt-4o',providerId:'openai'},
+    {id:'text',label:'Text only',model:'deepseek-v4-pro',providerId:'deepseek'},
+  ],defaultId:'vision'}}))
+  const requests=[]
+  await page.route('**/api/v1/ai/turns',route=>{
+    const request=route.request().postDataJSON()
+    const n=requests.push(request)
+    return route.fulfill({contentType:'text/event-stream',body:`event: delta\ndata: {"text":"Beautify reply ${n}"}\n\nevent: done\ndata: {}\n\n`})
+  })
+  await openDeck(f,file.fileId,'light')
+  const beautify=async n=>{
+    await page.locator('.ribbon').getByRole('button',{name:'AI Beautify',exact:true}).click()
+    await expect(page.getByText(`Beautify reply ${n}`,{exact:true})).toBeVisible()
+    const request=requests[n-1]
+    return {model:request.modelId,message:request.request.messages.findLast(item=>item.role==='user')}
+  }
+  const selectModel=async name=>{
+    await page.locator('.ai-model-chip').click()
+    await page.getByRole('option',{name,exact:true}).click()
+  }
+
+  const visual=await beautify(1)
+  assert.equal(visual.model,'vision')
+  assert.match(visual.message.text,/current rendering of this slide, slideIndex 0/)
+  assert.equal(visual.message.images?.length,1)
+  assert.equal(visual.message.images[0].mime,'image/png')
+  const image=PNG.sync.read(Buffer.from(visual.message.images[0].base64,'base64'))
+  assert.ok(image.width>100&&image.height>100)
+
+  await selectModel('deepseek-v4-pro')
+  const text=await beautify(2)
+  assert.equal(text.model,'text')
+  assert.equal(text.message.images,undefined)
+  assert.doesNotMatch(text.message.text,/Attached image/)
+
+  await selectModel('gpt-4o')
+  await page.locator('.thumb').nth(1).click()
+  const withheld=await beautify(3)
+  assert.equal(withheld.model,'vision')
+  assert.equal(withheld.message.images,undefined)
+  assert.match(withheld.message.text,/contains text withheld from you/)
+  assert.equal(requests.length,3)
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
+
+test('Web PowerPoint pastes a native clipboard picture when async clipboard reads are denied',{timeout:90000},async t=>{
+  const f=await fixture(t),{page,origin}=f
+  await f.preferences.update(f.alice.token,{theme:'light'})
+  const original=await readFile(deckFixture)
+  const {file}=await importFile(f,f.alice.token,original,'Clipboard picture.pptx')
+  await openDeck(f,file.fileId,'light')
+  const nodes=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes)
+  const count=(await nodes()).length
+  const picture=new PNG({width:4,height:3})
+  for(let i=0;i<picture.data.length;i+=4)picture.data.set([35,80,170,255],i)
+  await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin})
+  await page.bringToFront()
+  await page.evaluate(async(base64)=>{
+    const bytes=Uint8Array.from(atob(base64),value=>value.charCodeAt(0))
+    await navigator.clipboard.write([new ClipboardItem({
+      'image/png':new Blob([bytes],{type:'image/png'}),
+      'text/plain':new Blob(['Image source URL'],{type:'text/plain'}),
+    })])
+    Object.defineProperty(navigator.clipboard,'read',{value:async()=>{throw new DOMException('Clipboard read denied','NotAllowedError')}})
+  },PNG.sync.write(picture).toString('base64'))
+  await page.locator('.thumb').first().click()
+  await page.keyboard.press('ControlOrMeta+v')
+  await expect.poll(async()=> (await nodes()).slice(count).map(node=>node.type),{timeout:12000}).toEqual(['picture'])
+  await page.keyboard.press('ControlOrMeta+s')
+  const revision=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision).not.toBe(file.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  const media=await Promise.all(saved.file(/^ppt\/media\/.*\.png$/).map(part=>part.async('nodebuffer')))
+  assert.ok(media.some(bytes=>{
+    const image=PNG.sync.read(bytes)
+    return image.width===picture.width&&image.height===picture.height&&image.data.equals(picture.data)
+  }))
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(async()=> (await nodes()).slice(count).map(node=>node.type)).toEqual(['picture'])
+})
+
+test('Web PowerPoint saves a website picture pasted from HTML without a bitmap',{timeout:120000},async t=>{
+  const f=await fixture(t),{page,origin}=f
+  await f.preferences.update(f.alice.token,{theme:'light',showAssistant:false})
+  const original=await readFile(deckFixture)
+  const {file}=await importFile(f,f.alice.token,original,'Website picture.pptx')
+  const url='https://clipboard-images.example/slide-picture.png'
+  const html=`<img src="${url}" alt="Website picture">`
+  const png=new PNG({width:7,height:5});png.data.fill(208)
+  const bytes=PNG.sync.write(png)
+  const requests=[]
+  await page.route(url,route=>route.fulfill({status:403}))
+  await page.route('**/api/v1/ai/media',async route=>{
+    requests.push({body:route.request().postDataJSON(),csrf:!!route.request().headers()['x-csrf-token']})
+    await route.fulfill({json:{mime:'image/png',base64:bytes.toString('base64')}})
+  })
+  await openDeck(f,file.fileId,'light')
+  const nodes=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes)
+  const count=(await nodes()).length
+  const pastes=async()=> (await nodes()).slice(count).map(node=>node.type)
+  await page.locator('.thumb').first().click()
+  await page.evaluate(({html,url})=>{
+    const transfer=new DataTransfer()
+    transfer.setData('text/html',html)
+    transfer.setData('text/plain',url)
+    document.activeElement.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}))
+  },{html,url})
+  await expect.poll(pastes,{timeout:12000}).toEqual(['picture'])
+
+  await page.getByRole('button',{name:'Home',exact:true}).click()
+  await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin})
+  await page.evaluate(({html,url})=>navigator.clipboard.write([new ClipboardItem({
+    'text/html':new Blob([html],{type:'text/html'}),
+    'text/plain':new Blob([url],{type:'text/plain'}),
+  })]),{html,url})
+  await page.getByRole('button',{name:'Paste',exact:true}).click()
+  await expect.poll(pastes,{timeout:12000}).toEqual(['picture','picture'])
+
+  await page.evaluate(html=>{
+    const transfer=new DataTransfer()
+    transfer.setData('text/html',`<p>Text with a picture ${html}</p>`)
+    transfer.setData('text/plain','Text with a picture')
+    document.activeElement.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}))
+  },html)
+  await expect.poll(pastes,{timeout:12000}).toEqual(['picture','picture','text'])
+  assert.deepEqual(requests,Array.from({length:2},()=>({body:{action:'fetch_image',url},csrf:true})))
+
+  await page.keyboard.press('ControlOrMeta+s')
+  const revision=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision).not.toBe(file.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  const media=await Promise.all(saved.file(/^ppt\/media\/.*\.png$/).map(part=>part.async('nodebuffer')))
+  assert.ok(media.some(image=>image.equals(bytes)))
+  assert.doesNotMatch(await saved.file('ppt/slides/slide1.xml').async('string'),/clipboard-images\.example/)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(pastes).toEqual(['picture','picture','text'])
+})
+
+test('PPTX prints named PDF notes for a selected hidden slide',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f
+  const archive=await JSZip.loadAsync(await readFile(deckFixture))
+  const slide='ppt/slides/slide2.xml'
+  archive.file(slide,(await archive.file(slide).async('string')).replace(/<p:sld(?=\s)/,'<p:sld show="0"'))
+  const source=await archive.generateAsync({type:'nodebuffer'})
+  const {file}=await importFile(f,f.alice.token,source,'Review deck.pptx')
+  await f.preferences.update(f.alice.token,{theme:'light'})
+  await openDeck(f,file.fileId,'light')
+  await page.evaluate(async()=>{
+    await window.slidesApi.setNotes({slideIndex:0,text:'Excluded notes'})
+    await window.slidesApi.setNotes({slideIndex:1,text:'Review comments for the hidden slide'})
+    const append=document.body.append
+    document.body.append=function(...children){
+      for(const frame of children){
+        if(!(frame instanceof HTMLIFrameElement)||!frame.sandbox.contains('allow-modals'))continue
+        frame.addEventListener('load',()=>{
+          const target=frame.contentWindow
+          target.print=()=>{window.printedNotes={title:target.document.title,html:frame.srcdoc}}
+        },{capture:true,once:true})
+      }
+      return append.apply(this,children)
+    }
+  })
+  await page.locator('.ribbon-tab-file').click()
+  await page.getByRole('button',{name:/^Print…/}).click()
+  const dialog=page.getByRole('dialog',{name:'Print',exact:true})
+  await dialog.getByRole('radio',{name:'Notes Pages',exact:true}).check()
+  await dialog.getByRole('radio',{name:'Landscape',exact:true}).check()
+  await dialog.getByRole('radio',{name:'Custom range',exact:true}).check()
+  await dialog.getByPlaceholder('e.g. 1,3,5-8').fill('2')
+  const exportPdf=dialog.getByRole('button',{name:'Export as PDF…',exact:true})
+  const name=dialog.getByRole('textbox',{name:'File name',exact:true})
+  await expect(name).toHaveValue('Review deck')
+  await expect(exportPdf).toBeDisabled()
+  await dialog.getByRole('checkbox',{name:'Print hidden slides',exact:true}).check()
+  await name.fill('   ')
+  await expect(exportPdf).toBeDisabled()
+  await expect(dialog.getByRole('button',{name:'Print',exact:true})).toBeEnabled()
+  await name.fill('Board review notes.pdf')
+  await exportPdf.click()
+  await expect.poll(()=>page.evaluate(()=>window.printedNotes?.title)).toBe('Board review notes')
+  const printed=await page.evaluate(()=>window.printedNotes)
+  const pdfPage=await page.context().newPage()
+  try{
+    await pdfPage.setContent(printed.html)
+    const bytes=await pdfPage.pdf({preferCSSPageSize:true,printBackground:true})
+    const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const task=getDocument({data:Uint8Array.from(bytes)})
+    try{
+      const pdf=await task.promise
+      assert.equal(pdf.numPages,1)
+      const first=await pdf.getPage(1)
+      assert.ok(Math.abs(first.view[2]-842)<2)
+      assert.ok(Math.abs(first.view[3]-595)<2)
+      const text=(await first.getTextContent()).items.map(item=>item.str??'').join(' ')
+      assert.match(text,/Review comments for the hidden slide/)
+      assert.doesNotMatch(text,/Excluded notes/)
+    }finally{await task.destroy()}
+  }finally{await pdfPage.close()}
+  await expect(dialog).toBeHidden()
+  await page.locator('.ribbon-tab-file').click()
+  await page.getByRole('button',{name:/^Print…/}).click()
+  await name.fill('Custom name for export only')
+  await dialog.getByRole('button',{name:'Print',exact:true}).click()
+  await expect.poll(()=>page.evaluate(()=>window.printedNotes?.title)).toBe('Review deck')
+  await expect(dialog).toBeHidden()
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),source)
+})
+
 test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{timeout:120000},async t=>{
   const f=await fixture(t),{page,origin}=f
   const archive=await JSZip.loadAsync(await readFile(deckFixture))
+  const link='https://例子.example/报价?q=季度#页'
+  const first='ppt/slides/slide1.xml',rels='ppt/slides/_rels/slide1.xml.rels'
+  archive.file(first,(await archive.file(first).async('string')).replace('<p:cNvPr id="3" name="Shape 3">',
+    '<p:cNvPr id="3" name="Shape 3"><a:hlinkClick r:id="rId99"/>'))
+  archive.file(rels,(await archive.file(rels).async('string')).replace('</Relationships>',
+    `<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${link}" TargetMode="External"/></Relationships>`))
   const second='ppt/slides/slide2.xml'
   archive.file(second,(await archive.file(second).async('string')).replace(/<p:sld(?=\s)/,'<p:sld show="0"'))
   const initial=(await importFile(f,f.alice.token,await archive.generateAsync({type:'nodebuffer'}),'Web export.pptx')).file
@@ -462,10 +824,55 @@ test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{
     page.getByRole('button',{name:'Export as PDF…',exact:true}).click(),
   ])
   assert.equal(file.suggestedFilename(),'Web export.pdf')
-  const {PDFDocument}=await import('pdf-lib')
+  const {PDFDict,PDFDocument,PDFHexString,PDFName}=await import('pdf-lib')
   const pdf=await PDFDocument.load(await readFile(await file.path()))
   assert.equal(pdf.getPageCount(),1)
-  assert.equal(pdf.getPage(0).getWidth()/pdf.getPage(0).getHeight(),16/9)
+  assert.deepEqual(pdf.getPage(0).getSize(),{width:13.333*72,height:7.5*72})
+  const links=pdf.getPage(0).node.Annots()
+  assert.equal(links?.size(),1)
+  const action=links.lookup(0,PDFDict).lookup(PDFName.of('A'),PDFDict)
+  assert.equal(action.lookup(PDFName.of('URI'),PDFHexString).decodeText(),new URL(link).href)
+  assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,initial.revision)
+  await page.evaluate(()=>{
+    const append=document.body.append
+    document.body.append=function(...children){
+      for(const frame of children){
+        if(!(frame instanceof HTMLIFrameElement)||!frame.sandbox.contains('allow-modals'))continue
+        frame.addEventListener('load',()=>{
+          const target=frame.contentWindow
+          const print=target.print.bind(target)
+          target.print=()=>{
+            window.printedSlides={title:target.document.title,html:frame.srcdoc,sandbox:frame.getAttribute('sandbox')}
+            print()
+          }
+        },{capture:true,once:true})
+      }
+      return append.apply(this,children)
+    }
+  })
+  await page.locator('.ribbon-tab-file').click()
+  const searchablePdf=page.getByRole('button',{name:'Save as searchable PDF…',exact:true})
+  await expect(searchablePdf).toBeEnabled()
+  await searchablePdf.click()
+  await expect.poll(()=>page.evaluate(()=>window.printedSlides?.title),{timeout:25000}).toBe('Web export')
+  const printed=await page.evaluate(()=>window.printedSlides)
+  assert.equal(printed.sandbox,'allow-same-origin allow-modals')
+  const pdfPage=await page.context().newPage()
+  try{
+    await pdfPage.setContent(printed.html)
+    const bytes=await pdfPage.pdf({preferCSSPageSize:true,printBackground:true})
+    const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const task=getDocument({data:Uint8Array.from(bytes)})
+    try{
+      const vector=await task.promise
+      assert.equal(vector.numPages,1)
+      const first=await vector.getPage(1)
+      assert.ok(Math.abs(first.view[2]-13.333*72)<2)
+      assert.ok(Math.abs(first.view[3]-7.5*72)<2)
+      assert.match((await first.getTextContent()).items.map(item=>item.str??'').join(' '),/Acceptance title/)
+      assert.ok((await first.getAnnotations()).some(item=>item.url===new URL(link).href))
+    }finally{await task.destroy()}
+  }finally{await pdfPage.close()}
   assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,initial.revision)
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin})
   await page.locator('.thumb').first().click({button:'right'})
@@ -481,7 +888,7 @@ test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{
     return first.nodes.some(node=>node.text?.lines.flatMap(line=>line.runs.map(run=>run.text)).join('')===text)
   },marker)).toBe(true)
   await page.getByRole('button',{name:'Insert',exact:true}).click()
-  await expect(page.getByRole('button',{name:'Audio',exact:true})).toBeDisabled()
+  await expect(page.getByRole('button',{name:'Audio',exact:true})).toBeEnabled()
 })
 
 test('Web shape hyperlinks echo their target and are clickable in the slide show',{timeout:90000},async t=>{
@@ -888,7 +1295,45 @@ test('Web records microphone narration, saves it, and plays and clears it after 
   await savePrompt.getByRole('button',{name:"Don't Save",exact:true}).click()
 })
 
-test('Web plays an existing embedded video in the editor and slide show',{timeout:90000},async t=>{
+test('Web drops a mixed batch of pictures and audio on one slide and preserves the saved bytes',{timeout:90000},async t=>{
+  const f=await fixture(t),{page}=f
+  await f.preferences.update(f.alice.token,{theme:'light'})
+  const original=await readFile(deckFixture)
+  const {file}=await importFile(f,f.alice.token,original,'Mixed media drop.pptx')
+  await openDeck(f,file.fileId,'light')
+  const files=['image/png','image/png','application/octet-stream'].map((type,index)=>{
+    const image=new PNG({width:16+index*4,height:12})
+    image.data.fill(40+index*75)
+    return {name:`drop-${index}.PNG`,type,bytes:PNG.sync.write(image)}
+  })
+  const audio=Buffer.alloc(44+320)
+  audio.write('RIFF');audio.writeUInt32LE(audio.length-8,4);audio.write('WAVEfmt ',8)
+  audio.writeUInt32LE(16,16);audio.writeUInt16LE(1,20);audio.writeUInt16LE(1,22)
+  audio.writeUInt32LE(8000,24);audio.writeUInt32LE(16000,28);audio.writeUInt16LE(2,32);audio.writeUInt16LE(16,34)
+  audio.write('data',36);audio.writeUInt32LE(audio.length-44,40)
+  files.splice(1,0,{name:'note.wav',type:'',bytes:audio})
+  const nodes=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes)
+  const initialNodeCount=(await nodes()).length
+  const mediaKinds=async()=> (await nodes()).slice(initialNodeCount).map(node=>node.media??node.type)
+  await page.locator('.stage-rel').evaluate((stage,files)=>{
+    const transfer=new DataTransfer()
+    for(const {name,type,base64} of files)transfer.items.add(new File([Uint8Array.from(atob(base64),value=>value.charCodeAt(0))],name,{type}))
+    const rect=stage.getBoundingClientRect()
+    stage.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:rect.left+rect.width/3,clientY:rect.top+rect.height/3}))
+  },files.map(({name,type,bytes})=>({name,type,base64:bytes.toString('base64')})))
+  await expect.poll(mediaKinds,{timeout:15000}).toEqual(['picture','audio','picture','picture'])
+  await page.keyboard.press('ControlOrMeta+s')
+  const revision=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision).not.toBe(file.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  const savedMedia=await Promise.all(saved.file(/^ppt\/media\//).map(part=>part.async('nodebuffer')))
+  for(const {name,bytes} of files)assert.ok(savedMedia.some(part=>part.equals(bytes)),name)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(mediaKinds).toEqual(['picture','audio','picture','picture'])
+})
+
+test('Web inserts embedded video and audio, then reopens and plays the saved deck',{timeout:90000},async t=>{
   const f=await fixture(t),{page}=f
   await page.goto(f.origin+'/api/v1/auth/csrf')
   const encoded=await page.evaluate(async()=>{
@@ -913,14 +1358,20 @@ test('Web plays an existing embedded video in the editor and slide show',{timeou
     const bytes=new Uint8Array(await new Blob(chunks).arrayBuffer())
     return btoa(String.fromCharCode(...bytes))
   })
-  const {openPptx,savePptx,addMedia}=await import('../../../../packages/pptx-engine/src/index.ts')
-  const seeded=await openPptx(await readFile(deckFixture))
-  const media=addMedia(seeded,0,{kind:'video',ext:'webm',bytes:Buffer.from(encoded,'base64'),
-    offset:{x:3000000,y:3200000,cx:2200000,cy:1600000}})
-  assert.ok(media)
-  const {file}=await importFile(f,f.alice.token,Buffer.from(await savePptx(seeded)),'embedded-video.pptx')
+  const video=Buffer.from(encoded,'base64')
+  const {file}=await importFile(f,f.alice.token,await readFile(deckFixture),'embedded-video.pptx')
   await f.preferences.update(f.alice.token,{theme:'light'})
   await openDeck(f,file.fileId,'light')
+  await page.getByRole('button',{name:'Insert',exact:true}).click()
+  const insert=page.getByRole('button',{name:'Video',exact:true})
+  await expect(insert).toBeEnabled()
+  const rejected=page.waitForResponse(response=>response.url().endsWith('/slides/embedded-media'))
+  await assert.rejects(page.evaluate(async()=>window.slidesApi.addMediaBytes({slideIndex:0,kind:'video',ext:'webm',fitWidthPx:960,base64:btoa('plain text, not a media file')})),/supported audio or video/)
+  assert.equal((await rejected).status(),400)
+  const chooser=page.waitForEvent('filechooser')
+  await insert.click()
+  await (await chooser).setFiles({name:'clip.webm',mimeType:'video/webm',buffer:video})
+  await expect.poll(()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes.some(node=>node.media==='video'))).toBe(true)
   const center=await page.evaluate(async()=>{
     const [slide]=await window.slidesApi.getRenderSlides()
     const node=slide.nodes.find(node=>node.media==='video')
@@ -945,6 +1396,33 @@ test('Web plays an existing embedded video in the editor and slide show',{timeou
   await expect.poll(()=>showVideo.evaluate(el=>el.currentTime)).toBeGreaterThan(0)
   await page.keyboard.press('Escape')
   await expect(page.locator('.slideshow')).toHaveCount(0)
+
+  const audio=Buffer.alloc(44+1600)
+  audio.write('RIFF',0);audio.writeUInt32LE(audio.length-8,4);audio.write('WAVEfmt ',8)
+  audio.writeUInt32LE(16,16);audio.writeUInt16LE(1,20);audio.writeUInt16LE(1,22)
+  audio.writeUInt32LE(8000,24);audio.writeUInt32LE(16000,28);audio.writeUInt16LE(2,32);audio.writeUInt16LE(16,34)
+  audio.write('data',36);audio.writeUInt32LE(audio.length-44,40)
+  for(let i=0;i<800;i++)audio.writeInt16LE(Math.round(Math.sin(i/8)*4000),44+i*2)
+  await page.locator('.stage-rel').evaluate((stage,bytes)=>{
+    const transfer=new DataTransfer()
+    transfer.items.add(new File([Uint8Array.from(bytes)],'note.wav',{type:'audio/wav'}))
+    const rect=stage.getBoundingClientRect()
+    stage.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:rect.left+rect.width/4,clientY:rect.top+rect.height/4}))
+  },[...audio])
+  const mediaKinds=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes.map(node=>node.media).filter(Boolean).sort())
+  await expect.poll(mediaKinds).toEqual(['audio','video'])
+  await page.locator('button.qa-btn[aria-label^="Undo"]').click()
+  await expect.poll(mediaKinds).toEqual(['video'])
+  await page.locator('button.qa-btn[aria-label^="Redo"]').click()
+  await expect.poll(mediaKinds).toEqual(['audio','video'])
+  await page.keyboard.press('ControlOrMeta+s')
+  const revision=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision).not.toBe(file.revision)
+  const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  assert.deepEqual(await zip.file(/^ppt\/media\/.*\.webm$/)[0]?.async('nodebuffer'),video)
+  assert.deepEqual(await zip.file(/^ppt\/media\/.*\.wav$/)[0]?.async('nodebuffer'),audio)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(mediaKinds).toEqual(['audio','video'])
 })
 
 test('Web migrates legacy custom shows through duplicate names and rename',{timeout:90000},async t=>{
@@ -1233,4 +1711,195 @@ test('Ctrl+S names an untitled presentation from the first slide once', {timeout
   assert.ok(next?.sourceId)
   await save()
   assert.equal(await name(),title+'.pptx')
+})
+
+test('Web screen recording embeds the chosen capture and handles a cancelled picker',{timeout:90000},async t=>{
+  const f=await fixture(t),{page}=f
+  await f.preferences.update(f.alice.token,{theme:'light',autoSave:false})
+  await page.addInitScript(()=>{
+    window.cancelCapture=true;window.screenCaptureFrames=0
+    if(!navigator.mediaDevices)return
+    navigator.mediaDevices.getDisplayMedia=async()=>{
+      if(window.cancelCapture)throw new DOMException('Selection cancelled','NotAllowedError')
+      const canvas=document.createElement('canvas')
+      canvas.width=96;canvas.height=64
+      const ctx=canvas.getContext('2d'),stream=canvas.captureStream(20)
+      const track=stream.getVideoTracks()[0]
+      window.screenCaptureTrack=track
+      let frame=0
+      const paint=()=>{ctx.fillStyle=(window.screenCaptureFrames=++frame)%2?'#154582':'#bf4221';ctx.fillRect(0,0,96,64)}
+      paint()
+      const timer=setInterval(()=>{if(track.readyState==='ended')clearInterval(timer);else paint()},50)
+      return stream
+    }
+  })
+  const {file}=await importFile(f,f.alice.token,await readFile(deckFixture),'recorded-screen.pptx')
+  await openDeck(f,file.fileId,'light')
+  await page.getByRole('button',{name:'Insert',exact:true}).click()
+  const start=page.getByRole('button',{name:'Screen Recording',exact:true})
+  const stop=page.getByRole('button',{name:'Stop Recording',exact:true})
+  await expect(start).toBeEnabled()
+  await start.click()
+  await expect(page.locator('.status-msg')).toContainText('Screen recording unavailable')
+  assert.equal(await page.evaluate(()=>window.slidesApi.isDirty()),false)
+  await page.evaluate(()=>{window.cancelCapture=false})
+  await start.click()
+  await expect(stop).toBeVisible()
+  assert.equal(await page.evaluate(()=>window.dyofficeEditorCanSleep()),false)
+  await expect.poll(()=>page.evaluate(()=>window.screenCaptureTrack?.readyState)).toBe('live')
+  await page.waitForFunction(()=>window.screenCaptureFrames>=5)
+  await page.locator('.thumb').nth(1).click()
+  await stop.click()
+  await expect(page.locator('.status-msg')).toContainText('Screen recording inserted')
+  assert.equal(await page.evaluate(()=>window.screenCaptureTrack.readyState),'ended')
+  assert.equal(await page.evaluate(()=>window.dyofficeEditorCanSleep()),true)
+  const hasVideo=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes.some(node=>node.media==='video'))
+  await expect.poll(hasVideo).toBe(true)
+  await page.keyboard.press('ControlOrMeta+s')
+  const revision=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision).not.toBe(file.revision)
+  const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  assert.equal(zip.file(/^ppt\/media\/.*\.webm$/).length,1)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(hasVideo).toBe(true)
+  await page.getByRole('button',{name:'Slide Show',exact:true}).click()
+  await page.getByRole('button',{name:'From Beginning',exact:true}).click()
+  const player=page.locator('.slideshow video')
+  await expect(player).toHaveAttribute('src',/^blob:/)
+  await player.click()
+  await expect.poll(()=>player.evaluate(video=>video.currentTime)).toBeGreaterThan(0)
+  await page.keyboard.press('Escape')
+})
+
+test('PPTX exports a playable MP4 from the visible slides of the current Web draft',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f
+  await f.preferences.update(f.alice.token,{theme:'light',autoSave:false})
+  const archive=await JSZip.loadAsync(await readFile(deckFixture))
+  const hidden='ppt/slides/slide2.xml'
+  archive.file(hidden,(await archive.file(hidden).async('string')).replace(/<p:sld(?=\s)/,'<p:sld show="0"'))
+  const {file}=await importFile(f,f.alice.token,await archive.generateAsync({type:'nodebuffer'}),'Quarterly review.pptx')
+  await openDeck(f,file.fileId,'light')
+  await page.getByRole('button',{name:'Design',exact:true}).click()
+  await page.getByRole('button',{name:'Slide Size',exact:true}).click()
+  await page.getByRole('button',{name:'Standard (4:3)',exact:true}).click()
+  await expect.poll(()=>page.evaluate(()=>window.slidesApi.getSlideSize())).toEqual({cx:9144000,cy:6858000})
+  await page.locator('.ribbon-tab-file').click()
+  const exportVideo=page.getByRole('button',{name:'Export as Video (MP4)…',exact:true})
+  await expect(exportVideo).toBeEnabled()
+  await exportVideo.click()
+  const dialog=page.locator('.export-video-dialog')
+  await dialog.getByLabel('Resolution').selectOption('720')
+  await dialog.getByLabel('Seconds spent on each slide').fill('1')
+  const [download]=await Promise.all([
+    page.waitForEvent('download',{timeout:45000}),
+    dialog.getByRole('button',{name:'Create Video',exact:true}).click(),
+  ])
+  assert.equal(download.suggestedFilename(),'Quarterly review.mp4')
+  const encoded=await readFile(await download.path())
+  assert.equal(encoded.toString('ascii',4,8),'ftyp')
+  const metadata=await page.evaluate(base64=>new Promise((resolve,reject)=>{
+    const video=document.createElement('video')
+    const data=Uint8Array.from(atob(base64),c=>c.charCodeAt(0))
+    const url=URL.createObjectURL(new Blob([data],{type:'video/mp4'}))
+    video.onloadeddata=()=>{
+      resolve({width:video.videoWidth,height:video.videoHeight,duration:video.duration})
+      URL.revokeObjectURL(url)
+    }
+    video.onerror=()=>{URL.revokeObjectURL(url);reject(Error(video.error?.message||'MP4 playback failed'))}
+    video.preload='auto'
+    video.src=url
+  }),encoded.toString('base64'))
+  assert.equal(metadata.width,960)
+  assert.equal(metadata.height,720)
+  assert.ok(metadata.duration>=0.95&&metadata.duration<1.2,JSON.stringify(metadata))
+  assert.equal(await page.evaluate(()=>window.slidesApi.isDirty()),true)
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+
+  const wav=Buffer.alloc(44+1600)
+  wav.write('RIFF',0);wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8)
+  wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22)
+  wav.writeUInt32LE(8000,24);wav.writeUInt32LE(16000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34)
+  wav.write('data',36);wav.writeUInt32LE(1600,40)
+  for(let i=0;i<800;i++)wav.writeInt16LE(Math.round(Math.sin(i/8)*4000),44+i*2)
+  await page.evaluate(wavBase64=>window.slidesApi.saveRecording({slides:[{slideIndex:0,wavBase64,durationMs:100,advanceMs:1000}]}),wav.toString('base64'))
+  const aac=await page.evaluate(async()=>typeof AudioEncoder==='function'&&(await AudioEncoder.isConfigSupported({codec:'mp4a.40.2',sampleRate:48000,numberOfChannels:1,bitrate:96000})).supported)
+  await page.locator('.ribbon-tab-file').click()
+  await exportVideo.click()
+  await dialog.getByLabel('Resolution').selectOption('720')
+  await expect(dialog.getByRole('checkbox',{name:/Use recorded timings/})).toBeChecked()
+  const create=dialog.getByRole('button',{name:'Create Video',exact:true})
+  if(aac){
+    const [withNarration]=await Promise.all([page.waitForEvent('download',{timeout:45000}),create.click()])
+    assert.ok((await readFile(await withNarration.path())).includes(Buffer.from('soun')))
+  }else{
+    const stray=[]
+    page.on('download',value=>stray.push(value))
+    await create.click()
+    await expect(page.locator('.status-msg')).toContainText('cannot encode AAC narration')
+    await expect(dialog).toHaveCount(0)
+    assert.equal(stray.length,0)
+  }
+})
+
+test('Web inserts and turns a real GLB model and preserves it after saving',{timeout:90000},async t=>{
+  const f=await fixture(t,['--use-angle=swiftshader','--enable-unsafe-swiftshader']),{page}=f
+  await f.preferences.update(f.alice.token,{theme:'light',autoSave:false})
+  const positions=Buffer.alloc(36)
+  ;[-1,-1,0,1,-1,0,0,1,0].forEach((value,index)=>positions.writeFloatLE(value,index*4))
+  const model={asset:{version:'2.0'},scene:0,scenes:[{nodes:[0]}],nodes:[{mesh:0}],
+    meshes:[{primitives:[{attributes:{POSITION:0}}]}],buffers:[{
+      byteLength:positions.length,uri:'data:application/octet-stream;base64,'+positions.toString('base64'),
+    }],
+    bufferViews:[{buffer:0,byteLength:positions.length}],
+    accessors:[{bufferView:0,componentType:5126,count:3,type:'VEC3',min:[-1,-1,0],max:[1,1,0]}]}
+  function glb(content){
+    const json=Buffer.from(JSON.stringify(content))
+    const jsonSize=Math.ceil(json.length/4)*4
+    const output=Buffer.alloc(20+jsonSize,0x20)
+    output.writeUInt32LE(0x46546c67,0);output.writeUInt32LE(2,4);output.writeUInt32LE(output.length,8)
+    output.writeUInt32LE(jsonSize,12);output.writeUInt32LE(0x4e4f534a,16);json.copy(output,20)
+    return output
+  }
+  const bytes=glb(model)
+  const {file}=await importFile(f,f.alice.token,await readFile(deckFixture),'Model demo.pptx')
+  await openDeck(f,file.fileId,'light')
+  await page.getByRole('button',{name:'Insert',exact:true}).click()
+  const insert=page.getByRole('button',{name:'3D Models',exact:true})
+  await expect(insert).toBeEnabled()
+  const acceptedExternalBuffer=await page.evaluate(async base64=>{
+    const bytes=Uint8Array.from(atob(base64),character=>character.charCodeAt(0))
+    try{await window.slidesApi.addModel3d({slideIndex:0,bytes,name:'external.glb',aspect:1,fitWidthPx:960});return true}
+    catch{return false}
+  },glb({...model,buffers:[{byteLength:positions.length,uri:'external.bin'}]}).toString('base64'))
+  assert.equal(acceptedExternalBuffer,false)
+  const chosen=page.waitForEvent('filechooser')
+  await insert.click()
+  await (await chosen).setFiles({name:'triangle.glb',mimeType:'model/gltf-binary',buffer:bytes})
+  const getModel=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes.find(node=>node.model3d)?.model3d??null)
+  const getPoster=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes.find(node=>node.model3d)?.dataUrl??'')
+  await expect.poll(getModel,{timeout:15000}).toEqual({ax:0,ay:0,az:0})
+  const originalPoster=await getPoster()
+  assert.match(originalPoster,/^data:image\/png;base64,/)
+  const handle=page.getByRole('button',{name:'Drag to turn the 3D model',exact:true})
+  await expect(handle).toBeVisible()
+  const box=await handle.boundingBox()
+  assert.ok(box)
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2)
+  await page.mouse.down()
+  await page.mouse.move(box.x+box.width/2+36,box.y+box.height/2+16,{steps:6})
+  await page.mouse.up()
+  await expect.poll(async()=>Math.abs((await getModel())?.ay??0)).toBeGreaterThan(0)
+  await expect.poll(getPoster).not.toBe(originalPoster)
+  const rotation=await getModel()
+  const turnedPoster=await getPoster()
+  assert.match(turnedPoster,/^data:image\/png;base64,/)
+  await page.keyboard.press('ControlOrMeta+s')
+  const revision=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision).not.toBe(file.revision)
+  const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  assert.deepEqual(await zip.file(/^ppt\/media\/.*\.glb$/)[0]?.async('nodebuffer'),bytes)
+  assert.match(await zip.file('ppt/slides/slide1.xml').async('string'),/<am3d:rot[^>]* ay="-?\d+"/)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(getModel).toEqual(rotation)
+  await expect.poll(getPoster).toBe(turnedPoster)
 })

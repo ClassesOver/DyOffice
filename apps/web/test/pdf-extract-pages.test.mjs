@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {PDFDocument,PDFHexString,PDFName,degrees} from 'pdf-lib'
+import {PDFDict,PDFDocument,PDFHexString,PDFName,PDFPageLeaf,PDFString,degrees} from 'pdf-lib'
 import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs'
 import {createPdfExtractPagesJob} from '../server/src/pdf/extract-pages-job.mjs'
 import {createIsolatedPdfExtractPagesJob} from '../server/src/pdf/extract-pages-isolated.mjs'
@@ -23,6 +23,28 @@ test('PDF extraction writes a separate PDF in requested order and retains text, 
  assert.deepEqual(bytes,original)
  assert.deepEqual(await read(result.bytes),[{text:'Page 3',rotation:90,notes:['Note 3']},{text:'Page 1',rotation:0,notes:['Note 1']}])
  assert.equal((await read(bytes)).length,3)
+})
+test('PDF extraction remaps retained named links and leaves omitted pages out of the file',async()=>{
+ const doc=await PDFDocument.load(await fixture()),[first,omitted,last]=doc.getPages()
+ const name=PDFName.of
+ const addLink=extra=>first.node.addAnnot(doc.context.register(doc.context.obj({
+  Type:'Annot',Subtype:'Link',Rect:[20,20,100,40],...extra,
+ })))
+ const retained=PDFString.of('Last page')
+ doc.catalog.set(name('Names'),doc.context.obj({Dests:{Names:[retained,[last.ref,'Fit']]}}))
+ addLink({Dest:retained})
+ addLink({A:{S:'GoTo',D:[omitted.ref,'Fit']}})
+ const result=await createIsolatedPdfExtractPagesJob().execute(Buffer.from(await doc.save()),command([3,1]))
+ const task=getDocument({data:Uint8Array.from(result.bytes),disableFontFace:true,useSystemFonts:true})
+ try{
+  const output=await task.promise
+  const links=(await (await output.getPage(2)).getAnnotations()).filter(annotation=>annotation.subtype==='Link')
+  assert.equal(await output.getPageIndex(links[0].dest[0]),0)
+  assert.equal(links[1].dest,undefined)
+ }finally{await task.destroy()}
+ const output=await PDFDocument.load(result.bytes)
+ assert.equal(output.context.enumerateIndirectObjects().filter(([,object])=>object instanceof PDFPageLeaf).length,2)
+ assert.equal(output.getPage(1).node.Annots().lookup(2,PDFDict).has(name('A')),false)
 })
 test('PDF extraction strictly rejects empty, duplicate, stale and unbounded page selections',async()=>{
  const bytes=await fixture(),job=createPdfExtractPagesJob()
@@ -48,9 +70,10 @@ test('PDF extraction keeps note reply identities connected inside the new page',
  }finally{await task.destroy()}
 })
 
-test('PDF extraction rejects encrypted and form sources before export',async()=>{
- const bytes=await fixture(),form=await PDFDocument.load(bytes);form.getForm().createTextField('x')
- await assert.rejects(createPdfExtractPagesJob().execute(Buffer.from(await form.save()),command([1])),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})
+test('PDF extraction rejects encrypted and XFA sources before export',async()=>{
+ const bytes=await fixture(),form=await PDFDocument.load(bytes)
+ form.getForm().acroForm.dict.set(PDFName.of('XFA'),form.context.register(form.context.flateStream('<xdp/>')))
+ await assert.rejects(createPdfExtractPagesJob().execute(Buffer.from(await form.save({updateFieldAppearances:false})),command([1])),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})
  const encrypted=await PDFDocument.load(bytes);encrypted.context.trailerInfo.Encrypt=encrypted.context.register(encrypted.context.obj({Filter:'Standard',V:1,R:2,Length:40,O:'x',U:'y',P:-4}))
  await assert.rejects(createPdfExtractPagesJob().execute(Buffer.from(await encrypted.save()),command([1])),{code:'PASSWORD'})
 })

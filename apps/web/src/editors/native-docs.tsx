@@ -1,3 +1,7 @@
+import {BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES} from '../../../docs/src/shared/merge-data'
+import {takeOfficeImportUnlock,workspaceOpenAction} from './browser-document-command'
+import {applyBrowserEditorTheme} from './browser-editor-theme'
+import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import { officeSignatureNotice } from './office-signature-notice'
 import {readHandoffSkill} from './document-handoff-spec'
 import {joinWordCollab,type WordSyncState} from './word-collab'
@@ -12,18 +16,21 @@ import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/sr
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App, type DocsNamedCopy } from '../../../docs/src/renderer/App'
+import { PasswordDialog } from '../../../docs/src/renderer/components/PasswordDialog'
 import { LocaleProvider, setModuleLang } from '../../../docs/src/renderer/i18n/locale'
 import { setAuthorName } from '../../../docs/src/renderer/author-name'
-import { applyAiPanelPrefs, AssistantAvatar, installScreenTips } from '@genoffice/ui'
+import { AssistantAvatar, installScreenTips } from '@genoffice/ui'
 import type { SessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { createDocsBridge } from './docs-bridge.ts'
 import type { DocsEditorHandle, OfficeHandoffRunner } from '../../../docs/src/renderer/file-actions'
-import type { DesktopApi } from '../../../docs/src/shared/ipc'
+import type { DesktopApi, MergeOutputRequest, MergeOutputResponse } from '../../../docs/src/shared/ipc'
 import {AGENT_TOOLS as DOCS_AGENT_TOOLS} from '../../../docs/src/renderer/ai/tools'
 import { messages } from './messages.ts'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import { mountEditorRealtime } from './editor-realtime.ts'
-import { confirmWebFileName, suggestWebFileName } from './web-ai-naming'
+import { confirmWorkspaceCopy, suggestWebFileName, type WorkspaceCopyDestination } from './web-ai-naming'
+import {MAX_WORKSPACE_COPY_BYTES} from './pdf-extraction'
+import type {createMailMergeWorkspaceOutput} from './docs-mail-merge'
 import { createImageAttachmentReferences } from './web-ai-media-api'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -44,11 +51,13 @@ import './docs.css'
 import './ai-dock-theme.css'
 
 export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false},citationMode=false,guest=false) {
+  const openWorkspaceFile = workspaceOpenAction()
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
   let closing=false
   let changed = () => {}
-  let disposed = false, downloading = false, actionError = ''
+  let disposed = false, downloading = false, unlocking = false, actionError = ''
+  let unlockedBytes:Uint8Array|undefined
   let authorizedDraft: {origin:string;ticket:string;expires:number;write:boolean} | undefined
   type WriteState = 'planning'|'writing'|'saving'|'saved'|'conflict'|'saveFailed'|'failed'|'noModel'|'outputLimit'|'timedOut'|'emptyOutput'|'noTool'
   type Review = {state:'reviewing'|'ready'|'failed'|'noModel';text?:string}
@@ -78,22 +87,34 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   // Every registration gets a fresh local-copy identity, including detach/rebind
   // of the same renderer handle. Keep the readiness callback semantics unchanged.
-  let draftEditor:Pick<DocsEditorHandle,'serialize'>|null=null
-  const registerDraftEditor=(handle:DocsEditorHandle|null)=>{draftEditor=handle?{serialize:()=>handle.serialize()}:null;registerEditor(handle)}
-  const unsubscribe = host.subscribe(() => changed())
+  let draftEditor:Pick<DocsEditorHandle,'serialize'|'exportCopy'>|null=null
+  const registerDraftEditor=(handle:DocsEditorHandle|null)=>{
+    draftEditor=handle?{serialize:()=>handle.serialize(),exportCopy:handle.exportCopy}:null
+    registerEditor(handle)
+  }
+  let onHostState=()=>changed()
+  const unsubscribe = host.subscribe(() => onHostState())
   let continuationRevision:()=>string|undefined=()=>undefined
   const embeddedDocument=guest && window.parent!==window && new URLSearchParams(location.search).get('dshEmbed')==='1'
-  const assistantResult = guest?{assistant:undefined,failure:undefined}:await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision:()=>continuationRevision()},false,'docx',new Set([...DOCS_AGENT_TOOLS.map(tool=>tool.name),'read_attachment','read_knowledge_file','search_knowledge_base']))
-  const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
-  const signed=opened.officeSignatureProtected===true
+  const signed=opened.officeSignatureProtected===true,initiallyProtected=opened.documentPasswordProtected===true
+  let protectedSession=initiallyProtected
+  const passwordProtected=()=>host.isDocxPasswordProtected(fileId)
+  const assistantRestricted=()=>protectedSession||passwordProtected()||host.hasDocxPasswordChange(fileId)
+  const protectedView=()=>signed||assistantRestricted()
+  const canEdit=()=>!signed&&!citationMode&&(!passwordProtected()||host.hasDocxEditUnlock(fileId))
+  const assistantResult = guest||initiallyProtected?{assistant:undefined,failure:undefined}:await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision:()=>continuationRevision()},false,'docx',new Set([...DOCS_AGENT_TOOLS.map(tool=>tool.name),'read_attachment','read_knowledge_file','search_knowledge_base']))
+  const assistant = assistantResult.assistant
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
+  const importUnlock=initiallyProtected&&!guest?takeOfficeImportUnlock(opened.file.revision):undefined
+  if(importUnlock)unlockedBytes=await host.claimDocxImportUnlock(fileId,importUnlock,!signed&&!citationMode).catch(()=>undefined)
+  const initiallyUnlocked=!initiallyProtected||!!unlockedBytes
   setModuleLang(locale); document.documentElement.lang = locale
-  if (prefs.theme === 'system') delete document.documentElement.dataset.theme
-  else document.documentElement.dataset.theme = prefs.theme
+  applyBrowserEditorTheme(document.documentElement, prefs)
   setAuthorName(prefs.authorName ?? '')
-  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed?'unavailable':'joining'
+  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed||initiallyProtected?'unavailable':'joining'
+  let collabEditor:Editor|null=null, collabProtected=initiallyProtected, resumeCollab=false
   let peerSaveTimer:ReturnType<typeof setTimeout>|undefined
   let checkingWriter=false,nextWriterCheck=0,reopenToSave=false, journalAhead=false, lastSynced=-1
   let syncedSavedRevision:string|undefined
@@ -119,11 +140,12 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   function onCollabEditor(editor:Editor|null){
     if(citationMode)return
+    collabEditor=editor
     wordSync?.dispose();wordSync=undefined;clearTimeout(peerSaveTimer)
     syncedSavedRevision=undefined
-    if(!editor||disposed||signed)return
+    if(!editor||disposed||signed||passwordProtected()||resumeCollab)return
     syncState='joining'
-    wordSync=joinWordCollab(editor,opened.file.revision,host.getEditorId()!,
+    wordSync=joinWordCollab(editor,host.getState(fileId).revision.revision,host.getEditorId()!,
       data=>host.wordCollab(fileId,data),next=>{syncState=next;changed()},()=>{
         clearTimeout(peerSaveTimer)
         // 第二个浏览器从不抢占整文件写锁，收到远端正文的租约持有者落盘。
@@ -131,7 +153,26 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       },checkWriter)
   }
   const bridge = createDocsBridge(host,fileId,prefs,() => changed(),guest ? async () => null : undefined,{
+    ...(initiallyProtected?{takeUnlockedBytes:()=>{const bytes=unlockedBytes;unlockedBytes=undefined;return bytes}}:{}),
+    setOpenPassword(password){
+      if(disposed||closing||guest||!canEdit()||!draftAuthority.proof||!draftAuthority.current())return false
+      try{
+        if(copying||bridge.waitForSave())throw Error('Save in progress')
+        host.setDocxPassword(fileId,password,draftAuthority.proof)
+        actionError=''
+        return true
+      }catch{
+        actionError=locale==='en'?'Could not update the open password. Check editing access and try again.':'无法更新打开密码，请确认编辑权限后重试。'
+        changed()
+        return false
+      }
+    },
     knowledgeRequest:assistant?.request,
+    ...(!guest&&!citationMode&&draftAuthority.request?{
+      workspaceSources:{request:draftAuthority.request,verify:()=>draftAuthority.verify(),readBytes:(id,revision)=>host.readBytes(id,revision)},
+      writeMergeOutput:saveMailMergeOutput,
+    }:{}),
+    fetchClipboardRemoteImage:assistant?.mediaApi?.fetchImage,
     wordCheckpoint:async()=>wordSync?.checkpoint(),
     onSourceOpenFailed:()=>{
       if(disposed)return
@@ -149,56 +190,183 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     if(current.lease&&current.status==='idle'&&!local.dirty&&local.status==='idle'&&!local.takingOver&&
       local.nativeSaveOutcome!=='pending'&&current.revision.revision===saved.revision)return saved.revision
   }
-  const analysisTarget=createAnalysisDocumentTarget({fileId,format:'docx',state:()=>host.getState(fileId),verifyAuthority:async()=>{await host.renewLease(fileId)},
-    editor:()=>editorHandle?.analysis??null,receipt:()=>bridge.getReceipt(),
+  const analysisTarget=createAnalysisDocumentTarget({fileId,format:'docx',state:()=>host.getState(fileId),verifyAuthority:async()=>{if(assistantRestricted())throw Error('Protected document');await host.renewLease(fileId)},
+    editor:()=>assistantRestricted()?null:editorHandle?.analysis??null,receipt:()=>bridge.getReceipt(),
     save:check=>bridge.guardedSave(check,async()=>!!editorHandle&&await editorHandle.save()&&!editorHandle.isDirty()&&bridge.getState().nativeSaveOutcome==='accepted')})
   const unregisterAnalysis=assistant?.documents.register(analysisTarget)
-  const assistantNotice = guest?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
-  const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
+  function resumeWordAfterPasswordRemoval(){
+    if(!resumeCollab||disposed||closing||passwordProtected())return
+    if(collabEditor&&!editorHandle?.isDirty()&&!bridge.getState().dirty){
+      resumeCollab=false
+      onCollabEditor(collabEditor)
+    }else{
+      // Keep a local draft editable until its save establishes a clean baseline.
+      syncState='unavailable'
+      changed()
+    }
+  }
+  onHostState=()=>{
+    const encrypted=passwordProtected()
+    if(collabProtected!==encrypted){
+      collabProtected=encrypted
+      if(encrypted){
+        resumeCollab=false
+        wordSync?.dispose();wordSync=undefined;clearTimeout(peerSaveTimer)
+        syncState='unavailable';journalAhead=false
+      }else{
+        syncState='joining';resumeCollab=true
+        // Let the native save rebase its own OOXML before applying steps from the new epoch.
+        void (bridge.waitForSave()??Promise.resolve()).then(resumeWordAfterPasswordRemoval)
+      }
+    }
+    if(!protectedSession&&encrypted){
+      protectedSession=true
+      stopFollowup?.();stopExternalWriting?.();authorizedDraft=undefined
+      unregisterAnalysis?.();assistant?.dispose()
+    }
+    changed()
+  }
+  const assistantNotice = guest||initiallyProtected?'':editorAssistantNotice(assistantResult,locale)
+  const assistantAvailable = Boolean(assistant?.available)
   const copyLifetime = new AbortController()
-  let naming = false, copyNotice: {message:string;failed:boolean} | undefined
-  const nameCopy: DocsNamedCopy = async propose => {
-    const editor = draftEditor, modelId = assistant?.selected(), signal = copyLifetime.signal
-    const active = () => !signal.aborted && !closing && editor === draftEditor && draftAuthority.current() &&
-      !!host.getState(fileId).lease && host.getState(fileId).status === 'idle'
-    if (!assistant?.available || !modelId || !editor || naming || !active()) return
-    naming = true
+  let copying = false, copyNotice: {message:string;failed:boolean} | undefined
+  let pendingCopy: {upload:string;name:string}|undefined
+  let mailMergeOutput: ReturnType<typeof createMailMergeWorkspaceOutput> | undefined
+  let mailMergeNotice: {message:string;failed:boolean} | undefined
+  const confirmMergeMessage=locale==='en'
+    ? 'Confirm the original mail merge save. Close the mail merge panel to use the confirmation button.'
+    : '请关闭邮件合并面板，再确认原保存请求。'
+  function reportMailMerge(result:{ok:boolean;count:number}):MergeOutputResponse {
+    const en=locale==='en'
+    if(result.ok){
+      mailMergeNotice={failed:false,message:en?`Saved ${result.count} merged documents.`:`已保存 ${result.count} 份合并文档。`}
+      return result
+    }
+    const error=mailMergeOutput?.hasPending()?confirmMergeMessage
+      :en?`The mail merge stopped after saving ${result.count} documents.`:`邮件合并保存已停止，已保存 ${result.count} 份文档。`
+    mailMergeNotice={failed:true,message:error}
+    return {...result,error}
+  }
+  async function saveMailMergeOutput(input:MergeOutputRequest):Promise<MergeOutputResponse> {
+    const request=draftAuthority.request,signal=copyLifetime.signal
+    const source=host.getState(fileId),lease=source.lease
+    const active=()=>{
+      const current=host.getState(fileId)
+      return !signal.aborted&&!disposed&&!closing&&canEdit()&&draftAuthority.current()&&!!lease&&
+        current.lease?.editorId===lease.editorId&&current.lease.leaseEpoch===lease.leaseEpoch&&
+        !['conflict','unknown','unauthorized'].includes(current.status)
+    }
+    if(mailMergeOutput?.hasPending())return {ok:false,error:confirmMergeMessage}
+    if(!request||copying||!active())return {ok:false,canceled:true}
+    copying=true;mailMergeNotice=undefined;changed()
+    try{
+      const {createMailMergeWorkspaceOutput,downloadMailMerge,mailMergeDocxName,namedMailMergeFiles}=await import('./docs-mail-merge')
+      const files=namedMailMergeFiles(input)
+      if(!files.length)return {ok:false}
+      if(files.some(file=>file.data.byteLength>MAX_WORKSPACE_COPY_BYTES)){
+        return active()?await downloadMailMerge(input,source.name,signal):{ok:false,canceled:true}
+      }
+      const folderOnly=input.mode==='perRecord'||input.mode==='envelopes'
+      const destination=await confirmWorkspaceCopy(files[0]!.name,{
+        locale,signal,request,fileId,folderOnly,downloadLabel:locale==='en'?'Download merge output':'下载合并结果',
+      })
+      if(!destination||!active())return {ok:false,canceled:true}
+      if(!folderOnly)files[0]={...files[0]!,name:mailMergeDocxName(destination.name)}
+      if(destination.download)return await downloadMailMerge({...input,files},source.name,signal)
+      if(!await draftAuthority.verify()||!active())return reportMailMerge({ok:false,count:0})
+      mailMergeOutput??=createMailMergeWorkspaceOutput({fileId,name:source.name,request,getRevision:()=>host.getState(fileId).revision.revision})
+      return reportMailMerge(await mailMergeOutput.publish(files,destination.folderId,active,signal))
+    }catch{
+      return signal.aborted?{ok:false,canceled:true}:reportMailMerge({ok:false,count:0})
+    }finally{copying=false;if(!disposed)changed()}
+  }
+  async function confirmMailMergeSave(){
+    if(copying||disposed||closing||!mailMergeOutput?.hasPending())return
+    copying=true;changed()
+    try{
+      if(await draftAuthority.verify())reportMailMerge(await mailMergeOutput.confirm(copyLifetime.signal))
+    }finally{copying=false;if(!disposed)changed()}
+  }
+  const canSaveCopy = () => documentLoaded && !guest && canEdit() && !closing &&
+    !disposed && !!draftEditor && !!draftAuthority.request && draftAuthority.current() &&
+    !!host.getState(fileId).lease && host.getState(fileId).status === 'idle' &&
+    (!host.hasDocxPasswordChange(fileId)||!bridge.waitForSave())
+  async function saveCopy(selectDestination?: (request: NonNullable<DraftCopyAuthority['request']>, signal: AbortSignal) => Promise<WorkspaceCopyDestination | null>): Promise<boolean> {
+    const editor = draftEditor, request = draftAuthority.request, signal = copyLifetime.signal
+    let source: ReturnType<typeof host.getState> | undefined
+    const active = () => {
+      if(signal.aborted||editor!==draftEditor||!canSaveCopy())return false
+      if(!source)return true
+      const current=host.getState(fileId)
+      return current.revision.revision===source.revision.revision&&current.lease?.leaseEpoch===source.lease?.leaseEpoch
+    }
+    // Confirming an earlier upload is separate from choosing settings for a new copy.
+    const retry = selectDestination?undefined:pendingCopy
+    if(selectDestination?!!pendingCopy:!retry)return false
+    if (!request || copying || signal.aborted || !draftAuthority.current() || (!retry && (!editor || !active()))) return false
+    copying = true
     copyNotice = undefined
     changed()
     const en = locale === 'en'
-    let upload: string | undefined, finishStarted = false
+    let upload: string | undefined, name: string
     try {
-      if (!await draftAuthority.verify() || !active()) {
+      if (!await draftAuthority.verify()) {
         if (!signal.aborted) copyNotice = {message:en?'Could not verify this workspace session. Your draft is still open.':'无法验证当前工作区会话，草稿仍保留在此页。',failed:true}
-        return
+        return false
       }
-      const proposed = await propose(({content}) => suggestWebFileName(content,{modelId,proof:assistant.sessionProof,format:'docx',locale,signal}))
-      if (!proposed || !active()) return
-      const chosen = await confirmWebFileName(proposed,{locale,signal})
-      if (!chosen) return
-      const name = chosen.replace(/\.docx$/i,'')+'.docx'
-      if (!await draftAuthority.verify() || !active()) throw Error('Draft session ended')
-      const bytes = await editor.serialize()
-      if (!bytes?.byteLength || bytes.byteLength > 32*1024*1024 || !await draftAuthority.verify() || !active()) throw Error('Draft snapshot unavailable')
-      const blob = new Blob([bytes.slice().buffer as ArrayBuffer])
-      const {uploadId} = await assistant.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
-      upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
-      if (!active()) throw Error('Draft session ended')
-      await assistant.request(upload+'/content','PUT',blob,signal)
-      if (!active()) throw Error('Draft session ended')
-      finishStarted = true
-      await assistant.request(upload+'/finish','POST',undefined,signal)
+      if(retry){
+        ({name,upload}=retry)
+      }else{
+        if(!editor||!active())return false
+        const chosen = await selectDestination?.(request,signal)
+        if (!chosen) return false
+        if (!await draftAuthority.verify() || !active()) throw Error('Draft session ended')
+        if (chosen.downloadFormat) {
+          if(protectedView()||!editor.exportCopy)throw Error('Draft export unavailable')
+          return await editor.exportCopy(chosen.downloadFormat,chosen.name,()=>active()&&!protectedView())
+        }
+        name = chosen.name.replace(/\.docx$/i,'')+'.docx'
+        const managedCopy=passwordProtected()||host.hasDocxPasswordChange(fileId)
+        if(managedCopy)source=host.getState(fileId)
+        const bytes = await editor.serialize()
+        if (!bytes?.byteLength || bytes.byteLength > 32*1024*1024 || !await draftAuthority.verify() || !active()) throw Error('Draft snapshot unavailable')
+        const {uploadId} = managedCopy
+          ? await host.stageDocxDraftCopy(fileId,name,bytes,chosen.folderId)
+          : await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:bytes.byteLength,folderId:chosen.folderId},signal)
+        upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
+        if (!active()) throw Error('Draft session ended')
+        if(!managedCopy)await request(upload+'/content','PUT',new Blob([bytes.slice().buffer as ArrayBuffer]),signal)
+        if (!active()) throw Error('Draft session ended')
+      }
+      // A finish retry addresses the same upload and returns the original file.
+      pendingCopy = {upload,name}
+      await request(upload+'/finish','POST',undefined,signal)
+      pendingCopy=undefined
       copyNotice = {message:en?`Saved copy: ${name}`:`已保存副本：${name}`,failed:false}
-    } catch {
-      // Before /finish nothing can have been created: drop the staged upload and say so plainly.
-      if (upload && !finishStarted && !signal.aborted) await assistant.request(upload,'DELETE',undefined,signal).catch(()=>{})
-      if (!signal.aborted) copyNotice = {message:finishStarted
-        ? (en?'Could not confirm the copy. Check your workspace before retrying.':'无法确认副本是否已保存。请先在工作区核对，再决定是否重试。')
+      return true
+    } catch(error) {
+      const status=(error as {status?:number}).status
+      if(pendingCopy&&status&&status>=400&&status<500&&status!==408&&status!==429)pendingCopy=undefined
+      if (upload && !pendingCopy && !signal.aborted) await request(upload,'DELETE',undefined,signal).catch(()=>{})
+      if (!signal.aborted) copyNotice = {message:pendingCopy
+        ? (en?`The save of “${pendingCopy.name}” is unconfirmed. Confirm the original request with its original password setting.`:`“${pendingCopy.name}”的保存结果尚未确认。确认原请求时会沿用当时的密码设置。`)
         : (en?'Could not save the copy. The source document and its unsaved changes are still intact.':'无法保存副本。原文档和未保存的修改仍保留。'),failed:true}
+      return false
     } finally {
-      naming = false
+      copying = false
       if (!disposed) changed()
     }
+  }
+  const canCopyLocalDraft=()=>!signed&&(passwordProtected()? !guest&&!citationMode : !host.hasDocxPasswordChange(fileId))
+  const sealRecoveryDraft=(bytes:Uint8Array)=>host.sealDocxRecovery(fileId,bytes)
+  const saveAsCopy = () => saveCopy((request,signal) => confirmWorkspaceCopy(host.getState(fileId).name,{locale,signal,request,fileId,documentExports:!protectedView()&&!!draftEditor?.exportCopy}))
+  const nameCopy: DocsNamedCopy = async propose => {
+    const modelId = assistant?.selected()
+    if (!assistant?.available || !modelId || pendingCopy || protectedView()) return
+    await saveCopy(async (request,signal) => {
+      const proposed = await propose(({content}) => protectedView()?Promise.resolve(''):suggestWebFileName(content,{modelId,proof:assistant.sessionProof,format:'docx',locale,signal}))
+      return proposed && !protectedView() && canSaveCopy() ? confirmWorkspaceCopy(proposed,{locale,signal,request,fileId}) : null
+    })
   }
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   // The media gateway also returns WebP; the DOCX serializer embeds PNG, JPEG and GIF.
@@ -230,9 +398,12 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       try { return await normalizeWebp(image.base64) } catch { return null }
     },
   } : {}
-  window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => ({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
-  applyAiPanelPrefs(panelPrefs); installScreenTips()
-  let initialLease = !signed&&!citationMode
+  const appearance=await installBrowserAssistantPreferences(prefs,panelPrefs)
+  window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => appearance.withAppearance(),
+    setAiPanelPrefs: async (patch:Parameters<DesktopApi['setAiPanelPrefs']>[0]) =>
+      patch.side ? appearance.movePanel(patch.side,assistant?.sessionProof) : appearance.updatePanelPrefs(patch)} as unknown as DesktopApi
+  installScreenTips()
+  let initialLease = canEdit()
   if(initialLease)try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId)
   const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
@@ -329,8 +500,11 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const [sharingDraft,setSharingDraft] = useState(false)
     const [automaticDraft,setAutomaticDraft] = useState(false)
     const [draftPaused,setDraftPaused] = useState(false)
+    const [unlocked,setUnlocked]=useState(initiallyUnlocked)
+    const [passwordPrompt,setPasswordPrompt]=useState(!initiallyUnlocked&&!guest)
+    const [password,setPassword]=useState(''),[unlockError,setUnlockError]=useState(''),[unlockBusy,setUnlockBusy]=useState(false)
     useEffect(()=>{if(loaded&&!failed)reportDocumentLoading('ready')},[loaded,failed])
-    const state = host.getState(fileId)
+    const state = host.getState(fileId), privateView=protectedView(), encrypted=passwordProtected(), noAssistant=assistantRestricted()
     changed = () => {if(!closing)tick(value => value + 1)}
     useEffect(() => {
       const focus = () => { if (host.getState(fileId).lease) void host.renewLease(fileId).catch(() => {}) }
@@ -338,6 +512,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       return () => window.removeEventListener('focus',focus)
     },[])
     useEffect(() => {
+      if(privateView)return
       const handoff = documentHandoffPeer()
       if (!handoff || !loaded || failed || !state.lease) return
       const {shell,peer,embedded} = handoff
@@ -356,7 +531,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
           })
           if (!result.ok) return
           const {expires,write} = await result.json()
-          if (signal.aborted || !Number.isSafeInteger(expires) || expires <= Date.now()) return
+          if (signal.aborted || protectedView() || !Number.isSafeInteger(expires) || expires <= Date.now()) return
           authorizedDraft = {origin,ticket,expires,write:write===true}
           clearTimeout(grantExpiry)
           grantExpiry=setTimeout(()=>{stopExternalWriting?.();stopFollowup?.()},expires-Date.now())
@@ -366,6 +541,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         finally {checking = false}
       }
       const onRequest = (event: MessageEvent) => {
+        if(protectedView())return
         if (event.source !== peer || event.data?.type !== 'dsh-dyoffice:draft-request' || event.data.fileId !== fileId) return
         if (!/^https:\/\//u.test(event.origin) && !/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/u.test(event.origin)) return
         const ticket = event.data.ticket
@@ -413,7 +589,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       }
       shell.addEventListener('message',onRequest)
       return () => {controller.abort();shell.removeEventListener('message',onRequest)}
-    },[loaded,failed,state.lease,draftTarget,sharingDraft,draftPaused])
+    },[loaded,failed,state.lease,draftTarget,sharingDraft,draftPaused,privateView])
     const job = externalWriting, en=locale==='en'
     const message = (author:'DyOffice'|'DSH'|'You'|'你',body:string,key:string,reply?:string) =>
       <article key={key} className="assistant-chat-row assistant-chat-row-assistant dyoffice-collaboration-message">
@@ -437,44 +613,87 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const local = bridge.getState()
     const bodyFollower=loaded&&!failed&&!state.lease&&state.status!=='unauthorized'&&syncState==='active'
     const syncWarning=syncState==='offline'||syncState==='stale'?(locale==='zh'?'共同编辑暂停，保留本地草稿。': 'Collaboration paused; your local draft is preserved.'):''
-    const warning = syncWarning || (failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !citationMode && !signed && !state.lease && loaded && !bodyFollower ? (actionError || (initialLease ? text.conflict : text.readOnly)) : actionError)
+    const warning = syncWarning || (failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : canEdit() && !state.lease && loaded && !bodyFollower ? (actionError || (initialLease ? text.conflict : text.readOnly)) : actionError)
     const notice = bodyFollower?(locale==='zh'?'正文共同编辑中，整文件由主编辑器保存。':'Co-editing the body; the primary editor saves the file.'):realtime.notice(locale)
-    const status = signed ? officeSignatureNotice[locale].title : bodyFollower ? wordSync?.pending() ? (en?'Syncing…':'正在同步…') : journalAhead ? (en?'Synced; awaiting file save':'已同步，等待写入文件') : (en?'Saved':'已保存') : !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
+    const status = signed ? officeSignatureNotice[locale].title : encrypted&&loaded&&(!state.lease||!canEdit()) ? (en?'Read only':'只读') : bodyFollower ? wordSync?.pending() ? (en?'Syncing…':'正在同步…') : journalAhead ? (en?'Synced; awaiting file save':'已同步，等待写入文件') : (en?'Saved':'已保存') : !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
     const saveStatus = <>
       <span className="dyoffice-docs-persistence-state" role="status" data-attention={Boolean(warning || notice)} data-native-save={local.nativeSaveOutcome} data-incomplete-reasons={local.nativeSaveReasons.join(',')} data-dirty={String(local.dirty)} title={warning || [status, notice].filter(Boolean).join(' · ')}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
       {bodyFollower&&reopenToSave&&<button type="button" onClick={()=>{void syncBody().then(ok=>{if(ok&&!wordSync?.pending())location.reload()})}}>{locale==='zh'?'重新打开并接续保存':'Reopen and resume saving'}</button>}
-      {automaticDraft&&state.lease&&<button type="button" onClick={()=>setDraftPaused(value=>!value)}>
+      {!privateView&&automaticDraft&&state.lease&&<button type="button" onClick={()=>setDraftPaused(value=>!value)}>
         {draftPaused ? (locale==='zh'?'恢复同步正文':'Resume live text') : (locale==='zh'?'暂停同步正文':'Pause live text')}
       </button>}
-      {!automaticDraft&&draftTarget&&state.lease&&<button type="button" title={draftTarget} onClick={()=>setSharingDraft(value=>!value)}>
+      {!privateView&&!automaticDraft&&draftTarget&&state.lease&&<button type="button" title={draftTarget} onClick={()=>setSharingDraft(value=>!value)}>
         {sharingDraft ? (locale==='zh'?'停止同步正文':'Stop sharing draft') : (locale==='zh'?'同步未保存正文到 DSH':'Share unsaved text with DSH')}
       </button>}
     </>
     const fileActions = <>
       <div className="file-menu-sep" />
       <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
-      {!signed&&<LocalDraftCopy name={state.name} locale={locale} authority={draftAuthority} getEditor={()=>!disposed&&!closing&&loaded&&!failed&&host.getState(fileId).status!=='unauthorized'?draftEditor:null}/>}
+      {canCopyLocalDraft()&&<LocalDraftCopy
+        name={state.name} locale={locale} authority={draftAuthority} seal={encrypted?sealRecoveryDraft:undefined}
+        getEditor={()=>!disposed&&!closing&&loaded&&!failed&&host.getState(fileId).status!=='unauthorized'&&
+          canCopyLocalDraft()&&encrypted===passwordProtected()&&(!encrypted||host.canSealDocxRecovery(fileId))?draftEditor:null}
+      />}
       <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download>{text.download}</a>
     </>
+    const needsEditUnlock=encrypted&&!guest&&!signed&&!citationMode&&!failed&&state.status!=='unauthorized'&&!host.hasDocxEditUnlock(fileId)
+    const promptForPassword=()=>{setUnlockError('');setPasswordPrompt(true)}
+    const unlock=async()=>{
+      if(unlocking||disposed||closing||guest||!password)return
+      unlocking=true;setUnlockBusy(true);setUnlockError('')
+      try{
+        const bytes=await host.unlockDocx(fileId,password,!signed&&!citationMode)
+        if(!disposed&&canEdit()){
+          try{await host.acquireLease(fileId);initialLease=true}catch{initialLease=false}
+        }
+        if(!disposed){
+          if(!unlocked){unlockedBytes=bytes;reportDocumentLoading('rendering');setUnlocked(true)}
+          setPasswordPrompt(false)
+        }
+      }catch(error){
+        if(!disposed){
+          const status=(error as {status?:number}).status
+          setUnlockError(status===422
+            ? (en?'The document password is incorrect.':'文档密码错误。')
+            : status===429
+              ? (en?'Too many active document unlocks. Close another protected document or try again shortly.':'已解锁的文档过多，请关闭其他受保护的文档或稍后再试。')
+              : (en?'Could not unlock the document.':'无法解锁此文档。'))
+        }
+      }finally{unlocking=false;if(!disposed){setPassword('');setUnlockBusy(false)}}
+    }
+    const unlockDialog=passwordPrompt&&<PasswordDialog title={unlocked?(en?'Unlock editing':'解锁编辑'):(en?'Open password-protected document':'打开受密码保护的文档')} body={state.name} label={en?'Password':'密码'} value={password} error={unlockError} busy={unlockBusy} maxLength={255} submitLabel={unlocked?(en?'Unlock':'解锁'):(en?'Open':'打开')} cancelLabel={en?'Cancel':'取消'} onChange={setPassword} onSubmit={()=>void unlock()} onCancel={()=>{if(!unlocking){setPassword('');setPasswordPrompt(false)}}}/>
+    if(!unlocked){
+      return <div className="dyoffice-native-docs">
+        <DocumentNotifications locale={locale} items={[{id:'document-locked',level:'warning',title:en?'Password-protected document':'受密码保护的文档',message:en?'Enter the open password to read this document.':'输入打开密码后可阅读此文档。',actions:<>
+          {!guest&&<button type="button" onClick={promptForPassword}>{en?'Unlock document':'解锁文档'}</button>}
+          <a href={opened.downloadEndpoint+'&download=1'} download>{text.downloadReadOnly}</a>
+        </>}]} />
+        {unlockDialog}
+      </div>
+    }
     return <div className="dyoffice-native-docs">
       <DocumentNotifications locale={locale} items={[
         ...(citationMode ? [{id:'citation',level:'info' as const,title:en?'Cited version':'引用版本',message:en?'The saved source is open in read-only mode.':'当前引用展示已保存的只读版本。'}] : []),
         ...(signed ? [{id:'office-signature',level:'info' as const,...officeSignatureNotice[locale]}] : []),
-        ...(assistantNotice ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
+        ...(needsEditUnlock ? [{id:'document-edit-locked',level:'warning' as const,title:en?'Editing is locked':'编辑已锁定',message:en?'Enter the document password to resume editing and save your draft.':'重新输入文档密码后即可继续编辑并保存草稿。',actions:<button type="button" onClick={promptForPassword}>{en?'Unlock editing':'解锁编辑'}</button>}] : []),
+        ...(encrypted && !needsEditUnlock ? [{id:'document-unlocked',level:'info' as const,title:en?'Password-protected document':'受密码保护的文档',message:en?'Saved revisions and DOCX downloads retain password protection.':'保存的修订和下载的 DOCX 原件仍受密码保护。'}] : []),
+        ...(assistantNotice && !noAssistant ? [{id:'assistant',level:'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
-        {!citationMode && !signed && !state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
+        {canEdit() && !state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
       </>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
-        ...(copyNotice ? [{id:'named-copy',level:copyNotice.failed?'error' as const:'info' as const,title:locale==='zh'?'AI 命名':'AI file naming',message:copyNotice.message}] : []),
+        ...(copyNotice ? [{id:'named-copy',level:copyNotice.failed?'error' as const:'info' as const,title:locale==='zh'?'另存副本':'Save a copy',message:copyNotice.message,actions:pendingCopy&&<button type="button" onClick={()=>void saveCopy()}>{en?'Confirm copy save':'确认副本保存结果'}</button>}] : []),
+        ...(mailMergeNotice ? [{id:'mail-merge-output',level:mailMergeNotice.failed?'error' as const:'info' as const,title:en?'Mail merge':'邮件合并',message:mailMergeNotice.message,actions:mailMergeOutput?.hasPending()&&<button type="button" disabled={copying} onClick={()=>void confirmMailMergeSave()}>{en?'Confirm mail merge save':'确认邮件合并保存'}</button>}] : []),
       ]} />
-      <App host={{ embeddedDocument,fileActions,saveStatus,setImageAttachments,desktopActionsAvailable:false,getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,resolveKnowledgeCitation:bridge.resolveKnowledgeCitation,namedCopy:loaded&&!failed&&assistant?.available&&state.lease&&state.status==='idle'&&!naming&&draftAuthority.current()?nameCopy:undefined,onCollabEditor,syncBody,bodyCollaboration:bodyFollower,readOnly: !loaded || failed || !state.lease || local.takingOver || !['active','unavailable'].includes(syncState),assistantAvailable:!citationMode&&(assistantAvailable||!!(job&&assistant?.available)),assistant,recoveryRevision:continuationRevision(),externalAssistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,onHandoffReady:registerOfficeHandoff,lifecycle: { ...bridge.lifecycle,wordSyncActive:()=>syncState==='active',documentOpened() { bridge.lifecycle.documentOpened(); documentLoaded=true; setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => {documentLoaded=false; setFailed(true); reportDocumentLoading('error')} }} />
+      {unlockDialog}
+      <App host={{ embeddedDocument,fileActions,saveStatus,setImageAttachments,desktopActionsAvailable:false,openPasswordAvailable:!guest&&canEdit()&&!!draftAuthority.proof&&!!state.lease,mailMergeMaxBytes:BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES,openWorkspaceFile,getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,resolveKnowledgeCitation:bridge.resolveKnowledgeCitation,saveAsCopy,canSaveAsCopy:loaded&&!failed&&!copying&&!pendingCopy&&canSaveCopy(),namedCopy:!privateView&&loaded&&!failed&&!copying&&!pendingCopy&&assistant?.available&&canSaveCopy()?nameCopy:undefined,onCollabEditor,syncBody,bodyCollaboration:bodyFollower,readOnly: !loaded || failed || !state.lease || !canEdit() || local.takingOver || !['active','unavailable'].includes(syncState),assistantAvailable:!citationMode&&!noAssistant&&(assistantAvailable||!!(job&&assistant?.available)),assistant:noAssistant?undefined:assistant,recoveryRevision:continuationRevision(),externalAssistant:noAssistant?undefined:externalAssistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,onHandoffReady:registerOfficeHandoff,lifecycle: { ...bridge.lifecycle,canStartSave:()=>!copying||!host.hasDocxPasswordChange(fileId),afterSave(ok,reasons){bridge.lifecycle.afterSave(ok,reasons);if(resumeCollab)queueMicrotask(resumeWordAfterPasswordRemoval)},wordSyncActive:()=>syncState==='active',documentOpened() { bridge.lifecycle.documentOpened(); documentLoaded=true; setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => {documentLoaded=false; setFailed(true); reportDocumentLoading('error')} }} />
     </div>
   }
-  reportDocumentLoading('rendering')
+  reportDocumentLoading(initiallyUnlocked?'rendering':'ready')
   const root = createRoot(element)
   root.render(<LocaleProvider initial={locale}><NativeDocument /></LocaleProvider>)
-  const closeState=()=>({dirty:!host.getState(fileId).lease&&syncState==='active'&&wordSync ? wordSync.pending() : !!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||!!bridge.waitForSave()})
+  const closeState=()=>({dirty:!host.getState(fileId).lease&&syncState==='active'&&wordSync ? wordSync.pending() : !!editorHandle?.isDirty()||bridge.getState().dirty,blocked:unlocking||downloading||copying||mailMergeOutput?.hasPending()===true||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||!!bridge.waitForSave()})
   registerDisplayedRevision(()=>{
     const state=closeState(),current=host.getState(fileId)
     const revision=current.revision.revision
@@ -485,7 +704,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     if (closeState().dirty || closeState().blocked) { event.preventDefault(); event.returnValue = '' }
   }
   window.addEventListener('beforeunload',beforeUnload)
-  const cleanup=()=>{if(disposed)return;disposed=true;clearTimeout(grantExpiry);copyLifetime.abort();clearTimeout(peerSaveTimer);wordSync?.dispose();stopFollowup?.();stopExternalWriting?.();unregisterAnalysis?.();analysisTarget.dispose();window.removeEventListener('beforeunload',beforeUnload);imageAttachments.set([]);assistant?.dispose();realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()}
+  const cleanup=()=>{if(disposed)return;disposed=true;unlockedBytes=undefined;if(passwordProtected())void host.closeDocxEdit(fileId).catch(()=>{});clearTimeout(grantExpiry);copyLifetime.abort();clearTimeout(peerSaveTimer);wordSync?.dispose();stopFollowup?.();stopExternalWriting?.();unregisterAnalysis?.();analysisTarget.dispose();window.removeEventListener('beforeunload',beforeUnload);imageAttachments.set([]);assistant?.dispose();realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()}
   const lifecycle=createEditorCloseLifecycle({state:closeState,waitForSave:bridge.waitForSave,save:()=>editorHandle?.save()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;element.inert=value;if(!value)changed()},confirm:()=>window.confirm('文档有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>window.alert('保存仍在进行或结果待确认，请先在文档中核对后再关闭。')})
   return {
     canClose:lifecycle.canClose,

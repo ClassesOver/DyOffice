@@ -5,10 +5,14 @@ import { useModalDialog } from './modal-dialog'
 
 export function EncryptedWorkbookPasswordDialog({
   error,
+  busy = false,
+  maxLength,
   onSubmit,
   onClose,
 }: {
   readonly error: string | null
+  readonly busy?: boolean
+  readonly maxLength?: number
   readonly onSubmit: (password: string) => void
   readonly onClose: () => void
 }): React.JSX.Element {
@@ -16,7 +20,10 @@ export function EncryptedWorkbookPasswordDialog({
   const [password, setPassword] = useState('')
   const modal = useModalDialog(onClose)
   const submit = (): void => {
-    if (password.length > 0) onSubmit(password)
+    if (!busy && password.length > 0) {
+      onSubmit(password)
+      setPassword('')
+    }
   }
 
   return (
@@ -40,6 +47,8 @@ export function EncryptedWorkbookPasswordDialog({
               autoFocus
               autoComplete="current-password"
               type="password"
+              disabled={busy}
+              maxLength={maxLength}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               onKeyDown={(event) => {
@@ -57,7 +66,7 @@ export function EncryptedWorkbookPasswordDialog({
           <button className="secondary" type="button" onClick={onClose}>
             {t('dlgCancel')}
           </button>
-          <button className="primary-action" type="button" disabled={!password} onClick={submit}>
+          <button className="primary-action" type="button" disabled={busy || !password} onClick={submit}>
             {t('appEncryptedOpen')}
           </button>
         </div>

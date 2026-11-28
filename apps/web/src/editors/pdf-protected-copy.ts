@@ -1,4 +1,4 @@
-import {PDFDocument,PDFHexString} from 'pdf-lib'
+import {PDFDocument,PDFHexString} from '../../../pdf/src/shared/pdf-lib.ts'
 import type {PdfEncryptionInput} from '../../../pdf/src/shared/ipc'
 import {
   encryptDictFor,hex,passwordBytes,pdfCryptoPayloads,permissionsToP,r6DigestIndex,repeatR6Input,

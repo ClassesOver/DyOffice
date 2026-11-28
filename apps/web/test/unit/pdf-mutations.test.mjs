@@ -2,6 +2,27 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createPdfMutations} from '../../src/editors/pdf-mutations.ts'
 
+test('PDF undo stages only a historical revision and replays the same commit after a lost response',async()=>{
+ const stages=[],commits=[]
+ let revision='current'
+ const request=async(path,method,body)=>{
+  if(path.endsWith('/lease')&&method==='POST')return {leaseEpoch:7}
+  if(path.endsWith('/restoration-uploads')){stages.push(body);return {fileId:'file',uploadId:'restore-upload'}}
+  if(path.endsWith('/commits')){
+   commits.push(body)
+   if(commits.length===1)throw Error('response lost')
+   return {fileId:'file',revision:'restored'}
+  }
+ }
+ const client=createPdfMutations({fileId:'file',request,getRevision:()=>revision,editGrantId:'editor',onSaved:async receipt=>{revision=receipt.revision}})
+ await assert.rejects(client.mutate('restore-revision',[{revision:'historical'}]),/response lost/)
+ assert.equal(await client.confirm(),true)
+ assert.deepEqual(stages,[{revision:'historical',baseRevision:'current',editorId:'editor',leaseEpoch:7}])
+ assert.deepEqual(commits[0],commits[1])
+ assert.equal(commits[0].uploadId,'restore-upload')
+ assert.equal(revision,'restored')
+})
+
 test('mixed PDF save snapshots its input once and recovers an unknown commit without a second preparation',async()=>{
  const calls=[];let grant,lose=true,revision='rev1'
  const snapshot={fileId:'file',baseRevision:revision,generation:1,metadata:{title:'Original'},rotations:{0:90}}

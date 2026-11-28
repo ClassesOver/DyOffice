@@ -17,6 +17,9 @@ export function PasswordDialog({
   onChange,
   onSubmit,
   onCancel,
+  title,
+  description,
+  submitLabel,
 }: {
   fileName: string
   value: string
@@ -25,6 +28,9 @@ export function PasswordDialog({
   onChange: (value: string) => void
   onSubmit: () => void
   onCancel: () => void
+  title?: string
+  description?: string
+  submitLabel?: string
 }) {
   const { t } = useI18n()
   const [show, setShow] = useState(false)
@@ -56,9 +62,9 @@ export function PasswordDialog({
 
   return (
     <div className="pdf-modal-mask pdf-pwd-mask">
-      <div className="pdf-modal pdf-pwd-dialog" role="dialog" aria-modal="true">
-        <h2>{t('pwTitle')}</h2>
-        <p className="pdf-pwd-desc">{t('pwBody', { name: fileName })}</p>
+      <div className="pdf-modal pdf-pwd-dialog" role="dialog" aria-modal="true" aria-label={title ?? t('pwTitle')}>
+        <h2>{title ?? t('pwTitle')}</h2>
+        <p className="pdf-pwd-desc">{description ?? t('pwBody', { name: fileName })}</p>
         <label className={`pdf-pwd-fld${wrong ? ' has-error' : ''}`}>
           {t('pwLabel')}
           <span className="pdf-pwd-wrap">
@@ -99,7 +105,7 @@ export function PasswordDialog({
             {t('cancel')}
           </button>
           <button className="pdf-modal-btn primary" disabled={!value} onClick={onSubmit}>
-            {t('pwOpen')}
+            {submitLabel ?? t('pwOpen')}
           </button>
         </div>
       </div>

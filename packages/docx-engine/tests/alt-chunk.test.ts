@@ -9,6 +9,7 @@ import {
   setAltChunkHtmlConverter,
 } from '../src/alt-chunk'
 import { buildDocx } from './helpers/build-docx'
+import { assertZipInflatesWithinLimits } from '../src/zip-load'
 
 const CHUNK_REL =
   '<Relationship Id="rIdChunk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="/word/afchunk.htm"/>'
@@ -208,6 +209,32 @@ describe('w:altChunk expansion', () => {
       'table',
       'paragraph',
     ])
+  })
+
+  it('charges repeated embedded DOCX reads and inflation to the same budget', async () => {
+    const inner = await buildDocx({ bodyXml: '<w:p><w:r><w:t>Embedded</w:t></w:r></w:p>' })
+    const host = await buildDocx({
+      bodyXml: '<w:altChunk r:id="rIdChunk"/>'.repeat(2),
+      extraRels: CHUNK_REL.replace('afchunk.htm', 'afchunk.docx'),
+      extraParts: [{
+        path: 'word/afchunk.docx',
+        xml: inner as unknown as string,
+        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      }],
+    })
+    let outerBytes = 0
+    let innerBytes = 0
+    await assertZipInflatesWithinLimits(host, undefined, usage => { outerBytes = usage.bytes })
+    await assertZipInflatesWithinLimits(inner, undefined, usage => { innerBytes = usage.bytes })
+    const budget = {
+      maxParts: 256,
+      maxPartBytes: 1024 * 1024,
+      maxTotalBytes: outerBytes + 2 * (inner.length + innerBytes),
+    }
+    const parsed = await parseDocx(host, { zipLimits: budget })
+    expect(parsed.blocks.filter(block => block.altChunk)).toHaveLength(2)
+    await expect(parseDocx(host, { zipLimits: { ...budget, maxTotalBytes: budget.maxTotalBytes - 1 } }))
+      .rejects.toThrow(/total uncompressed size .* exceeds/)
   })
 
   it('leaves the chunk as a passthrough when no converter is installed', async () => {

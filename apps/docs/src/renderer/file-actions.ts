@@ -108,8 +108,8 @@ import { loadSystemFontFamilies, resolveFontAliases } from './system-fonts'
 import { adoptEmbeddedFonts } from './embedded-fonts'
 import { prefetchFaces } from './font-resolve'
 import { defaultEastAsiaFontFor } from './font-list'
-import { clearPrintZoom, setPrintZoom } from './print-zoom'
-import { collectPdfInternalLinks } from './pdf-internal-links'
+import { clearPrintZoom, paperOfPage, setPrintZoom } from './print-zoom'
+import { addBrowserPrintLinks, collectPdfInternalLinks } from './pdf-internal-links'
 import type { PdfInternalLink } from '../shared/ipc'
 import type { SaveAsExportFormat } from '../shared/save-as-format'
 import { showToast } from './components/toast-bus'
@@ -119,10 +119,13 @@ import { aiPanelInitiallyOpen } from '@genoffice/ui'
 /** An export waiting for the pagination preview to mount; resolve settles the caller's exportPdf promise. */
 export type PendingPdfExport = {
   outPath?: string
+  browser?: BrowserPdfExport
   resolve: (ok: boolean) => void
   /** the export opened the preview itself and closes it once the PDF is written */
   closePreview: boolean
 }
+
+export type BrowserPdfExport = { active: () => boolean }
 
 export type OfficeHandoffFailure = 'conflict' | 'outputLimit' | 'timedOut' | 'emptyOutput' | 'noTool' | 'failed'
 export type OfficeHandoffRunner = (input: {
@@ -140,11 +143,12 @@ export interface DocsEditorHandle {
   readDraftText?(includeSaved?: boolean, includeWriterDraft?: boolean): { text: string; truncated: boolean } | null
   beginExternalWrite?(): boolean
   getSelection(): { from: number; to: number; text: string } | null
+  exportCopy?(format: SaveAsExportFormat, name: string, active: () => boolean): Promise<boolean>
   serialize(): Promise<Uint8Array | null>
   save(): Promise<boolean>
   isDirty(): boolean
 }
-export interface DocsHostLifecycle {wordSyncActive?():boolean; documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean, incompleteReasons?: readonly string[]): void; aiDocumentCreated?(accepted: boolean): void }
+export interface DocsHostLifecycle {canStartSave?():boolean; wordSyncActive?():boolean; documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean, incompleteReasons?: readonly string[]): void; aiDocumentCreated?(accepted: boolean): void }
 export interface FileActionContext {
   hostLifecycle?: DocsHostLifecycle
   /** Read the latest React state after asynchronous native serialization/write. */
@@ -524,7 +528,9 @@ export async function loadFile(
   }
   const generation = ++openGeneration
   try {
-    const bytes = await fetchDocBytes(result.dataUrl)
+    const bytes = await fetchDocBytes(result.dataUrl).finally(() => {
+      if (result.dataUrl.startsWith('blob:')) URL.revokeObjectURL(result.dataUrl)
+    })
     // a 0-byte .docx (touch, failed download) is not a corrupt archive but an
     // empty document: open the blank template under the file's own path
     const parsed = await parseDocxOffThread(
@@ -906,6 +912,7 @@ export async function suggestedSaveAsName(ctx: FileActionContext, suggest: (inpu
 export async function buildDocBytes(
   ctx: FileActionContext,
   pmOverride?: PmNode,
+  outputSection?: SectionSettings,
 ): Promise<Uint8Array | null> {
   const generation = docGeneration
   if (ctx.settleFontSettings) ctx = await ctx.settleFontSettings()
@@ -988,7 +995,7 @@ export async function buildDocBytes(
     pageCount: ctx.pageCount,
     newPictures: Object.keys(plan.newPictures).length > 0 ? plan.newPictures : undefined,
     trailingSectPrChange: plan.trailingSectPrChange,
-    section: ctx.sectionDirty && ctx.section ? ctx.section : undefined,
+    section: outputSection ?? (ctx.sectionDirty && ctx.section ? ctx.section : undefined),
     sectionStartType: ctx.trailingStartType ?? undefined,
     pgNumType: ctx.pgNumEdit ?? undefined,
     ...hfOptions,
@@ -1241,7 +1248,7 @@ async function saveOnce(
   exportRequest?: SaveAsExportRequest,
 ): Promise<boolean> {
   const { doc, editor } = ctx
-  if (!doc || !editor) return false
+  if (!doc || !editor || ctx.hostLifecycle?.canStartSave?.() === false) return false
   ctx.saveInFlightRef.current = true
   ctx.saveIncompleteRef.current = false
   let nativeSaved = false
@@ -1251,7 +1258,7 @@ async function saveOnce(
     // a mid-stream save would serialize (and write) a truncated document
     await waitForFullContent()
     // the wait ended because another document replaced this one: nothing to write
-    if (docGeneration !== generation) return false
+    if (docGeneration !== generation || ctx.hostLifecycle?.canStartSave?.() === false) return false
     // flush pending in-place table cell / textbox edits into the PM doc first
     window.dispatchEvent(new Event('ai-docs-commit-tables'))
     // identity snapshot: detects edits that arrive while the save is in flight
@@ -1624,10 +1631,10 @@ async function printGroupsMerged(
 }
 
 /** Park the export until the preview mounts; the App effect re-runs it and settles the promise. */
-function deferExportToPreview(ctx: FileActionContext, outPath?: string): Promise<boolean> {
+function deferExportToPreview(ctx: FileActionContext, outPath?: string, browser?: BrowserPdfExport): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const closePreview = !previewIsOpen()
-    ctx.pendingMixedExportRef.current = { outPath, resolve, closePreview }
+    ctx.pendingMixedExportRef.current = { outPath, browser, resolve, closePreview }
     ctx.setShowPagePreview(true)
     ctx.bumpPendingExportTick()
   })
@@ -1641,11 +1648,12 @@ function deferExportToPreview(ctx: FileActionContext, outPath?: string): Promise
 // in the meantime, and the resume call claims (clears) it before re-entering.
 let printJobActive = false
 
-/** Resolves true only when a PDF was written to disk. */
-export async function exportPdf(ctx: FileActionContext, outPath?: string): Promise<boolean> {
+/** Resolves true on a desktop write or after the browser print dialog closes. */
+export async function exportPdf(ctx: FileActionContext, outPath?: string, browser?: BrowserPdfExport): Promise<boolean> {
   const { doc } = ctx
   if (!doc) return false
   await waitForFullContent()
+  if (browser && !browser.active()) return false
   if (printJobActive || ctx.pendingMixedExportRef.current) {
     ctx.setStatus(t('appExportingPdf'))
     return false
@@ -1658,6 +1666,19 @@ export async function exportPdf(ctx: FileActionContext, outPath?: string): Promi
     // with pdf-lib; each page keeps its section's paper size
     const pvPages = previewPageEls()
     if (pvPages.length > 0) {
+      if (browser) {
+        const app = pvPages[0]?.closest('.app')
+        const removeLinks = addBrowserPrintLinks(pvPages, pvPages, doc.parsed.blocks)
+        app?.classList.add('pv-printing')
+        try {
+          const result = await window.desktop.print(1, { deviceName: null }, paperOfPage(pvPages[0]), outPath ?? doc.fileName)
+          ctx.setStatus(result.error ? t('appExportPdfFailed', { error: result.error }) : '')
+          return result.ok
+        } finally {
+          removeLinks()
+          app?.classList.remove('pv-printing')
+        }
+      }
       // measured before the print zoom: fractions of each page box
       const links = collectPdfInternalLinks(pvPages, doc.parsed.blocks)
       const scale = setPrintZoom()
@@ -1723,7 +1744,7 @@ export async function exportPdf(ctx: FileActionContext, outPath?: string): Promi
       ).map((st) => `${st.pageWidth}x${st.pageHeight}`),
     )
     if (sizes.size > 1) ctx.setStatus(t('appMixedExportOpening'))
-    return deferExportToPreview(ctx, outPath)
+    return deferExportToPreview(ctx, outPath, browser)
   } finally {
     clearPrintZoom()
     printJobActive = false

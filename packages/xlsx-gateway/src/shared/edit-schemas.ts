@@ -1,6 +1,8 @@
 // Zod schemas and limits shared by the xlsx gateway and the sheets app IPC surface.
 import { z } from 'zod'
 
+import { WORKBOOK_CHART_PATH } from './workbook-chart-path.ts'
+
 import { PATTERN_TYPES } from '../domain/style-color.ts'
 
 export const richRunSchema = z
@@ -32,6 +34,8 @@ export const drawingAnchorSchema = z
     /// of walking past it like synthesized oneCellAnchor/absoluteAnchor
     /// encodings.
     explicitTo: z.boolean().optional(),
+    /// Absolute anchors store both corners as sheet-origin offsets.
+    absolute: z.literal(true).optional(),
   })
   .strict()
 
@@ -165,7 +169,7 @@ export const CHART_CATEGORY_WIRE_MAX = 1_024
 export const workbookChartEditSchema = z
   .object({
     /// Constrained to the charts directory — the renderer chooses the path.
-    chartPath: z.string().regex(/^xl\/charts\/[A-Za-z0-9._-]+\.xml$/),
+    chartPath: z.string().regex(WORKBOOK_CHART_PATH),
     title: z.string().max(CHART_TEXT_WIRE_MAX).optional(),
     chartType: z.enum(['column', 'bar', 'line', 'area', 'pie', 'doughnut']).optional(),
     seriesColors: z.record(z.string().regex(/^[0-9]{1,3}$/), hexColorSchema).optional(),
@@ -293,6 +297,11 @@ export const workbookChartEditSchema = z
 
 export const shapePaintSchema = z.union([hexColorSchema, z.literal('none')])
 
+const drawingExtentSchema = z.object({
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+}).strict()
+
 /// Edit to a visual that already lives in the file, located by the sidecar's
 /// (drawingPath, anchor index) pair. `remove` deletes the anchor (charts
 /// fail closed in the gateway); `anchor` rewrites its from/to markers.
@@ -302,15 +311,11 @@ export const workbookVisualEditSchema = z
     drawingIndex: z.number().int().nonnegative().max(10_000),
     remove: z.literal(true).optional(),
     anchor: drawingAnchorSchema.optional(),
+    /// New occupied size in EMU for a one-cell or absolute anchor, sent with its position.
+    anchorSize: drawingExtentSchema.optional(),
     /// New xfrm ext in EMU — sent with `anchor` when a rotated shape is
     /// resized (its anchor stores the rotated AABB, not the true frame).
-    frameSize: z
-      .object({
-        width: z.number().int().positive(),
-        height: z.number().int().positive(),
-      })
-      .strict()
-      .optional(),
+    frameSize: drawingExtentSchema.optional(),
     /// Shape paint: explicit spPr solidFill / noFill ("none") replacing
     /// whatever fill or style reference the shape had.
     fillColor: shapePaintSchema.optional(),
@@ -344,6 +349,9 @@ export const workbookVisualEditSchema = z
       edit.hyperlink !== undefined,
     { message: 'A visual edit needs a removal or at least one property.' },
   )
+  .refine((edit) => edit.anchorSize === undefined || edit.anchor !== undefined, {
+    message: 'An anchor size needs its anchor markers.',
+  })
 
 export type WorkbookStyleEdit = z.infer<typeof workbookStyleEditSchema>
 export type WorkbookChartEdit = z.infer<typeof workbookChartEditSchema>

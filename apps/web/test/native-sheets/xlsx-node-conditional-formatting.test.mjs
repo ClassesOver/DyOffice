@@ -363,7 +363,10 @@ test('Web Node imports conditional formatting and preserves rules outside the ed
       const savedFile = await JSZip.loadAsync(saved)
       const savedWorksheet = await savedFile.file(sheetPath).async('string')
       assert.ok(savedWorksheet.includes(base))
-      assert.ok(savedWorksheet.includes(extension))
+      // The gateway normalizes equivalent SpreadsheetML prefixes on save.
+      // The x14 payload and its original namespace aliases must survive verbatim.
+      const normalizedExtension = extension.replaceAll('<s:', '<').replaceAll('</s:', '</')
+      assert.ok(savedWorksheet.includes(normalizedExtension))
       assert.deepEqual(await readBar(saved), expected)
       const { cells, conditionalRules } = await native.readRange(saved, 'Acceptance', range)
       assert.equal(cells.find((cell) => cell.row === 1 && cell.column === 0).value, -5)

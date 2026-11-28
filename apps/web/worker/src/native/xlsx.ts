@@ -55,10 +55,26 @@ export interface BoundWorkbookSource {
 }
 /** Uses the original sidecar's archive writer. This is an archive roundtrip,
  * not an editor or persisted recalculation implementation. */
-export function createXlsxNativeWorker(process: NativeProcess, supportsOpeningViewport=false) {
+export function createXlsxNativeWorker(process: NativeProcess, nodeEngine=false) {
   const native = createNativeAdmission(process)
   let refreshing = false
+  async function convertWorkbook(command:'convert_legacy_xls'|'convert_odf_spreadsheet', input:Uint8Array, signal?:AbortSignal) {
+      const invalid = () => Object.assign(new Error('Invalid source workbook'), { statusCode: 400 })
+      if (!input.byteLength) throw invalid()
+      const result = await native.run(input, async io => {
+        const reply = await io.request(command, {path:'/work/input.xlsx',targetPath:'/work/output.xlsx'}) as Record<string,unknown>
+        if (reply?.invalidInput === true && Object.keys(reply).length === 1) return null
+        if (reply?.written !== true || Object.keys(reply).length !== 1) throw new SandboxError('INVALID_PROTOCOL')
+        const bytes = await io.readOutput()
+        if (bytes.length < 4 || bytes.readUInt32LE(0) !== 0x04034b50) throw new SandboxError('INVALID_OUTPUT')
+        return bytes
+      }, {signal})
+      if (!result) throw invalid()
+      return result
+  }
   return {
+    convertLegacyXls:(input:Uint8Array,signal?:AbortSignal)=>convertWorkbook('convert_legacy_xls',input,signal),
+    convertOdfSpreadsheet:(input:Uint8Array,signal?:AbortSignal)=>convertWorkbook('convert_odf_spreadsheet',input,signal),
     async refreshExternalLinks(input: Uint8Array, sources: readonly BoundWorkbookSource[], signal?: AbortSignal) {
       if (!(input instanceof Uint8Array) || !Array.isArray(sources) || sources.length > 256) {
         throw new SandboxError('INPUT_LIMIT')
@@ -124,7 +140,7 @@ export function createXlsxNativeWorker(process: NativeProcess, supportsOpeningVi
     },
     inspect(input:Uint8Array,signal?:AbortSignal,openingViewport=false){
       return native.run(input,async io=>{
-        const result=await io.request('open',{path:'/work/input.xlsx',locale:'en',...(openingViewport&&supportsOpeningViewport?{openingViewport:true}:{})}) as Record<string,unknown>
+        const result=await io.request('open',{path:'/work/input.xlsx',locale:'en',...(openingViewport&&nodeEngine?{openingViewport:true}:{})}) as Record<string,unknown>
         const source=opened(result)
         await io.request('close',{sessionId:source.sessionId})
         const {sessionId: _session,path: _path,...metadata}=result
@@ -150,7 +166,10 @@ export function createXlsxNativeWorker(process: NativeProcess, supportsOpeningVi
           const index: FormulaIndexSheet[] = []
           for (const sheet of source.sheets) {
             await waitForSheet(io, source.sessionId, sheet.id, signal)
-            const result = await io.request('read_formula_cells', { sessionId: source.sessionId, sheetId: sheet.id }) as {
+            const result = await io.request('read_formula_cells', {
+              sessionId: source.sessionId, sheetId: sheet.id,
+              ...(nodeEngine ? { expandSharedFormulas: true } : {}),
+            }) as {
               cells: FormulaIndexSheet['cells']
               sharedGroups?: unknown[]
               indexingComplete?: boolean

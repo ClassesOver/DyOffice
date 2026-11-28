@@ -143,11 +143,12 @@ export function mergeFieldNames(doc: PmNode): string[] {
  * repeated per record, with the page break on the first block of every
  * letter but the first.
  */
-export function mergeAllRecords(doc: PmNode, records: readonly MergeRecord[]): PmNode {
+export function mergeAllRecords(doc: PmNode, records: readonly MergeRecord[], measure?: (blocks: readonly PmNode[]) => void): PmNode {
   const blocks = doc.content ?? []
   const content: PmNode[] = []
   records.forEach((record, index) => {
     const merged = substituteContent(blocks, record) ?? []
+    measure?.(merged)
     merged.forEach((block, blockIndex) => {
       // a bookmark, a comment anchor or a note reference exists once in the
       // package, so only the first letter keeps it

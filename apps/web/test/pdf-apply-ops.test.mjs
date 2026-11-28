@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {PDFDocument,PDFName,PDFDict,PDFArray,PDFString,StandardFonts} from 'pdf-lib'
+import {PDFDocument,PDFName,PDFDict,PDFArray,PDFString,StandardFonts} from '../../pdf/src/shared/pdf-lib.ts'
 import {PNG} from 'pngjs'
 import {createHash} from 'node:crypto'
 import {execFile as run} from 'node:child_process'
@@ -10,9 +10,31 @@ import {join} from 'node:path'
 import {promisify} from 'node:util'
 import {createPdfApplyOpsJob,validatePdfApplySnapshot,parsePdfApplyOpsRequest} from '../server/src/pdf/apply-ops-job.mjs'
 import {createPdfStampsJob} from '../server/src/pdf/stamps-job.mjs'
+import {assertPdfInsertFormPreserved,pdfInsertFormState} from '../server/src/pdf/insert-form-integrity.mjs'
 const n=PDFName.of,hash=b=>createHash('sha256').update(b).digest('hex')
 const empty=()=>({fileId:'11111111-1111-4111-8111-111111111111',baseRevision:'22222222-2222-4222-8222-222222222222',generation:1,markups:[],notes:[],textInserts:[],imageEdits:[],formEdits:{},formFields:[],rotations:{},deleted:[],order:null,metadata:null})
 const raw=snapshot=>JSON.stringify({version:1,action:'applyOps',snapshot})
+test('form integrity restores only widget coordinate rounding during a native image rewrite',async()=>{
+ const before=await PDFDocument.create(),page=before.addPage([595,420])
+ const field=before.getForm().createTextField('Customer')
+ field.addToPage(page,{x:195.3,y:111.3,width:211.4,height:40.6})
+ field.setText('Ada')
+ const bytes=await before.save(),rect=n('Rect')
+ const original=await PDFDocument.load(bytes)
+ const round=async delta=>{
+  const output=await PDFDocument.load(bytes)
+  const widget=output.getForm().getTextField('Customer').acroField.getWidgets()[0].dict
+  const coords=widget.lookup(rect,PDFArray).asArray().map(value=>Math.fround(value.asNumber()))
+  coords[0]+=delta
+  widget.set(rect,output.context.obj(coords))
+  return output
+ }
+ const rounded=await round(0),moved=await round(.01)
+ assert.throws(()=>assertPdfInsertFormPreserved(original,rounded),{code:'PDF_FORM_INSERT_INTEGRITY_FAILED'})
+ assert.throws(()=>assertPdfInsertFormPreserved(original,moved,{restoreRoundedWidgetRects:true}),{code:'PDF_FORM_INSERT_INTEGRITY_FAILED'})
+ assertPdfInsertFormPreserved(original,rounded,{restoreRoundedWidgetRects:true})
+ assert.equal(pdfInsertFormState(rounded),pdfInsertFormState(original))
+})
 test('saved note edits and markup deletions retain unrelated annotations in a reordered save',async()=>{
  const doc=await PDFDocument.create(),page=doc.addPage([400,500])
  doc.addPage([400,500])
@@ -29,6 +51,22 @@ test('saved note edits and markup deletions retain unrelated annotations in a re
  assert.deepEqual(annots.map(String),[String(note),String(keep)])
  assert.deepEqual(annots.map(ref=>out.context.lookup(ref).lookup(n('Contents')).decodeText()),['After','Same position'])
  assert.equal(out.context.lookup(note).lookup(n('T')).decodeText(),'Author')
+})
+test('the regular PDF save rewrites navigation while preserving unrelated annotations',async()=>{
+ const doc=await PDFDocument.create(),source=doc.addPage(),deleted=doc.addPage(),keep=doc.addPage()
+ const add=entry=>source.node.addAnnot(doc.context.register(doc.context.obj({
+  Type:'Annot',Rect:[20,30,100,50],...entry,
+ })))
+ add({Subtype:'Link',Dest:[2,'Fit']})
+ add({Subtype:'Link',Dest:[deleted.ref,'Fit']})
+ add({Subtype:'Text',Contents:PDFString.of('Keep this note')})
+ const result=await createPdfApplyOpsJob().execute(Buffer.from(await doc.save()),raw({...empty(),deleted:[1],order:[2,0,1]}))
+ const output=await PDFDocument.load(result.bytes),[destination,from]=output.getPages()
+ assert.equal(String(destination.ref),String(keep.ref))
+ const [link,removed,note]=from.node.Annots().asArray().map(ref=>output.context.lookup(ref,PDFDict))
+ assert.equal(String(link.lookup(n('Dest'),PDFArray).get(0)),String(destination.ref))
+ assert.equal(removed.has(n('Dest')),false)
+ assert.equal(note.lookup(n('Contents'),PDFString).decodeText(),'Keep this note')
 })
 test('native text rewrite changes only the chosen occurrence and rejects a wrong target atomically',async()=>{
  const doc=await PDFDocument.create(),page=doc.addPage([400,500])
@@ -113,6 +151,11 @@ test('snapshot validator rejects arbitrary writer keys getters IDs and malformed
  for(const input of bad)assert.throws(()=>validatePdfApplySnapshot(input),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
  let read=false;const getter=empty();Object.defineProperty(getter,'metadata',{enumerable:true,get(){read=true;return null}});assert.throws(()=>validatePdfApplySnapshot(getter),{code:'INVALID_PDF_APPLY_SNAPSHOT'});assert.equal(read,false)
  assert.throws(()=>parsePdfApplyOpsRequest(JSON.stringify({version:1,action:'applyOps',snapshot:empty(),request:{}})),{code:'INVALID_REQUEST'})
+ const fill={id:'static-text',kind:'text',pageIndex:0,rect:[10,10,40,30],text:'Form entry',fontSize:12,color:'#110022',align:'left'}
+ assert.deepEqual(parsePdfApplyOpsRequest(raw({...empty(),staticFormFills:[fill]})).staticFormFills,[fill])
+ for(const staticFormFills of [[fill,fill],[{...fill,rect:[0,0,0,0]}],[{...fill,color:'red'}],[{...fill,pageIndex:-1}]]){
+  assert.throws(()=>validatePdfApplySnapshot({...empty(),staticFormFills}),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
+ }
 })
 test('one native snapshot writes mixed forms notes markup rotations deletion order metadata and preserves old AP/content',async()=>{
  const original=await fixture(),before=await PDFDocument.load(original),snapshot={...empty(),markups:[{id:'Pmark',pageIndex:0,type:'highlight',color:[1,1,0],quads:[[30,615,140,615,30,598,140,598]]}],notes:[{id:'Pnote',input:{kind:'note',pageIndex:0,color:[1,0.9,0.3],at:[200,400],contents:'Comment'}}],formEdits:{change:{name:'change',kind:'text',value:'已更新'}},formFields:[{id:'Fnew',input:{name:'newChoice',kind:'choice',pageIndex:0,rect:[230,450,400,480],options:['中文','日本語'],value:'中文'}}],rotations:{0:90},deleted:[1],order:[2,0,1],metadata:{title:'Mixed atomic'}}
@@ -286,4 +329,9 @@ test('PDF widget removal keeps the surviving radio option and clears the removed
  assert.deepEqual(actual.getOptions(),['keep option'])
  assert.equal(actual.getSelected(),undefined)
  assert.equal(saved.getPage(0).node.Annots().asArray().length,1)
+})
+test('PDF attachment snapshots accept an empty file without accepting noncanonical base64',()=>{
+ const draft=bytesBase64=>({...empty(),attachments:{add:[{name:'empty.txt',bytesBase64}]}})
+ assert.deepEqual(validatePdfApplySnapshot(draft('')),draft(''))
+ for(const invalid of ['====','  ','YQ','Y Q=='])assert.throws(()=>validatePdfApplySnapshot(draft(invalid)),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
 })

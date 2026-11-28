@@ -172,13 +172,16 @@ export function findPivotAtSelection(ctx: PivotActionContext): PivotHit | null {
   const sheetMeta = state.file.sheets.find((sheet) => sheet.id === selection.sheetId)
   if (!sheetMeta) return null
   for (const pivot of sheetMeta.pivotTables) {
+    let bounds: ReturnType<typeof parseRange>
+    try {
+      bounds = parseRange(pivot.outputRef)
+    } catch {
+      continue
+    }
     const definition = state.pivotDefinitions.get(pivot.path)
-    const relayout =
-      pivot.cachePath === null
-        ? undefined
-        : state.editJournal.pivotRefreshUpdates.get(pivot.cachePath)?.relayout
+    const relayout = state.editJournal.pivotRefreshUpdates.get(pivot.path)?.relayout
     const pageCount = relayout?.pageFieldIndices?.length ?? definition?.pageFields.length ?? 0
-    if (hitsBlock(selection, parseRange(pivot.outputRef), pivotPageRows(pageCount))) {
+    if (hitsBlock(selection, bounds, pivotPageRows(pageCount))) {
       return { kind: 'file', sheetId: selection.sheetId, pivot, definition, relayout }
     }
   }
@@ -294,7 +297,7 @@ export function refreshPivotTables(ctx: PivotActionContext, sheetId: string): nu
         // new area; OOXML write-back of rowItems/colItems and sharedItems is
         // deferred — refreshOnLoad makes Excel rebuild them on open (see the
         // pivot-engine TODO).
-        recordPivotRefreshUpdate(state.editJournal, pivot.cachePath, sheetId, newOutputRef)
+        recordPivotRefreshUpdate(state.editJournal, pivot.path, pivot.cachePath, sheetId, newOutputRef)
       }
       // The grown definition (with the new outputRef) takes over subsequent
       // refreshes and edit protection.
@@ -943,7 +946,7 @@ export function applySlicerSelection(
       // On save, the location ref is widened/shrunk to the new area; OOXML
       // write-back of the hidden entries themselves relies on refreshOnLoad
       // letting Excel rebuild (same strategy as the refresh growth path).
-      recordPivotRefreshUpdate(state.editJournal, pivot.cachePath, slicer.sheetId, newOutputRef)
+      recordPivotRefreshUpdate(state.editJournal, pivot.path, pivot.cachePath, slicer.sheetId, newOutputRef)
       recordPivotCacheRefresh(state.editJournal, pivot.cachePath)
     }
     state.pivotDefinitions.set(pivot.path, {

@@ -10,10 +10,39 @@ import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import { createFileValidator, validateFileName, validateUpload } from './validation.ts'
 import { assertDshUpload, uuid, scope, objectKey, openResult as unsupportedOpenResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow, type Upload } from './queries.ts'
 import { assertLiveLease } from '../leases/queries.ts'
-import { authError } from '../auth/sessions.ts'
+import { authError, tokenHash } from '../auth/sessions.ts'
 import { reclaimAbandonedUploads } from './reclamation.ts'
+import { createWorkbookPasswordCodec } from './workbook-password.ts'
+import { isEncryptedOfficeFormat, isSpreadsheetArchive, type EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
+import {createDocumentEditGrants} from './document-edit-grants.ts'
+
+const workbookPasswords = createWorkbookPasswordCodec()
+const verifiedOfficeCopy = Symbol()
+type ProtectedOffice = { password: string; signal?: AbortSignal; format?:EncryptedOfficeFormat; readAfterImport?:boolean } | {
+  [verifiedOfficeCopy]: { format: EncryptedOfficeFormat; sha256: string; size: number; officeSignatureProtected: boolean }
+}
+
+function assertProtectedOfficeImport(row: Upload, principal: BusinessPrincipal, format:EncryptedOfficeFormat) {
+  if (principal.job || principal.dshEdit) throw authError(404)
+  if (row.kind !== 'import' || row.format !== format) throw authError(415)
+}
+
+async function lockImportFolder(connection: PoolClient, principal: BusinessPrincipal, workspaceId: string, folderId: string) {
+  const folder = await connection.query('SELECT id FROM workspace_folders WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND id=$4 FOR KEY SHARE', [...scope(principal),workspaceId,folderId])
+  if (!folder.rowCount) throw authError(404)
+}
 
 export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
+
+export function fitFileStem(stem: string, ending: string) {
+  let fitted = '', size = Buffer.byteLength(ending)
+  for (const character of stem) {
+    size += Buffer.byteLength(character)
+    if (size > 255) break
+    fitted += character
+  }
+  return fitted
+}
 
 export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000, capabilities = UNSUPPORTED_CAPABILITIES }: { capabilities?: CapabilityCatalog; transactions: PrincipalTransactions & Partial<Pick<McpPrincipalTransactions, 'withMcpReadTransaction'>>; objects: ObjectStore } & FilePolicy) {
   if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
@@ -22,6 +51,53 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     if (principal.job || principal.dshEdit) throw authError(404)
     return fn(connection,principal)
   })
+  const documentEdits=createDocumentEditGrants()
+  const importReads=new Map<string,{sessionHash:string;fileId:string;revision:string;sha256:string;bytes:Buffer;password:string;expiresAt:number;timer:NodeJS.Timeout}>()
+  const importReadLifetimeMs=60_000, importReadCapacity=8, importReadByteLimit=64*1024*1024
+  function removeImportRead(id:string){
+    const grant=importReads.get(id)
+    if(grant)clearTimeout(grant.timer)
+    importReads.delete(id)
+  }
+  function prepareImportRead(token:string,row:Upload,sha256:string,bytes:Buffer,password:string){
+    const used=[...importReads.values()].reduce((sum,grant)=>sum+grant.bytes.length,0)
+    if(importReads.size>=importReadCapacity||used+bytes.length>importReadByteLimit)return
+    const id=randomUUID(),timer=setTimeout(()=>removeImportRead(id),importReadLifetimeMs)
+    timer.unref()
+    importReads.set(id,{sessionHash:tokenHash(token),fileId:row.file_id,revision:row.revision_id,sha256,bytes,password,expiresAt:Date.now()+importReadLifetimeMs,timer})
+    return id
+  }
+  function requireImportRead(token:string,fileId:string,revision:string,id:string){
+    const grant=importReads.get(uuid(id))
+    if(!grant||grant.expiresAt<=Date.now()||grant.sessionHash!==tokenHash(token)||grant.fileId!==fileId||grant.revision!==revision)throw authError(404)
+    return grant
+  }
+  function authorizeProtectedDocument(token:string,fileId:string,revision:string){
+    return personal(token,'files:read',async(connection,principal)=>{
+      const file=await loadFile(connection,principal,uuid(fileId))
+      if(file.format!=='docx'||!file.office_password_protected)throw authError(415)
+      if(file.current_revision!==uuid(revision))throw authError(409)
+      return file
+    })
+  }
+  async function sealDocumentDraft(token:string,fileId:string,revision:string,editorId:string,unlockId:string,bytes:Buffer,signal?:AbortSignal) {
+    const authorize=async()=>{
+      const current=await authorizeProtectedDocument(token,fileId,revision)
+      signal?.throwIfAborted()
+      return documentEdits.authorize(token,current,uuid(editorId),unlockId)
+    }
+    const grant=await authorize()
+    const sealed=await workbookPasswords.seal(bytes,grant.password,signal,'docx')
+    return {sealed,grant,async recheck(){
+      if(await authorize()!==grant)throw authError(423)
+    }}
+  }
+  async function documentDraftGrant(token:string,file:FileRow,revision:string,editorId:string,unlockId?:string){
+    if(file.format!=='docx')throw authError(415)
+    if(file.current_revision!==uuid(revision))throw authError(409)
+    await service.assertOfficeWritable(file,file.office_password_protected?'docx':undefined)
+    return file.office_password_protected?documentEdits.authorize(token,file,uuid(editorId),unlockId):undefined
+  }
   const catalog = Object.freeze({ ...capabilities })
   function readRevision<T>(credential: OfficeReadCredential, fileId: string, revision: string, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) {
     if (typeof credential !== 'string' && credential.kind === 'external-token') {
@@ -34,8 +110,8 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     const file = await loadFile(connection, principal, uuid(fileId))
     const requestedRevision = uuid(revision)
     if (principal.job && requestedRevision !== principal.job.baseRevision) throw authError(404)
-    const reference = (await connection.query<{ object_key: string; size: number; sha256: string }>(
-      'SELECT object_key,size,sha256 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4',
+    const reference = (await connection.query<{ object_key: string; size: number; sha256: string; office_password_protected: boolean }>(
+      'SELECT object_key,size,sha256,office_password_protected FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4',
       [...scope(principal),file.id,requestedRevision],
     )).rows[0]
     if (!reference) throw authError(404)
@@ -46,7 +122,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
   const validateLegacyOffice = createFileValidator({maxConcurrent:1})
   let nextLegacyInspection = Promise.resolve()
   async function signatureProtected(row: FileRow) {
-    if (row.format === 'pdf') return false
+    if (row.format === 'pdf' || row.format === 'csv') return false
     if (typeof row.office_signature_protected === 'boolean') return row.office_signature_protected
     const key = `${row.format}:${row.sha256}:${row.size}`
     const cached = legacySignatureResults.get(key)
@@ -68,11 +144,19 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     try { return await inspection } finally { legacyInspections.delete(key) }
   }
   const openResult = async (row: FileRow) => ({ ...unsupportedOpenResult(row),capabilities: catalog,
+    ...(row.office_password_protected ? row.format==='docx'?{documentPasswordProtected:true as const}:{workbookPasswordProtected:true as const} : {}),
     ...(await signatureProtected(row) ? {officeSignatureProtected:true as const} : {}) })
   const service = {
     capabilities: catalog,
-    async assertOfficeWritable(row: FileRow) {
-      if (await signatureProtected(row)) throw authError(423)
+    async assertOfficeLeaseAllowed(row: FileRow, token?:FileCredential, editorId?:string, docxUnlockId?:string) {
+      if(row.pdf_encrypted||await signatureProtected(row))throw authError(423)
+      if(row.format==='docx'&&row.office_password_protected){
+        if(typeof token!=='string'||token.startsWith('dsh-edit:')||!editorId)throw authError(423)
+        documentEdits.authorize(token,row,editorId,docxUnlockId)
+      }
+    },
+    async assertOfficeWritable(row: FileRow, protectedFormat?:EncryptedOfficeFormat) {
+      if (row.pdf_encrypted || row.office_password_protected !== !!protectedFormat || (protectedFormat&&row.format!==protectedFormat) || await signatureProtected(row)) throw authError(423)
     },
     async reclaimAbandonedUploads(token: FileCredential) {
       if (!objects.removeUnreferenced) return { reclaimedBytes: 0, reclaimedUploads: 0 }
@@ -86,40 +170,52 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (!canReclaim) return { reclaimedBytes: 0, reclaimedUploads: 0 }
       return personal(token, 'files:write', (connection,principal) => reclaimAbandonedUploads(connection,principal,objects))
     },
-    async stageUpload(token: FileCredential, metadata: { name: string; size: number; autoName?:boolean }) {
-      if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size','autoName'].includes(key))) throw authError(400)
+    async stageUpload(token: FileCredential, metadata: { name: string; size: number; autoName?:boolean; folderId?:string }) {
+      if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size','autoName','folderId'].includes(key))) throw authError(400)
       const name = metadata.name, format = validateFileName(name), size = metadata.size
-      if(metadata.autoName!==undefined&&(typeof metadata.autoName!=='boolean'||(metadata.autoName&&(format==='pdf'||name!=='未命名.'+format))))throw authError(400)
-      if (!Number.isSafeInteger(size) || size < 1) throw authError(400)
+      const folderId = metadata.folderId === undefined ? null : uuid(metadata.folderId)
+      if(metadata.autoName!==undefined&&(typeof metadata.autoName!=='boolean'||(metadata.autoName&&(format==='pdf'||format==='csv'||name!=='未命名.'+format))))throw authError(400)
+      if (!Number.isSafeInteger(size) || size < (format === 'csv' ? 0 : 1)) throw authError(400)
       if (size > MAX_OBJECT_BYTES) throw authError(413)
       // Separate commit: quota reclamation survives a subsequent quota rejection.
       await service.reclaimAbandonedUploads(token)
       return personal(token, 'files:write', async (connection, principal) => {
         const account = await lockAccount(connection, principal)
+        if (folderId) await lockImportFolder(connection, principal, account.workspaceId, folderId)
         if (account.reservedBytes + account.storedBytes + size > quotaBytes) throw authError(413)
         const pending = await connection.query("SELECT 1 FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND state IN ('staged','receiving','ready')", scope(principal))
         if (pending.rowCount! >= maxUploads) throw Object.assign(authError(429), { retryAfter: 60 })
         const id = randomUUID(), fileId = randomUUID(), revisionId = randomUUID()
-        const result = await connection.query("INSERT INTO uploads(id,deployment_id,owner_id,workspace_id,file_id,revision_id,name,format,expected_size,auth_version,state,expires_at,auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'staged',clock_timestamp()+$11*interval '1 millisecond',$12) RETURNING expires_at", [id,...scope(principal),account.workspaceId,fileId,revisionId,name,format,size,principal.authVersion,uploadTtlMs,metadata.autoName===true])
+        const result = await connection.query("INSERT INTO uploads(id,deployment_id,owner_id,workspace_id,file_id,revision_id,name,format,expected_size,auth_version,state,expires_at,auto_name_pending,import_folder_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'staged',clock_timestamp()+$11*interval '1 millisecond',$12,$13) RETURNING expires_at", [id,...scope(principal),account.workspaceId,fileId,revisionId,name,format,size,principal.authVersion,uploadTtlMs,metadata.autoName===true,folderId])
         await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),size])
         return { uploadId: id, fileId, expiresAt: (result.rows[0].expires_at as Date).toISOString() }
       })
     },
-    preflightUpload: (token: FileCredential, uploadId: string) => run(token, 'files:write', async (connection, principal) => {
+    preflightUpload: (token: FileCredential, uploadId: string, encryptedFormat?:EncryptedOfficeFormat) => run(token, 'files:write', async (connection, principal) => {
       const row = await lockUpload(connection, principal, uuid(uploadId))
       if (row.state !== 'staged') throw authError(409)
+      if (encryptedFormat) assertProtectedOfficeImport(row, principal,encryptedFormat)
       if (row.kind === 'revision') {
+        if (row.office_password_protected || row.office_password_change) throw authError(423)
         await loadFile(connection,principal,row.file_id)
         await assertLiveLease(connection,principal,row.file_id,Number(row.lease_epoch),row.editor_id!)
       }
       return { size: row.expected_size }
     }),
-    async receiveUpload(token: FileCredential, uploadId: string, input: Buffer) {
+    async receiveProtectedOfficeRevision(token: FileCredential, uploadId: string, sealed: Awaited<ReturnType<typeof workbookPasswords.seal>>) {
+      return service.receiveUpload(token,uploadId,sealed.bytes,{[verifiedOfficeCopy]:sealed.file})
+    },
+    async receiveUpload(token: FileCredential, uploadId: string, input: Buffer, encryptedOffice?: ProtectedOffice): Promise<{uploadId:string;sha256:string;size:number;unlockId?:string}> {
       const id = uuid(uploadId), attempt = randomUUID()
+      const verified=encryptedOffice&&verifiedOfficeCopy in encryptedOffice?encryptedOffice[verifiedOfficeCopy]:undefined
+      const password=encryptedOffice&&'password' in encryptedOffice?encryptedOffice:undefined
       const claimed = await run(token, 'files:write', async (connection, principal) => {
         await lockAccount(connection, principal)
         const row = await lockUpload(connection, principal, id)
         if (row.state !== 'staged') throw authError(409)
+        if (row.kind === 'revision') {
+          if (row.office_password_protected !== !!verified || (encryptedOffice && !verified)) throw authError(423)
+        } else if (encryptedOffice) assertProtectedOfficeImport(row,principal,verified?.format??password?.format??'xlsx')
         if (row.kind === 'revision') {
           await loadFile(connection,principal,row.file_id)
           await assertLiveLease(connection,principal,row.file_id,Number(row.lease_epoch),row.editor_id!)
@@ -130,8 +226,15 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       let published = false, completedSha: string | undefined
       try {
         if (!Buffer.isBuffer(input) || input.length !== claimed.row.expected_size) throw authError(400)
-        const bytes = Buffer.from(input), validated = await validateUpload(bytes, claimed.row.name)
+        const bytes = Buffer.from(input)
+        const importedDocument=typeof token==='string'&&password?.format==='docx'&&password.readAfterImport
+          ? await workbookPasswords.open(bytes,password.password,password.signal,'docx') : undefined
+        const validated = importedDocument?.file ?? (password
+          ? await workbookPasswords.verify(bytes,password.password,password.signal,password.format)
+          : verified ?? await validateUpload(bytes, claimed.row.name, { allowEncryptedPdf: claimed.row.kind === 'import' }))
         if (validated.format !== claimed.row.format) throw authError(400)
+        const pdfEncrypted = 'pdfEncrypted' in validated && validated.pdfEncrypted === true
+        password?.signal?.throwIfAborted()
         // Once publication starts, an error may mean an object exists. Retain
         // the reservation/row until expiry; never delete an ambiguous object.
         published = true
@@ -140,7 +243,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         const reference = await objects.putImmutable(claimed.key, bytes, { size: validated.size, sha256: validated.sha256 })
         if (reference.key !== claimed.key || reference.size !== validated.size || reference.sha256 !== validated.sha256) throw authError(503)
         completedSha = validated.sha256
-        return await run(token, 'files:write', async (connection, principal) => {
+        const ready=await run(token, 'files:write', async (connection, principal) => {
           await lockAccount(connection, principal)
           const row = await lockUpload(connection, principal, id)
           if (row.state !== 'receiving' || row.attempt_id !== attempt) throw authError(409)
@@ -148,9 +251,14 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
             await loadFile(connection,principal,row.file_id)
             await assertLiveLease(connection,principal,row.file_id,Number(row.lease_epoch),row.editor_id!)
           }
-          await connection.query("UPDATE uploads SET state='ready',sha256=$4,office_signature_protected=$5 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,validated.sha256,validated.officeSignatureProtected])
+          await connection.query("UPDATE uploads SET state='ready',sha256=$4,office_signature_protected=$5,office_password_protected=$6,pdf_encrypted=$7 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,validated.sha256,validated.officeSignatureProtected,!!encryptedOffice,pdfEncrypted])
           return { uploadId: id, sha256: validated.sha256, size: validated.size }
         })
+        if(importedDocument&&password&&typeof token==='string'&&!password.signal?.aborted){
+          const unlockId=prepareImportRead(token,claimed.row,reference.sha256,importedDocument.bytes,password.password)
+          if(unlockId)return {...ready,unlockId}
+        }
+        return ready
       } catch (error) {
         // A verified PUT receipt proves that this attempt has finished writing.
         // Preserve it for terminal reclamation without publishing a revision or
@@ -199,13 +307,39 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       const {uploadId} = await service.stageUpload(token, {name:'未命名.pdf',size:bytes.length})
       try {
         await service.receiveUpload(token,uploadId,bytes)
-        return await service.finishUpload(token,uploadId,undefined,true)
+        return await service.finishUpload(token,uploadId,undefined,{blankPdf:true})
       } catch (error) {
         await service.cancelUpload(token,uploadId).catch(() => {})
         throw error
       }
     },
-    async finishUpload(token: FileCredential, uploadId: string, authorize?: (connection: PoolClient, principal: BusinessPrincipal) => Promise<void>, blankPdf = false) {
+    async prepareDuplicate(token: FileCredential, fileId: string) {
+      const source = await personal(token,'files:write',async (connection,principal) => {
+        const row = await loadFile(connection,principal,uuid(fileId))
+        const bytes = await objects.readVerified({key:row.object_key,size:row.size,sha256:row.sha256})
+        return {row,bytes}
+      })
+      const {uploadId} = await service.stageUpload(token,{name:source.row.name,size:source.row.size})
+      try {
+        const format=source.row.format
+        const protectedCopy = source.row.office_password_protected && isEncryptedOfficeFormat(format) ? {
+          [verifiedOfficeCopy]: {
+            format, sha256: source.row.sha256, size: source.row.size,
+            officeSignatureProtected: await signatureProtected(source.row),
+          },
+        } : undefined
+        await service.receiveUpload(token,uploadId,source.bytes,protectedCopy)
+        return {uploadId,revision:source.row.current_revision}
+      } catch (error) {
+        await service.cancelUpload(token,uploadId).catch(() => {})
+        throw error
+      }
+    },
+    async finishDuplicate(token: FileCredential, fileId: string, uploadId: string, revision: string, language: 'en' | 'zh') {
+      if (language !== 'en' && language !== 'zh') throw authError(400)
+      return service.finishUpload(token,uploadId,undefined,{copy:{id:uuid(fileId),revision:uuid(revision),suffix:language==='en'?'Copy':'副本'}})
+    },
+    async finishUpload(token: FileCredential, uploadId: string, authorize?: (connection: PoolClient, principal: BusinessPrincipal) => Promise<void>, options: {blankPdf?: boolean;uniqueGeneratedName?: boolean;copy?:{id:string;revision:string;suffix:string}} = {}) {
       const id = uuid(uploadId)
       return personal(token, 'files:write', async (connection, principal) => {
         await authorize?.(connection, principal)
@@ -214,12 +348,55 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         if (row.kind !== 'import') throw authError(409)
         if (row.state === 'committed') {
           const file = await loadFile(connection,principal,row.file_id)
-          return openResult({ ...file, current_revision: row.revision_id, object_key:objectKey(principal,row.revision_id), sha256: row.sha256!, size: row.expected_size, office_signature_protected:row.office_signature_protected })
+          return openResult({ ...file, current_revision: row.revision_id, object_key:objectKey(principal,row.revision_id), sha256: row.sha256!, size: row.expected_size, office_signature_protected:row.office_signature_protected, office_password_protected:row.office_password_protected, pdf_encrypted:row.pdf_encrypted })
         }
         if (row.state !== 'ready' || !row.sha256) throw authError(409)
+        let name = row.name, folderId = row.import_folder_id
+        if (folderId) await lockImportFolder(connection, principal, row.workspace_id, folderId)
+        if (options.copy) {
+          const {id:sourceId,revision,suffix} = options.copy
+          const source = await loadFile(connection,principal,sourceId)
+          if (source.current_revision !== revision || source.sha256 !== row.sha256 || source.format !== row.format || source.size !== row.expected_size) throw authError(409)
+          folderId = (await connection.query<{folder_id:string|null}>(
+            'SELECT folder_id FROM workspace_file_state WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 FOR SHARE',
+            [...scope(principal),sourceId],
+          )).rows[0]?.folder_id ?? null
+          const dot = source.name.lastIndexOf('.'), stem = source.name.slice(0,dot), extension = source.name.slice(dot)
+          const prefix = fitFileStem(stem,` ${suffix} ${Number.MAX_SAFE_INTEGER}${extension}`)
+          const names = (await connection.query<{name:string}>(`SELECT f.name FROM files f
+            LEFT JOIN workspace_file_state s ON s.deployment_id=f.deployment_id AND s.owner_id=f.owner_id AND s.file_id=f.id
+            WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.deleted_at IS NULL AND f.purge_started_at IS NULL
+              AND s.folder_id IS NOT DISTINCT FROM $3::uuid AND starts_with(f.name,$4)`,
+            [...scope(principal),folderId,prefix],
+          )).rows
+          const occupied = new Set(names.map(item=>item.name))
+          for (let index = 1; ;index++) {
+            const ending = ` ${suffix}${index===1?'':` ${index}`}${extension}`
+            name = fitFileStem(stem,ending)+ending
+            if (!occupied.has(name)) break
+          }
+        } else if (options.uniqueGeneratedName) {
+          const dot = name.lastIndexOf('.'), stem = name.slice(0,dot), extension = name.slice(dot)
+          const prefix = fitFileStem(stem,`-${Number.MAX_SAFE_INTEGER}${extension}`)
+          const names = (await connection.query<{name:string}>(`SELECT lower(f.name) AS name FROM files f
+            LEFT JOIN workspace_file_state s ON s.deployment_id=f.deployment_id AND s.owner_id=f.owner_id AND s.file_id=f.id
+            WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.deleted_at IS NULL AND f.purge_started_at IS NULL
+              AND s.folder_id IS NULL AND starts_with(lower(f.name),lower($3))`,
+            [...scope(principal),prefix],
+          )).rows
+          const occupied = new Set(names.map(item=>item.name))
+          for (let index = 2; occupied.has(name.toLowerCase());index++) {
+            const ending = `-${index}${extension}`
+            name = fitFileStem(stem,ending)+ending
+          }
+        }
         await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
-        await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision,pdf_auto_name_pending,auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id,blankPdf,row.auto_name_pending])
-        await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,office_signature_protected) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size,row.office_signature_protected])
+        await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision,pdf_auto_name_pending,auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [row.file_id,...scope(principal),row.workspace_id,name,row.format,row.revision_id,options.blankPdf===true,row.auto_name_pending])
+        if (options.copy || folderId) await connection.query(
+          'INSERT INTO workspace_file_state(deployment_id,owner_id,workspace_id,file_id,folder_id,last_opened_at) VALUES($1,$2,$3,$4,$5,CASE WHEN $6::boolean THEN clock_timestamp() END)',
+          [...scope(principal),row.workspace_id,row.file_id,folderId,!!options.copy],
+        )
+        await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,office_signature_protected,office_password_protected,pdf_encrypted) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size,row.office_signature_protected,row.office_password_protected,row.pdf_encrypted])
         await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])
         await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes-$3,stored_bytes=stored_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),row.expected_size])
         const result = await openResult(await loadFile(connection, principal, row.file_id))
@@ -243,6 +420,92 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     },
     syncAssistantChat:(token:string,fileId:string,input:Parameters<typeof syncFileAssistantChat>[3])=>syncFileAssistantChat(transactions,token,fileId,input),
     openFile: (token: FileCredential, fileId: string) => run(token, 'files:read', async (connection, principal) => openResult(await loadFile(connection, principal, uuid(fileId)))),
+    async openProtectedDocument(token:string,fileId:string,revision:string,password:string,signal?:AbortSignal,editorId?:string) {
+      const file=await authorizeProtectedDocument(token,fileId,revision)
+      const bytes=await objects.readVerified({key:file.object_key,size:file.size,sha256:file.sha256},signal)
+      const opened=await workbookPasswords.open(bytes,password,signal,'docx')
+      const current=await authorizeProtectedDocument(token,fileId,revision)
+      signal?.throwIfAborted()
+      if(current.sha256!==opened.file.sha256||current.size!==opened.file.size)throw authError(409)
+      return {bytes:opened.bytes,editId:documentEdits.open(token,current,editorId,password)}
+    },
+    async claimDocumentImportRead(token:string,fileId:string,revision:string,unlockId:string,signal?:AbortSignal,editorId?:string){
+      const current=await authorizeProtectedDocument(token,fileId,revision)
+      signal?.throwIfAborted()
+      const grant=requireImportRead(token,current.id,current.current_revision,unlockId)
+      if(current.sha256!==grant.sha256)throw authError(409)
+      // Check and consume together so concurrent claims cannot both read the payload.
+      const editId=documentEdits.open(token,current,editorId,grant.password)
+      removeImportRead(uuid(unlockId))
+      return {bytes:grant.bytes,editId}
+    },
+    closeDocumentEdit:documentEdits.close,
+    assertPreparedDocumentRevision:documentEdits.assertPrepared,
+    async sealDocumentRecovery(token:string,fileId:string,editorId:string,unlockId:string,bytes:Buffer,signal?:AbortSignal){
+      const editor=uuid(editorId),id=uuid(fileId)
+      const authorize=()=>personal(token,'files:read',async(connection,principal)=>{
+        const file=await loadFile(connection,principal,id)
+        if(file.format!=='docx')throw authError(415)
+        signal?.throwIfAborted()
+        // The snapshot belongs to the tab that unlocked the file. A peer save
+        // or a lost commit response can advance the head without replacing that draft.
+        return documentEdits.recoveryGrant(token,file.id,editor,unlockId)
+      })
+      const grant=await authorize()
+      const sealed=await workbookPasswords.seal(bytes,grant.password,signal,'docx')
+      if(await authorize()!==grant)throw authError(423)
+      return sealed.bytes
+    },
+    async sealDocumentRevision(token:string,fileId:string,revision:string,editorId:string,unlockId:string,bytes:Buffer,signal?:AbortSignal){
+      const {sealed,grant,recheck}=await sealDocumentDraft(token,fileId,revision,editorId,unlockId,bytes,signal)
+      return {...sealed,async rememberSave(){
+        await recheck()
+        documentEdits.remember(grant,sealed.file.sha256)
+      }}
+    },
+    async prepareDocumentPassword(token:string,fileId:string,revision:string,editorId:string,newPassword:string,unlockId:string|undefined,bytes:Buffer,signal?:AbortSignal){
+      const authorize=()=>personal(token,'files:write',async(connection,principal)=>{
+        const file=await loadFile(connection,principal,uuid(fileId))
+        const grant=await documentDraftGrant(token,file,revision,editorId,unlockId)
+        if(!newPassword&&!grant)throw authError(409)
+        signal?.throwIfAborted()
+        return grant
+      })
+      const grant=await authorize()
+      const sealed=newPassword?await workbookPasswords.seal(bytes,newPassword,signal,'docx'):undefined
+      return {sealed,async rememberChange(sha256:string){
+        if(await authorize()!==grant)throw authError(423)
+        if(grant)documentEdits.remember(grant,sha256,true)
+      }}
+    },
+    async prepareDocumentDraftCopy(token:string,fileId:string,input:{name:string;folderId?:string;baseRevision:string;editorId:string;leaseEpoch:number},unlockId:string|undefined,bytes:Buffer,password:string|undefined,signal?:AbortSignal){
+      if(validateFileName(input.name)!=='docx')throw authError(415)
+      const id=uuid(fileId),editor=uuid(input.editorId)
+      const authorize=()=>personal(token,'files:write',async(connection,principal)=>{
+        const file=await loadFile(connection,principal,id)
+        const grant=await documentDraftGrant(token,file,input.baseRevision,editor,unlockId)
+        if(password===undefined&&!grant)throw authError(423)
+        await assertLiveLease(connection,principal,id,input.leaseEpoch,editor)
+        signal?.throwIfAborted()
+        return grant
+      })
+      const grant=await authorize()
+      const copyPassword=password??grant?.password
+      const sealed=copyPassword?await workbookPasswords.seal(bytes,copyPassword,signal,'docx'):undefined
+      const {uploadId}=await service.stageUpload(token,{name:input.name,size:sealed?.bytes.length??bytes.length,folderId:input.folderId})
+      try{
+        await service.receiveUpload(token,uploadId,sealed?.bytes??bytes,sealed?{[verifiedOfficeCopy]:sealed.file}:undefined)
+        if(await authorize()!==grant)throw authError(423)
+        return {uploadId}
+      }catch(error){
+        await service.cancelUpload(token,uploadId).catch(()=>{})
+        throw error
+      }
+    },
+    revokeDocumentImportRead(token:string,fileId:string,revision:string,unlockId:string){
+      requireImportRead(token,uuid(fileId),uuid(revision),unlockId)
+      removeImportRead(uuid(unlockId))
+    },
     assertReadableRevision: (token: OfficeReadCredential, fileId: string, revision: string, signal: AbortSignal) =>
       readRevision(token, fileId, revision, async (connection, principal) => {
         signal.throwIfAborted()
@@ -254,7 +517,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (maxBytes !== undefined && reference.size > maxBytes) throw authError(413)
       signal?.throwIfAborted()
       const bytes = await objects.readVerified({ key: reference.object_key, size: reference.size, sha256: reference.sha256 }, signal)
-      return { bytes, name: file.name, format: file.format }
+      return { bytes, name: file.name, format: file.format, ...(reference.office_password_protected && isSpreadsheetArchive(file.format) ? {workbookPasswordProtected:true as const} : {}) }
     }),
     async readFile(token: FileCredential, fileId: string, revision: string, signal?: AbortSignal): Promise<Buffer> { return (await service.download(token,fileId,revision,undefined,signal)).bytes },
     listFiles: async (token: FileCredential, { trash = false, cursor, limit = 50 }: { trash?: boolean; cursor?: string; limit?: number } = {}) => {

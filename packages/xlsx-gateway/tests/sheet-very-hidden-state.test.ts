@@ -21,6 +21,24 @@ const plan = (hiddenChanges: { sheetName: string; hidden: boolean }[]) => ({
 })
 
 describe('veryHidden sheet state', () => {
+  it('updates real sheet attributes and preserves the sheet-list wrapper and comments', () => {
+    const comment = '<!-- <sheets><sheet name="Fake"/></sheets> -->'
+    const xml = WORKBOOK.replace('<sheets>', '<sheets xmlns:ext="urn:example">' + comment)
+      .replace('name="B" sheetId="2" state="hidden"', "ext:name='extension' name = 'B' sheetId='2' state = 'hidden'")
+      .replace('</sheets></workbook>', '</sheets ></workbook>')
+    const result = applySheetPlanToWorkbookXml(xml, {
+      ...plan([{ sheetName: 'B', hidden: false }]),
+      renames: [{ sheetName: 'B', newName: 'Renamed' }],
+      order: ['Renamed', 'A', 'C'],
+    }, [])
+    expect(result).toContain('<sheets xmlns:ext="urn:example">' + comment)
+    expect(result).toContain('</sheets >')
+    expect(result).toContain("ext:name='extension'")
+    expect(parseSheetElements(result).map(({ name, hidden }) => [name, hidden])).toEqual([
+      ['Renamed', false], ['A', false], ['C', true],
+    ])
+  })
+
   it('parses the tri-state', () => {
     expect(parseSheetElements(WORKBOOK).map((e) => [e.hidden, e.veryHidden])).toEqual([
       [false, false],
@@ -29,7 +47,7 @@ describe('veryHidden sheet state', () => {
     ])
   })
 
-  it('survives visibility changes on other sheets and points activeTab off it', () => {
+  it('keeps veryHidden sheets hidden and moves the active tab to the first visible sheet', () => {
     const result = applySheetPlanToWorkbookXml(
       WORKBOOK,
       plan([{ sheetName: 'B', hidden: false }]),
@@ -37,7 +55,7 @@ describe('veryHidden sheet state', () => {
     )
     expect(result).toContain('<sheet name="B" sheetId="2" r:id="rId2"/>')
     expect(result).toContain('<sheet name="C" sheetId="3" state="veryHidden" r:id="rId3"/>')
-    expect(result).toContain('activeTab="2"')
+    expect(result).toContain('activeTab="0"')
   })
 
   it('is not downgraded by a redundant hide of the sheet itself', () => {

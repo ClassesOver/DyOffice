@@ -28,6 +28,47 @@ async function openBridge(createSlidesBridge, server, t, {acquire = true, mediaA
   return {host, bridge}
 }
 
+test('slides bridge cancels a queued password submission when its lease changes',async t=>{
+ const createSlidesBridge=await bundleBridge(t)
+ const server=createSlidesMockServer({slideCount:1}),fileId=server.file().fileId
+ const host=createSessionFileHost({fetchImpl:server.fetchImpl})
+ t.after(()=>host.dispose())
+ await host.open(fileId)
+ await host.acquireLease(fileId)
+ const entered=Promise.withResolvers(),resume=Promise.withResolvers()
+ let unlockRequests=0
+ const bridge=createSlidesBridge(host,fileId,{language:'en',theme:'light'},{fetchImpl:async(url,init)=>{
+  const path=String(url)
+  if(path.endsWith('/slides/open')){
+   const response=await server.fetchImpl(url,init)
+   return Response.json({...await response.json(),writeProtected:true})
+  }
+  if(path.endsWith('/slides/notes')){
+   entered.resolve()
+   await resume.promise
+   return Response.json({text:''})
+  }
+  if(path.endsWith('/slides/unlock-editing')){
+   unlockRequests++
+   return Response.json({status:'unlocked',generation:0})
+  }
+  return server.fetchImpl(url,init)
+ }})
+ t.after(()=>bridge.dispose())
+ await bridge.api.openPptx(1280)
+ const read=bridge.api.getNotes(0)
+ await entered.promise
+ try{
+  const unlock=assert.rejects(bridge.unlockEditing('Synthetic modification password'),{code:'CONFLICT'})
+  await host.takeoverLease(fileId)
+  resume.resolve()
+  await unlock
+ }finally{resume.resolve()}
+ await read
+ assert.equal(unlockRequests,0)
+ assert.equal(bridge.isWriteProtected(),true)
+})
+
 function mockBrowserClipboard(t) {
   let items = []
   let denied = false
@@ -782,7 +823,7 @@ test('desktop-only slides operations reject asynchronously with an explicit unav
   const createSlidesBridge = await bundleBridge(t)
   const server = createSlidesMockServer({slideCount: 1})
   const {bridge} = await openBridge(createSlidesBridge, server, t)
-  const desktopOnly = ['printSlides', 'exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'pickExportVideoPath', 'videoFileOpen', 'listPrinters', 'printerOptions', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'insertMedia', 'addMediaBytes', 'pickModel3d', 'addModel3d', 'openPptxPath', 'newBlank', 'saveAs', 'aiStream', 'webSearch']
+  const desktopOnly = ['exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'openPptxPath', 'newBlank', 'saveAs', 'aiStream', 'webSearch']
   for (const method of desktopOnly) {
     assert.equal(typeof bridge.api[method], 'function', method)
     let operation
@@ -1196,4 +1237,43 @@ test('Web slides commits Edit Points and connector endpoints in slide EMUs',asyn
  assert.deepEqual(await bridge.api.presenterStart(),{audience:false})
  assert.equal(await bridge.api.presenterSwap(),false)
  await bridge.api.presenterEnd()
+})
+
+test('Web slides print notes with the shared desktop layout and browser dialog', async t => {
+  const createSlidesBridge = await bundleBridge(t)
+  const {bridge} = await openBridge(createSlidesBridge, createSlidesMockServer({slideCount: 1}), t)
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  let removed = false
+  let titleAtPrint
+  const printWindow = Object.assign(new EventTarget(), {
+    document: {title: '', fonts: {ready: Promise.resolve()}},
+    focus() {},
+    print() { titleAtPrint = this.document.title },
+  })
+  const frame = Object.assign(new EventTarget(), {
+    contentWindow: printWindow, style: {},
+    setAttribute() {},
+    remove() { removed = true },
+  })
+  Object.defineProperty(globalThis, 'document', {configurable: true, value: {
+    createElement(tag) { assert.equal(tag, 'iframe'); return frame },
+    body: {append(child) { queueMicrotask(() => child.dispatchEvent(new Event('load'))) }},
+  }})
+  t.after(() => {
+    if (before) Object.defineProperty(globalThis, 'document', before)
+    else delete globalThis.document
+  })
+
+  assert.equal(bridge.api.browserPrintDialog, true)
+  assert.deepEqual(await bridge.api.listPrinters(), [])
+  assert.deepEqual(await bridge.api.printerOptions('unused'), [])
+  assert.deepEqual(await bridge.api.printSlides({
+    pngsBase64: ['cG5n'], widthPx: 1280, heightPx: 720, layout: 'notes',
+    notes: ['Draft <speaker> notes'], orientation: 'landscape',
+  }), {ok: true})
+  assert.match(frame.srcdoc, /Draft &lt;speaker&gt; notes/)
+  assert.match(frame.srcdoc, /data:image\/png;base64,cG5n/)
+  assert.match(frame.srcdoc, /Content-Security-Policy/)
+  assert.ok(titleAtPrint)
+  assert.equal(removed, true)
 })

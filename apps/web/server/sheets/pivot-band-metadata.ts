@@ -46,9 +46,17 @@ function palette(style:string|undefined,theme:readonly string[]):Partial<Pivot>{
  return variants[match[1]!.toLowerCase()+Math.floor((number-1)/7)]!
 }
 
-/** Band metadata is distinct from the on-demand recomputation definition. */
-export function pivotBandMetadata(xml:string,theme:readonly string[]):Partial<Pivot>{
- const root=parser.parse(xml)?.pivotTableDefinition??{},style=root.pivotTableStyleInfo?.['@_name'],result=palette(style,theme)
+function dataOffset(raw:unknown):number {
+ const value=Number(raw)
+ return typeof raw==='string'&&/^\+?\d+$/.test(raw)&&Number.isSafeInteger(value)?value:1
+}
+
+/** Display metadata is distinct from the on-demand recomputation definition. */
+export function readPivotPartMetadata(xml:string,theme:readonly string[]){
+ const root=parser.parse(xml)?.pivotTableDefinition,location=root?.location
+ const outputRef=location?.['@_ref']
+ if(typeof outputRef!=='string'||!outputRef)return undefined
+ const style=root.pivotTableStyleInfo?.['@_name'],result=palette(style,theme)
  if(!flag(root.pivotTableStyleInfo?.['@_showRowStripes'])){delete result.stripeFill;delete result.secondRowStripeFill}
  if(!flag(root.pivotTableStyleInfo?.['@_showColStripes'])){delete result.columnStripeFill;delete result.secondColumnStripeFill}
  const fields=list(root.pivotFields?.pivotField),outline=list(root.rowFields?.field).map(field=>fields[integer(field['@_x'])]?.['@_outline']!=='0')
@@ -59,5 +67,7 @@ export function pivotBandMetadata(xml:string,theme:readonly string[]):Partial<Pi
   if(kind!=='data')return 't'
   return depth+1<outline.length&&(outline[depth]??true)?depth===0?'s':'S':'d'
  }).join('')
- return {...result,styled:typeof style==='string'&&style.length>0,rowGrandTotals:flag(root['@_rowGrandTotals'],true),rowKinds}
+ return {...result,outputRef,firstDataRow:dataOffset(location['@_firstDataRow']),firstDataCol:dataOffset(location['@_firstDataCol']),
+  styled:typeof style==='string'&&style.length>0,rowGrandTotals:flag(root['@_rowGrandTotals'],true),
+  ...(rowKinds?{rowKinds}:{})}
 }

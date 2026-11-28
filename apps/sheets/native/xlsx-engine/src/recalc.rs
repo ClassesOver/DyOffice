@@ -20,6 +20,7 @@ use ironcalc::base::types::{Cell, CellType, FormulaValue, SpillValue};
 use serde::{Deserialize, Serialize};
 
 use crate::rels_normalize::load_model;
+use crate::workbook::{WORKBOOK_PATH, read_sheet_declarations};
 use crate::{CellRange, SidecarError};
 
 pub const MAX_RECALC_EDITS: usize = 10_000;
@@ -1065,7 +1066,9 @@ fn workbook_uses_1904_dates(path: &Path) -> Result<bool, SidecarError> {
             "The formula engine could not read the workbook archive: {error}"
         ))
     })?;
-    let (_, _, _, date_1904) = crate::workbook::read_sheet_declarations(&mut archive)?;
+    let xml = crate::read_zip_string(&mut archive, WORKBOOK_PATH)?;
+    let workbook = crate::visuals::parse_document(&xml, WORKBOOK_PATH)?;
+    let (_, _, _, date_1904) = read_sheet_declarations(workbook.root_element())?;
     Ok(date_1904)
 }
 

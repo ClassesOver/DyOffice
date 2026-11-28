@@ -256,7 +256,7 @@ export interface ActionCtx {
   toggleGuides: () => void
 
   // Screen recording
-  recorderRef: { current: { rec: MediaRecorder; stream: MediaStream } | null }
+  recorderRef: { current: ScreenRecordingSession | null }
   setRecording: Set<boolean>
 
   // Text-edit flush support
@@ -288,4 +288,9 @@ export interface ActionCtx {
   newComment: () => void
   /** Open the "Change Shape" gallery popover for a shape (context menu entry) */
   openChangeShape: (targetId: string, x: number, y: number) => void
+}
+
+export interface ScreenRecordingSession {
+  stop(): void
+  cancel(): void
 }

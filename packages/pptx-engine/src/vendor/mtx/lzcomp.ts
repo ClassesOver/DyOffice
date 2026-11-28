@@ -256,12 +256,13 @@ const DIST_MIN = 1
 const MAX_2BYTE_DIST = 512
 
 /** Inflate one LZCOMP block (MTX_LZCOMP_UnPackMemory). */
-export function unpackLz(data: Uint8Array, version: number): Uint8Array {
+export function unpackLz(data: Uint8Array, version: number, limit = Infinity): Uint8Array {
   const bits = new BitReader(data)
   const usingRunLength = version === 1 ? false : bits.inputBit()
   const distCoder = new AHuff(bits, 1 << DIST_WIDTH)
   const lenCoder = new AHuff(bits, 1 << LEN_WIDTH)
   const outLen = bits.readValue(24)
+  if (outLen > limit) throw new MtxError('MTX output limit')
 
   // SetDistRange
   let numDistRanges = 1
@@ -355,7 +356,7 @@ function be24(b: Uint8Array, o: number): number {
 }
 
 /** Split an MTX payload into its three inflated CTF streams (unpackMtx). */
-export function unpackMtx(buf: Uint8Array): [Uint8Array, Uint8Array, Uint8Array] {
+export function unpackMtx(buf: Uint8Array, limit = Infinity): [Uint8Array, Uint8Array, Uint8Array] {
   if (buf.length < 10) throw new MtxError('MTX header truncated')
   const version = buf[0]!
   const offsets = [10, be24(buf, 4), be24(buf, 7)]
@@ -363,7 +364,9 @@ export function unpackMtx(buf: Uint8Array): [Uint8Array, Uint8Array, Uint8Array]
   const out: Uint8Array[] = []
   for (let k = 0; k < 3; k++) {
     if (sizes[k]! < 0 || offsets[k]! + sizes[k]! > buf.length) throw new MtxError('MTX block bounds')
-    out.push(unpackLz(buf.subarray(offsets[k]!, offsets[k]! + sizes[k]!), version))
+    const block = unpackLz(buf.subarray(offsets[k]!, offsets[k]! + sizes[k]!), version, limit)
+    out.push(block)
+    limit -= block.length
   }
   return out as [Uint8Array, Uint8Array, Uint8Array]
 }

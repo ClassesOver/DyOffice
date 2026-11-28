@@ -457,6 +457,8 @@ export interface DesktopApi {
   onZoteroRequest(handler: (request: ZoteroRendererRequest) => void): () => void
   respondToZotero(response: ZoteroRendererResponse): void
   openDocx(): Promise<OpenDocxResult>
+  /** Pick a comparison target without opening it as the current document. */
+  pickComparisonDocx?(): Promise<{ name: string; bytes: Uint8Array } | null>
   openDocxPath(path: string): Promise<OpenDocxResult>
   confirmDocumentReplace(): Promise<boolean>
   /** decrypt-and-open a password-protected docx (path from a needsPassword result) */
@@ -592,11 +594,13 @@ export interface DesktopApi {
    *  job: printer/copies/duplex from the in-app dialog; a named printer ('' = OS
    *  default) prints silently, null or omitted opens the system dialog.
    *  paper: the document's own page size in twips (the preview's first sheet),
-   *  used by the CUPS print route to size printToPDF's pages */
+   *  used by the CUPS print route to size printToPDF's pages
+   *  pdfName: suggested filename for the browser's PDF save dialog */
   print(
     scale?: number,
     job?: PrintJobOptions,
     paper?: PrintPaper,
+    pdfName?: string,
   ): Promise<{ ok: boolean; error?: string }>
   /** installed printers for the in-app print dialog */
   listPrinters(): Promise<PrinterInfo[]>

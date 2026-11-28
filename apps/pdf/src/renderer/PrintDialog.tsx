@@ -18,14 +18,15 @@ export function PrintDialog({
   print: PrintJobApi
   printCurrentPage: number
 }) {
-  const { t } = useI18n()
+  const { lang, t } = useI18n()
   // The mask covers the whole app, so the dialog must mount only when open
   // (the inline JSX this component replaced was `{printDlg && (...)}`).
   if (!print.printDlg) return null
   return (
     <div className="pdf-modal-mask" onClick={() => print.setPrintDlg(false)}>
-      <div className="pdf-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="pdf-modal" role="dialog" aria-modal="true" aria-label={t('print')} onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-title">{t('print')}</div>
+        {!print.browserPrintDialog && <>
         <label className="pdf-modal-row pdf-print-field">
           <span>{t('printPrinter')}</span>
           <select
@@ -124,6 +125,7 @@ export function PrintDialog({
           </label>
         ))}
         <div className="pdf-print-divider" />
+        </>}
         <label className="pdf-modal-row">
           <input
             type="radio"
@@ -197,6 +199,11 @@ export function PrintDialog({
           <button className="pdf-modal-btn" onClick={() => print.setPrintDlg(false)}>
             {t('cancel')}
           </button>
+          {print.confirmSavePdfCopy && (
+            <button className="pdf-modal-btn" onClick={print.confirmSavePdfCopy}>
+              {lang === 'zh' ? '将所选页面另存为 PDF' : 'Save selected pages as PDF'}
+            </button>
+          )}
           <button className="pdf-modal-btn primary" onClick={print.confirmPrint}>
             {t('print')}
           </button>

@@ -141,7 +141,7 @@ import {
   refreshableQueriesOf,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-connection-refresh'
 import type { PartReader } from '@genoffice/xlsx-gateway/gateway/xlsx-connections'
-import { parsePivotDefinition } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
+import { readPivotDefinitionWithSource } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
 import { parseSlicerState } from '@genoffice/xlsx-gateway/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '@genoffice/xlsx-gateway/gateway/xlsx-connections'
 import { manifestNamesSchema, readWorkbookRedactionPart } from '../node/workbook-redactions'
@@ -3682,7 +3682,18 @@ export function registerSheetsIpc(): void {
       readArchiveEntryText(entry.client, session.snapshotPath, request.path),
       readArchiveEntryText(entry.client, session.snapshotPath, request.cachePath),
     ])
-    return workbookPivotDefinitionSchema.parse(parsePivotDefinition(pivotXml, cacheXml))
+    let names: Promise<Set<string>> | undefined
+    const has = async (path: string) => {
+      names ??= entry.client.archiveManifest(session.snapshotPath).then((result) => new Set(
+        z.object({ entries: z.array(z.object({ name: z.string() })) }).parse(result)
+          .entries.map(({ name }) => name),
+      ))
+      return (await names).has(path)
+    }
+    return workbookPivotDefinitionSchema.parse(await readPivotDefinitionWithSource(pivotXml, cacheXml, {
+      has,
+      readText: (path) => readArchiveEntryText(entry.client, session.snapshotPath, path),
+    }))
   })
 
   ipcMain.handle(IPC_CHANNELS.readSlicerState, async (event, input: unknown) => {

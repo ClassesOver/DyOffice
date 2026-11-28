@@ -1,6 +1,6 @@
 import {PNG} from 'pngjs'
 import {inflateSync,deflateSync} from 'node:zlib'
-import {PDFDocument,PDFDict,PDFArray,PDFStream,PDFName,PDFRawStream} from 'pdf-lib'
+import {PDFDocument,PDFDict,PDFArray,PDFStream,PDFName,PDFRawStream} from '../../../../pdf/src/shared/pdf-lib.ts'
 
 const name=PDFName.of,MAX_BYTES=64*1024*1024
 const namedResource=(resources,decoded)=>resources?.entries().find(([key])=>key.decodeText()===decoded)?.[1]

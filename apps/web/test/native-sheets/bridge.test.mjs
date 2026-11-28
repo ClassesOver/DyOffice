@@ -80,19 +80,83 @@ test('unsupported workbook operations reject asynchronously instead of breaking 
  }
 })
 
-test('AI create_document delegates XLSX output to the authenticated shell creator', async t => {
+test('Sheets bridge reads the current account text import limit',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'dyoffice-csv-preference-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const outfile=join(dir,'bridge.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
+ const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
+ let csvImportLimitMb=64
+ const getPreferences=async()=>({language:'zh',theme:'system',csvImportLimitMb})
+ const bridge=createSheetsBridge({getPreferences},'unused',await getPreferences())
+ t.after(()=>bridge.dispose())
+ assert.equal(await bridge.api.getCsvImportLimit(),64)
+ csvImportLimitMb=128
+ assert.equal(await bridge.api.getCsvImportLimit(),128)
+ csvImportLimitMb=undefined
+ assert.equal(await bridge.api.getCsvImportLimit(),256)
+})
+
+test('browser printing keeps the selected workbook pages alive until the print dialog closes', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'dyoffice-browser-print-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const outfile=join(dir,'bridge.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
+ const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
+ const previous=globalThis.document
+ const attributes=new Map()
+ let removed=false, started
+ const printing=new Promise(resolve=>{started=resolve})
+ const printWindow=Object.assign(new EventTarget(),{
+  document:{title:'',fonts:{ready:Promise.resolve()}},focus(){},
+  print(){this.dispatchEvent(new Event('beforeprint'));started()},
+ })
+ const frame=Object.assign(new EventTarget(),{
+  style:{},contentWindow:printWindow,
+  setAttribute(name,value){attributes.set(name,value)},
+  remove(){removed=true},
+ })
+ globalThis.document={
+  createElement(tag){assert.equal(tag,'iframe');return frame},
+  body:{append(child){assert.equal(child,frame);queueMicrotask(()=>child.dispatchEvent(new Event('load')))}},
+ }
+ t.after(()=>{globalThis.document=previous})
+ const bridge=createSheetsBridge({},'unused',{language:'en',theme:'light'})
+ t.after(()=>bridge.dispose())
+ assert.equal(bridge.api.browserPrintDialog,true)
+ assert.deepEqual(await bridge.api.listPrinters(),[])
+ const output=bridge.api.printWorkbook({
+  fileName:'Quarterly.pdf',html:'<!doctype html><html><body>Selected workbook page</body></html>',
+  landscape:false,pageSize:'A4',margins:{top:0,bottom:0,left:0,right:0},scale:1,
+ })
+ await printing
+ assert.equal(attributes.get('sandbox'),'allow-same-origin allow-modals')
+ assert.match(frame.srcdoc,/Selected workbook page/)
+ assert.equal(printWindow.document.title,'Quarterly')
+ assert.equal(removed,false)
+ printWindow.dispatchEvent(new Event('afterprint'))
+ assert.deepEqual(await output,{ok:true})
+ assert.equal(removed,true)
+})
+
+test('AI create_document delegates CSV and XLSX output to the authenticated shell creator', async t => {
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-create-xlsx-'));t.after(()=>rm(dir,{recursive:true,force:true}))
  const outfile=join(dir,'bridge.mjs')
  await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
  const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
  const previous=globalThis.window,received=[]
- globalThis.window={parent:{dyofficeCreateAiXlsx:async input=>received.push(input)}}
+ globalThis.window={parent:{
+  dyofficeCreateAiXlsx:async input=>received.push(input),
+  dyofficeCreateAiCsv:async input=>{received.push(input);return 'Quarterly-2.csv'},
+ }}
  t.after(()=>{globalThis.window=previous})
  const bridge=createSheetsBridge({},'unused',{language:'en',theme:'light'});t.after(()=>bridge.dispose())
  assert.deepEqual(bridge.supportedCreateDocumentTypes,['xlsx','csv'])
  const result=await bridge.api.createDocument({type:'xlsx',title:'Quarterly',sheetName:'Results',content:'Name,Value\nA,42'})
  assert.deepEqual(result,{ok:true})
  assert.deepEqual(received,[{title:'Quarterly',sheetName:'Results',content:'Name,Value\nA,42'}])
+ assert.deepEqual(await bridge.api.createDocument({type:'csv',title:'Quarterly',content:'Name,Value\nA,007'}),{ok:true,name:'Quarterly-2.csv'})
+ assert.deepEqual(received.at(-1),{title:'Quarterly',content:'Name,Value\nA,007'})
+ globalThis.window.parent.dyofficeCreateAiCsv=async()=>{throw new Error('CSV created but could not be opened')}
+ assert.deepEqual(await bridge.api.createDocument({type:'csv',title:'Quarterly',content:'Name,Value\nA,007'}),{ok:false,error:'CSV created but could not be opened'})
  const {runInNewContext}=await import('node:vm')
  globalThis.window.parent.dyofficeCreateAiXlsx=async()=>{throw runInNewContext('new Error("The workbook was created but could not be opened; check recent files before retrying.")')}
  assert.deepEqual(await bridge.api.createDocument({type:'xlsx',title:'Quarterly',content:'Name,Value\nA,42'}),{ok:false,error:'The workbook was created but could not be opened; check recent files before retrying.'})

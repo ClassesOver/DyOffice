@@ -483,14 +483,15 @@ import {
   type RibbonCommandContext,
 } from './ribbon-actions'
 import {
-  handleApplyHeaderFooter as handleApplyHeaderFooterImpl,
+  openHeaderFooterEditor,
   handleExportPdf as handleExportPdfImpl,
   handlePageLayoutCommand as handlePageLayoutCommandImpl,
   openPrintPreviewHost,
   type PrintPreviewHost,
   type PageLayoutContext,
 } from './page-layout-actions'
-import { handleExportCsv as handleExportCsvImpl, type CsvExportContext } from './csv-export'
+import { resolveEffectivePrintFit } from './print-settings'
+import { captureActiveSheetCsv, handleExportCsv as handleExportCsvImpl, type CsvExportContext } from './csv-export'
 import { effectivePageBreaks, installPageBreakPreview } from './page-break-preview'
 import { mapProtectedRanges } from './protected-ranges'
 import { settleFormulas } from './formula-settle'
@@ -586,6 +587,7 @@ import { TimelineFieldPicker, TimelinePanels, type TimelineUiState } from './Tim
 import type { DefinedNameAction, DefinedNameRow } from './NameManagerDialog'
 import { workbookMediaDataUrl } from './workbook-media'
 import {
+  canEditChartAnchor,
   clearVisualSelection,
   convertibleType,
   getChartElementSelection,
@@ -649,6 +651,8 @@ export interface SheetsEditorHandle {
   nameWithAi(): Promise<void>
   saveAndWait(): Promise<boolean>
   saveForDownload(): Promise<boolean>
+  saveAsCopy(): void
+  openPrintPreview(): void
   exportCsv(): Promise<void>
   /** Reopen the host revision only while clean. */
   reload(): Promise<boolean>
@@ -656,14 +660,23 @@ export interface SheetsEditorHandle {
   getWorkbookSessionId(): string | undefined
 }
 export interface SheetsEditorHost {
+  /** Stable browser storage identity for this workspace workbook. */
+  documentStorageScope?: string
   getSupportedCreateDocumentTypes?: () => readonly import('../shared/desktop-api').WorkbookCreateDocumentRequest['type'][]
   setImageAttachments?: (files: readonly { name: string; image: AgentImage }[]) => string
   supportedMergeExtensions?: readonly string[]
+  fetchClipboardPicture?: (source: string) => Promise<File | null>
   saveDownload?: React.ReactNode
   fileMenu?: React.ReactNode
-  namedCopy?: {
-    suggest(content: string): Promise<string>
-    save(stem: string, capture: (exportCopy: WorkbookDraftExporter) => Promise<SaveOutcome>): Promise<void>
+  workbookPasswordLimit?: number
+  confirmWorkbookPasswordSave?: {label:string; busy:boolean; error?:string; run:()=>void}
+  workspaceCopy?: {
+    suggest?(content: string): Promise<string>
+    save(
+      stem: string,
+      capture: (exportCopy: WorkbookDraftExporter) => Promise<SaveOutcome>,
+      captureCsv?: () => Promise<string | null>,
+    ): Promise<void>
   } | undefined
   assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
   harnessRecovery?: {
@@ -678,9 +691,11 @@ export interface SheetsEditorHost {
   }
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
+  saveCsvContent?: SaveContext['saveCsvContent']
   workspaceLinks?: {
-    listSources(): Promise<readonly {id:string;name:string;revision:string}[]>
+    pickSource(signal: AbortSignal): Promise<{id:string;revision:string}|null>
     sourceTarget(id: string, revision: string): string
+    revealSource?(sessionId: string, index: number): Promise<void>
     refresh(sessionId: string): Promise<{links:ExternalLinkRow[];cells:import('../shared/desktop-api').ExternalLinksUpdateResult['cells']}>
   }
   readOnly: boolean
@@ -801,26 +816,11 @@ export function App({
       waitForSave: () => saveGateRef.current.waitForCurrent(),
       saveAndWait,
       saveForDownload: saveAndWait,
+      saveAsCopy: () => menuActionRef.current('save-as'),
       nameWithAi,
+      openPrintPreview: () => menuActionRef.current('print'),
       exportCsv: async () => {
-        const context = csvExportContext()
-        const runtime = univerRef.current
-        const state = lazyWorkbookRef.current
-        if (runtime && state && !state.flags.preloadComplete) {
-          if (!fitsFullLoad(workbookCellCounts(state.file.sheets))) {
-            setMessage(t('appCsvExportTooLarge'))
-            return
-          }
-          setMessage(t('appFullLoadRunning'))
-          try {
-            await startFullLoad(runtime, lazyWorkbookRef, setMessage)
-          } catch {
-            setMessage(t('appCsvExportFailed'))
-            return
-          }
-          if (lazyWorkbookRef.current !== state) return
-        }
-        await handleExportCsvImpl(context)
+        if (await prepareCsvExport()) await handleExportCsvImpl(csvExportContext())
       },
       reload: () => saveGateRef.current.run(async () => {
         if (editorIsDirty()) return false
@@ -931,7 +931,8 @@ export function App({
       pendingEditsForClose(pendingEdits, editingCellRef.current),
     )
   }, [pendingEdits])
-  const [autoSave, setAutoSave] = useAutoSavePref('ai-sheets-auto-save', window.desktopApi)
+  const autoSaveKey = host?.documentStorageScope ? `ai-sheets-auto-save:${host.documentStorageScope}` : 'ai-sheets-auto-save'
+  const [autoSave, setAutoSave] = useAutoSavePref(autoSaveKey, window.desktopApi)
   // Ref mirror for callbacks captured when an AI run starts
   const autoSaveRef = useRef(autoSave)
   autoSaveRef.current = autoSave
@@ -1145,8 +1146,8 @@ export function App({
   const [linksBusy, setLinksBusy] = useState(false)
   const [linksNotice, setLinksNotice] = useState<'unsaved' | 'unavailable' | null>(null)
   const [workspaceLinksAvailable,setWorkspaceLinksAvailable]=useState(false)
-  const [workspaceLinkPicker,setWorkspaceLinkPicker]=useState<{index:number;sessionId:string;files:readonly {id:string;name:string;revision:string}[]}|null>(null)
-  const workspacePickerRequest=useRef(0)
+  const workspacePickerRequest=useRef<AbortController|null>(null)
+  useEffect(()=>()=>workspacePickerRequest.current?.abort(),[])
   // Load the workbook's links when the panel opens: the listing carries
   // identity fields only and never probes the sources on disk, so it is cheap
   // and reachability stays unknown (the panel's "—") until Update answers it.
@@ -1230,29 +1231,22 @@ export function App({
       if(saved.ok)analysisSaveConsent.current.confirmClean()
     })
   }
-  async function saveWorkspaceExternalLink(id:string) {
-    const picker=workspaceLinkPicker, workspace=hostRef.current?.workspaceLinks
-    const source=picker?.files.find(file=>file.id===id)
-    if(!picker||!workspace||linksBusy||!source)return
-    setWorkspaceLinkPicker(null)
-    setLinksBusy(true)
-    try {
-      await saveGateRef.current.run(async()=>{
-        if(lazyWorkbookRef.current?.file.sessionId!==picker.sessionId||hostRef.current?.readOnly||
-          !userMutationAllowed()||!analysisSaveConsent.current.allowed(false)||!(await commitActiveEditor()))return
-        if(editorIsDirty()){
-          const saved=await handleSaveImpl(saveContext(),'save',true)
-          if(!saved.ok||editorIsDirty())return
-        }
-        pendingExternalLinkOpsRef.current={broken:[],retargets:[{index:picker.index,target:workspace.sourceTarget(id,source.revision)}]}
-        try {
-          const saved=await handleSaveImpl(saveContext(),'save')
-          if(saved.ok)analysisSaveConsent.current.confirmClean()
-        }finally{pendingExternalLinkOpsRef.current=null}
-      })
-      await refreshLinkStatuses()
-    }catch(error){setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
-    finally{setLinksBusy(false)}
+  async function saveWorkspaceExternalLink(index:number,sessionId:string,target:string,signal:AbortSignal) {
+    await saveGateRef.current.run(async()=>{
+      if(signal.aborted||lazyWorkbookRef.current?.file.sessionId!==sessionId||hostRef.current?.readOnly||
+        !userMutationAllowed()||!analysisSaveConsent.current.allowed(false)||!(await commitActiveEditor()))return
+      if(editorIsDirty()){
+        const saved=await handleSaveImpl(saveContext(),'save',true)
+        if(!saved.ok||editorIsDirty())return
+      }
+      if(signal.aborted)return
+      pendingExternalLinkOpsRef.current={broken:[],retargets:[{index,target}]}
+      try {
+        const saved=await handleSaveImpl(saveContext(),'save')
+        if(saved.ok)analysisSaveConsent.current.confirmClean()
+      }finally{pendingExternalLinkOpsRef.current=null}
+    })
+    await refreshLinkStatuses()
   }
   const [watchCells, setWatchCells] = useState<readonly WatchCell[]>([])
   const [calcManual, setCalcManual] = useState(false)
@@ -1456,12 +1450,33 @@ export function App({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per renderer; reads the latest state through refs
   }, [])
 
+  async function prepareCsvExport(): Promise<boolean> {
+    const runtime = univerRef.current
+    const state = lazyWorkbookRef.current
+    if (!runtime || !state || state.flags.preloadComplete) return true
+    if (!fitsFullLoad(workbookCellCounts(state.file.sheets))) {
+      setMessage(t('appCsvExportTooLarge'))
+      return false
+    }
+    setMessage(t('appFullLoadRunning'))
+    try {
+      await startFullLoad(runtime, lazyWorkbookRef, setMessage)
+    } catch {
+      setMessage(t('appCsvExportFailed'))
+      return false
+    }
+    return lazyWorkbookRef.current === state && univerRef.current === runtime
+  }
+
   function csvExportContext(): CsvExportContext {
     return {
       univerRef,
       lazyWorkbookRef,
       setMessage,
-      requestSaveAs: () => void handleSaveRef.current('save-as'),
+      requestSaveAs: () => {
+        if (hostRef.current?.inPlaceSave) void saveWorkspaceCopy(false, true)
+        else void handleSaveRef.current('save-as')
+      },
     }
   }
 
@@ -1479,7 +1494,7 @@ export function App({
           ? 'Finishing pending workbook changes before saving…'
           : MUTATION_SAVE_MESSAGE)
       },
-      ...(hostRef.current?.inPlaceSave ? {
+      ...(hostRef.current?.inPlaceSave && lazyWorkbookRef.current?.file.csvPath === undefined ? {
         applySavedWorkbook: (file: WorkbookFile) => {
           const state = lazyWorkbookRef.current
           if (!state) return
@@ -1493,6 +1508,8 @@ export function App({
           if (previousSession !== file.sessionId) void window.desktopApi.closeWorkbook(previousSession).catch(() => undefined)
         },
       } : {}),
+      ...(hostRef.current?.saveCsvContent ? { saveCsvContent: hostRef.current.saveCsvContent } : {}),
+      ...(hostRef.current?.inPlaceSave ? { exportCsvAsWorkbook: () => saveWorkspaceCopyUnderGate(false, true) } : {}),
       flushPendingChanges: async () => {
         flushPendingChartDataSync(visualSyncContext())
         await flushChartDataSync(visualSyncContext())
@@ -2917,7 +2934,7 @@ export function App({
     const fxButtonDisposable = installFxButtonHook(runtime)
     // The picking side of the cross-workbook range picker (genoffice#2109): another
     // tab's dialog can arm a pick against this workbook's grid.
-    const pickRelayDisposable = installWorkbookPickRelay(runtime)
+    const pickRelayDisposable = installWorkbookPickRelay(runtime,hostRef.current!==undefined)
     // A file formula the engine re-computes into an error shows the file's
     // cached result instead; display-only.
     const cachedValueDisposable = installCachedValueFallbackInterceptor(runtime, lazyWorkbookRef)
@@ -4194,6 +4211,13 @@ export function App({
           isCellEditing: () => editingCellRef.current,
           cellAtPoint: (x, y) => cellAtClientPoint(runtime, x, y),
           insert: (file, anchor) => handleInsertPictureFile(visualContext(), file, anchor),
+          insertRemote: source => {
+            const current = hostRef.current
+            const fetchPicture = current?.fetchClipboardPicture
+            if (!fetchPicture || current?.readOnly) return false
+            handleInsertPictureFile(visualContext(), () => fetchPicture(source))
+            return true
+          },
         })
       : () => undefined
     // Double-click on a cell picture opens the viewer instead of the editor.
@@ -5224,22 +5248,59 @@ export function App({
    * preserved: Excel repairs the whole table when a header cell differs from
    * its column name, so the fetched page's header row never overwrites them.
    */
+  const queryRefreshBusy = useRef(false)
+
   async function refreshQueryConnection(connectionId: string): Promise<void> {
     const connection = queryConnections.find((c) => c.id === connectionId)
     const sessionId = workbookFile?.sessionId
     const runtime = univerRef.current
-    if (!connection || !sessionId || !runtime) return
+    if (!connection || !sessionId || !runtime || queryRefreshBusy.current) return
+    queryRefreshBusy.current = true
     setMessage(t('appQueryRefreshing', { name: connection.name }))
     try {
-      const table = await window.desktopApi.refreshWorkbookConnection({
-        sessionId,
-        connectionId: connection.id,
-      })
       const target = a1RangeToTarget(connection.range, connection.sheetName)
       const worksheet = target
         ? runtime.univerAPI.getActiveWorkbook()?.getSheetByName(connection.sheetName)
         : undefined
       if (!target || !worksheet) throw new Error('The query has no target range.')
+      const state = lazyWorkbookRef.current
+      const web = hostRef.current?.inPlaceSave === true
+      const current = () => lazyWorkbookRef.current === state && univerRef.current === runtime &&
+        state?.file.sessionId === sessionId &&
+        runtime.univerAPI.getActiveWorkbook()?.getSheetByName(connection.sheetName)?.getSheetId() === worksheet.getSheetId() &&
+        userMutationAllowed()
+      const sheetId = worksheet.getSheetId()
+      const stableLayout = () => {
+        const journal = state?.editJournal
+        return !journal || (!journal.structuralOps.get(sheetId)?.length && !journal.tableEdits.size &&
+          !journal.sheets.renamed.has(sheetId) && !journal.sheets.removed.has(sheetId) &&
+          !journal.tableAdds.length && !journal.definedNames.dirty)
+      }
+      let loadTarget: (() => Promise<boolean>) | undefined
+      let stamp: (() => string) | undefined
+      let before: string | undefined
+      if (web) {
+        if (!state || target.width * target.height > 100_000 || !stableLayout() || !(await commitActiveEditor())) {
+          throw new Error('The workbook query target is unavailable.')
+        }
+        const bounds = {
+          startRow: target.startRow, endRow: target.startRow + target.height - 1,
+          startColumn: target.startColumn, endColumn: target.startColumn + target.width - 1,
+        }
+        loadTarget = () => ensureLazyRangeLoaded(runtime, lazyWorkbookRef, worksheet, bounds, setMessage)
+        if (!(await loadTarget()) || !current()) throw new Error('Could not load the workbook query target.')
+        const destination = worksheet.getRange(target.startRow, target.startColumn, target.height, target.width)
+        stamp = () => JSON.stringify(destination.getCellDatas().map(row => row.map(cell =>
+          cell?.f ? [cell.f, cell.si] : [cell?.v, cell?.p],
+        )))
+        before = stamp()
+      }
+      const table = await window.desktopApi.refreshWorkbookConnection({ sessionId, connectionId: connection.id })
+      if (web && (!current() || !stableLayout() || !await loadTarget?.() ||
+          !current() || !stableLayout() || editingCellRef.current || stamp?.() !== before)) {
+        throw new Error('The workbook changed before the query completed.')
+      }
+
       if (table.headers.length === 0 && table.rows.length === 0) {
         throw new Error('The query returned no rows.')
       }
@@ -5254,9 +5315,22 @@ export function App({
         const matrix: ICellData[][] = plan.values.map((row) =>
           row.map((value) => ({ v: value, f: null, si: null, p: null })),
         )
-        worksheet
-          .getRange(plan.startRow, target.startColumn, plan.values.length, target.width)
-          .setValues(matrix)
+        if (web) {
+          const workbook = runtime.univerAPI.getActiveWorkbook()
+          const commandService = runtime.univer.__getInjector().get(ICommandService)
+          const range = {
+            startRow: plan.startRow, endRow: plan.startRow + matrix.length - 1,
+            startColumn: target.startColumn, endColumn: target.startColumn + target.width - 1,
+          }
+          const values = Object.fromEntries(matrix.map((row, r) => [
+            range.startRow + r, Object.fromEntries(row.map((cell, c) => [range.startColumn + c, cell])),
+          ]))
+          if (!workbook || !await runUserMutation(() => commandService.syncExecuteCommand(SET_RANGE_VALUES_COMMAND, {
+            unitId: workbook.getId(), subUnitId: sheetId, range, value: values,
+          }))) throw new Error('The query values could not be written.')
+        } else {
+          worksheet.getRange(plan.startRow, target.startColumn, plan.values.length, target.width).setValues(matrix)
+        }
       }
       // Growing the destination range is out of scope: say so rather than drop
       // the extra rows silently.
@@ -5273,6 +5347,8 @@ export function App({
       }
     } catch {
       setMessage(t('appQueryRefreshFailed', { name: connection.name }))
+    } finally {
+      queryRefreshBusy.current = false
     }
   }
 
@@ -5280,7 +5356,6 @@ export function App({
     if (!userMutationAllowed()) return
     if (hostRef.current?.readOnly) return
     if (command.startsWith('query-refresh:')) {
-      if (hostRef.current?.inPlaceSave) return
       void refreshQueryConnection(command.slice('query-refresh:'.length))
       return
     }
@@ -6029,17 +6104,21 @@ export function App({
     return lazyWorkbookRef.current === state && !editingCellRef.current
   }
 
-  async function saveAndWait(): Promise<boolean> {
-    return saveGateRef.current.run(async () => {
-      if (hostRef.current?.readOnly) return !editorIsDirty()
-      for (let attempt = 0; attempt < 4; attempt++) {
-        if (!(await flushEditor())) return false
-        const saved = await handleSaveImpl(saveContext(), 'save', true)
-        if (!saved.ok && saved.reason !== 'no-edits') return false
-        if (!editorIsDirty()) {analysisSaveConsent.current.confirmClean();return true}
+  async function saveUntilClean(): Promise<SaveOutcome> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (!(await flushEditor())) return {ok:false}
+      const saved = await handleSaveImpl(saveContext(), 'save', true)
+      if (!saved.ok && saved.reason !== 'no-edits') return saved
+      if (!editorIsDirty()) {
+        analysisSaveConsent.current.confirmClean()
+        return {ok:true}
       }
-      return false
-    })
+    }
+    return {ok:false}
+  }
+
+  async function saveAndWait(): Promise<boolean> {
+    return saveGateRef.current.run(async () => hostRef.current?.readOnly ? !editorIsDirty() : (await saveUntilClean()).ok)
   }
 
   async function handleSave(
@@ -6064,21 +6143,15 @@ export function App({
   async function updateWorkbookPassword(newPassword: string): Promise<string | null> {
     try {
       return await saveGateRef.current.run(async () => {
-        if (!(await commitActiveEditor())) return t('appSaveFailed')
-        const beforeSave = lazyWorkbookRef.current
-        if (!beforeSave?.file.passwordProtected) {
+        if (hostRef.current?.readOnly) return t('appSaveFailed')
+        if (!lazyWorkbookRef.current?.file.passwordProtected) {
           return t('appWorkbookNotPasswordProtected')
         }
 
-        // Commit all current sheet edits before changing the package password.
-        // The sidecar snapshot stays plaintext for this session, while the
-        // main process updates the encrypted file atomically on disk.
-        const saved = await handleSaveImpl(saveContext(), 'save', true)
+        const saved = await saveUntilClean()
+        if (!saved.ok) return saved.error ?? t('appSaveFailed')
         const current = lazyWorkbookRef.current
         if (!current) return t('appWorkbookNotReady')
-        if (!saved.ok && journalSize(current.editJournal) > 0) {
-          return saved.error ?? t('appSaveFailed')
-        }
         if (!current.file.passwordProtected) {
           return t('appWorkbookNotPasswordProtected')
         }
@@ -6087,8 +6160,10 @@ export function App({
           current.file.sessionId,
           newPassword,
         )
-        const file: WorkbookFile = { ...current.file, ...result }
-        lazyWorkbookRef.current = { ...current, file }
+        const latest=lazyWorkbookRef.current
+        if(latest?.file.sessionId!==current.file.sessionId)return t('appWorkbookNotReady')
+        const file: WorkbookFile = { ...latest.file, ...result }
+        lazyWorkbookRef.current = { ...latest, file }
         setWorkbookFile(file)
         setMessage(t('appWorkbookPasswordChanged'))
         return null
@@ -6108,25 +6183,36 @@ export function App({
    * empty answer leaves the dialog on the workbook's current name, so this is a
    * no-op rather than a failure.
    */
-  async function nameWithAi(): Promise<void> {
+  async function saveWorkspaceCopy(namedByAi: boolean, xlsxOnly = false): Promise<void> {
+    const gate = saveGateRef.current
+    if (gate.busy) return
+    await gate.run(() => saveWorkspaceCopyUnderGate(namedByAi, xlsxOnly))
+  }
+
+  async function saveWorkspaceCopyUnderGate(namedByAi: boolean, xlsxOnly: boolean): Promise<void> {
     const web = hostRef.current
-    if (web) {
-      const copy = web.namedCopy
-      const gate = saveGateRef.current
-      if (!copy || web.readOnly || gate.busy) return
-      // Keep autosave from writing back while the user is naming the copy.
-      await gate.run(async () => {
-        if (!(await commitActiveEditor())) return
-        const state = lazyWorkbookRef.current
-        const stem = await modelSaveAsName(readContext(), copy.suggest)
-        if (!stem || hostRef.current?.readOnly || lazyWorkbookRef.current !== state) return
-        await copy.save(stem, async (exportCopy) => {
-          if (hostRef.current?.readOnly || lazyWorkbookRef.current !== state || !(await commitActiveEditor())) return { ok: false }
-          return exportWorkbookDraft(saveContext(), exportCopy)
-        })
-      })
-      return
-    }
+    const copy = web?.workspaceCopy
+    if (!copy || web.readOnly || (namedByAi && !copy.suggest)) return
+    if (!(await commitActiveEditor())) return
+    const state = lazyWorkbookRef.current
+    if (!state) return
+    const extension = /\.(xlsx|xlsm|csv)$/i
+    const stem = namedByAi
+      ? await modelSaveAsName(readContext(), copy.suggest)
+      : state.file.name.replace(extension, '')
+    if (!stem || hostRef.current?.readOnly || lazyWorkbookRef.current !== state) return
+    await copy.save(stem, async (exportCopy) => {
+      if (hostRef.current?.readOnly || lazyWorkbookRef.current !== state || !(await commitActiveEditor())) return { ok: false }
+      return exportWorkbookDraft(saveContext(), exportCopy)
+    }, xlsxOnly ? undefined : async () => {
+      if (!(await commitActiveEditor()) || !(await prepareCsvExport()) ||
+          hostRef.current?.readOnly || lazyWorkbookRef.current !== state) return null
+      return (await captureActiveSheetCsv(csvExportContext()))?.content ?? null
+    })
+  }
+
+  async function nameWithAi(): Promise<void> {
+    if (hostRef.current) return saveWorkspaceCopy(true)
     const stem = await modelSaveAsName(readContext())
     if (!stem) return
     await handleSave('save-as', false, undefined, stem)
@@ -6164,6 +6250,8 @@ export function App({
     if (action !== 'open' && (openingWorkbook || workbookOpeningRef.current)) return
     if (action === 'open') {
       void handleInspectWorkbook()
+    } else if (action === 'save-as' && hostRef.current?.inPlaceSave) {
+      void saveWorkspaceCopy(false)
     } else if (action === 'print') {
       void openPrintPreviewHost(pageLayoutContext()).then(setPrintHost)
     } else if (action === 'export-pdf') {
@@ -6378,6 +6466,7 @@ export function App({
       convertible,
       currentType,
       canEdit: !state || live.chartPath !== undefined || live.id.startsWith('added-'),
+      canDelete: canEditChartAnchor(live),
       isPie,
       hasAxes: currentType !== null && !isPie,
       // A pending conversion always lands on a labelable family.
@@ -6411,11 +6500,15 @@ export function App({
 
   const activePageLayout = (() => {
     const worksheet = univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()
-    const journalState = worksheet
-      ? (lazyWorkbookRef.current?.editJournal.pageSetup.get(worksheet.getSheetId()) ?? {})
-      : {}
+    const sheetId = worksheet?.getSheetId()
+    const state = lazyWorkbookRef.current
+    const journalState = sheetId ? state?.editJournal.pageSetup.get(sheetId) ?? {} : {}
+    const fileSetup = sheetId ? state?.sheetFilePageSetups.get(sheetId) ?? null : null
+    const fit = resolveEffectivePrintFit(journalState, fileSetup)
     return {
       ...journalState,
+      fitToWidth: fit.fitToPage ? fit.fitToWidth : 0,
+      fitToHeight: fit.fitToPage ? fit.fitToHeight : 0,
       showGridlines:
         journalState.showGridlines ?? (worksheet ? !worksheet.hasHiddenGridLines() : true),
       showHeadings:
@@ -6613,7 +6706,7 @@ export function App({
         onClosePrint={() => setPrintHost(null)}
         calcManual={calcManual}
         queryConnections={queryConnections}
-        queryRefreshAvailable={!host?.inPlaceSave}
+        queryRefreshAvailable={!host?.readOnly}
         showFormulas={activeShowFormulas}
         onGoalSeek={(setCell, toValue, byCell) => {
           const runtime = univerRef.current
@@ -6681,7 +6774,7 @@ export function App({
         canSave={mutationPhase === 'open' && !host?.readOnly && (pendingEdits > 0 || workbookFile?.unsavedNew === true)}
         onSave={() => void handleSave('save')}
         canSaveAs={mutationPhase === 'open' && !host && workbookFile !== null}
-        canNameWithAi={mutationPhase === 'open' && workbookFile !== null && (!host || Boolean(host.namedCopy && !host.readOnly))}
+        canNameWithAi={mutationPhase === 'open' && workbookFile !== null && (!host || Boolean(host.workspaceCopy?.suggest && !host.readOnly))}
         onSaveAs={() => void handleSave('save-as')}
         saveDownload={host?.saveDownload}
         fileMenu={host?.fileMenu}
@@ -6747,7 +6840,7 @@ export function App({
         onCreateSubtotal={(config) => handleCreateSubtotalImpl(dataToolsContext(), config)}
         onCreateConsolidate={(config) => handleCreateConsolidateImpl(dataToolsContext(), config)}
         onGetConsolidateDefault={() => consolidateDefaultReferenceImpl(dataToolsContext())}
-        onApplyHeaderFooter={(result) => handleApplyHeaderFooterImpl(pageLayoutContext(), result)}
+        onOpenHeaderFooter={() => openHeaderFooterEditor(pageLayoutContext())}
       />
       {openingWorkbook && !host?.inPlaceSave && (
         <div className="workbook-opening-screen" role="status" aria-live="polite">
@@ -6775,6 +6868,8 @@ export function App({
         <ChangeWorkbookPasswordDialog
           onSubmit={updateWorkbookPassword}
           onClose={() => setChangeWorkbookPasswordOpen(false)}
+          {...(host?.workbookPasswordLimit ? {maxLength:host.workbookPasswordLimit} : {})}
+          {...(host?.confirmWorkbookPasswordSave ? {confirmSave:host.confirmWorkbookPasswordSave} : {})}
         />
       )}
       <ThreadedCommentsPane getRuntime={getRuntime} />
@@ -6948,7 +7043,7 @@ export function App({
           busy={linksBusy}
           sourceActions={!host?.inPlaceSave}
           workspaceActions={Boolean(host?.workspaceLinks&&workspaceLinksAvailable&&!host.readOnly)}
-          workspacePicker={host?.readOnly?undefined:workspaceLinkPicker?.files}
+          canRevealWorkspaceSource={!!host?.workspaceLinks?.revealSource}
           canBreak={!host?.readOnly}
           notice={linksNotice}
           onUpdate={() => {
@@ -7059,15 +7154,17 @@ export function App({
               if (sessionId === null || linksBusy) return
               const workspace=hostRef.current?.workspaceLinks
               if(workspace){
-                if(!workspaceLinksAvailable||hostRef.current?.readOnly)return
+                if(!workspaceLinksAvailable||hostRef.current?.readOnly||workspacePickerRequest.current)return
+                const attempt=new AbortController()
+                workspacePickerRequest.current=attempt
                 setLinksBusy(true)
-                setWorkspaceLinkPicker(null)
-                const attempt=++workspacePickerRequest.current
                 try{
-                  const files=await workspace.listSources()
-                  if(workspacePickerRequest.current===attempt&&lazyWorkbookRef.current?.file.sessionId===sessionId)setWorkspaceLinkPicker({index,sessionId,files})
-                }catch(error){setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
-                finally{setLinksBusy(false)}
+                  const source=await workspace.pickSource(attempt.signal)
+                  if(source&&!attempt.signal.aborted){
+                    await saveWorkspaceExternalLink(index,sessionId,workspace.sourceTarget(source.id,source.revision),attempt.signal)
+                  }
+                }catch(error){if(!attempt.signal.aborted)setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
+                finally{workspacePickerRequest.current=null;setLinksBusy(false)}
                 return
               }
               // a web source has no local file to point at
@@ -7090,11 +7187,16 @@ export function App({
           }}
           onReveal={(index) => {
             const file = lazyWorkbookRef.current?.file
-            if (file) window.desktopApi.revealLinkSource({ sessionId: file.sessionId, index })
+            if (!file || file.needsSaveAs || linksBusy) return
+            const workspace = hostRef.current?.workspaceLinks
+            if (workspace?.revealSource) {
+              setLinksBusy(true)
+              void workspace.revealSource(file.sessionId,index)
+                .catch(error=>setMessage(error instanceof Error?error.message:t('appOpenFailed')))
+                .finally(()=>setLinksBusy(false))
+            } else window.desktopApi.revealLinkSource({ sessionId: file.sessionId, index })
           }}
-          onSaveWorkspaceSource={(id)=>void saveWorkspaceExternalLink(id)}
-          onCancelWorkspaceSource={()=>setWorkspaceLinkPicker(null)}
-          onClose={() => {workspacePickerRequest.current++;setWorkspaceLinkPicker(null);setLinksOpen(false)}}
+          onClose={() => {workspacePickerRequest.current?.abort();setLinksOpen(false)}}
         />
       )}
     </>

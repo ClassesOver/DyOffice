@@ -11,10 +11,19 @@ export {PDF_WORKER_BUNDLE_DIR}
  * (about 1 s per call).
  * The manifest records a hash of every bundled source; worker-launch.mjs falls back to
  * tsx when any of them changed, so a stale bundle is never executed. */
-// npm packages stay external (resolved from node_modules at runtime). Workspace packages
-// (@genoffice/*) ship TypeScript sources, so they must be bundled or the worker would need tsx.
+// The document renderer and its extensions must share the same ProseMirror modules.
+const wordDirectory=fileURLToPath(new URL('../../../../docs/',import.meta.url))
 const externalNpmPackages={name:'external-npm-packages',setup(build){
-  build.onResolve({filter:/^[^./]/},args=>args.path.startsWith('@genoffice/')||args.path.startsWith('node:')?undefined:{path:args.path,external:true})
+  build.onResolve({filter:/^[^./]/},async args=>{
+    if(args.pluginData?.resolvingWordEditor)return
+    if(/^(?:@tiptap\/|prosemirror-)/.test(args.path)){
+      return build.resolve(args.path,{
+        resolveDir:wordDirectory,kind:'import-statement',pluginData:{resolvingWordEditor:true},
+      })
+    }
+    // Workspace packages ship TypeScript. Other npm packages resolve at runtime.
+    if(!args.path.startsWith('@genoffice/')&&!args.path.startsWith('node:'))return {path:args.path,external:true}
+  })
 }}
 
 export async function buildPdfWorker(outdir=PDF_WORKER_BUNDLE_DIR){

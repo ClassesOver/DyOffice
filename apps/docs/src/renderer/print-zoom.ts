@@ -1,3 +1,5 @@
+import type { PrintPaper } from '../shared/ipc'
+
 /**
  * Chromium lays print jobs out at device scale 1, but pagination measured the
  * canvas at the screen's scale, and Blink rounds font ascent/descent to device
@@ -42,4 +44,13 @@ export function setPrintZoom(job: PrintJob = 'pdf'): number {
 
 export function clearPrintZoom(): void {
   previewRoot()?.style.removeProperty('--pv-print-zoom')
+}
+
+/** The preview uses 96 CSS pixels per inch and retains fractional paper dimensions. */
+export function paperOfPage(page: HTMLElement | undefined): PrintPaper | undefined {
+  if (!page) return undefined
+  const w = Number.parseFloat(page.style.width) || page.offsetWidth
+  const h = Number.parseFloat(page.style.height) || page.offsetHeight
+  if (!(w > 0) || !(h > 0)) return undefined
+  return { widthTwips: Math.round(w * 15), heightTwips: Math.round(h * 15) }
 }

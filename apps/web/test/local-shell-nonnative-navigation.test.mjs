@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises'
 import {runInNewContext} from 'node:vm'
 import {transform} from 'esbuild'
 import {readOpenDocument} from '../src/shell/document-entry-reader.ts'
+import {isWorkspaceFileName,workspaceFileImports} from '../src/shell/workspace-file-formats.ts'
 
 // Execute the real Home open/upload bodies without mounting unrelated React UI.
 const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.url),'utf8')
@@ -15,8 +16,9 @@ function fixture({verified=true,format='xlsx',capability='editable',missingCapab
  const result={format,name:'book.'+format,file:{fileId:'file',revision:'rev'},downloadEndpoint:download}
  const client={async request(path,method){calls.push([path,method]);if(fail&&(fail==='read'||method==='POST'))throw new Error('Forbidden');return result},async upload(file,proof){assert.equal(proof,'a'.repeat(43));calls.push(['upload',file.name]);return result}}
  const opened=[]
- const context={documentTabs:{reserveOpen:()=>({renameVersion:0,sequence:1}),open:x=>opened.push(x)},client,sourceWorkspace:{bound:{request:client.request,...(verified?{proof:'a'.repeat(43)}:{})}},readOpenDocument,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
- const api=runInNewContext(code+'\n({open,upload})',context)
+ const context={documentTabs:{renderedDocuments:()=>opened,reserveOpen:()=>({renameVersion:0,sequence:1}),open:x=>opened.push(x)},client,sourceWorkspace:{bound:{request:client.request,...(verified?{proof:'a'.repeat(43)}:{})}},readOpenDocument,isWorkspaceFileName,workspaceFileImports,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
+ const actions=runInNewContext(code+'\n({open,upload})',context)
+ const api={...actions,upload:file=>actions.upload(file,verified?'a'.repeat(43):undefined)}
  return {api,calls,navigated,downloads,notices,opened}
 }
 test('editable XLSX opens native editor in an app tab',async()=>{

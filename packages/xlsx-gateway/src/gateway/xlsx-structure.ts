@@ -7,11 +7,28 @@
 import type { WorkbookStyleEdit } from '../shared/edit-schemas.ts'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import { rewriteChartReferences } from './xlsx-chart-references.ts'
-import { rewriteX14DataValidations } from './xlsx-dv.ts'
+import { workbookNameParts } from './xlsx-defined-names.ts'
+import { isDrawingNamespace } from './xlsx-drawing-anchors.ts'
+import { rewriteWorksheetValidations } from './xlsx-dv.ts'
 import { decodeXmlText } from './xlsx-escapes.ts'
-import { findRootChild, rootChildren } from './xlsx-root-tail.ts'
-import { childElements, type ChildElement } from './xlsx-style-entries.ts'
+import { readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
+import { childElements } from './xlsx-style-entries.ts'
 import { rewriteWorksheetVisualReferences } from './xlsx-visual-references.ts'
+import {
+  applyPatches,
+  elementText,
+  isElement,
+  patchElement,
+  prefixOf,
+  scopedChildren,
+  spreadsheetPartRoot,
+  withBody,
+  withNamespaces,
+  X14_XMLNS,
+  worksheetRoot,
+  type ScopedElement,
+  type XmlPatch,
+} from './xlsx-worksheet-xml.ts'
 
 export type StructuralOp =
   | {
@@ -88,48 +105,40 @@ export type RowColumnOp = Extract<StructuralOp, { index: number }>
 export class StructuralShiftError extends Error {}
 
 export function inferWorksheetAddresses(worksheetXml: string): string {
-  const sheetDataOpen = /<sheetData\b[^>]*>/.exec(worksheetXml)
-  const closeIndex = worksheetXml.lastIndexOf('</sheetData>')
-  if (!sheetDataOpen || closeIndex < sheetDataOpen.index + sheetDataOpen[0].length) {
+  // Most sheets already have canonical addresses, so avoid parsing them twice on save.
+  if (!/<(?:[^\s<>/:]+:)?(?:row|c)(?=[\s/>])(?!\s+r="(?:[A-Z]{1,3})?[1-9][0-9]*")/.test(worksheetXml)) {
     return worksheetXml
   }
-
-  const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
-  const body = worksheetXml.slice(bodyStart, closeIndex)
-  // Typical worksheets already put the canonical address first on every tag.
-  if (!/<(?:row|c)(?=[\s/>])(?!\s+r="[^">]*")/.test(body)) return worksheetXml
-  let currentRow = 0
-  let nextColumn: number | undefined
-  const tags =
-    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\/row\s*>|<(row|c)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/g
-  const normalizedBody = body.replace(tags, (tag, name: string | undefined) => {
-    if (name === undefined) {
-      if (tag.startsWith('</row')) nextColumn = undefined
-      return tag
-    }
-    const attribute = worksheetTagAttribute(tag, 'r')
-    const explicit = attribute?.[2] ?? attribute?.[3]
-    let address: string
-    if (name === 'row') {
-      currentRow = readPositiveInteger(explicit) ?? currentRow + 1
-      nextColumn = tag.endsWith('/>') ? undefined : 0
-      address = explicit ?? String(currentRow)
-    } else if (nextColumn !== undefined) {
-      const column = (explicit === undefined ? null : parseA1(explicit))?.column ?? nextColumn
+  const sheetData = worksheetData(worksheetXml)
+  if (!sheetData) return worksheetXml
+  const parts: string[] = []
+  let cursor = 0
+  const normalizeAddress = (element: ScopedElement, offset: number, address: string) => {
+    const existing = worksheetTagAttribute(element.opening, 'r')
+    const encoded = escapeXmlAttribute(address)
+    if (existing?.[0].trimStart() === `r="${encoded}"`) return
+    parts.push(worksheetXml.slice(cursor, offset))
+    cursor = offset + element.opening.length
+    const opening = existing
+      ? element.opening.slice(0, existing.index) + element.opening.slice(existing.index + existing[0].length)
+      : element.opening
+    parts.push(addTagAttribute(opening, 'r', encoded))
+  }
+  const dataOffset = sheetData.start + sheetData.opening.length
+  for (const { row, rowNumber } of worksheetRowPositions(sheetData)) {
+    const rowOffset = dataOffset + row.start
+    normalizeAddress(row, rowOffset, String(rowNumber))
+    const cellOffset = rowOffset + row.opening.length
+    let nextColumn = 0
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', row.namespace)) continue
+      const explicit = cell.attributes.get('r')
+      const column = worksheetCellColumn(explicit, nextColumn)
       nextColumn = column + 1
-      address = explicit ?? `${columnToLetters(column)}${currentRow}`
-    } else {
-      return tag
+      normalizeAddress(cell, cellOffset + cell.start, explicit ?? `${columnToLetters(column)}${rowNumber}`)
     }
-    if (attribute === undefined) return addTagAttribute(tag, 'r', address)
-    if (attribute[0].trimStart() === `r="${address}"`) return tag
-    const rest = tag.slice(0, attribute.index) + tag.slice(attribute.index + attribute[0].length)
-    return addTagAttribute(rest, 'r', address.replaceAll('"', '&quot;'))
-  })
-
-  return normalizedBody === body
-    ? worksheetXml
-    : worksheetXml.slice(0, bodyStart) + normalizedBody + worksheetXml.slice(closeIndex)
+  }
+  return parts.length === 0 ? worksheetXml : parts.join('') + worksheetXml.slice(cursor)
 }
 
 const worksheetAttributes = /\s+([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
@@ -166,19 +175,6 @@ export function updateWorksheetTagAttribute(
   )
 }
 
-function readTagAttribute(tag: string, name: string): string | undefined {
-  return new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(tag)?.[1]
-}
-
-function setTagAttribute(tag: string, name: string, value: string): string {
-  const pattern = new RegExp(`((?:^|\\s)${name}=")[^"]*(")`)
-  if (!pattern.test(tag)) return addTagAttribute(tag, name, value)
-  return tag.replace(
-    pattern,
-    (_match, prefix: string, suffix: string) => `${prefix}${value}${suffix}`,
-  )
-}
-
 function addTagAttribute(tag: string, name: string, value: string): string {
   const nameEnd = /^<[^ \t\r\n/>]+/.exec(tag)?.[0].length ?? 1
   return `${tag.slice(0, nameEnd)} ${name}="${value}"${tag.slice(nameEnd)}`
@@ -188,6 +184,59 @@ function readPositiveInteger(value: string | undefined): number | undefined {
   if (value === undefined || !/^[0-9]+$/.test(value)) return undefined
   const number = Number(value)
   return number > 0 && Number.isSafeInteger(number) ? number : undefined
+}
+
+// Even a cell with an unusable address advances the cursor for the next cell.
+function worksheetCellColumn(address: string | undefined, fallback: number): number {
+  return (address === undefined ? null : parseA1(address))?.column ?? fallback
+}
+
+export function parseGridCellAddress(address: string): { row: number; column: number } | undefined {
+  const match = /^([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(address)
+  if (!match?.[1] || !match[2]) return undefined
+  const row = Number(match[2]) - 1
+  const column = lettersToColumn(match[1])
+  return row < MAX_GRID_ROWS && column < MAX_GRID_COLUMNS ? { row, column } : undefined
+}
+
+// Direct SpreadsheetML children, with offsets relative to the full worksheet XML.
+export function worksheetChildren(xml: string): ScopedElement[] {
+  const root = worksheetRoot(xml)
+  if (!root) return []
+  const offset = root.start + root.opening.length
+  return scopedChildren(root)
+    .filter((child) => child.namespace === root.namespace)
+    .map((child) => ({ ...child, start: offset + child.start }))
+}
+
+export function worksheetData(xml: string): ScopedElement | undefined {
+  return worksheetChildren(xml).find((child) => child.local === 'sheetData')
+}
+
+export function* worksheetRowPositions(sheetData: ScopedElement) {
+  let rowNumber = 0
+  for (const row of scopedChildren(sheetData)) {
+    if (!isElement(row, 'row', sheetData.namespace)) continue
+    rowNumber = readPositiveInteger(row.attributes.get('r')) ?? rowNumber + 1
+    yield { row, rowNumber }
+  }
+}
+
+export function* worksheetCellPositions(sheetData: ScopedElement) {
+  for (const { row, rowNumber } of worksheetRowPositions(sheetData)) {
+    let nextColumn = 0
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', row.namespace)) continue
+      const address = cell.attributes.get('r')
+      const position = address === undefined
+        ? { row: rowNumber - 1, column: nextColumn }
+        : parseGridCellAddress(address)
+      nextColumn = (position?.column ?? worksheetCellColumn(address, nextColumn)) + 1
+      if (position && position.row < MAX_GRID_ROWS && position.column < MAX_GRID_COLUMNS) {
+        yield { ...position, cell }
+      }
+    }
+  }
 }
 
 export function applyStructuralOps(
@@ -225,19 +274,19 @@ export function applyStructuralOps(
     if (!shift.swap) xml = materializeSharedGroupsTheShiftBreaks(xml, sheetName, shift, axis, true)
     const moveReference = (ref: string) => moveRefRange(ref, shift, axis)
     const moveFormula = (formula: string) => shiftFormulaText(formula, sheetName, shift, axis)
-    xml = shiftWorksheetRuleRanges(xml, moveReference)
+    xml = shiftProtectedRanges(xml, moveReference)
     xml = rewriteWorksheetHyperlinks(
       xml,
       (location) => shiftLocalHyperlinkLocation(location, sheetName, shift, axis),
       moveReference,
     )
-    xml = rewriteWorksheetCore(xml, (core) => {
-      if (axis === 'column') return transformColumnOperation(core, sheetName, shift)
-      const rows = transformSheetRows(core, shift)
-      return transformRangedFeatures(transformFormulas(rows, sheetName, shift, axis), shift, axis)
-    })
+    xml = axis === 'column'
+      ? transformColumnOperation(xml, sheetName, shift)
+      : transformSheetRows(xml, sheetName, shift)
+    xml = shiftWorksheetMerges(xml, shift, axis)
+    xml = transformWorksheetAutoFilters(xml, shift, axis)
     const moveSqref = (sqref: string) => shiftSqref(sqref, moveReference)
-    xml = rewriteX14DataValidations(xml, moveFormula, moveSqref)
+    xml = rewriteWorksheetValidations(xml, moveFormula, moveSqref)
     xml = rewriteWorksheetVisualReferences(xml, moveFormula, moveSqref)
     xml = shiftWorksheetPrintLayout(xml, shift, axis)
   }
@@ -251,10 +300,40 @@ export function applyStructuralOps(
 /// in-memory `ole` visual on inserts/deletes; the saved anchor has to follow
 /// or the object jumps back over the wrong cells on reopen.
 export function shiftOleObjectAnchors(worksheetXml: string, ops: readonly StructuralOp[]): string {
-  if (!worksheetXml.includes('<oleObjects')) return worksheetXml
-  return worksheetXml.replace(/<oleObjects\b[\s\S]*?<\/oleObjects>/g, (block) =>
-    shiftDrawingAnchors(block, ops),
-  )
+  if (!worksheetXml.includes('oleObjects')) return worksheetXml
+  const shifts = rowColumnOps(ops)
+  if (!shifts.length) return worksheetXml
+  let xml = worksheetXml
+  for (const op of shifts) {
+    const shift = toShift(op)
+    const axis = axisOf(op) === 'row' ? 'row' : 'col'
+    const patches = worksheetChildren(xml).flatMap((section) => {
+      if (section.local !== 'oleObjects') return []
+      const updated = rewriteAnchorBranches(section, (object) => {
+        if (!isElement(object, 'oleObject', section.namespace)) return object.xml
+        const oleMarkup = (node: ScopedElement) =>
+          node.namespace === section.namespace || node.namespace === X14_XMLNS
+        return rewriteAnchorChildren(object, (properties) => {
+          if (properties.local !== 'objectPr' || !oleMarkup(properties)) return properties.xml
+          return rewriteAnchorChildren(properties, (anchor) =>
+            anchor.local === 'anchor' && oleMarkup(anchor)
+              ? rewriteCellAnchor(
+                  anchor,
+                  shift,
+                  axis,
+                  true,
+                  oleMarkup,
+                  (node) => oleMarkup(node) || isDrawingNamespace(node.namespace),
+                )
+              : anchor.xml,
+          )
+        })
+      })
+      return updated === section.xml ? [] : [patchElement(section, updated)]
+    })
+    xml = applyPatches(xml, patches)
+  }
+  return xml
 }
 
 /// Legacy VML shapes carry an `<x:Anchor>` of eight comma-separated values:
@@ -304,85 +383,71 @@ function shiftVmlAnchorValues(values: readonly number[], ops: readonly RowColumn
   return next
 }
 
-const SHEET_PR_PATTERN = /<sheetPr\b[^>]*\/>|<sheetPr\b[^>]*>[\s\S]*?<\/sheetPr>/
-const OUTLINE_PR_PATTERN = /<outlinePr\b[^>]*\/>|<outlinePr\b[^>]*>[\s\S]*?<\/outlinePr>/
-
 export function applyOutlinePr(
   xml: string,
   op: Extract<StructuralOp, { summaryBelow: boolean }>,
 ): string {
-  const attributes =
+  const root = worksheetRoot(xml)
+  if (!root) return xml
+  const sheetPr = scopedChildren(root).find((child) => isElement(child, 'sheetPr', root.namespace))
+  const qualifier = prefixOf(sheetPr?.name ?? root.name)
+  const offset = root.start + root.opening.length
+  const attrs =
     (op.summaryBelow ? '' : ' summaryBelow="0"') + (op.summaryRight ? '' : ' summaryRight="0"')
-  const existing = SHEET_PR_PATTERN.exec(xml)
-  const sheetPr = existing?.[0]
-  const current = sheetPr === undefined ? undefined : OUTLINE_PR_PATTERN.exec(sheetPr)?.[0]
-  // Other outlinePr attributes (applyStyles, showOutlineSymbols) stay verbatim.
-  const kept = (current ?? '')
-    .replace(/^<outlinePr\b|\/?>$|<\/outlinePr>$/g, '')
-    .replace(/\s+summary(?:Below|Right)="[^"]*"/g, '')
-    .replace(/>.*$/s, '')
-    .trim()
-  const element =
-    kept === '' && attributes === '' ? '' : `<outlinePr${kept ? ` ${kept}` : ''}${attributes}/>`
-  if (sheetPr === undefined) {
-    if (element === '') return xml
-    return xml.replace(
-      /(<worksheet\b[^>]*>)/,
-      (_full, open: string) => `${open}<sheetPr>${element}</sheetPr>`,
-    )
+  const element = attrs === '' ? '' : `<${qualifier}outlinePr${attrs}/>`
+  if (!sheetPr) {
+    return element === '' ? xml : xml.slice(0, offset) +
+      `<${qualifier}sheetPr>${element}</${qualifier}sheetPr>` + xml.slice(offset)
   }
-  let next: string
-  if (current !== undefined) {
-    next = sheetPr.replace(OUTLINE_PR_PATTERN, () => element)
-  } else if (element === '') {
-    next = sheetPr
-  } else if (sheetPr.endsWith('/>')) {
-    next = `${sheetPr.slice(0, -2)}>${element}</sheetPr>`
-  } else {
+
+  const children = scopedChildren(sheetPr)
+  const outline = children.find((child) => isElement(child, 'outlinePr', sheetPr.namespace))
+  let body = sheetPr.inner
+  if (outline) {
+    const keptOpening = omitWorksheetTagAttributes(outline.opening, ['summaryBelow', 'summaryRight'])
+    const opening = keptOpening.replace(/(\s*\/?>)$/, (_end, suffix) => attrs + suffix)
+    const otherAttributes = [...outline.attributes.keys()].some((name) => name !== 'summaryBelow' && name !== 'summaryRight')
+    const replacement = attrs || otherAttributes || outline.inner.trim()
+      ? opening + outline.xml.slice(outline.opening.length)
+      : ''
+    body = body.slice(0, outline.start) + replacement + body.slice(outline.start + outline.xml.length)
+  } else if (element !== '') {
     // Schema order: tabColor, outlinePr, pageSetUpPr.
-    const pageSetUp = /<pageSetUpPr\b/.exec(sheetPr)
-    next = pageSetUp
-      ? `${sheetPr.slice(0, pageSetUp.index)}${element}${sheetPr.slice(pageSetUp.index)}`
-      : sheetPr.replace(/<\/sheetPr>$/, `${element}</sheetPr>`)
+    const next = children.find((child) => isElement(child, 'pageSetUpPr', sheetPr.namespace))
+    const at = next?.start ?? body.length
+    body = body.slice(0, at) + element + body.slice(at)
   }
-  const emptied = /^<sheetPr\b([^>]*)>\s*<\/sheetPr>$/.exec(next)
-  if (emptied && emptied[1]!.trim() === '') next = ''
-  return xml.replace(SHEET_PR_PATTERN, () => next)
+  if (body === sheetPr.inner) return xml
+  const updated = { ...sheetPr, start: offset + sheetPr.start }
+  const keepProperties = body.trim() !== '' || sheetPr.attributes.size > 0
+  return applyPatches(xml, [patchElement(updated, keepProperties ? withBody(sheetPr, body) : '')])
 }
 
-/// Excel sizes the outline gutter from sheetFormatPr's outlineLevelRow/Col;
-/// recompute both maxima after outline edits so the bars actually show.
+/// Excel sizes the outline gutter from the largest real row and column levels.
 function syncOutlineSummaryLevels(xml: string): string {
+  const children = worksheetChildren(xml)
+  const data = children.find((child) => child.local === 'sheetData')
+  const cols = children.find((child) => child.local === 'cols')
+  const format = children.find((child) => child.local === 'sheetFormatPr')
   let maxRow = 0
-  for (const match of xml.matchAll(/<row\b[^>]*?\boutlineLevel="([0-9]+)"/g)) {
-    maxRow = Math.max(maxRow, Number(match[1]))
-  }
   let maxCol = 0
-  for (const match of xml.matchAll(/<col\b[^>]*?\boutlineLevel="([0-9]+)"/g)) {
-    maxCol = Math.max(maxCol, Number(match[1]))
+  for (const { row } of data ? worksheetRowPositions(data) : []) {
+    maxRow = Math.max(maxRow, readPositiveInteger(row.attributes.get('outlineLevel')) ?? 0)
   }
-  const attributes =
-    (maxRow > 0 ? ` outlineLevelRow="${maxRow}"` : '') +
-    (maxCol > 0 ? ` outlineLevelCol="${maxCol}"` : '')
-  const existing = /<sheetFormatPr\b([^>]*?)(\/?)>/.exec(xml)
-  if (existing) {
-    const kept = existing[1]!
-      .replace(/\s+outlineLevelRow="[^"]*"/g, '')
-      .replace(/\s+outlineLevelCol="[^"]*"/g, '')
-    return (
-      xml.slice(0, existing.index) +
-      `<sheetFormatPr${kept}${attributes}${existing[2]}>` +
-      xml.slice(existing.index + existing[0].length)
-    )
+  for (const col of cols ? scopedChildren(cols) : []) {
+    if (isElement(col, 'col', cols?.namespace))
+      maxCol = Math.max(maxCol, readPositiveInteger(col.attributes.get('outlineLevel')) ?? 0)
   }
-  if (!attributes) return xml
-  const anchor = /<cols\b|<sheetData\b/.exec(xml)
-  if (!anchor) return xml
-  return (
-    xml.slice(0, anchor.index) +
-    `<sheetFormatPr defaultRowHeight="15"${attributes}/>` +
-    xml.slice(anchor.index)
-  )
+  const attrs = (maxRow ? ` outlineLevelRow="${maxRow}"` : '') + (maxCol ? ` outlineLevelCol="${maxCol}"` : '')
+  if (format) {
+    const kept = omitWorksheetTagAttributes(format.opening, ['outlineLevelRow', 'outlineLevelCol'])
+    const opening = kept.replace(/(\s*\/?>)$/, (_end, suffix) => attrs + suffix)
+    return applyPatches(xml, [patchElement(format, opening + format.xml.slice(format.opening.length))])
+  }
+  const anchor = cols ?? data
+  if (!anchor || (!maxRow && !maxCol)) return xml
+  const qualifier = prefixOf(readRootOpening(xml)?.name ?? '')
+  return xml.slice(0, anchor.start) + `<${qualifier}sheetFormatPr defaultRowHeight="15"${attrs}/>` + xml.slice(anchor.start)
 }
 
 function toRef(range: CellArea): string {
@@ -393,31 +458,89 @@ function toRef(range: CellArea): string {
 }
 
 function applyMergeOp(xml: string, op: Extract<StructuralOp, { range: CellArea }>): string {
+  const children = worksheetChildren(xml)
+  const section = children.find((child) => child.local === 'mergeCells')
   const ref = toRef(op.range)
   if (op.kind === 'unmerge-cells') {
-    const without = xml.replace(new RegExp(`<mergeCell\\b[^>]*\\bref="${ref}"[^>]*/>`), '')
-    return refreshMergeCount(without)
+    return section ? rewriteMergeSection(xml, section, (oldRef) =>
+      comparableMergeRef(oldRef) === ref ? null : oldRef) : xml
   }
-  const element = `<mergeCell ref="${ref}"/>`
-  if (xml.includes('</mergeCells>')) {
-    return refreshMergeCount(xml.replace('</mergeCells>', () => `${element}</mergeCells>`))
+  if (section) return rewriteMergeSection(xml, section, (oldRef) => oldRef, ref)
+
+  const data = children.find((child) => child.local === 'sheetData')
+  if (!data) {
+    throw new StructuralShiftError('Worksheet has no sheetData element.')
   }
-  // Schema order places mergeCells after autoFilter (when present), which in
-  // turn follows sheetData.
-  const section = `<mergeCells count="1">${element}</mergeCells>`
-  const autoFilter = /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/.exec(xml)
-  if (autoFilter) {
-    const insertAt = autoFilter.index + autoFilter[0].length
-    return xml.slice(0, insertAt) + section + xml.slice(insertAt)
+  // Insert after the last applicable predecessor in SpreadsheetML schema order.
+  const preceding = ['sheetData', 'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios',
+    'autoFilter', 'sortState', 'dataConsolidate', 'customSheetViews']
+  const anchor = children.reverse().find((child) => preceding.includes(child.local)) ?? data
+  const at = anchor.start + anchor.xml.length
+  const qualifier = prefixOf(readRootOpening(xml)?.name ?? '')
+  const newSection = `<${qualifier}mergeCells count="1"><${qualifier}mergeCell ref="${ref}"/></${qualifier}mergeCells>`
+  return xml.slice(0, at) + newSection + xml.slice(at)
+}
+
+function comparableMergeRef(ref: string): string {
+  return ref.replaceAll('$', '').toUpperCase()
+}
+
+function rewriteMergeSection(
+  xml: string,
+  section: ScopedElement,
+  move: (ref: string) => string | null,
+  addition?: string,
+): string {
+  const parts: string[] = []
+  let cursor = 0
+  let count = 0
+  let alreadyPresent = false
+  for (const child of scopedChildren(section)) {
+    if (!isElement(child, 'mergeCell', section.namespace)) continue
+    const ref = child.attributes.get('ref')
+    if (ref === undefined) {
+      count += 1
+      continue
+    }
+    const moved = move(ref)
+    if (moved !== null) count += 1
+    alreadyPresent ||= addition !== undefined && comparableMergeRef(ref) === addition
+    if (moved === ref) continue
+    const replacement = moved === null
+      ? ''
+      : updateWorksheetTagAttribute(child.opening, 'ref', escapeXmlAttribute(moved)) +
+        child.xml.slice(child.opening.length)
+    parts.push(section.inner.slice(cursor, child.start), replacement)
+    cursor = child.start + child.xml.length
   }
-  if (xml.includes('</sheetData>')) {
-    return xml.replace('</sheetData>', () => `</sheetData>${section}`)
+
+  const append = addition !== undefined && !alreadyPresent
+  if (parts.length === 0 && !append) return xml
+  let body = parts.join('') + section.inner.slice(cursor)
+  if (append) {
+    const qualifier = prefixOf(section.name)
+    body += `<${qualifier}mergeCell ref="${addition}"/>`
+    count += 1
   }
-  const emptySheetData = /<sheetData\s*\/>/
-  if (emptySheetData.test(xml)) {
-    return xml.replace(emptySheetData, (match) => `${match}${section}`)
+  const hasOtherAttributes = [...section.attributes.keys()].some((name) => name !== 'count')
+  if (count === 0 && body.trim() === '' && !hasOtherAttributes) {
+    return applyPatches(xml, [patchElement(section, '')])
   }
-  throw new StructuralShiftError('Worksheet has no sheetData element.')
+  const opening = updateWorksheetTagAttribute(section.opening, 'count', String(count))
+  const replacement = opening.endsWith('/>')
+    ? opening.slice(0, -2) + '>' + body + `</${section.name}>`
+    : opening + body + section.xml.slice(section.opening.length + section.inner.length)
+  return applyPatches(xml, [patchElement(section, replacement)])
+}
+
+function shiftWorksheetMerges(xml: string, shift: Shift, axis: Axis): string {
+  if (!xml.includes('mergeCells')) return xml
+  const section = worksheetChildren(xml).find((child) => child.local === 'mergeCells')
+  return section ? rewriteMergeSection(xml, section, (ref) => {
+    const comparable = comparableMergeRef(ref)
+    const moved = moveRefRange(comparable, shift, axis)
+    return moved === comparable ? ref : moved
+  }) : xml
 }
 
 function formatSize(size: number): string {
@@ -428,80 +551,65 @@ function formatSize(size: number): string {
 /// file never materialized are created in order — but only when the op sets
 /// something (a default-reset on a missing row is already the default).
 function applyRowAttributeOp(xml: string, op: AxisAttributeOp): string {
-  // col-only op: never dispatched here, but narrow the union for the checks below
   if ('style' in op) return xml
-  // start/end are 0-based. The op schema caps `row`, but a direct caller need
-  // not, and an uncapped span materialises <row r="5000000">. Clamp the tail;
-  // a span starting outside the grid is dropped rather than written onto the
-  // last row in its place.
-  const start = op.start
+  // Do not materialize rows outside the Excel grid, even for direct callers.
+  const start = Math.max(0, op.start)
   const end = Math.min(op.end, MAX_GRID_ROWS - 1)
   if (start > end) return xml
-  const seen = new Set<number>()
-  let result = xml.replace(/<row\b([^>]*?)(\/>|>)/g, (full, attributes: string, close: string) => {
-    const rowNumber = /(?:^|\s)r="([0-9]+)"/.exec(attributes)?.[1]
-    if (rowNumber === undefined) return full
-    const rowIndex = Number(rowNumber) - 1
-    if (rowIndex < start || rowIndex > end) return full
-    seen.add(rowIndex)
-    let patched = attributes
-    if ('size' in op) {
-      patched = patched.replace(/\s*ht="[^"]*"/, '').replace(/\s*customHeight="[^"]*"/, '')
-      if (op.size !== null) patched += ` ht="${formatSize(op.size)}" customHeight="1"`
-    } else if ('level' in op) {
-      patched = patched.replace(/\s*outlineLevel="[^"]*"/, '')
-      if (op.level > 0) patched += ` outlineLevel="${op.level}"`
-      if (op.collapsed !== undefined) {
-        patched = patched.replace(/\s*collapsed="[^"]*"/, '')
-        if (op.collapsed) patched += ' collapsed="1"'
-      }
-    } else {
-      patched = patched.replace(/\s*hidden="[^"]*"/, '')
-      if (op.hidden) patched += ' hidden="1"'
-    }
-    return `<row${patched}${close}`
-  })
-  const setsSomething =
-    'size' in op
-      ? op.size !== null
-      : 'level' in op
-        ? op.level > 0 || op.collapsed === true
-        : op.hidden
-  if (!setsSomething) return result
-  const newAttributes =
-    'size' in op
-      ? ` ht="${formatSize(op.size ?? 0)}" customHeight="1"`
-      : 'level' in op
-        ? (op.level > 0 ? ` outlineLevel="${op.level}"` : '') +
-          (op.collapsed ? ' collapsed="1"' : '')
-        : ' hidden="1"'
-  for (let rowIndex = start; rowIndex <= end; rowIndex += 1) {
-    if (seen.has(rowIndex)) continue
-    result = insertEmptyRow(result, rowIndex + 1, newAttributes)
-  }
-  return result
-}
 
-function insertEmptyRow(worksheetXml: string, rowNumber: number, attributes: string): string {
-  const newRow = `<row r="${rowNumber}"${attributes}/>`
-  const rowStartPattern = /<row\b[^>]*?\br="([1-9][0-9]*)"/g
-  let match: RegExpExecArray | null
-  while ((match = rowStartPattern.exec(worksheetXml)) !== null) {
-    if (Number(match[1]) > rowNumber) {
-      return worksheetXml.slice(0, match.index) + newRow + worksheetXml.slice(match.index)
+  let names: string[]
+  let attributes: string
+  if ('size' in op) {
+    names = ['ht', 'customHeight']
+    attributes = op.size === null ? '' : ` ht="${formatSize(op.size)}" customHeight="1"`
+  } else if ('level' in op) {
+    names = op.collapsed === undefined ? ['outlineLevel'] : ['outlineLevel', 'collapsed']
+    attributes = (op.level > 0 ? ` outlineLevel="${op.level}"` : '') + (op.collapsed ? ' collapsed="1"' : '')
+  } else {
+    names = ['hidden']
+    attributes = op.hidden ? ' hidden="1"' : ''
+  }
+
+  const data = worksheetData(xml)
+  if (!data) {
+    if (attributes === '') return xml
+    throw new StructuralShiftError('Worksheet has no sheetData element.')
+  }
+  const rows = [...worksheetRowPositions(data)]
+  const existing = attributes === '' ? undefined : new Set(rows.map(({ rowNumber }) => rowNumber - 1))
+  const qualifier = prefixOf(data.name)
+  const parts: string[] = []
+  let cursor = 0
+  let next = start
+  const insertBefore = (rowIndex: number, offset: number) => {
+    if (!existing) return
+    for (; next < rowIndex && next <= end; next += 1) {
+      if (existing.has(next)) continue
+      if (cursor < offset) parts.push(data.inner.slice(cursor, offset))
+      parts.push(`<${qualifier}row r="${next + 1}"${attributes}/>`)
+      cursor = offset
     }
   }
-  if (worksheetXml.includes('</sheetData>')) {
-    return worksheetXml.replace('</sheetData>', () => `${newRow}</sheetData>`)
+
+  for (const { row, rowNumber } of rows) {
+    const rowIndex = rowNumber - 1
+    insertBefore(rowIndex, row.start)
+    if (rowIndex < start || rowIndex > end) continue
+    const kept = omitWorksheetTagAttributes(row.opening, names)
+    const opening = kept.replace(/(\s*\/?>)$/, (_end, suffix) => attributes + suffix)
+    if (opening === row.opening) continue
+    parts.push(data.inner.slice(cursor, row.start), opening)
+    cursor = row.start + row.opening.length
   }
-  const emptySheetData = /<sheetData\s*\/>/
-  if (emptySheetData.test(worksheetXml)) {
-    return worksheetXml.replace(emptySheetData, () => `<sheetData>${newRow}</sheetData>`)
-  }
-  throw new StructuralShiftError('Worksheet has no sheetData element.')
+  insertBefore(end + 1, data.inner.length)
+  if (parts.length === 0) return xml
+  const body = parts.join('') + data.inner.slice(cursor)
+  return applyPatches(xml, [patchElement(data, withBody(data, body))])
 }
 
 interface ColDefinition {
+  name: string
+  tail: string
   min: number
   max: number
   /// Attributes other than min/max, in original order.
@@ -517,22 +625,26 @@ function applyColAttributeOp(
   resolveColStyle?: (baseXfIndex: number, delta: WorkbookStyleEdit) => number,
 ): string {
   if ('style' in op && resolveColStyle === undefined) return xml
+  const children = worksheetChildren(xml)
+  const section = children.find((child) => child.local === 'cols')
   const existing: ColDefinition[] = []
-  const section = /<cols\b[^>]*>([\s\S]*?)<\/cols>/.exec(xml)
-  if (section?.[1]) {
-    for (const element of section[1].matchAll(/<col\b([^>]*?)\/>/g)) {
-      const attrs = new Map<string, string>()
-      for (const attribute of (element[1] ?? '').matchAll(/([\w:]+)="([^"]*)"/g)) {
-        if (attribute[1] && attribute[2] !== undefined) attrs.set(attribute[1], attribute[2])
-      }
-      const min = Number(attrs.get('min'))
-      const max = Number(attrs.get('max'))
-      if (!Number.isInteger(min) || !Number.isInteger(max)) continue
-      attrs.delete('min')
-      attrs.delete('max')
-      existing.push({ min: min - 1, max: max - 1, attrs })
-    }
+  const originalBody = section?.inner ?? ''
+  const untouched: string[] = []
+  let past = 0
+  for (const element of section ? scopedChildren(section) : []) {
+    if (!isElement(element, 'col', section?.namespace)) continue
+    const min = readPositiveInteger(element.attributes.get('min'))
+    const max = readPositiveInteger(element.attributes.get('max'))
+    if (min === undefined || max === undefined || min > max || max > MAX_GRID_COLUMNS) continue
+    const attrs = new Map(element.attributes)
+    attrs.delete('min')
+    attrs.delete('max')
+    const tail = element.opening.endsWith('/>') ? '/>' : '>' + element.xml.slice(element.opening.length)
+    existing.push({ name: element.name, tail, min: min - 1, max: max - 1, attrs })
+    untouched.push(originalBody.slice(past, element.start))
+    past = element.start + element.xml.length
   }
+  const qualifier = prefixOf(section?.name ?? readRootOpening(xml)?.name ?? '')
 
   const patch = (attrs: Map<string, string>): Map<string, string> => {
     const next = new Map(attrs)
@@ -568,13 +680,14 @@ function applyColAttributeOp(
       continue
     }
     if (col.min < op.start)
-      result.push({ min: col.min, max: op.start - 1, attrs: new Map(col.attrs) })
+      result.push({ ...col, max: op.start - 1 })
     result.push({
+      ...col,
       min: Math.max(col.min, op.start),
       max: Math.min(col.max, op.end),
       attrs: patch(col.attrs),
     })
-    if (col.max > op.end) result.push({ min: op.end + 1, max: col.max, attrs: new Map(col.attrs) })
+    if (col.max > op.end) result.push({ ...col, min: op.end + 1 })
   }
   // Span parts no existing <col> covered get an element carrying only the
   // change (unless the change is a reset back to the default).
@@ -598,39 +711,30 @@ function applyColAttributeOp(
     }
     if (cursor <= op.end) gaps.push({ min: cursor, max: op.end })
     for (const gap of gaps) {
-      result.push({ min: gap.min, max: gap.max, attrs: patch(new Map()) })
+      result.push({ name: qualifier + 'col', tail: '/>', ...gap, attrs: patch(new Map()) })
     }
   }
 
   const kept = result
-    .filter((col) => col.attrs.size > 0)
+    .filter((col) => col.attrs.size > 0 || col.tail !== '/>')
     .sort((left, right) => left.min - right.min)
   const serialized = kept
     .map((col) => {
-      const attributes = [...col.attrs].map(([name, value]) => ` ${name}="${value}"`).join('')
-      return `<col min="${col.min + 1}" max="${col.max + 1}"${attributes}/>`
+      const attributes = [...col.attrs].map(([name, value]) => ` ${name}="${escapeXmlAttribute(value)}"`).join('')
+      return `<${col.name} min="${col.min + 1}" max="${col.max + 1}"${attributes}${col.tail}`
     })
     .join('')
-  const newSection = kept.length === 0 ? '' : `<cols>${serialized}</cols>`
+  const body = serialized + untouched.join('') + originalBody.slice(past)
   if (section) {
-    return xml.replace(/<cols\b[^>]*>[\s\S]*?<\/cols>/, () => newSection)
+    const keepSection = body.trim() !== '' || section.attributes.size > 0
+    const replacement = keepSection ? withBody(section, body) : ''
+    return applyPatches(xml, [patchElement(section, replacement)])
   }
-  if (newSection === '') return xml
+  if (body === '') return xml
   // Schema order places cols immediately before sheetData.
-  const sheetData = /<sheetData\s*\/>|<sheetData\b[^>]*>/.exec(xml)
+  const sheetData = children.find((child) => child.local === 'sheetData')
   if (!sheetData) throw new StructuralShiftError('Worksheet has no sheetData element.')
-  return xml.slice(0, sheetData.index) + newSection + xml.slice(sheetData.index)
-}
-
-function refreshMergeCount(xml: string): string {
-  return xml.replace(/<mergeCells\b[^>]*>([\s\S]*?)<\/mergeCells>/, (full, inner: string) => {
-    const count = (inner.match(/<mergeCell\b/g) ?? []).length
-    if (count === 0) return ''
-    return full.replace(
-      /(<mergeCells\b[^>]*\bcount=")[0-9]+(")/,
-      (_m, prefix: string, suffix: string) => `${prefix}${count}${suffix}`,
-    )
-  })
+  return xml.slice(0, sheetData.start) + `<${qualifier}cols>${body}</${qualifier}cols>` + xml.slice(sheetData.start)
 }
 
 /// Rewrites references to the edited sheet inside another sheet's formulas
@@ -647,24 +751,11 @@ export function shiftCrossSheetFormulas(
     if (!shift.swap) {
       xml = materializeSharedGroupsTheShiftBreaks(xml, editedSheetName, shift, axis, false)
     }
-    const rewrite = (body: string): string =>
-      escapeXmlText(shiftFormulaText(decodeEntities(body), editedSheetName, shift, axis, true))
-    xml = rewriteWorksheetCore(xml, (core) =>
-      core
-        .replace(
-          CELL_FORMULA,
-          (_full, opening: string, body: string, closing: string) =>
-            opening + rewrite(body) + closing,
-        )
-        .replace(
-          /<(formula[12]?)>([\s\S]*?)<\/\1>/g,
-          (_full, tag: string, body: string) => `<${tag}>${rewrite(body)}</${tag}>`,
-        ),
-    )
     const moveFormula = (formula: string) =>
       shiftFormulaText(formula, editedSheetName, shift, axis, true)
+    xml = rewriteWorksheetCellFormulas(xml, moveFormula)
     xml = rewriteWorksheetHyperlinks(xml, moveFormula)
-    xml = rewriteX14DataValidations(xml, moveFormula)
+    xml = rewriteWorksheetValidations(xml, moveFormula)
     xml = rewriteWorksheetVisualReferences(xml, moveFormula)
   }
   return xml
@@ -691,17 +782,15 @@ export function rewriteDefinedNames(
   workbookXml: string,
   rewrite: (formula: string, opening: string) => string | null,
 ): string {
-  const position = findRootChild(workbookXml, 'workbook', 'definedNames')
-  if (!position) return workbookXml
-  const [section] = childElements(workbookXml.slice(position.start, position.end))
-  if (!section?.inner) return workbookXml
+  const parts = workbookNameParts(workbookXml)
+  if (!parts?.section?.inner) return workbookXml
+  const { bodyStart, section, entries } = parts
+  const offset = bodyStart + section.start
 
   const chunks: string[] = []
   let start = 0
-  for (const child of childElements(section.inner)) {
-    if (child.name.slice(child.name.lastIndexOf(':') + 1) !== 'definedName' || !child.inner) {
-      continue
-    }
+  for (const child of entries) {
+    if (!child.inner) continue
     const content = definedNameContent(child.inner)
     if (!content) continue
     const { nodes, text } = content
@@ -728,7 +817,7 @@ export function rewriteDefinedNames(
   const replacement = inner.trim()
     ? section.opening + inner + section.xml.slice(section.opening.length + section.inner.length)
     : ''
-  return workbookXml.slice(0, position.start) + replacement + workbookXml.slice(position.end)
+  return workbookXml.slice(0, offset) + replacement + workbookXml.slice(offset + section.xml.length)
 }
 
 /// Fully deleted print ranges disappear. References in actual named formulas
@@ -788,7 +877,7 @@ function shiftPrintRanges(
       shifted.push(part)
       continue
     }
-    const moved = shiftReferenceToken(token, shift, axis)
+    const moved = shiftReferenceToken(token, shift, axis, true)
     if (moved === null) continue
     const tokenEnd = part.trimEnd().length
     shifted.push(part.slice(0, tokenEnd - token.length) + moved + part.slice(tokenEnd))
@@ -816,81 +905,135 @@ function rowColumnOps(ops: readonly StructuralOp[]): RowColumnOp[] {
   return ops.filter((op): op is RowColumnOp => 'index' in op)
 }
 
-/// Shifts twoCellAnchor/oneCellAnchor from/to markers in a drawing part along
-/// the same op stream. Markers inside a deleted span clamp to its start (with
-/// a zeroed offset) — objects are never dropped, only compressed.
-/// absoluteAnchor is EMU-positioned and unaffected.
+const MARKUP_COMPATIBILITY_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+const compatibilityBranches = new Set(['AlternateContent', 'Choice', 'Fallback'])
+
+/// Shifts drawing markers, leaving absolute anchors and opaque extensions alone.
 export function shiftDrawingAnchors(drawingXml: string, ops: readonly StructuralOp[]): string {
   let xml = drawingXml
   for (const op of rowColumnOps(ops)) {
-    const axis: Axis = axisOf(op)
+    const [element] = childElements(xml)
+    if (!element) return xml
+    const root = withNamespaces(element, new Map())
+    if (root.local !== 'wsDr') return xml
+    // The gateway also accepts fragments with the conventional implicit prefix.
+    const implicitPrefix = root.namespace === undefined && root.name === 'xdr:wsDr'
+    if (!implicitPrefix && root.namespace !== '' && !isDrawingNamespace(root.namespace)) return xml
+    const drawing = (node: ScopedElement) =>
+      node.namespace === root.namespace && (!implicitPrefix || node.name.startsWith('xdr:'))
     const shift = toShift(op)
-    const tag = axis === 'row' ? 'row' : 'col'
-    if (shift.swap) {
-      xml = swapDrawingAnchors(xml, shift, tag)
-      continue
-    }
-    xml = xml.replace(
-      /<((?:\w+:)?)(from|to)>([\s\S]*?)<\/\1\2>/g,
-      (_full, ns: string, kind: string, inner: string) => {
-        let clamped = false
-        let patched = inner.replace(
-          new RegExp(`(<(?:\\w+:)?${tag}>)([0-9]+)(</(?:\\w+:)?${tag}>)`),
-          (_m, open: string, value: string, close: string) => {
-            const moved = moveAnchorMark(Number(value), shift)
-            clamped = moved.clamped
-            return `${open}${moved.position}${close}`
-          },
-        )
-        if (clamped) {
-          patched = patched.replace(
-            new RegExp(`(<(?:\\w+:)?${tag}Off>)-?[0-9]+(</(?:\\w+:)?${tag}Off>)`),
-            (_m, open: string, close: string) => `${open}0${close}`,
-          )
-        }
-        return `<${ns}${kind}>${patched}</${ns}${kind}>`
-      },
-    )
+    const axis = axisOf(op) === 'row' ? 'row' : 'col'
+    const updated = rewriteAnchorBranches(root, (anchor) => {
+      if (
+        !drawing(anchor) ||
+        (anchor.local !== 'oneCellAnchor' && anchor.local !== 'twoCellAnchor')
+      ) {
+        return anchor.xml
+      }
+      return rewriteCellAnchor(
+        anchor,
+        shift,
+        axis,
+        anchor.local === 'twoCellAnchor',
+        drawing,
+        drawing,
+      )
+    })
+    if (updated !== root.xml) xml = applyPatches(xml, [patchElement(root, updated)])
   }
   return xml
 }
 
-/// Swap-shift pass over a drawing part: from/to marks are judged as a PAIR
-/// (independent remapping could tear an anchor whose ends straddle a block
-/// boundary). moveRange supplies the three-way semantics: anchors outside or
-/// spanning the swapped blocks stay put, anchors inside one block move with
-/// it, partial contact fails closed. A worksheet `oleObjects` `<anchor>` is
-/// the same from/to pair under another name.
-function swapDrawingAnchors(xml: string, shift: BlockSwap, tag: string): string {
-  const markPattern = (kind: string): RegExp =>
-    new RegExp(`(<(?:\\w+:)?${kind}>[\\s\\S]*?<(?:\\w+:)?${tag}>)([0-9]+)(</(?:\\w+:)?${tag}>)`)
-  const result = xml.replace(/<((?:\w+:)?)(twoCellAnchor|anchor)\b[\s\S]*?<\/\1\2>/g, (block) => {
-    const from = markPattern('from').exec(block)
-    const to = markPattern('to').exec(block)
-    if (!from?.[2] || !to?.[2]) return block
-    const moved = moveRange(Number(from[2]), Number(to[2]), shift)
-    if (!moved || (moved.start === Number(from[2]) && moved.end === Number(to[2]))) return block
-    return block
-      .replace(
-        markPattern('from'),
-        (_m, open: string, _v, close: string) => `${open}${moved.start}${close}`,
-      )
-      .replace(
-        markPattern('to'),
-        (_m, open: string, _v, close: string) => `${open}${moved.end}${close}`,
-      )
+function rewriteAnchorBranches(
+  parent: ScopedElement,
+  rewrite: (child: ScopedElement) => string,
+): string {
+  return rewriteAnchorChildren(parent, (child) =>
+    child.namespace === MARKUP_COMPATIBILITY_NS && compatibilityBranches.has(child.local)
+      ? rewriteAnchorBranches(child, rewrite)
+      : rewrite(child),
+  )
+}
+
+function rewriteAnchorChildren(
+  parent: ScopedElement,
+  rewrite: (child: ScopedElement) => string,
+): string {
+  const patches = scopedChildren(parent).flatMap((child) => {
+    const updated = rewrite(child)
+    return updated === child.xml ? [] : [patchElement(child, updated)]
   })
-  // oneCellAnchor is extent-based; its single mark remaps freely.
-  return result.replace(/<((?:\w+:)?)oneCellAnchor\b[\s\S]*?<\/\1oneCellAnchor>/g, (block) => {
-    const from = markPattern('from').exec(block)
-    if (!from?.[2]) return block
-    const moved = movePosition(Number(from[2]), shift)
-    if (moved === null || moved === Number(from[2])) return block
-    return block.replace(
-      markPattern('from'),
-      (_m, open: string, _v, close: string) => `${open}${moved}${close}`,
-    )
-  })
+  return patches.length ? withBody(parent, applyPatches(parent.inner, patches)) : parent.xml
+}
+
+function readAnchorCoordinate(
+  mark: ScopedElement | undefined,
+  axis: 'row' | 'col',
+  coordinate: (element: ScopedElement) => boolean,
+) {
+  if (!mark) return undefined
+  const fields = scopedChildren(mark).filter(coordinate)
+  const field = fields.find((child) => child.local === axis)
+  const text = field && elementText(field.inner).trim()
+  const number = Number(text)
+  if (!field || !text || !/^\d+$/.test(text) || !Number.isSafeInteger(number)) return undefined
+  return { mark, field, number, offset: fields.find((child) => child.local === axis + 'Off') }
+}
+
+function rewriteCellAnchor(
+  anchor: ScopedElement,
+  shift: Shift,
+  axis: 'row' | 'col',
+  paired: boolean,
+  isMarker: (element: ScopedElement) => boolean,
+  isCoordinate: (element: ScopedElement) => boolean,
+): string {
+  const marks = scopedChildren(anchor).filter(isMarker)
+  const from = readAnchorCoordinate(
+    marks.find((mark) => mark.local === 'from'),
+    axis,
+    isCoordinate,
+  )
+  const to = paired
+    ? readAnchorCoordinate(
+        marks.find((mark) => mark.local === 'to'),
+        axis,
+        isCoordinate,
+      )
+    : undefined
+  const patches: XmlPatch[] = []
+  const update = (coordinate: NonNullable<typeof from>, position: number, clamped: boolean) => {
+    const { mark, field, number, offset } = coordinate
+    const writes: XmlPatch[] = []
+    if (position !== number) writes.push(patchElement(field, withBody(field, String(position))))
+    const offsetText = clamped && offset ? elementText(offset.inner).trim() : ''
+    if (offset && /^-?\d+$/.test(offsetText) && offsetText !== '0') {
+      writes.push(patchElement(offset, withBody(offset, '0')))
+    }
+    if (writes.length)
+      patches.push(patchElement(mark, withBody(mark, applyPatches(mark.inner, writes))))
+  }
+  if (shift.swap) {
+    if (!from || (paired && !to)) return anchor.xml
+    if (to) {
+      // Move the complete pair or reject an anchor torn by the swap.
+      const moved = moveRange(from.number, to.number, shift)
+      if (moved) {
+        update(from, moved.start, false)
+        update(to, moved.end, false)
+      }
+    } else {
+      const moved = movePosition(from.number, shift)
+      if (moved !== null) update(from, moved, false)
+    }
+  } else {
+    for (const coordinate of [from, to]) {
+      if (!coordinate) continue
+      const moved = moveAnchorMark(coordinate.number, shift)
+      update(coordinate, moved.position, moved.clamped)
+    }
+  }
+  return patches.length ? withBody(anchor, applyPatches(anchor.inner, patches)) : anchor.xml
 }
 
 function moveAnchorMark(
@@ -1415,58 +1558,49 @@ export function materializeSharedFormulaGroups(
   interface Fragment extends SharedFormulaCell {
     start: number
     end: number
-    openTag: string
+    formula: ScopedElement
     si: string
     isAnchor: boolean
-    body: string
   }
+  const data = worksheetData(xml)
+  if (!data) return xml
+  const dataStart = data.start + data.opening.length
   const fragments: Fragment[] = []
-  // The open tag is matched alone so a self-closing follower never pairs
-  // with a later </f>.
-  const sharedOpen = /<f(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/g
-  let match: RegExpExecArray | null
-  while ((match = sharedOpen.exec(xml)) !== null) {
-    const openTag = match[0]
-    if (readWorksheetTagAttribute(openTag, 't') !== 'shared') continue
-    const si = readWorksheetTagAttribute(openTag, 'si')
-    if (si === undefined) continue
-    const openEnd = match.index + openTag.length
-    let end = openEnd
-    let body = ''
-    if (!openTag.endsWith('/>')) {
-      const close = xml.indexOf('</f>', openEnd)
-      if (close === -1) continue
-      body = xml.slice(openEnd, close)
-      end = close + '</f>'.length
+  for (const { row } of worksheetRowPositions(data)) {
+    if (!hasSharedFormula(row.inner)) continue
+    const rowStart = dataStart + row.start + row.opening.length
+    for (const cell of scopedChildren(row)) {
+      if (!isElement(cell, 'c', row.namespace)) continue
+      const formula = cellFormula(cell)
+      if (formula?.attributes.get('t') !== 'shared') continue
+      const si = formula.attributes.get('si')
+      const position = parseGridCellAddress(cell.attributes.get('r') ?? '')
+      if (si === undefined || !position) continue
+      const start = rowStart + cell.start + cell.opening.length + formula.start
+      fragments.push({
+        ...position,
+        start,
+        end: start + formula.xml.length,
+        formula,
+        si,
+        isAnchor: formula.attributes.has('ref'),
+      })
     }
-    const cellOpen = xml.lastIndexOf('<c', match.index)
-    const address = /\br="([A-Z]{1,3})([0-9]+)"/.exec(xml.slice(cellOpen, match.index))
-    if (!address) continue
-    fragments.push({
-      start: match.index,
-      end,
-      openTag,
-      row: Number(address[2]) - 1,
-      column: lettersToColumn(address[1] ?? 'A'),
-      si,
-      isAnchor: readWorksheetTagAttribute(openTag, 'ref') !== undefined,
-      body,
-    })
   }
   const groups = new Map<string, { anchor: Fragment; followers: Fragment[] }>()
   for (const fragment of fragments) {
-    if (fragment.isAnchor && fragment.body.trim() !== '') {
+    if (fragment.isAnchor && elementText(fragment.formula.inner).trim() !== '') {
       groups.set(fragment.si, { anchor: fragment, followers: [] })
     }
   }
   for (const fragment of fragments) {
-    if (!fragment.isAnchor && fragment.body.trim() === '') {
+    if (!fragment.isAnchor && elementText(fragment.formula.inner).trim() === '') {
       groups.get(fragment.si)?.followers.push(fragment)
     }
   }
   const broken = new Map<string, string>()
   for (const [si, { anchor, followers }] of groups) {
-    const formula = decodeXmlText(anchor.body)
+    const formula = elementText(anchor.formula.inner)
     if (breaks({ anchor, formula, followers })) broken.set(si, formula)
   }
   if (broken.size === 0) return xml
@@ -1478,8 +1612,8 @@ export function materializeSharedFormulaGroups(
     if (group === undefined || formula === undefined || keeps(fragment)) continue
     let replacement: string
     if (fragment === group.anchor) {
-      replacement = `<f${plainFormulaAttributes(fragment.openTag)}>${fragment.body}</f>`
-    } else if (!fragment.isAnchor && fragment.body.trim() === '') {
+      replacement = plainFormula(fragment.formula, fragment.formula.inner)
+    } else if (!fragment.isAnchor && elementText(fragment.formula.inner).trim() === '') {
       const translated = translateSharedFormula(
         formula,
         fragment.row - group.anchor.row,
@@ -1492,9 +1626,7 @@ export function materializeSharedFormulaGroups(
         )
       }
       replacement =
-        translated === null
-          ? ''
-          : `<f${plainFormulaAttributes(fragment.openTag)}>${escapeXmlText(translated)}</f>`
+        translated === null ? '' : plainFormula(fragment.formula, escapeXmlText(translated))
     } else {
       continue
     }
@@ -1506,12 +1638,13 @@ export function materializeSharedFormulaGroups(
   return parts.join('')
 }
 
-function plainFormulaAttributes(openTag: string): string {
-  return omitWorksheetTagAttributes(openTag.slice(2, openTag.endsWith('/>') ? -2 : -1), [
-    't',
-    'ref',
-    'si',
-  ]).trimEnd()
+function plainFormula(formula: ScopedElement, body: string): string {
+  const attributes = formula.opening.slice(
+    formula.name.length + 1,
+    formula.opening.endsWith('/>') ? -2 : -1,
+  )
+  const retained = omitWorksheetTagAttributes(attributes, ['t', 'ref', 'si']).trimEnd()
+  return `<${formula.name}${retained}>${body}</${formula.name}>`
 }
 
 /// Shifts a single 0-based position; null means it was deleted.
@@ -1574,324 +1707,302 @@ function moveRange(
   }
 }
 
-function transformSheetRows(xml: string, shift: Shift): string {
-  const renumbered = xml.replace(
-    /<row\b[^>]*?\br="([0-9]+)"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g,
-    (full, rowNumber: string) => {
-      const moved = movePosition(Number(rowNumber) - 1, shift)
-      if (moved === null) return ''
-      if (moved === Number(rowNumber) - 1) return full
-      const patched = full.replace(
-        /(<row\b[^>]*?\br=")[0-9]+(")/,
-        (_m, prefix: string, suffix: string) => `${prefix}${moved + 1}${suffix}`,
-      )
-      // Cell addresses inside the row carry the row number too.
-      return patched.replace(
-        /(<c\b[^>]*?\br="[A-Z]{1,3})[0-9]+(")/g,
-        (_m, prefix: string, suffix: string) => `${prefix}${moved + 1}${suffix}`,
-      )
-    },
-  )
-  // Inserts and deletes renumber monotonically, so document order survives;
-  // a swap does not — Excel requires sheetData rows in ascending order.
-  return shift.swap ? sortSheetDataRows(renumbered) : renumbered
-}
-
-function sortSheetDataRows(xml: string): string {
-  const section = /<sheetData\b[^>]*>([\s\S]*?)<\/sheetData>/.exec(xml)
-  if (!section?.[1]) return xml
-  const rows: { index: number; text: string }[] = []
-  const leftover = section[1].replace(
-    /<row\b[^>]*?\br="([0-9]+)"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g,
-    (full, rowNumber: string) => {
-      rows.push({ index: Number(rowNumber), text: full })
-      return ''
-    },
-  )
-  if (leftover.trim() !== '') {
-    throw new StructuralShiftError('sheetData holds content other than rows — move aborted.')
+function transformSheetRows(xml: string, sheetName: string, shift: Shift): string {
+  const data = worksheetData(xml)
+  if (!data) return xml
+  const patches: XmlPatch[] = []
+  const reordered: { index: number; text: string }[] = []
+  for (const { row, rowNumber } of worksheetRowPositions(data)) {
+    const moved = movePosition(rowNumber - 1, shift)
+    if (moved === null) {
+      patches.push(patchElement(row, ''))
+      continue
+    }
+    const newNumber = moved + 1
+    const rowMoved = newNumber !== rowNumber
+    let updated = row.xml
+    if (rowMoved || FORMULA_TAG.test(row.inner)) {
+      updated = rewriteRowCells(row, rowCells(row), (cell) => {
+        const address = cell.attributes.get('r')
+        const movedAddress = rowMoved
+          ? address?.replace(/^([A-Z]{1,3})[0-9]+$/, (_match, column) => column + newNumber)
+          : address
+        return moveCell(cell, address, movedAddress, sheetName, shift, 'row')
+      })
+      if (rowMoved) {
+        updated =
+          updateWorksheetTagAttribute(row.opening, 'r', String(newNumber)) +
+          updated.slice(row.opening.length)
+      }
+    }
+    if (shift.swap) {
+      reordered.push({ index: newNumber, text: updated })
+      patches.push(patchElement(row, ''))
+    } else if (updated !== row.xml) {
+      patches.push(patchElement(row, updated))
+    }
   }
-  rows.sort((a, b) => a.index - b.index)
-  const body = rows.map((row) => row.text).join('')
-  return (
-    xml.slice(0, section.index) +
-    `${section[0].slice(0, section[0].indexOf('>') + 1)}${body}</sheetData>` +
-    xml.slice(section.index + section[0].length)
-  )
+  if (shift.swap) {
+    const leftover = replaceInOrder(data.inner, patches)
+    if (leftover.trim()) {
+      throw new StructuralShiftError('sheetData holds content other than rows — move aborted.')
+    }
+    const body = reordered
+      .sort((a, b) => a.index - b.index)
+      .map(({ text }) => text)
+      .join('')
+    return applyPatches(xml, [patchElement(data, withBody(data, body))])
+  }
+  return replaceGridRows(xml, data, patches)
 }
 
-/**
- * A column operation used to run four whole-worksheet replacements in
- * sequence (row spans/cells, formulas, ranged features, and <col> metadata).
- * A dense 300MB worksheet retained several generations of those strings and
- * exhausted Electron's V8 heap. Split around sheetData so all row/cell work
- * happens in one pass while the small prefix/suffix carry the metadata work.
- */
+// Rewrite each affected row once. Keep wide formula-free rows to the left of
+// the edit untouched, including their still-valid span hints.
 function transformColumnOperation(xml: string, sheetName: string, shift: Shift): string {
-  const sheetDataOpen = /<sheetData\b[^>]*>/.exec(xml)
-  const closeIndex = xml.lastIndexOf('</sheetData>')
-  if (!sheetDataOpen || closeIndex < sheetDataOpen.index) {
-    let fallback = transformSheetColumns(xml, shift)
-    fallback = transformFormulas(fallback, sheetName, shift, 'column')
-    fallback = transformRangedFeatures(fallback, shift, 'column')
-    return transformColDefinitions(fallback, shift)
+  const boundary = shift.swap ? undefined : shift.deleted?.start ?? shift.boundary
+  if (boundary !== undefined && worksheetGridBeforeColumn(xml, boundary)) return xml
+  const children = worksheetChildren(xml)
+  const data = children.find((child) => child.local === 'sheetData')
+  const columns = children.find((child) => child.local === 'cols')
+  const worksheetPatches: XmlPatch[] = []
+  if (columns) {
+    const moved = transformColDefinitions(columns, shift)
+    if (moved !== columns.xml) worksheetPatches.push(patchElement(columns, moved))
   }
-  const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
-  const originalPrefix = xml.slice(0, bodyStart)
-  const body = xml.slice(bodyStart, closeIndex)
-  const originalSuffix = xml.slice(closeIndex)
-
-  let prefix = transformFormulas(originalPrefix, sheetName, shift, 'column')
-  prefix = transformRangedFeatures(prefix, shift, 'column')
-  prefix = transformColDefinitions(prefix, shift)
-  let suffix = transformFormulas(originalSuffix, sheetName, shift, 'column')
-  suffix = transformRangedFeatures(suffix, shift, 'column')
-
-  // Cursor walk with a per-row early exit: a row whose rightmost cell sits
-  // left of the shift and that holds no formulas cannot change, so it stays
-  // inside a contiguous zero-copy slice of the original body (and keeps its
-  // still-accurate spans hint). Appending a column to an 88k-row sheet used
-  // to rebuild all 300MB of rows for nothing.
-  const affectsFrom = shift.swap
-    ? Math.min(shift.swap.first.start, shift.swap.second.start)
-    : shift.deleted
-      ? shift.deleted.start
-      : shift.boundary
-  const rowOpenPattern = /<row\b[^>]*>/g
-  const parts: string[] = []
-  let cursor = 0
-  // Rolling occurrence pointers: every '<f' and ' r="' position in the body
-  // is visited once across all rows, keeping the per-row skip test O(1)
-  // amortized (a bounded indexOf per row would rescan to the end of a 300MB
-  // body on every formula-free row).
-  let formulaAt = body.indexOf('<f')
-  let referenceAt = body.indexOf(' r="')
-  let openMatch: RegExpExecArray | null
-  while ((openMatch = rowOpenPattern.exec(body)) !== null) {
-    const openTag = openMatch[0]
-    const rowStart = openMatch.index
-    let rowEnd: number
-    if (openTag.endsWith('/>')) {
-      rowEnd = rowStart + openTag.length
-    } else {
-      const closePosition = body.indexOf('</row>', rowStart + openTag.length)
-      if (closePosition === -1) break
-      rowEnd = closePosition + '</row>'.length
-      rowOpenPattern.lastIndex = rowEnd
-    }
-    while (formulaAt !== -1 && formulaAt < rowStart) formulaAt = body.indexOf('<f', formulaAt + 2)
-    let lastReference = -1
-    while (referenceAt !== -1 && referenceAt < rowEnd) {
-      if (referenceAt >= rowStart) lastReference = referenceAt
-      referenceAt = body.indexOf(' r="', referenceAt + 4)
-    }
-    const hasFormula = formulaAt !== -1 && formulaAt < rowEnd
-    if (!hasFormula && columnShiftSkipsRow(body, lastReference, rowEnd, affectsFrom)) continue
-    const full = body.slice(rowStart, rowEnd)
-    let row = full.replace(/(<row\b[^>]*?)\s+spans="[^"]*"/, (_match, start: string) => start)
-    row = row.replace(
-      /<c\b[^>]*?\br="([A-Z]{1,3})[0-9]+"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g,
-      (cell, letters: string) => {
-        const column = lettersToColumn(letters)
-        const moved = movePosition(column, shift)
-        if (moved === null) return ''
-        if (moved === column) return cell
-        return cell.replace(
-          /(<c\b[^>]*?\br=")[A-Z]{1,3}([0-9]+")/,
-          (_match, start: string, end: string) => `${start}${columnToLetters(moved)}${end}`,
-        )
-      },
-    )
-    row = transformFormulas(row, sheetName, shift, 'column')
-    if (row === full) continue
-    parts.push(body.slice(cursor, openMatch.index), row)
-    cursor = rowEnd
-  }
-  // Full identity: hand back the original string so downstream regex passes
-  // never flatten a rope into one more full-size generation.
-  if (parts.length === 0 && prefix === originalPrefix && suffix === originalSuffix) return xml
-  const transformedBody = parts.length === 0 ? body : parts.join('') + body.slice(cursor)
-  return `${prefix}${transformedBody}${suffix}`
-}
-
-/// True when a column shift provably cannot alter the formula-free row whose
-/// rightmost ' r="' occurrence starts at lastReference: that reference is
-/// left of every shifted column. Works on the parent string with index
-/// arithmetic so a skipped row allocates nothing. Conservative — any doubt
-/// returns false and the row takes the full transform.
-function columnShiftSkipsRow(
-  body: string,
-  lastReference: number,
-  end: number,
-  affectsFrom: number,
-): boolean {
-  // No reference at all: a row with no addressed cells.
-  if (lastReference === -1) return true
-  let index = lastReference + 4
-  let column = 0
-  let sawLetter = false
-  while (index < end) {
-    const code = body.charCodeAt(index)
-    if (code < 65 || code > 90) break
-    column = column * 26 + (code - 64)
-    sawLetter = true
-    index += 1
-  }
-  // Letterless r= is the row's own number attribute: a row with no cells.
-  if (!sawLetter) return true
-  return column - 1 < affectsFrom
-}
-
-function transformSheetColumns(xml: string, shift: Shift): string {
-  // Row span hints go stale after a column shift; Excel rebuilds them.
-  let result = xml.replace(/(<row\b[^>]*?)\s+spans="[^"]*"/g, (_m, prefix: string) => prefix)
-  result = result.replace(
-    /<c\b[^>]*?\br="([A-Z]{1,3})[0-9]+"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g,
-    (full, letters: string) => {
-      const moved = movePosition(lettersToColumn(letters), shift)
+  if (!data) return applyPatches(xml, worksheetPatches)
+  const patches: XmlPatch[] = []
+  for (const { row } of worksheetRowPositions(data)) {
+    if (boundary !== undefined && canonicalRowBeforeColumn(row.inner, boundary))
+      continue
+    const cells = rowCells(row)
+    const updated = rewriteRowCells(row, cells, (cell) => {
+      const address = cell.attributes.get('r')
+      const parts = /^([A-Z]{1,3})([0-9]+)$/.exec(address ?? '')
+      if (!parts) return moveCell(cell, address, address, sheetName, shift, 'column')
+      const column = lettersToColumn(parts[1]!)
+      const moved = movePosition(column, shift)
       if (moved === null) return ''
-      if (moved === lettersToColumn(letters)) return full
-      return full.replace(
-        /(<c\b[^>]*?\br=")[A-Z]{1,3}([0-9]+")/,
-        (_m, prefix: string, suffix: string) => `${prefix}${columnToLetters(moved)}${suffix}`,
-      )
-    },
-  )
-  return result
+      const movedAddress = moved === column ? address : columnToLetters(moved) + parts[2]
+      return moveCell(cell, address, movedAddress, sheetName, shift, 'column')
+    })
+    if (updated === row.xml) continue
+    const opening = omitWorksheetTagAttributes(row.opening, ['spans'])
+    patches.push(patchElement(row, opening + updated.slice(row.opening.length)))
+  }
+  if (patches.length) {
+    worksheetPatches.push(patchElement(data, withBody(data, replaceInOrder(data.inner, patches))))
+  }
+  return applyPatches(xml, worksheetPatches)
 }
 
-function transformColDefinitions(xml: string, shift: Shift): string {
-  // Attribute order carries no meaning in XML, so read min/max by name rather
-  // than assuming min comes first: the old pattern only matched the schema
-  // order, and a <col> written max-before-min was left unshifted, stranding
-  // its width on the wrong columns after an insert or delete.
-  return xml.replace(/<col\b([^>]*?)\/>/g, (full, attributes: string) => {
-    const min = readPositiveInteger(readTagAttribute(attributes, 'min'))
-    const max = readPositiveInteger(readTagAttribute(attributes, 'max'))
-    if (min === undefined || max === undefined) return full
+function worksheetGridBeforeColumn(xml: string, boundary: number): boolean {
+  if (FORMULA_TAG.test(xml) || /<(?:[^\s<>/:]+:)?col(?=[\s/>])/.test(xml)) return false
+  let address = xml.indexOf(' r="')
+  while (address !== -1) {
+    let column = 0
+    for (let index = address + 4; index < xml.length; index += 1) {
+      const code = xml.charCodeAt(index)
+      if (code < 65 || code > 90) break
+      column = column * 26 + code - 64
+      if (column > boundary) return false
+    }
+    address = xml.indexOf(' r="', address + 4)
+  }
+  // Every real cell must have been covered by the address scan above.
+  // Namesakes in an extension can only make this check more conservative.
+  return !/<(?:[^\s<>/:]+:)?c(?=[\s/>])(?! r="[A-Z]{1,3}[0-9]+")/.test(xml)
+}
+
+// Only skip a row when its entire body consists of simple value cells to
+// the left of the shift. Formulas, aliases, and richer markup fall through.
+const SIMPLE_VALUE_CELL =
+  /\s*<c r="([A-Z]{1,3})[1-9][0-9]*"(?: s="[0-9]+")?(?: t="[A-Za-z]+")?(?:\/>|><v>[^<]*<\/v><\/c>)/y
+
+function canonicalRowBeforeColumn(body: string, boundary: number): boolean {
+  let end = 0
+  SIMPLE_VALUE_CELL.lastIndex = 0
+  while (end < body.length) {
+    const matched = SIMPLE_VALUE_CELL.exec(body)
+    if (!matched) return body.slice(end).trim() === ''
+    if (lettersToColumn(matched[1]!) >= boundary) return false
+    end = SIMPLE_VALUE_CELL.lastIndex
+  }
+  return true
+}
+
+function moveCell(
+  cell: ScopedElement,
+  address: string | undefined,
+  movedAddress: string | undefined,
+  sheetName: string,
+  shift: Shift,
+  axis: Axis,
+): string {
+  const formula = cellFormula(cell)
+  const updated = formula
+    ? rewriteCellFormulaMarkup(cell, formula, shiftCellFormula(formula, sheetName, shift, axis))
+    : cell.xml
+  return movedAddress === undefined || movedAddress === address
+    ? updated
+    : updateWorksheetTagAttribute(cell.opening, 'r', movedAddress) +
+        updated.slice(cell.opening.length)
+}
+
+function transformColDefinitions(section: ScopedElement, shift: Shift): string {
+  const patches: XmlPatch[] = []
+  for (const col of scopedChildren(section)) {
+    if (!isElement(col, 'col', section.namespace)) continue
+    const min = readPositiveInteger(col.attributes.get('min'))
+    const max = readPositiveInteger(col.attributes.get('max'))
+    if (min === undefined || max === undefined) continue
     const moved = moveRange(min - 1, max - 1, shift)
-    if (moved === null) return ''
-    return setTagAttribute(
-      setTagAttribute(full, 'min', String(moved.start + 1)),
+    if (moved === null) {
+      patches.push(patchElement(col, ''))
+      continue
+    }
+    if (moved.start === min - 1 && moved.end === max - 1) continue
+    const opening = updateWorksheetTagAttribute(
+      updateWorksheetTagAttribute(col.opening, 'min', String(moved.start + 1)),
       'max',
       String(moved.end + 1),
     )
-  })
-}
-
-// A self-closing shared follower must not consume the next formula's closing tag.
-const CELL_FORMULA = /(<f(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(?<!\/)>)([\s\S]*?)(<\/f>)/g
-
-/// Rewrites `<f>` bodies plus shared/array formula `ref` attributes, and the
-/// `<formula>`/`<formula1>`/`<formula2>` bodies of conditional formatting and
-/// data validation rules.
-function transformFormulas(xml: string, sheetName: string, shift: Shift, axis: Axis): string {
-  let result = xml.replace(
-    CELL_FORMULA,
-    (_full, opening: string, body: string, closing: string) => {
-      const rewritten = escapeXmlText(
-        shiftFormulaText(decodeEntities(body), sheetName, shift, axis),
-      )
-      const rawRef = readWorksheetTagAttribute(opening, 'ref')
-      if (rawRef !== undefined) {
-        const ref = decodeEntities(rawRef)
-        // Only wholesale moves of a shared or array anchor are safe.
-        if (shift.swap && axis === 'row') assertSwapKeepsAnchorIntact(ref, shift.swap)
-        const moved = moveRefRange(ref, shift, axis)
-        if (moved === null) {
-          throw new StructuralShiftError('Deletion would remove a shared formula anchor — aborted.')
-        }
-        if (moved !== ref) opening = updateWorksheetTagAttribute(opening, 'ref', moved)
-      }
-      return opening + rewritten + closing
-    },
-  )
-  result = result.replace(
-    /<(formula[12]?)>([\s\S]*?)<\/\1>/g,
-    (_full, tag: string, body: string) =>
-      `<${tag}>${escapeXmlText(shiftFormulaText(decodeEntities(body), sheetName, shift, axis))}</${tag}>`,
-  )
-  return result
-}
-
-/// Shifts merges and range-scoped feature elements. Elements whose every
-/// range is deleted are removed outright.
-function transformRangedFeatures(xml: string, shift: Shift, axis: Axis): string {
-  let result = xml.replace(/<mergeCell\b[^>]*\bref="([^"]+)"[^>]*\/>/g, (full, ref: string) => {
-    const moved = moveRefRange(ref, shift, axis)
-    return moved === null ? '' : full.replace(/ref="[^"]+"/, () => `ref="${moved}"`)
-  })
-  result = result.replace(
-    /<mergeCells\b[^>]*>([\s\S]*?)<\/mergeCells>|<mergeCells\b[^>]*\/>/g,
-    (full, inner: string | undefined) => {
-      const count = ((inner ?? '').match(/<mergeCell\b/g) ?? []).length
-      if (count === 0) return ''
-      return full.replace(
-        /(<mergeCells\b[^>]*\bcount=")[0-9]+(")/,
-        (_m, prefix: string, suffix: string) => `${prefix}${count}${suffix}`,
-      )
-    },
-  )
-  result = result.replace(
-    /<autoFilter\b[^>]*\/>|<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/g,
-    (element) => shiftAutoFilterCriteria(element, shift, axis),
-  )
-  return result
-}
-
-/// The worksheet extension list has its own formula dialects, including x14 DV.
-export function rewriteWorksheetCore(xml: string, rewrite: (fragment: string) => string): string {
-  const extension = xml.includes('extLst') && findRootChild(xml, 'worksheet', 'extLst')
-  return extension
-    ? rewrite(xml.slice(0, extension.start)) +
-        xml.slice(extension.start, extension.end) +
-        rewrite(xml.slice(extension.end))
-    : rewrite(xml)
-}
-
-function rewriteWorksheetSections(
-  xml: string,
-  names: readonly string[],
-  rewrite: (element: ChildElement, name: string) => string,
-): string {
-  const chunks: string[] = []
-  let start = 0
-  for (const section of rootChildren(xml, 'worksheet')) {
-    if (!names.includes(section.name)) continue
-    const [element] = childElements(xml.slice(section.start, section.end))
-    if (!element) continue
-    const updated = rewrite(element, section.name)
-    if (updated === element.xml) continue
-    chunks.push(xml.slice(start, section.start), updated)
-    start = section.end
+    patches.push(patchElement(col, opening + col.xml.slice(col.opening.length)))
   }
-  if (!chunks.length) return xml
-  chunks.push(xml.slice(start))
-  return chunks.join('')
+  if (!patches.length) return section.xml
+  const body = replaceInOrder(section.inner, patches)
+  return body.trim() ? withBody(section, body) : ''
+}
+
+const FORMULA_TAG = /<(?:[^\s<>/:]+:)?f(?=[\s/>])/
+
+function rowCells(row: ScopedElement): ScopedElement[] {
+  return scopedChildren(row).filter((cell) => isElement(cell, 'c', row.namespace))
+}
+
+function cellFormula(cell: ScopedElement): ScopedElement | undefined {
+  if (!FORMULA_TAG.test(cell.inner)) return undefined
+  return scopedChildren(cell).find((child) => isElement(child, 'f', cell.namespace))
+}
+
+function rewriteCellFormulaMarkup(
+  cell: ScopedElement,
+  formula: ScopedElement,
+  updated: string,
+): string {
+  if (updated === formula.xml) return cell.xml
+  return withBody(
+    cell,
+    cell.inner.slice(0, formula.start) +
+      updated +
+      cell.inner.slice(formula.start + formula.xml.length),
+  )
+}
+
+function rewriteRowCells(
+  row: ScopedElement,
+  cells: ScopedElement[],
+  rewrite: (cell: ScopedElement) => string,
+): string {
+  const patches: XmlPatch[] = []
+  for (const cell of cells) {
+    const updated = rewrite(cell)
+    if (updated !== cell.xml) patches.push(patchElement(cell, updated))
+  }
+  return patches.length ? withBody(row, replaceInOrder(row.inner, patches)) : row.xml
+}
+
+function replaceInOrder(xml: string, patches: XmlPatch[]): string {
+  const parts: string[] = []
+  let cursor = 0
+  for (const patch of patches) {
+    parts.push(xml.slice(cursor, patch.start), patch.xml)
+    cursor = patch.start + patch.length
+  }
+  return parts.join('') + xml.slice(cursor)
+}
+
+function replaceGridRows(xml: string, data: ScopedElement, patches: XmlPatch[]): string {
+  if (!patches.length) return xml
+  return applyPatches(xml, [
+    patchElement(data, withBody(data, replaceInOrder(data.inner, patches))),
+  ])
+}
+
+export function rewriteWorksheetCellFormulas(
+  xml: string,
+  rewrite: (formula: string) => string,
+): string {
+  if (!FORMULA_TAG.test(xml)) return xml
+  const data = worksheetData(xml)
+  if (!data) return xml
+  const patches: XmlPatch[] = []
+  for (const { row } of worksheetRowPositions(data)) {
+    if (!FORMULA_TAG.test(row.inner)) continue
+    const updated = rewriteRowCells(row, rowCells(row), (cell) => {
+      const formula = cellFormula(cell)
+      if (!formula?.inner) return cell.xml
+      const text = elementText(formula.inner)
+      const moved = rewrite(text)
+      return moved === text
+        ? cell.xml
+        : rewriteCellFormulaMarkup(cell, formula, withBody(formula, escapeXmlText(moved)))
+    })
+    if (updated !== row.xml) patches.push(patchElement(row, updated))
+  }
+  return replaceGridRows(xml, data, patches)
+}
+
+function shiftCellFormula(
+  formula: ScopedElement,
+  sheetName: string,
+  shift: Shift,
+  axis: Axis,
+): string {
+  if (formula.xml === formula.opening) return formula.xml
+  const text = elementText(formula.inner)
+  const rewritten = shiftFormulaText(text, sheetName, shift, axis)
+  const body =
+    rewritten === text && /<!\[CDATA\[|<!--/.test(formula.inner)
+      ? formula.xml
+      : withBody(formula, escapeXmlText(rewritten))
+  const ref = formula.attributes.get('ref')
+  if (ref === undefined) return body
+  // Only wholesale moves of a shared or array anchor are safe.
+  if (shift.swap && axis === 'row') assertSwapKeepsAnchorIntact(ref, shift.swap)
+  const moved = moveRefRange(ref, shift, axis)
+  if (moved === null) {
+    throw new StructuralShiftError('Deletion would remove a shared formula anchor — aborted.')
+  }
+  return moved === ref
+    ? body
+    : updateWorksheetTagAttribute(formula.opening, 'ref', escapeXmlAttribute(moved)) +
+        body.slice(formula.opening.length)
+}
+
+function transformWorksheetAutoFilters(xml: string, shift: Shift, axis: Axis): string {
+  if (!xml.includes('autoFilter')) return xml
+  const filter = worksheetChildren(xml).find((child) => child.local === 'autoFilter')
+  if (!filter) return xml
+  const replacement = shiftAutoFilterCriteria(filter, shift, axis)
+  return replacement === filter.xml ? xml : applyPatches(xml, [patchElement(filter, replacement)])
 }
 
 function rewriteRangeSection(
-  element: ChildElement,
+  element: ScopedElement,
   entryName: string,
   rewriteOpening: (opening: string) => string | null,
-  updateCount = false,
 ): string {
   let body = element.inner
-  let count = 0
-  for (const child of childElements(element.inner).reverse()) {
-    if (child.name.slice(child.name.lastIndexOf(':') + 1) !== entryName) continue
+  const children = scopedChildren(element).filter(child => isElement(child, entryName, element.namespace))
+  for (const child of children.reverse()) {
     const opening = rewriteOpening(child.opening)
-    if (opening !== null) count += 1
     if (opening === child.opening) continue
     const replacement = opening === null ? '' : opening + child.xml.slice(child.opening.length)
     body = body.slice(0, child.start) + replacement + body.slice(child.start + child.xml.length)
   }
   if (body === element.inner) return element.xml
   if (!body.trim()) return ''
-  const opening = updateCount
-    ? updateWorksheetTagAttribute(element.opening, 'count', String(count))
-    : element.opening
-  return opening + body + element.xml.slice(element.opening.length + element.inner.length)
+  return withBody(element, body)
 }
 
 export function rewriteWorksheetHyperlinks(
@@ -1900,24 +2011,39 @@ export function rewriteWorksheetHyperlinks(
   rewriteReference?: (ref: string) => string | null,
 ): string {
   if (!xml.includes('hyperlinks')) return xml
-  return rewriteWorksheetSections(xml, ['hyperlinks'], (section) =>
-    rewriteRangeSection(section, 'hyperlink', (opening) => {
-      if (rewriteReference) {
-        const anchor = rewriteRangeAttribute(opening, 'ref', rewriteReference)
-        if (anchor === null) return null
-        opening = anchor
+  const section = worksheetChildren(xml).find((child) => child.local === 'hyperlinks')
+  if (!section) return xml
+  const root = readRootStartTag(xml)
+  let body = section.inner
+  for (const link of scopedChildren(section).reverse()) {
+    if (!isElement(link, 'hyperlink', section.namespace)) continue
+    const ref = link.attributes.get('ref')
+    const nextRef = ref && rewriteReference ? rewriteReference(ref) : ref
+    const location = link.attributes.get('location')
+    const external = readRelationshipId(link.opening, section.opening, root) !== undefined
+    const nextLocation = nextRef !== null && location !== undefined && !external
+      ? rewriteLocation(location, nextRef)
+      : location
+    let replacement = link.xml
+    if (nextRef === null || nextLocation === null) {
+      replacement = ''
+    } else {
+      let opening = link.opening
+      if (nextRef !== undefined && nextRef !== ref) {
+        opening = updateWorksheetTagAttribute(opening, 'ref', escapeXmlAttribute(nextRef))
       }
-      const raw = readWorksheetTagAttribute(opening, 'location')
-      if (raw === undefined || readWorksheetTagAttribute(opening, 'r:id') !== undefined)
-        return opening
-      const location = decodeEntities(raw)
-      const moved = rewriteLocation(location, readWorksheetTagAttribute(opening, 'ref'))
-      if (moved === null) return null
-      return moved === location
-        ? opening
-        : updateWorksheetTagAttribute(opening, 'location', escapeXmlAttribute(moved))
-    }),
-  )
+      if (nextLocation !== undefined && nextLocation !== location) {
+        opening = updateWorksheetTagAttribute(opening, 'location', escapeXmlAttribute(nextLocation))
+      }
+      replacement = opening + link.xml.slice(link.opening.length)
+    }
+    if (replacement !== link.xml) {
+      body = body.slice(0, link.start) + replacement + body.slice(link.start + link.xml.length)
+    }
+  }
+  if (body === section.inner) return xml
+  const replacement = body.trim() ? withBody(section, body) : ''
+  return applyPatches(xml, [patchElement(section, replacement)])
 }
 
 function rewriteRangeAttribute(
@@ -1944,76 +2070,65 @@ function shiftSqref(sqref: string, moveRef: (ref: string) => string | null): str
     : moved.join(' ')
 }
 
-function shiftWorksheetRuleRanges(xml: string, moveRef: (ref: string) => string | null): string {
-  if (!/protectedRanges|conditionalFormatting|dataValidations/.test(xml)) return xml
-  const shiftOpening = (opening: string) =>
-    rewriteRangeAttribute(opening, 'sqref', (sqref) => shiftSqref(sqref, moveRef))
-  return rewriteWorksheetSections(
-    xml,
-    ['conditionalFormatting', 'dataValidations', 'protectedRanges'],
-    (element, name) => {
-      if (name === 'protectedRanges')
-        return rewriteRangeSection(element, 'protectedRange', shiftOpening)
-      if (name === 'dataValidations')
-        return rewriteRangeSection(element, 'dataValidation', shiftOpening, true)
-      const opening = shiftOpening(element.opening)
-      return opening === null ? '' : opening + element.xml.slice(element.opening.length)
-    },
+function shiftProtectedRanges(xml: string, moveRef: (ref: string) => string | null): string {
+  if (!xml.includes('protectedRanges')) return xml
+  const ranges = worksheetChildren(xml).find(child => child.local === 'protectedRanges')
+  if (!ranges) return xml
+  const moved = rewriteRangeSection(ranges, 'protectedRange', opening =>
+    rewriteRangeAttribute(opening, 'sqref', sqref => shiftSqref(sqref, moveRef)),
   )
+  return moved === ranges.xml ? xml : applyPatches(xml, [patchElement(ranges, moved)])
 }
 
 function shiftWorksheetPrintLayout(xml: string, shift: Shift, axis: Axis): string {
-  if (xml.includes('dimension')) {
-    const dimension = findRootChild(xml, 'worksheet', 'dimension')
-    if (dimension) {
-      const [element] = childElements(xml.slice(dimension.start, dimension.end))
-      const rawRef = element && readWorksheetTagAttribute(element.opening, 'ref')
-      if (element && rawRef !== undefined) {
-        const ref = decodeEntities(rawRef)
-        const moved = moveRefRange(ref, shift, axis)
-        if (moved !== null && moved !== ref) {
-          const opening = updateWorksheetTagAttribute(element.opening, 'ref', moved)
-          xml =
-            xml.slice(0, dimension.start) +
-            opening +
-            xml.slice(dimension.start + element.opening.length)
-        }
-      }
+  if (!/dimension|rowBreaks|colBreaks/.test(xml)) return xml
+  const children = worksheetChildren(xml)
+  const patches: XmlPatch[] = []
+  const dimension = children.find((child) => child.local === 'dimension')
+  const ref = dimension?.attributes.get('ref')
+  if (dimension && ref !== undefined) {
+    const moved = moveRefRange(ref, shift, axis)
+    if (moved !== ref) {
+      const replacement = moved === null
+        ? ''
+        : updateWorksheetTagAttribute(dimension.opening, 'ref', moved) +
+          dimension.xml.slice(dimension.opening.length)
+      patches.push(patchElement(dimension, replacement))
     }
   }
-  xml = shiftPageBreaks(xml, 'rowBreaks', shift, axis === 'row', MAX_GRID_ROWS, MAX_GRID_COLUMNS)
-  return shiftPageBreaks(
-    xml,
-    'colBreaks',
-    shift,
-    axis === 'column',
-    MAX_GRID_COLUMNS,
-    MAX_GRID_ROWS,
-  )
+
+  for (const name of ['rowBreaks', 'colBreaks']) {
+    const block = children.find((child) => child.local === name)
+    if (!block) continue
+    const rows = name === 'rowBreaks'
+    const replacement = shiftPageBreaks(
+      block,
+      shift,
+      axis === (rows ? 'row' : 'column'),
+      rows ? MAX_GRID_ROWS : MAX_GRID_COLUMNS,
+      rows ? MAX_GRID_COLUMNS : MAX_GRID_ROWS,
+    )
+    if (replacement !== block.xml) patches.push(patchElement(block, replacement))
+  }
+  return applyPatches(xml, patches)
 }
 
 function shiftPageBreaks(
-  xml: string,
-  name: 'rowBreaks' | 'colBreaks',
+  block: ScopedElement,
   shift: Shift,
   alongAxis: boolean,
   axisLength: number,
   acrossLength: number,
 ): string {
-  if (!xml.includes(name)) return xml
-  const position = findRootChild(xml, 'worksheet', name)
-  if (!position) return xml
-  const [block] = childElements(xml.slice(position.start, position.end))
-  if (!block) return xml
   let body = block.inner
   let count = 0
   let manual = 0
-  for (const child of childElements(block.inner).reverse()) {
-    if (child.name.slice(child.name.lastIndexOf(':') + 1) !== 'brk') continue
-    const opening = shiftBreakOpening(child.opening, shift, alongAxis, axisLength, acrossLength)
+  for (const child of scopedChildren(block).reverse()) {
+    if (!isElement(child, 'brk', block.namespace)) continue
+    const opening = shiftBreakOpening(child, shift, alongAxis, axisLength, acrossLength)
     if (opening !== null) {
       count += 1
-      const flag = readWorksheetTagAttribute(opening, 'man')
+      const flag = child.attributes.get('man')
       if (flag === '1' || flag === 'true') manual += 1
     }
     if (opening !== child.opening) {
@@ -2021,25 +2136,26 @@ function shiftPageBreaks(
       body = body.slice(0, child.start) + replacement + body.slice(child.start + child.xml.length)
     }
   }
-  if (body === block.inner) return xml
+  if (body === block.inner) return block.xml
   let replacement = ''
   if (count > 0 || body.trim() !== '') {
     const countTag = updateWorksheetTagAttribute(block.opening, 'count', String(count))
     const opening = updateWorksheetTagAttribute(countTag, 'manualBreakCount', String(manual))
     replacement = opening + body + block.xml.slice(block.opening.length + block.inner.length)
   }
-  return xml.slice(0, position.start) + replacement + xml.slice(position.end)
+  return replacement
 }
 
 function shiftBreakOpening(
-  opening: string,
+  element: ScopedElement,
   shift: Shift,
   alongAxis: boolean,
   axisLength: number,
   acrossLength: number,
 ): string | null {
+  let opening = element.opening
   const number = (name: string, fallback: number) => {
-    const raw = readWorksheetTagAttribute(opening, name)
+    const raw = element.attributes.get(name)
     return raw === undefined ? fallback : /^\d+$/.test(raw) ? Number(raw) : NaN
   }
   // Break ids are zero-based positions before a row or column.
@@ -2074,32 +2190,28 @@ function shiftBreakOpening(
   return opening
 }
 
-function shiftAutoFilterCriteria(element: string, shift: Shift, axis: Axis): string {
-  const [filter] = childElements(element)
-  if (!filter) return element
-  const rawRef = readWorksheetTagAttribute(filter.opening, 'ref')
-  if (!rawRef) return element
-  const ref = decodeEntities(rawRef)
+function shiftAutoFilterCriteria(filter: ScopedElement, shift: Shift, axis: Axis): string {
+  const ref = filter.attributes.get('ref')
+  if (!ref) return filter.xml
   const moveRef = (value: string) => moveRefRange(value, shift, axis)
   const movedRef = moveRef(ref)
-  if (movedRef === null) return element
+  if (movedRef === null) return filter.xml
   const opening =
     movedRef === ref
       ? filter.opening
       : updateWorksheetTagAttribute(filter.opening, 'ref', escapeXmlAttribute(movedRef))
-  const closing = element.slice(filter.opening.length + filter.inner.length)
+  const closing = filter.xml.slice(filter.opening.length + filter.inner.length)
 
   const from = refFirstColumn(ref)
   const to = refFirstColumn(movedRef)
   if (from === null || to === null) return opening + filter.inner + closing
   let body = filter.inner
-  for (const child of childElements(filter.inner).reverse()) {
+  for (const child of scopedChildren(filter).reverse()) {
+    if (child.namespace !== filter.namespace) continue
     let replacement: string
-    if (child.name === 'filterColumn' && axis === 'column') {
-      const rawId = readWorksheetTagAttribute(child.opening, 'colId')
-      if (rawId === undefined) continue
-      const id = decodeEntities(rawId)
-      if (!/^[0-9]+$/.test(id)) continue
+    if (child.local === 'filterColumn' && axis === 'column') {
+      const id = child.attributes.get('colId')
+      if (id === undefined || !/^[0-9]+$/.test(id)) continue
       const colId = Number(id)
       const column = movePosition(from + colId, shift)
       if (column !== null && column - to === colId) continue
@@ -2108,7 +2220,7 @@ function shiftAutoFilterCriteria(element: string, shift: Shift, axis: Axis): str
           ? ''
           : updateWorksheetTagAttribute(child.opening, 'colId', String(column - to)) +
             child.xml.slice(child.opening.length)
-    } else if (child.name === 'sortState') {
+    } else if (child.local === 'sortState') {
       replacement =
         child.xml !== child.opening && !child.inner.trim()
           ? ''
@@ -2178,26 +2290,34 @@ function moveArea(area: CellArea, shift: Shift, axis: Axis): CellArea | null {
     : { ...area, startColumn: moved.start, endColumn: moved.end }
 }
 
+export function findPivotTableLocation(xml: string): ScopedElement | undefined {
+  const root = spreadsheetPartRoot(xml)
+  if (root?.local !== 'pivotTableDefinition') return undefined
+  const location = scopedChildren(root).find((child) =>
+    isElement(child, 'location', root.namespace),
+  )
+  return location && { ...location, start: root.start + root.opening.length + location.start }
+}
+
 /// A pivot body and its report filters can move together as one block. The
 /// layout offsets and item records are relative to the body and cannot
 /// describe cells that were deleted, rearranged, or pulled apart.
 export function shiftPivotTablePart(xml: string, ops: readonly StructuralOp[]): string {
-  const location = findRootChild(xml, 'pivotTableDefinition', 'location')
-  const tag =
-    location && /^(?:[^>"']|"[^"]*"|'[^']*')*>/.exec(xml.slice(location.start, location.end))?.[0]
-  const reference = tag ? readWorksheetTagAttribute(tag, 'ref') : undefined
-  if (!location || !tag || reference === undefined) {
+  const location = findPivotTableLocation(xml)
+  const reference = location?.attributes.get('ref')
+  if (!location || reference === undefined) {
     throw new StructuralShiftError('A pivot table has no output reference.')
   }
-  const ref = decodeXmlText(reference)
+  const tag = location.opening
+  const ref = reference
   const [first = '', last = first, extra] = ref.split(':')
   const start = parseA1(first)
   const end = parseA1(last)
   if (!start || !end || extra !== undefined) {
     throw new StructuralShiftError('A pivot table has an invalid output reference.')
   }
-  const pageRows = Number(readWorksheetTagAttribute(tag, 'rowPageCount') ?? 0)
-  const pageColumns = Number(readWorksheetTagAttribute(tag, 'colPageCount') ?? 1)
+  const pageRows = Number(location.attributes.get('rowPageCount') ?? 0)
+  const pageColumns = Number(location.attributes.get('colPageCount') ?? 1)
   // The report filters sit above the body with a blank separator row and
   // occupy pairs of caption/value cells from the body's leftmost column.
   const filterTop = pageRows > 0 ? start.row - pageRows - 1 : start.row
@@ -2323,6 +2443,41 @@ export function* formulaCodeSegments(formula: string) {
   yield { code: formula.slice(start), literal: '' }
 }
 
+/// Numeric workbook qualifiers in SpreadsheetML formulas, with the digit span
+/// so a link can be renumbered without changing the rest of the reference.
+export function* externalWorkbookReferences(formula: string) {
+  const markers = /["'[]/g
+  const bareQualifier = /\[(\d+)\][^\s!(),;"'^&*<>=+\-*/[\]]*!/y
+  for (let match = markers.exec(formula); match; match = markers.exec(formula)) {
+    const { index } = match
+    const marker = match[0]
+    if (marker === '"') {
+      markers.lastIndex = formulaQuoteEnd(formula, index, marker)
+      continue
+    }
+    if (marker === "'") {
+      const end = formulaQuoteEnd(formula, index, marker)
+      markers.lastIndex = end
+      if (formula[end] !== '!') continue
+      const digits = /^'\[(\d+)\]/.exec(formula.slice(index, end))?.[1]
+      if (digits) yield { index: Number(digits), start: index + 2, end: index + 2 + digits.length }
+      continue
+    }
+    // A table identifier followed by brackets, or a nested bracket group,
+    // belongs to a structured reference. Skip its contents as a unit.
+    bareQualifier.lastIndex = index
+    const digits = /[\p{L}\p{N}_.\\\]]/u.test(formula[index - 1] ?? '')
+      ? undefined
+      : bareQualifier.exec(formula)?.[1]
+    if (digits) {
+      markers.lastIndex = bareQualifier.lastIndex
+      yield { index: Number(digits), start: index + 1, end: index + 1 + digits.length }
+    } else {
+      markers.lastIndex = formulaBracketEnd(formula, index)
+    }
+  }
+}
+
 /// Shifts A1 references in a formula, preserving `$` markers and other
 /// sheets' qualified references. String literals are left untouched. A
 /// reference fully inside a deleted range aborts (Excel would emit #REF!).
@@ -2367,24 +2522,27 @@ function shiftFormulaSegment(
   )
 }
 
-function shiftReferenceToken(token: string, shift: Shift, axis: Axis): string | null {
+function shiftReferenceToken(
+  token: string,
+  shift: Shift,
+  axis: Axis,
+  clipToGrid = false,
+): string | null {
+  const limit = axis === 'column' ? MAX_GRID_COLUMNS : MAX_GRID_ROWS
   const wholeColumn = /^(\$?)([A-Z]{1,3}):(\$?)([A-Z]{1,3})$/.exec(token)
-  if (wholeColumn) {
-    if (axis === 'row') return token
-    const moved = moveRange(
-      lettersToColumn(wholeColumn[2] ?? 'A'),
-      lettersToColumn(wholeColumn[4] ?? 'A'),
-      shift,
-    )
-    if (moved === null) return null
-    return `${wholeColumn[1]}${columnToLetters(moved.start)}:${wholeColumn[3]}${columnToLetters(moved.end)}`
-  }
-  const wholeRow = /^(\$?)([0-9]+):(\$?)([0-9]+)$/.exec(token)
-  if (wholeRow) {
-    if (axis === 'column') return token
-    const moved = moveRange(Number(wholeRow[2]) - 1, Number(wholeRow[4]) - 1, shift)
-    if (moved === null) return null
-    return `${wholeRow[1]}${moved.start + 1}:${wholeRow[3]}${moved.end + 1}`
+  const whole = wholeColumn ?? /^(\$?)([0-9]+):(\$?)([0-9]+)$/.exec(token)
+  if (whole?.[2] && whole[4]) {
+    const rangeAxis = wholeColumn ? 'column' : 'row'
+    if (axis !== rangeAxis) return token
+    const parse = wholeColumn ? lettersToColumn : (label: string) => Number(label) - 1
+    const format = wholeColumn ? columnToLetters : (index: number) => String(index + 1)
+    const start = parse(whole[2])
+    const end = parse(whole[4])
+    if (clipToGrid && (start < 0 || end >= limit || start > end)) return null
+    const moved = moveRange(start, end, shift)
+    if (moved === null || (clipToGrid && moved.start >= limit)) return null
+    const movedEnd = clipToGrid ? Math.min(moved.end, limit - 1) : moved.end
+    return `${whole[1]}${format(moved.start)}:${whole[3]}${format(movedEnd)}`
   }
   const parts = token.split(':')
   const cells = parts.map((part) => /^(\$?)([A-Z]{1,3})(\$?)([0-9]+)$/.exec(part))
@@ -2399,22 +2557,26 @@ function shiftReferenceToken(token: string, shift: Shift, axis: Axis): string | 
   if (!first) return token
   if (parsed.length === 1) {
     const moved = movePosition(axis === 'row' ? first.row : first.column, shift)
-    if (moved === null) return null
+    if (moved === null || (clipToGrid && moved >= limit)) return null
     const row = axis === 'row' ? moved : first.row
     const column = axis === 'column' ? moved : first.column
     return `${first.colDollar}${columnToLetters(column)}${first.rowDollar}${row + 1}`
   }
   const second = parsed[1]
   if (!second) return token
-  const moved =
-    axis === 'row'
-      ? moveRange(first.row, second.row, shift)
-      : moveRange(first.column, second.column, shift)
-  if (moved === null) return null
-  const startRow = axis === 'row' ? moved.start : first.row
-  const endRow = axis === 'row' ? moved.end : second.row
-  const startColumn = axis === 'column' ? moved.start : first.column
-  const endColumn = axis === 'column' ? moved.end : second.column
+  const rowStart = clipToGrid ? Math.min(first.row, second.row) : first.row
+  const rowEnd = clipToGrid ? Math.max(first.row, second.row) : second.row
+  const columnStart = clipToGrid ? Math.min(first.column, second.column) : first.column
+  const columnEnd = clipToGrid ? Math.max(first.column, second.column) : second.column
+  const moved = axis === 'row'
+    ? moveRange(rowStart, rowEnd, shift)
+    : moveRange(columnStart, columnEnd, shift)
+  if (moved === null || (clipToGrid && moved.start >= limit)) return null
+  const movedEnd = clipToGrid ? Math.min(moved.end, limit - 1) : moved.end
+  const startRow = axis === 'row' ? moved.start : rowStart
+  const endRow = axis === 'row' ? movedEnd : rowEnd
+  const startColumn = axis === 'column' ? moved.start : columnStart
+  const endColumn = axis === 'column' ? movedEnd : columnEnd
   return (
     `${first.colDollar}${columnToLetters(startColumn)}${first.rowDollar}${startRow + 1}` +
     `:${second.colDollar}${columnToLetters(endColumn)}${second.rowDollar}${endRow + 1}`
@@ -2480,6 +2642,60 @@ function formulaQuoteEnd(formula: string, start: number, quote: string): number 
     index += 1
   }
   return formula.length
+}
+
+function* structuredTableReferenceTokens(formula: string) {
+  const tokens = /["'[]|[\p{L}\p{N}_.\\]+/gu
+  for (let match = tokens.exec(formula); match; match = tokens.exec(formula)) {
+    const token = match[0]
+    const start = match.index
+    const end = tokens.lastIndex
+    if (token === '"' || token === "'") {
+      tokens.lastIndex = formulaQuoteEnd(formula, start, token)
+      continue
+    }
+    if (token === '[') {
+      tokens.lastIndex = formulaBracketEnd(formula, start)
+      continue
+    }
+    if (formula[end] !== '[' || formula[start - 1] === ']') continue
+    if (formula[start - 1] === '!') {
+      const qualifier = formula.slice(0, start)
+      if (
+        /\][\p{L}\p{N}_.\\]*!$/u.test(qualifier) ||
+        /'(?:[^']|'')*'!$/u.exec(qualifier)?.[0]?.includes('[')
+      )
+        continue
+    }
+    yield { token, start, end }
+  }
+}
+
+export function findStructuredTableReference(
+  formula: string,
+  tableNames: ReadonlySet<string>,
+): string | undefined {
+  if (!formula.includes('[')) return undefined
+  for (const { token } of structuredTableReferenceTokens(formula)) {
+    const name = token.toLowerCase()
+    if (tableNames.has(name)) return name
+  }
+  return undefined
+}
+
+export function renameStructuredTableReferences(
+  formula: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  let result = ''
+  let cursor = 0
+  for (const { token, start, end } of structuredTableReferenceTokens(formula)) {
+    const replacement = names.get(token.toLowerCase())
+    if (replacement === undefined || replacement === token) continue
+    result += formula.slice(cursor, start) + replacement
+    cursor = end
+  }
+  return result + formula.slice(cursor)
 }
 
 function translateSharedToken(token: string, rowDelta: number, columnDelta: number): string | null {

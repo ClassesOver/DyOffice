@@ -184,6 +184,7 @@ interface AiPanelProps {
   assistantAgents?: readonly AssistantParticipant[]
   extraSkills?: readonly AgentSkill[]
   mediaCapabilities?: {imageGeneration:boolean;mediaAnalysis:boolean}
+  supportsVision?: () => boolean
   onManageAgents?: () => void
   slides: RenderSlide[]
   current: number
@@ -300,6 +301,7 @@ export function AiPanel({
   assistantAgents,
   extraSkills,
   mediaCapabilities,
+  supportsVision,
   onManageAgents,
   slides,
   current,
@@ -1721,6 +1723,8 @@ export function AiPanel({
     return images
   }
 
+  const canSendSlideImage = () => supportsVision?.() ?? settingsSupportVision(settingsRef.current)
+
   /** Current slide rendered at pixelRatio 1 (vision-friendly size); null when rendering fails */
   /**
    * A rendered picture of the slide, when sending one is safe.
@@ -1821,6 +1825,8 @@ export function AiPanel({
     ])
     runStartedAtRef.current = Date.now()
     setBusy(true)
+    const screenshotPage = currentRef.current
+    const requestedShot = !!opts?.slideShot && canSendSlideImage()
     // Persist the user message (store display text + attachment metadata; loop.restore rebuilds model context on file reopen)
     persistMessage('user', shown, undefined, sentAtts, scope)
     return collectImageAttachments(sentAtts)
@@ -1828,17 +1834,7 @@ export function AiPanel({
         // AI Beautify sends the current slide's rendering along, so the model sees what it edits;
         // the note rides on the model instruction only — the chat bubble stays the localized preset text
         let modelInstruction = await withSkillBodies(instruction, sentSkills)
-        if (opts?.slideShot && settingsSupportVision(settingsRef.current)) {
-          const shot = await captureSlideShot(currentRef.current)
-          if (shot) {
-            images.push(shot)
-            modelInstruction += `\n\n(Attached image: the current rendering of this slide, slideIndex ${currentRef.current}. Use it to spot visual issues the element inventory can't show.)`
-          } else {
-            // said rather than omitted: a model told nothing assumes it has the
-            // rendering and reasons about text it cannot see
-            modelInstruction += `\n\n(${NO_SCREENSHOT_NOTE})`
-          }
-        }
+        const shot = requestedShot ? await captureSlideShot(screenshotPage) : null
         if (epoch !== conversationEpoch.current) return
         await onBeforeRunRef.current?.()
         if (epoch !== conversationEpoch.current) return
@@ -1846,6 +1842,16 @@ export function AiPanel({
         if (epoch !== conversationEpoch.current) return
         await beginHistoryBatch(epoch)
         if (epoch !== conversationEpoch.current) return
+        if (requestedShot && canSendSlideImage()) {
+          if (shot) {
+            images.push(shot)
+            modelInstruction += `\n\n(Attached image: the current rendering of this slide, slideIndex ${screenshotPage}. Use it to spot visual issues the element inventory can't show.)`
+          } else {
+            // said rather than omitted: a model told nothing assumes it has the
+            // rendering and reasons about text it cannot see
+            modelInstruction += `\n\n(${NO_SCREENSHOT_NOTE})`
+          }
+        }
         runStartingRef.current = false
         const draft = opts?.composerDraft
         recoverableDraftRef.current = sharedTransport && draft !== undefined
@@ -2054,7 +2060,7 @@ export function AiPanel({
       for (const page of capped) {
         checkingPage = page
         if (controller.signal.aborted) break
-        const useScreenshot = !forceGeometryOnly && settingsSupportVision(settingsRef.current)
+        const useScreenshot = !forceGeometryOnly && canSendSlideImage()
         const shot = useScreenshot ? await captureSlideShot(page) : null
         if (useScreenshot && !shot) {
           if (slidesRef.current[page]) lines.push(tGlobal('aiQcPageSkipped', { n: page + 1 }))
@@ -2074,15 +2080,16 @@ export function AiPanel({
             return id
           },
         }, async () => {
+          const screenshot = shot && canSendSlideImage() ? shot : null
           let result = await qcSlidePage({
             access,
             transport,
             pageIndex: page,
-            screenshot: shot,
+            screenshot,
             systemSuffix: aiLangDirective,
             signal: controller.signal,
           })
-          if (shot && result.error && isUnsupportedImageInputError(result.error)) {
+          if (screenshot && result.error && isUnsupportedImageInputError(result.error)) {
             forceGeometryOnly = true
             result = await qcSlidePage({
               access,

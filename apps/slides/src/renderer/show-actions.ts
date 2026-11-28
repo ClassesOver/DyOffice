@@ -15,6 +15,7 @@ import { t } from './i18n/locale'
  *  SlideShowView lifts it once the show is revealed (and on unmount, for early exits). */
 export function dropShowCurtain(): void {
   document.body.classList.add('show-curtain')
+  window.slidesApi?.requestShowFullScreen?.()
 }
 export function liftShowCurtain(): void {
   document.body.classList.remove('show-curtain')

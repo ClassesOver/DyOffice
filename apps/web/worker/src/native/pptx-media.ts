@@ -57,3 +57,30 @@ export function recordingOps(opened:OpenedPptx,input:SlidesRecordingCommand):Op[
     {op:'setAdvanceTime',target:{slide:slideIndex},ms:advanceMs},
   ])
 }
+import {AUDIO_EXTS,VIDEO_EXTS} from '../../../../slides/src/shared/media-kinds'
+import {audioFrame,videoFrame,videoSize} from '../../../../slides/src/main/video-size'
+import type {SlidesMediaInsert} from './pptx-session-host'
+
+export function mediaInsertOp(opened:OpenedPptx,input:SlidesMediaInsert):Op {
+  const {slide,kind,ext,bytes,name,fitWidthPx,centerPx}=input
+  const extensions:readonly string[]=kind==='video'?VIDEO_EXTS:kind==='audio'?AUDIO_EXTS:[]
+  if(!Number.isSafeInteger(slide)||slide<0||slide>=opened.deck.slides.length||!extensions.includes(ext)||
+    !(bytes instanceof Uint8Array)||bytes.byteLength<12||bytes.byteLength>MAX_PPTX_MEDIA_BYTES||
+    !Number.isInteger(fitWidthPx)||fitWidthPx<320||fitWidthPx>4096||
+    (name!==undefined&&(typeof name!=='string'||name.length>255||/[\u0000-\u001f\u007f]/u.test(name)))||
+    (centerPx!==undefined&&(!centerPx||![centerPx.x,centerPx.y].every(value=>Number.isFinite(value)&&Math.abs(value)<=100000))))throw Error('INVALID_MEDIA')
+  const tag=(offset:number,length:number)=>String.fromCharCode(...bytes.subarray(offset,offset+length))
+  const frameSync=bytes[0]===0xff&&(bytes[1]!&0xe0)===0xe0
+  const matches=ext==='wav'?tag(0,4)==='RIFF'&&tag(8,4)==='WAVE'
+    :ext==='avi'?tag(0,4)==='RIFF'&&tag(8,4)==='AVI '
+    :ext==='webm'?bytes[0]===0x1a&&bytes[1]===0x45&&bytes[2]===0xdf&&bytes[3]===0xa3
+    :ext==='mp3'?tag(0,3)==='ID3'||frameSync
+    :ext==='aac'?tag(0,4)==='ADIF'||frameSync
+    :ext==='ogg'?tag(0,4)==='OggS'
+    :tag(4,4)==='ftyp'||ext==='mov'&&['moov','mdat','wide'].includes(tag(4,4))
+  if(!matches)throw Error('INVALID_MEDIA')
+  const {cx,cy}=opened.deck.size,size={width:cx,height:cy},scale=cx/fitWidthPx
+  const center=centerPx?{x:centerPx.x*scale,y:centerPx.y*scale}:undefined
+  const offset=kind==='video'?videoFrame(size,videoSize(bytes,ext),center):audioFrame(size,center)
+  return {op:'addMedia',target:{slide},kind,ext,bytes,offset,...(name?{name}:{})}
+}

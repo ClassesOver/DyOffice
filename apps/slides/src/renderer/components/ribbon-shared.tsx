@@ -289,16 +289,24 @@ export interface Props {
   autoSave: boolean
   onAutoSaveChange: (on: boolean) => void
   onOpen: () => void
+  openAvailable?: boolean
   onSave: () => void
   onUndo: () => void
   onRedo: () => void
   onSaveAs: () => void
   saveDownload?: React.ReactNode
+  saveAsAvailable?: boolean
   /** Ask the model for a name, then open Save As with it prefilled */
   onNameWithAi: () => void
   /** Export as PDF (hidden slides skipped) */
   desktopMediaAvailable?: boolean
+  fileMediaAvailable?: boolean
+  model3dAvailable?: boolean
+  screenRecordingAvailable?: boolean
+  printAvailable?: boolean
+  videoExportAvailable?: boolean
   onExportPdf: () => void
+  searchablePdf?: {label:string;run:()=>void}
   onPrint: () => void
   /** Export as images (one PNG per page, hidden slides skipped) */
   onExportImages: () => void
@@ -638,6 +646,9 @@ export interface RibbonTabCtx extends Pick<
   | 'onInsertIcon'
   | 'onInsertImage'
   | 'desktopMediaAvailable'
+  | 'fileMediaAvailable'
+  | 'model3dAvailable'
+  | 'screenRecordingAvailable'
   | 'onInsertMedia'
   | 'onInsertModel3d'
   | 'onInsertSmartArt'

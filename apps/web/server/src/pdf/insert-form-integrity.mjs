@@ -1,9 +1,10 @@
-import {PDFArray,PDFDict,PDFName,PDFRef,PDFStream} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFName,PDFNumber,PDFRef,PDFStream} from '../../../../pdf/src/shared/pdf-lib.ts'
 import {createHash} from 'node:crypto'
 import {openEditablePdf} from './editable-document.mjs'
 import {assertPdfManagedStamps} from './stamps-job.mjs'
 import {fail} from './job-common.mjs'
 const name=PDFName.of
+const pageWidgets=(doc,page)=>(page?.node.Annots()?.asArray()??[]).map(ref=>doc.context.lookup(ref)).filter(dict=>dict instanceof PDFDict&&String(dict.lookup(name('Subtype')))==='/Widget')
 /** Protection checks for additive text and image operations. */
 export async function openPdfForInserts(bytes,{planning=false}={}){
  const doc=await openEditablePdf(bytes,{allowAcroForm:true}),acro=doc.catalog.lookup(name('AcroForm'))
@@ -25,8 +26,10 @@ export async function openPdfForInserts(bytes,{planning=false}={}){
  return doc
 }
 /** Resolve object numbers, dictionary ordering and page backrefs before comparing form state. */
-export function pdfInsertFormState(doc){
- const pages=doc.getPages(),pageRefs=new Map(pages.map((page,index)=>[String(page.ref),index])),stack=new Set(),fieldPaths=new Map();let visited=0
+export function pdfInsertFormState(doc,{ignoreAttachedWidgetRects=false,pages=doc.getPages()}={}){
+ const pageRefs=new Map(pages.flatMap((page,index)=>page?[[String(page.ref),index]]:[])),stack=new Set(),fieldPaths=new Map();let visited=0
+ const widgets=pages.map(page=>pageWidgets(doc,page))
+ const omitRects=ignoreAttachedWidgetRects?new Set(widgets.flat()):undefined
  const acro=doc.catalog.lookup(name('AcroForm'))
  function mapField(raw,path,depth=0){
   const field=doc.context.lookup(raw)
@@ -51,6 +54,16 @@ export function pdfInsertFormState(doc){
     const widget=String(value.lookup(name('Subtype')))==='/Widget',entries=[]
     for(const [key,item]of value.entries().sort(([a],[b])=>a.decodeText().localeCompare(b.decodeText()))){
      const k=key.decodeText()
+     if(k==='Rect'&&omitRects?.has(value))continue
+     if(k==='CO'&&value===acro){
+      const order=doc.context.lookup(item)
+      if(!(order instanceof PDFArray))fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
+      entries.push([k,order.asArray().map(ref=>{
+       const field=fieldPaths.get(doc.context.lookup(ref))
+       if(field===undefined)fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
+       return {field}
+      })]);continue
+     }
      if((field||widget)&&k==='Parent'){
       const parent=fieldPaths.get(doc.context.lookup(item));if(parent===undefined)fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
       entries.push([k,{field:parent}]);continue
@@ -66,7 +79,30 @@ export function pdfInsertFormState(doc){
   if(typeof value.asBytes==='function')return {bytes:Buffer.from(value.asBytes()).toString('hex')}
   return String(value)
  }
- const widgets=pages.map(page=>{const annots=page.node.Annots();return (annots?.asArray()??[]).map(ref=>doc.context.lookup(ref)).filter(dict=>dict instanceof PDFDict&&String(dict.lookup(name('Subtype')))==='/Widget').map(dict=>encode(dict,true))})
- return JSON.stringify({acro:encode(acro),widgets})
+ return JSON.stringify({acro:encode(acro),widgets:widgets.map(page=>page.map(dict=>encode(dict,true)))})
 }
-export function assertPdfInsertFormPreserved(before,after){if(pdfInsertFormState(before)!==pdfInsertFormState(after))fail('PDF_FORM_INSERT_INTEGRITY_FAILED')}
+export function assertPdfInsertFormPreserved(before,after,{restoreRoundedWidgetRects=false}={}){
+ const expected=pdfInsertFormState(before)
+ if(expected===pdfInsertFormState(after))return
+ const onlyRects={ignoreAttachedWidgetRects:true}
+ if(!restoreRoundedWidgetRects||pdfInsertFormState(before,onlyRects)!==pdfInsertFormState(after,onlyRects))fail('PDF_FORM_INSERT_INTEGRITY_FAILED')
+ const rectKey=name('Rect'),afterPages=after.getPages()
+ // PDFium serializes widget coordinates at single precision during a content rewrite.
+ for(const [index,page] of before.getPages().entries()){
+  const expectedWidgets=pageWidgets(before,page),actualWidgets=pageWidgets(after,afterPages[index])
+  for(const [offset,widget] of expectedWidgets.entries()){
+   const actual=actualWidgets[offset],from=widget.lookup(rectKey),to=actual.lookup(rectKey)
+   if(from===undefined&&to===undefined)continue
+   if(!(from instanceof PDFArray)||!(to instanceof PDFArray)||from.size()!==4||to.size()!==4)fail('PDF_FORM_INSERT_INTEGRITY_FAILED')
+   const coordinates=Array.from({length:4},(_,axis)=>{
+    const a=from.lookup(axis),b=to.lookup(axis)
+    if(!(a instanceof PDFNumber)||!(b instanceof PDFNumber))fail('PDF_FORM_INSERT_INTEGRITY_FAILED')
+    const original=a.asNumber(),current=b.asNumber()
+    if(![original,current].every(Number.isFinite)||Math.abs(original-current)>1e-7*Math.max(1,Math.abs(original)))fail('PDF_FORM_INSERT_INTEGRITY_FAILED')
+    return original
+   })
+   actual.set(rectKey,after.context.obj(coordinates))
+  }
+ }
+ if(expected!==pdfInsertFormState(after))fail('PDF_FORM_INSERT_INTEGRITY_FAILED')
+}

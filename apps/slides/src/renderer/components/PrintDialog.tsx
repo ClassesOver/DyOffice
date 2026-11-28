@@ -31,6 +31,7 @@ export function PrintDialog({
   slides,
   images,
   current,
+  documentName,
   onClose,
   setStatus,
 }: {
@@ -39,21 +40,24 @@ export function PrintDialog({
   images: Map<string, HTMLImageElement>
   /** Current page index, for the "current slide" range */
   current: number
+  documentName: string
   onClose: () => void
   setStatus: (s: string) => void
 }) {
   useEscOverlay(true)
-  const { t } = useI18n()
+  const { lang, t } = useI18n()
   const [pngs, setPngs] = useState<string[] | null>(null)
   const [notes, setNotes] = useState<string[]>([])
   const [layout, setLayout] = useState<PrintLayout>('full')
   const [rangeMode, setRangeMode] = useState<RangeMode>('all')
   const [customRange, setCustomRange] = useState('')
+  const [pdfName, setPdfName] = useState(documentName)
   const [orientation, setOrientation] = useState<PrintOrientation>('portrait')
   const [order, setOrder] = useState<PrintOrder>('horizontal')
   const [frame, setFrame] = useState(false)
   const [includeHidden, setIncludeHidden] = useState(false)
   const [printing, setPrinting] = useState(false)
+  const browserPrintDialog = window.slidesApi.browserPrintDialog === true
   // the printer section: '' = the OS default, a name = that queue, SYSTEM = the OS dialog
   const [printers, setPrinters] = useState<PrinterInfo[]>([])
   const [printDevice, setPrintDevice] = useState(IS_MAC ? PRINT_SYSTEM_DIALOG : '')
@@ -115,14 +119,15 @@ export function PrintDialog({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
-        onClose()
+        if (!printing) onClose()
       }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, printing])
 
   useEffect(() => {
+    if (browserPrintDialog) return
     let alive = true
     window.slidesApi
       .listPrinters()
@@ -133,7 +138,7 @@ export function PrintDialog({
     return () => {
       alive = false
     }
-  }, [])
+  }, [browserPrintDialog])
 
   /** 0-based deck indices selected by the range options (before the hidden filter) */
   const rangeIndices = useMemo<number[] | null>(() => {
@@ -183,13 +188,14 @@ export function PrintDialog({
     return () => ro.disconnect()
   }, [applyZoom])
 
-  const doPrint = async () => {
+  const printDisabled = !pngs || selected.length === 0 || printing
+  const doPrint = async (outputName?: string) => {
     if (!pngs || selected.length === 0 || printing) return
     setPrinting(true)
     try {
       const first = slides[selected[0]]
       const job =
-        printDevice === PRINT_SYSTEM_DIALOG
+        browserPrintDialog || printDevice === PRINT_SYSTEM_DIALOG
           ? undefined
           : {
               deviceName: printDevice,
@@ -212,6 +218,7 @@ export function PrintDialog({
         ...(layout !== 'full' ? { orientation } : {}),
         ...(layout !== 'full' && layout !== 'notes' ? { order } : {}),
         ...(frame && layout === 'full' ? { frame: true } : {}),
+        ...(outputName ? { pdfName: outputName } : {}),
         ...(job ? { job } : {}),
       })
       if (r.ok) onClose()
@@ -235,7 +242,7 @@ export function PrintDialog({
   const orderMatters = layout !== 'full' && layout !== 'notes' && layout !== 'handout3'
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={printing ? undefined : onClose}>
       <div
         ref={dialogRef}
         className="modal print-dialog"
@@ -293,7 +300,7 @@ export function PrintDialog({
               </label>
               <input
                 type="text"
-                className={`print-range-input ${rangeInvalid ? 'invalid' : ''}`}
+                className={`print-text-input ${rangeInvalid ? 'invalid' : ''}`}
                 placeholder={t('appPrintRangeHint')}
                 value={customRange}
                 disabled={rangeMode !== 'custom'}
@@ -380,7 +387,7 @@ export function PrintDialog({
                 {t('appPrintHidden')}
               </label>
             </fieldset>
-            <fieldset>
+            {!browserPrintDialog && <fieldset>
               <legend>{t('appPrintPrinter')}</legend>
               <select
                 className="print-select"
@@ -421,7 +428,7 @@ export function PrintDialog({
                       {t('appPrintCopies')}
                       <input
                         type="number"
-                        className="print-range-input"
+                        className="print-text-input"
                         min={1}
                         max={999}
                         value={printCopies}
@@ -482,17 +489,37 @@ export function PrintDialog({
                   ))}
                 </>
               )}
-            </fieldset>
+            </fieldset>}
+            {browserPrintDialog && (
+              <label className="print-file-name">
+                <span>{lang === 'zh' ? '文件名' : 'File name'}</span>
+                <input
+                  type="text"
+                  className="print-text-input"
+                  value={pdfName}
+                  disabled={printing}
+                  onChange={(e) => setPdfName(e.target.value)}
+                />
+              </label>
+            )}
             <div className="print-page-count">
               {selected.length > 0 ? t('appPrintPageCount', { n: pageCount }) : ''}
             </div>
           </div>
         </div>
         <div className="modal-actions">
-          <button onClick={onClose}>{t('appSettingsCancel')}</button>
+          <button disabled={printing} onClick={onClose}>{t('appSettingsCancel')}</button>
+          {browserPrintDialog && (
+            <button
+              disabled={printDisabled || !pdfName.trim()}
+              onClick={() => void doPrint(pdfName.trim())}
+            >
+              {t('ribbonFileExportPdf')}
+            </button>
+          )}
           <button
             className="primary"
-            disabled={!pngs || selected.length === 0 || printing}
+            disabled={printDisabled}
             onClick={() => void doPrint()}
           >
             {printing ? t('appPrintProgress') : t('appPrintTitle')}

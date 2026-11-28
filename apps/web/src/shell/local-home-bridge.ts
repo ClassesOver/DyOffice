@@ -1,5 +1,5 @@
 import type {HomeApi, RecentEntry, RecentQuery, MoveResult} from '../../../shell/src/shared/home-api'
-import type {WorkspaceFile, WorkspaceFileList, WorkspaceFolder, WorkspaceFolderList, WorkspaceView} from '../../../../packages/web-contracts/src/workspace.ts'
+import type {WorkspaceFile, WorkspaceFileList, WorkspaceFileQuery, WorkspaceFolder, WorkspaceFolderList, WorkspaceStarredGroups, WorkspaceView} from '../../../../packages/web-contracts/src/workspace.ts'
 import type {createPreferencesClient, SettingsRequest} from '../../../../packages/browser-host/src/preferences.ts'
 import {notifyRevealWorkspaceFolder} from '../../../shell/src/renderer/src/file-events.ts'
 import {createWebHomeBridge} from './web-home-bridge.ts'
@@ -20,6 +20,7 @@ const folderId = (path: string) => path === rootPath ? null : path.split('/').at
 /** The original Home UI keeps its contract; every personal mutation uses the scoped API. */
 export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   const pending = new Map<string, {promise: Promise<unknown>; intent: string}>()
+  const pendingCopies = new Map<string, {uploadId:string; revision:string; language:'en'|'zh'}>()
   const unknownStars = new Map<string, boolean>()
   type Batch={key:string;intent:string;ids:string[];confirmed:Set<string>}
   const batches=new Map<string,Batch>()
@@ -34,9 +35,11 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     pending.set(key, {promise: result, intent})
     return result
   }
-  async function queryFiles(view: WorkspaceView, query: {folderId?: string; limit?: number; offset?: number; ext?: string; q?: string; id?: string; sort?: RecentQuery['sort']} = {}): Promise<WorkspaceFileList> {
+  async function queryFiles(view: WorkspaceView, query: Omit<WorkspaceFileQuery,'view'|'ext'|'family'> & {ext?: string} = {}): Promise<WorkspaceFileList> {
     const params = new URLSearchParams({view, limit: String(query.limit ?? 50), offset: String(query.offset ?? 0)})
-    for (const key of ['folderId','ext','q','id','sort'] as const) if (query[key] !== undefined) params.set(key, query[key]!)
+    for (const key of ['folderId','q','id','sort','group'] as const) if (query[key] !== undefined) params.set(key, query[key]!)
+    if (query.ext === 'xlsx') params.set('family', 'spreadsheet')
+    else if (query.ext !== undefined) params.set('ext', query.ext)
     const page = await deps.request<WorkspaceFileList>(`/api/v1/workspace/files?${params}`)
     if (!page || !Array.isArray(page.files) || !Number.isSafeInteger(page.total) || page.total < 0 || !Number.isSafeInteger(page.totalAll) || page.totalAll < page.total || page.files.length > (query.limit ?? 50)) throw new Error('无法读取个人文件列表。')
     return page
@@ -71,7 +74,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
       }
       return names.join(' / ') || unavailable
     }
-    return items.map(file => ({path: file.id, name: file.name, ext: file.format, mtimeMs: Date.parse(file.updatedAt), sizeBytes: file.size, starred: file.starred, locationLabel: location(file)}))
+    return items.map(file => ({path: file.id, name: file.name, ext: file.format, mtimeMs: Date.parse(file.updatedAt), sizeBytes: file.size, starred: file.starred, ...(file.group ? {group:file.group} : {}), locationLabel: location(file)}))
   }
   function paths(items: WorkspaceFolder[]) {
     const byId = new Map(items.map(folder => [folder.id, folder]))
@@ -90,11 +93,12 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   }
   async function page(view: WorkspaceView, query: RecentQuery = {}) {
     const limit = query.limit ?? 50, offset = query.offset ?? 0
-    const page = await queryFiles(view, {offset, limit: Math.min(limit, 100), ext: query.ext, sort: query.sort})
+    const filters = {ext:query.ext, sort:query.sort, group:view==='starred'?query.group:undefined}
+    const page = await queryFiles(view, {...filters,offset, limit: Math.min(limit, 100)})
     const items = [...page.files], seen = new Set(items.map(file => file.id))
     // Home refreshes the number of rows already loaded; the API caps each request at 100.
     while (items.length < limit && offset + items.length < page.total) {
-      const next = await queryFiles(view, {offset: offset + items.length, limit: Math.min(limit - items.length, 100), ext: query.ext, sort: query.sort})
+      const next = await queryFiles(view, {...filters,offset: offset + items.length, limit: Math.min(limit - items.length, 100)})
       if (next.total !== page.total || next.totalAll !== page.totalAll || !next.files.length || next.files.some(file => seen.has(file.id))) throw new Error('文件列表已变化，请刷新后重试。')
       for (const file of next.files) {seen.add(file.id); items.push(file)}
     }
@@ -230,7 +234,19 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     },
     recents: (query?: RecentQuery) => page('recent', query),
     starred: (query?: RecentQuery) => page('starred', query),
-    starredGroups: async () => [],
+    starredGroups: async () => {
+      const result = await deps.request<WorkspaceStarredGroups>('/api/v1/workspace/starred-groups')
+      if (!Array.isArray(result?.groups) || result.groups.some(name=>typeof name!=='string')) throw new Error('无法读取收藏分组。')
+      return result.groups
+    },
+    setStarredGroup: async (paths, group) => {
+      const ids = [...new Set(paths)].sort()
+      if (!ids.length) return
+      await once('starred-group', async () => {
+        await deps.request('/api/v1/workspace/starred-groups', 'PUT', {ids,group})
+        changed()
+      },JSON.stringify({ids,group}))
+    },
     toggleStar,
     unstarPaths: (ids: string[]) => mutateFiles(ids, 'star', 'PUT', {starred: false}),
     removeRecent: (ids: string[]) => mutateFiles(ids, 'recent', 'DELETE'),
@@ -244,6 +260,30 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     renameFile: (id: string, name: string) => once(JSON.stringify(['rename', id]), async () => {
       await deps.request(`/api/v1/files/${encodeURIComponent(id)}`, 'PATCH', {name}); deps.renamed?.(id, name); changed(); return {ok: true, path: id}
     },name),
+    duplicateFile: id => once(JSON.stringify(['duplicate',id]), async () => {
+      const endpoint = `/api/v1/files/${encodeURIComponent(id)}/duplicate`
+      let copy = pendingCopies.get(id)
+      if (!copy) {
+        const language = (await deps.preferences.getPreferences()).language === 'en' ? 'en' : 'zh'
+        const upload = await deps.request<{uploadId:string;revision:string}>(endpoint+'/uploads','POST')
+        copy = {...upload,language}
+        pendingCopies.set(id,copy)
+      }
+      const {uploadId,revision,language} = copy
+      try {
+        await deps.request(`${endpoint}/${encodeURIComponent(uploadId)}/finish`,'POST',{revision,language})
+      } catch (error) {
+        const status = (error as {status?:number})?.status
+        if (typeof status !== 'number' || status === 408 || status === 429 || status >= 500) {
+          throw new Error('副本尚未确认，请再次执行创建副本以核对结果。',{cause:error})
+        }
+        pendingCopies.delete(id)
+        await deps.request(`/api/v1/uploads/${encodeURIComponent(uploadId)}`,'DELETE').catch(()=>{})
+        throw error
+      }
+      pendingCopies.delete(id)
+      changed()
+    }),
     folderRoots: async () => [{path: rootPath, name: (await deps.preferences.getPreferences()).language === 'en' ? 'My files' : '个人文件', usable: true, readable: true, removable: false}],
     listFolder: async (dir: string) => {
       const all = await folders(), mapping = paths(all), id = folderId(dir)

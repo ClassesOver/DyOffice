@@ -8,6 +8,19 @@ function worksheet(body: string): string {
 }
 
 describe('inferWorksheetAddresses with self-closing rows and cells', () => {
+  it('decodes character references before inferring the next row and column', () => {
+    const xml = worksheet(
+      '<row r="&#51;"><c r="&#x43;3"><v>1</v></c><c><v>2</v></c></row>' +
+        '<row><c><v>9</v></c></row>',
+    )
+    expect(inferWorksheetAddresses(xml)).toBe(worksheet(
+      '<row r="3"><c r="C3"><v>1</v></c><c r="D3"><v>2</v></c></row>' +
+        '<row r="4"><c r="A4"><v>9</v></c></row>',
+    ))
+    expect(inferWorksheetAddresses(worksheet('<row r="&#51;"><c r="&#x43;3"/></row>')))
+      .toBe(worksheet('<row r="3"><c r="C3"/></row>'))
+  })
+
   it('leaves a custom-height empty row self-closing', () => {
     const xml = worksheet(
       '<row r="1"><c r="A1"><v>1</v></c></row>' +

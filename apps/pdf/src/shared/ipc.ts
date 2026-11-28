@@ -4,6 +4,7 @@ import type { AiSettings, AiStreamChunk, AiStreamRequest } from '@genoffice/ai-p
 import type { PrintDuplex, PrintJobOptions, PrinterInfo } from '@genoffice/electron-utils/print-job'
 import type { PrinterOption } from '@genoffice/electron-utils/printer-options'
 export type { PrintDuplex, PrintJobOptions, PrinterInfo }
+export type PdfBrowserPrintPage = { src: string; widthPt: number; heightPt: number }
 export type { PrinterOption }
 
 /** largest slice readFileChunk hands over IPC; the renderer loops over them */
@@ -226,8 +227,8 @@ export interface SignWithCertificateRequest {
 }
 
 export type SignWithCertificateResult =
-  | { ok: true; path: string }
-  | { ok: false; cancelled: true }
+  | { ok: true; path: string; workspace?: true }
+  | { ok: false; cancelled: true; pending?: true }
   | {
       ok: false
       cancelled?: false
@@ -893,7 +894,8 @@ export interface ExtractPagesRequest {
   suggestedName: string
 }
 
-export type ExtractPagesResult = { ok: true; savedPath: string } | { ok: false; error: string }
+export type ExtractPagesResult =
+  { ok: true; savedPath: string } | { ok: true; canceled: true } | { ok: false; error: string }
 
 /** Insert (merge) another PDF after a page of the current file: main process shows a picker and writes back immediately */
 export interface InsertPdfRequest {
@@ -990,7 +992,8 @@ export interface SplitPagesRequest {
   suggestedName: string
 }
 
-export type SplitPagesResult = { ok: true; savedPath: string } | { ok: false; error: string }
+export type SplitPagesResult =
+  { ok: true; savedPath: string } | { ok: true; canceled: true } | { ok: false; error: string }
 
 /** Shrink the CropBox of the given pages to a fractional rect of the displayed page; in place */
 export interface CropPagesRequest {
@@ -1105,7 +1108,7 @@ export interface PdfApi {
     { ok: true; name: string; pageCount: number; pages: string[] } | { ok: false; reason: string }
   >
   /** Ask for a file to embed (open dialog); the bytes come back base64-encoded */
-  pickAttachmentFile(): Promise<
+  pickAttachmentFile(pending?: { count: number; bytes: number }): Promise<
     | { ok: true; name: string; bytesBase64: string }
     | { ok: false; cancelled: true }
     | { ok: false; reason: string }
@@ -1237,6 +1240,8 @@ export interface PdfApi {
   onSaveAsFlow(handler: (inFlight: boolean) => void): () => void
   /** Shell menu Print → renderer runs its print flow (save, rasterize, system dialog) */
   onPrintRequest(handler: () => void): () => void
+  /** Browser host prints the selected JPEG pages through its own dialog. */
+  printBrowserPages?(pages: readonly PdfBrowserPrintPage[]): Promise<void>
   /** print this window's print stylesheet output on a named printer ('' = OS default)
    *  without the system dialog; ok=false without error = canceled */
   print(job: PrintJobOptions): Promise<{ ok: boolean; error?: string }>

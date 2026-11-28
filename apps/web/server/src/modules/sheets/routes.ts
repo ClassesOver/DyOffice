@@ -1,13 +1,15 @@
 import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
+import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type {FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
-import type { createSheetsSaveService, SheetsExportInput, SheetsSaveInput } from './save.ts'
+import type { createSheetsSaveService, SheetsCopyInput, SheetsExportInput, SheetsPasswordInput, SheetsSaveInput } from './save.ts'
 import type { FastifyInstance } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import { cookies, type createCsrfService } from '../auth/csrf.ts'
 import { uuidSchema, fileParamsSchema, emptyQuerySchema } from '../files/http-schema.ts'
-import type { createSheetsService, ExternalLinkBinding, SheetRange } from './service.ts'
+import type { createSheetsService, ExternalLinkBinding, SheetRange, SheetsQueryInput } from './service.ts'
+import {authError} from '../auth/sessions.ts'
 
 const revisionBody = { revision: uuidSchema }
 export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<typeof createSheetsService>, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: ReturnType<typeof createSheetsSaveService>) {
@@ -21,48 +23,82 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       // budget is busy with concurrent reads: a user save must not starve
       // behind its own edit-triggered reads (503 starved chart edits, see
       // shared-object-admission evidence). Read routes keep the immediate 503.
-      await admission.admit(request, reply, request.routeOptions.url?.endsWith('/sheets/uploads') ? { waitMs: 10_000 } : undefined)
+      const path=request.routeOptions.url
+      const saving = path?.endsWith('/sheets/uploads') || path?.endsWith('/sheets/csv-uploads') || path?.endsWith('/sheets/password-uploads') || path?.endsWith('/sheets/copy/uploads')
+      await admission.admit(request, reply, saving ? { waitMs: 10_000 } : undefined)
     })
     api.addHook('onResponse', async request => admission.close(request))
     api.addHook('onError', async request => admission.error(request))
-    function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T, signal: AbortSignal) => Promise<unknown>, bodyLimit = 4096, optional:readonly string[] = []) {
+    function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T, signal: AbortSignal, unlockId?:string) => Promise<unknown>, bodyLimit = 4096, optional:readonly string[] = []) {
       api.post(path, { bodyLimit, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: Object.keys(properties).filter(key=>!optional.includes(key)), properties } } }, async (request, reply) => {
-        return withDisconnect(request, reply, signal => admission.transfer(request, reply, () => operation(editorFileToken(request), (request.params as {id: string}).id, request.body as T, signal)))
+        const unlockId = request.headers['x-dyoffice-workbook-unlock']
+        if(unlockId!==undefined&&(typeof unlockId!=='string'||!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/.test(unlockId)))throw authError(400)
+        return withDisconnect(request, reply, signal => admission.transfer(request, reply, () => operation(editorFileToken(request), (request.params as {id: string}).id, request.body as T, signal,unlockId)))
       })
     }
+    route<{revision:string;password:string}>('/api/v1/files/:id/sheets/unlock', { ...revisionBody,password:{type:'string',minLength:1,maxLength:255} },
+      (token,id,body,signal)=>sheets.unlockWorkbook(token,id,body.revision,body.password,signal))
+    route<{revision:string;unlockId:string}>('/api/v1/files/:id/sheets/lock', { ...revisionBody,unlockId:uuidSchema },
+      (token,id,body)=>sheets.lockWorkbook(token,id,body.revision,body.unlockId))
     if (saves) route<SheetsSaveInput>('/api/v1/files/:id/sheets/uploads', {
-      baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER}, request: {type: 'object'},
-    }, (token,id,body,signal) => saves.prepare(token,id,body,signal), 4 * 1024 * 1024)
-    if (saves) route<SheetsExportInput>('/api/v1/files/:id/sheets/export', {
+      baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER}, request: {type: 'object'},unlockId:uuidSchema,
+    }, (token,id,body,signal) => saves.prepare(token,id,body,signal), 4 * 1024 * 1024,['unlockId'])
+    if (saves) api.post<{Params:{id:string};Querystring:{baseRevision:string;editorId:string;leaseEpoch:string}}>('/api/v1/files/:id/sheets/csv-uploads',{
+      bodyLimit:MAX_OBJECT_BYTES,
+      schema:{params:fileParamsSchema,querystring:{
+        type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch'],
+        properties:{baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'string',pattern:'^[1-9][0-9]{0,15}$'}},
+      }},
+    }, (request,reply)=>withDisconnect(request,reply,signal=>admission.transfer(request,reply,()=>{
+      if(request.headers['content-type']!=='application/octet-stream'||!Buffer.isBuffer(request.body))throw authError(415)
+      const {baseRevision,editorId,leaseEpoch}=request.query
+      return saves.prepareCsv(editorFileToken(request),request.params.id,{baseRevision,editorId,leaseEpoch:Number(leaseEpoch)},request.body,signal)
+    })))
+    if (saves) route<SheetsPasswordInput>('/api/v1/files/:id/sheets/password-uploads', {
+      baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER},
+      unlockId:uuidSchema,newPassword:{type:'string',minLength:1,maxLength:255},
+    }, (token,id,body,signal)=>saves.preparePassword(token,id,body,signal))
+    const draftInput = {
       baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER},
       phases: {type: 'array', maxItems: 2, items: {type: 'object'}},
-    }, (token,id,body,signal) => saves.exportDraft(token,id,body,signal), 4 * 1024 * 1024)
-    route<{revision:string;visualId:string}>('/api/v1/files/:id/sheets/media',{...revisionBody,visualId:{type:'string',minLength:1,maxLength:512,pattern:'^[^/\\\\]+$'}},(token,id,body,signal)=>sheets.readMedia(token,id,body.revision,body.visualId,signal))
+    }
+    if (saves) {
+      route<SheetsExportInput>('/api/v1/files/:id/sheets/export',draftInput,
+        (token,id,body,signal)=>saves.exportDraft(token,id,body,signal),4*1024*1024)
+      route<SheetsCopyInput>('/api/v1/files/:id/sheets/copy/uploads',{
+        ...draftInput,name:{type:'string',minLength:1,maxLength:255},folderId:uuidSchema,
+      },(token,id,body,signal,unlockId)=>saves.prepareProtectedCopy(token,id,{...body,...(unlockId?{unlockId}:{})},signal),4*1024*1024,['folderId'])
+    }
+    route<{revision:string;visualId:string}>('/api/v1/files/:id/sheets/media',{...revisionBody,visualId:{type:'string',minLength:1,maxLength:512,pattern:'^[^/\\\\]+$'}},(token,id,body,signal,unlockId)=>sheets.readMedia(token,id,body.revision,body.visualId,signal,unlockId))
     const sheetName={type:'string',minLength:1,maxLength:255}
     route<FindInput & {revision:string;sheetName:string}>('/api/v1/files/:id/sheets/find',{
       ...revisionBody,sheetName,query:{type:'string',minLength:1,maxLength:10000,pattern:'\\S'},matchCase:{type:'boolean'},
       matchEntireCell:{type:'boolean'},lookIn:{type:'string',enum:['values','formulas','formulas_only','both']},wildcards:{type:'boolean'},
       limit:{type:'integer',minimum:1,maximum:100},
       resumeAt:{type:'object',additionalProperties:false,required:['row','column'],properties:{row:{type:'integer',minimum:0,maximum:1048575},column:{type:'integer',minimum:0,maximum:16383}}},
-    },(token,id,{revision,sheetName,...request},signal)=>sheets.findCells(token,id,revision,sheetName,request,signal),65536,['resumeAt'])
+    },(token,id,{revision,sheetName,...request},signal,unlockId)=>sheets.findCells(token,id,revision,sheetName,request,signal,unlockId),65536,['resumeAt'])
     const range={type:'object',additionalProperties:false,required:['startRow','endRow','startColumn','endColumn'],properties:{startRow:{type:'integer',minimum:0,maximum:1048575},endRow:{type:'integer',minimum:0,maximum:1048575},startColumn:{type:'integer',minimum:0,maximum:16383},endColumn:{type:'integer',minimum:0,maximum:16383}}}
     route<RecalcInput & {revision:string}>('/api/v1/files/:id/sheets/recalculate', {...revisionBody,
       edits:{type:'array',maxItems:10000,items:{type:'object',additionalProperties:false,required:['sheetName','row','column','input'],properties:{sheetName,row:{type:'integer',minimum:0,maximum:1048575},column:{type:'integer',minimum:0,maximum:16383},input:{type:'string',maxLength:32767}}}},
       reads:{type:'array',maxItems:200,items:{type:'object',additionalProperties:false,required:['sheetName','range'],properties:{sheetName,range}}},
-    },(token,id,body,signal)=>sheets.recalculate(token,id,body.revision,{edits:body.edits,reads:body.reads},signal),1024*1024)
+    },(token,id,body,signal,unlockId)=>sheets.recalculate(token,id,body.revision,{edits:body.edits,reads:body.reads},signal,unlockId),1024*1024)
     route<{revision:string;path:string;cachePath:string}>('/api/v1/files/:id/sheets/pivot-definition',{
       ...revisionBody,path:{type:'string',maxLength:512,pattern:'^xl/pivotTables/[A-Za-z0-9._-]+\\.xml$'},cachePath:{type:'string',maxLength:512,pattern:'^xl/pivotCache/[A-Za-z0-9._-]+\\.xml$'},
-    },(token,id,body,signal)=>sheets.readPivotDefinition(token,id,body.revision,body.path,body.cachePath,signal))
-    route<{revision:string}>('/api/v1/files/:id/sheets/external-links',revisionBody,(token,id,body,signal)=>sheets.listExternalLinks(token,id,body.revision,signal))
+    },(token,id,body,signal,unlockId)=>sheets.readPivotDefinition(token,id,body.revision,body.path,body.cachePath,signal,unlockId))
+    route<SheetsQueryInput>('/api/v1/files/:id/sheets/web-query',{
+      ...revisionBody,connectionId:{type:'string',minLength:1,maxLength:200},
+      editorId:uuidSchema,leaseEpoch:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER},
+    },(token,id,body,signal,unlockId)=>sheets.refreshWebQuery(token,id,body,signal,unlockId))
+    route<{revision:string}>('/api/v1/files/:id/sheets/external-links',revisionBody,(token,id,body,signal,unlockId)=>sheets.listExternalLinks(token,id,body.revision,signal,unlockId))
     route<{revision:string;sources:ExternalLinkBinding[]}>('/api/v1/files/:id/sheets/external-links/preview',{
       ...revisionBody,sources:{type:'array',maxItems:256,items:{
         type:'object',additionalProperties:false,required:['index','fileId','revision'],
         properties:{index:{type:'integer',minimum:1,maximum:256},fileId:uuidSchema,revision:uuidSchema},
       }},
     },(token,id,body,signal)=>sheets.previewExternalLinkRefresh(token,id,body.revision,body.sources,signal),65536)
-    route<{revision: string}>('/api/v1/files/:id/sheets/package', revisionBody, (token,id,body,signal) => sheets.readPackage(token,id,body.revision,signal))
-    route<{revision: string; sheetName: string; kind: 'formulas' | 'outline'}>('/api/v1/files/:id/sheets/sheet', {...revisionBody,sheetName: {type:'string',minLength:1,maxLength:255},kind: {type:'string',enum:['formulas','outline']}}, (token,id,body,signal) => sheets.readSheet(token,id,body.revision,body.sheetName,body.kind,signal))
-    route<{revision: string;openingViewport?:boolean}>('/api/v1/files/:id/sheets/inspect', {...revisionBody,openingViewport:{type:'boolean'}}, (token, id, body, signal) => sheets.inspect(token, id, body.revision, signal,body.openingViewport),4096,['openingViewport'])
+    route<{revision: string}>('/api/v1/files/:id/sheets/package', revisionBody, (token,id,body,signal,unlockId) => sheets.readPackage(token,id,body.revision,signal,unlockId))
+    route<{revision: string; sheetName: string; kind: 'formulas' | 'outline'}>('/api/v1/files/:id/sheets/sheet', {...revisionBody,sheetName: {type:'string',minLength:1,maxLength:255},kind: {type:'string',enum:['formulas','outline']}}, (token,id,body,signal,unlockId) => sheets.readSheet(token,id,body.revision,body.sheetName,body.kind,signal,unlockId))
+    route<{revision: string;openingViewport?:boolean}>('/api/v1/files/:id/sheets/inspect', {...revisionBody,openingViewport:{type:'boolean'}}, (token, id, body, signal,unlockId) => sheets.inspect(token, id, body.revision, signal,body.openingViewport,unlockId),4096,['openingViewport'])
     route('/api/v1/files/:id/sheets/range', {
       ...revisionBody,
       sheetName: { type: 'string', minLength: 1, maxLength: 255 },
@@ -70,7 +106,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
         startRow: { type: 'integer', minimum: 0, maximum: 1048575 }, endRow: { type: 'integer', minimum: 0, maximum: 1048575 },
         startColumn: { type: 'integer', minimum: 0, maximum: 16383 }, endColumn: { type: 'integer', minimum: 0, maximum: 16383 },
       } },
-    }, (token, id, body: { revision: string; sheetName: string; range: SheetRange }, signal) => sheets.readRange(token, id, body.revision, body.sheetName, body.range, signal))
+    }, (token, id, body: { revision: string; sheetName: string; range: SheetRange }, signal,unlockId) => sheets.readRange(token, id, body.revision, body.sheetName, body.range, signal,unlockId))
     api.post('/api/v1/files/:id/sheets/merge-sources/open',{bodyLimit:50*1024*1024,schema:{params:fileParamsSchema,querystring:{type:'object',additionalProperties:false,required:['revision','name'],properties:{revision:uuidSchema,name:{type:'string',minLength:1,maxLength:255}}}}},async(request,reply)=>{
       return withDisconnect(request,reply,signal=>{
         if(request.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/octet-stream')throw Object.assign(new Error('Unsupported media type'),{statusCode:415})

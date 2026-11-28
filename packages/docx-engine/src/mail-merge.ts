@@ -162,7 +162,7 @@ function recordAt(data: MergeData, index: number): MergeRecord {
 
 /** the value a record holds for `name`, or '' when the column is absent */
 export function valueOf(record: MergeRecord, name: string): string {
-  return record[name] ?? ''
+  return Object.hasOwn(record, name) ? record[name] ?? '' : ''
 }
 
 /**
@@ -524,12 +524,8 @@ export function mergeBlockTree(blocks: readonly Block[], data: MergeData): Block
 export function mergeDataFromRows(rows: readonly (readonly string[])[]): MergeData {
   if (rows.length === 0) return { fields: [], records: [] }
   const header = (rows[0] ?? []).map((h) => h.trim())
-  const records = rows.slice(1).map((row) => {
-    const record: MergeRecord = {}
-    header.forEach((name, i) => {
-      record[name] = row[i] ?? ''
-    })
-    return record
-  })
+  const records = rows.slice(1).map((row) =>
+    Object.fromEntries(header.map((name, index) => [name, row[index] ?? ''])),
+  )
   return { fields: header, records }
 }

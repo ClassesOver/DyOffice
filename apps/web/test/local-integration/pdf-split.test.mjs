@@ -6,6 +6,7 @@ import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {createLeaseService} from '../../server/src/modules/leases/service.ts'
 import {createRevisionService} from '../../server/src/modules/revisions/service.ts'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {createPdfService} from '../../server/src/modules/pdf/service.ts'
 
 test('PDF split publishes each original upload exactly once and keeps its source intact',async t=>{
@@ -19,7 +20,11 @@ test('PDF split publishes each original upload exactly once and keeps its source
  await assert.rejects(pdf.stageSplit(f.bob.token,source.fileId,input),error=>error.statusCode===404)
  await assert.rejects(pdf.stageSplit(f.alice.token,source.fileId,{...input,leaseEpoch:lease.leaseEpoch+1}),error=>error.statusCode===409)
  for(const pagesPerFile of [0,1.5,5,6])await assert.rejects(pdf.stageSplit(f.alice.token,source.fileId,{...input,pagesPerFile}),error=>error.statusCode===400)
- const prepared=await pdf.stageSplit(f.alice.token,source.fileId,input)
+ const workspace=createWorkspaceService(f.transactions)
+ const folder=await workspace.createFolder(f.alice.token,{name:'Parts',parentId:null})
+ const other=await workspace.createFolder(f.bob.token,{name:'Private parts',parentId:null})
+ await assert.rejects(pdf.stageSplit(f.alice.token,source.fileId,{...input,name:'Selected.pdf',folderId:other.id}),{statusCode:404})
+ const prepared=await pdf.stageSplit(f.alice.token,source.fileId,{...input,name:'Selected.pdf',folderId:folder.id})
  assert.equal(prepared.files.length,3)
  assert.equal(new Set(prepared.files.map(file=>file.fileId)).size,3)
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
@@ -29,6 +34,7 @@ test('PDF split publishes each original upload exactly once and keeps its source
  await assert.rejects(f.files.finishUpload(f.bob.token,prepared.files[1].uploadId),error=>error.statusCode===404)
  for(const [index,part]of prepared.files.entries()){
   const saved=await f.files.finishUpload(f.alice.token,part.uploadId)
+  assert.equal(saved.name,`Selected-${index+1}.pdf`)
   assert.equal(saved.file.fileId,part.fileId);assert.equal(saved.file.sha256,part.sha256);assert.equal(saved.file.size,part.size)
   const bytes=await f.files.readFile(f.alice.token,part.fileId,saved.file.revision)
   const task=getDocument({data:Uint8Array.from(bytes),disableFontFace:true,useSystemFonts:true})
@@ -42,6 +48,7 @@ test('PDF split publishes each original upload exactly once and keeps its source
    }
   }finally{await task.destroy()}
  }
+ assert.deepEqual((await workspace.listFiles(f.alice.token,{folderId:folder.id})).files.map(file=>file.name).sort(),['Selected-1.pdf','Selected-2.pdf','Selected-3.pdf'])
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,4)
  assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),original)

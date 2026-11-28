@@ -65,6 +65,7 @@ export function createOfficeReadTool(files: Pick<FileService, 'assertReadableRev
     const read = async () => {
       const { bytes, format } = await files.download(authorizedCredential, fileId, revision, DOCUMENT_READ_MAX_BYTES, deadline)
       deadline.throwIfAborted()
+      if (format === 'csv' || format === 'xlsm') throw authError(415)
       const document = await readBackgroundDocument(bytes, format, deadline, { visibleOnly: typeof authorizedCredential !== 'string' && authorizedCredential.kind === 'external-token' })
       // Parsing runs outside the download transaction. Recheck the same revision before returning text.
       deadline.throwIfAborted()

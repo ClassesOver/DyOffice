@@ -96,6 +96,68 @@ test(
       },
     )
     await t.test(
+      'moves only SpreadsheetML dimensions and page breaks',
+      async () => {
+        const foreignDimension = '<dimension xmlns="urn:example:print" ref="A1:K500"/>'
+        const foreignBreaks = '<rowBreaks xmlns="urn:example:print"><brk id="20" man="1"/></rowBreaks>'
+        const foreignChild = '<brk xmlns="urn:example:print" id="30" man="1"/>'
+        const input = await book({
+          [sheetPart]: (xml) => xml
+            .replace('<dimension ref="A1:F3"/>', foreignDimension + '<dimension ref="A1:F6"/>')
+            .replace('<drawing ', foreignBreaks +
+              `<rowBreaks count="1" manualBreakCount="1">${foreignChild}<brk id="2" man="1"/></rowBreaks><drawing `),
+        })
+        assert.deepEqual((await native.readRange(input, 'Acceptance', range)).rowBreaks, [2])
+        const saved = await save(input, { structuralOps: [insert('insert-rows', 1)] })
+        const xml = await (await JSZip.loadAsync(saved)).file(sheetPart).async('string')
+        assert.ok(xml.includes(foreignDimension))
+        assert.ok(xml.includes(foreignBreaks))
+        assert.ok(xml.includes(foreignChild))
+        assert.match(xml, /<dimension ref="A1:F7"\/>/)
+        assert.match(xml, /<rowBreaks count="1" manualBreakCount="1">/)
+        assert.deepEqual((await native.readRange(saved, 'Acceptance', range)).rowBreaks, [3])
+        assert.deepEqual(await dimensions(saved), [7, 6])
+      },
+    )
+    await t.test(
+      'discards a dimension whose rows were all deleted',
+      async () => {
+        const input = await book({
+          [sheetPart]: (xml) => xml.replace('<dimension ref="A1:F3"/>', '<dimension ref="A200:F250"/>'),
+        })
+        const saved = await save(input, { structuralOps: [insert('remove-rows', 199, 51)] })
+        const xml = await (await JSZip.loadAsync(saved)).file(sheetPart).async('string')
+        assert.doesNotMatch(xml, /<dimension\b/)
+        assert.deepEqual(await dimensions(saved), [3, 6])
+      },
+    )
+    await t.test(
+      'saves and reopens all print areas on the selected sheet',
+      async () => {
+        const saved = await save(original, {
+          pageSetupStates: [{ sheetId: 'sheet-1', printArea: 'A1:A2,D3:F3' }],
+        })
+        const reopened = (await native.inspect(saved)).sheets[0]
+        assert.equal(reopened.printArea, "'Acceptance'!$A$1:$A$2,'Acceptance'!$D$3:$F$3")
+        const cleared = await save(saved, {
+          pageSetupStates: [{ sheetId: 'sheet-1', printArea: null }],
+        })
+        assert.equal((await native.inspect(cleared)).sheets[0].printArea, undefined)
+      },
+    )
+    await t.test(
+      'round-trips the full range of worksheet fit counts',
+      async () => {
+        const saved = await save(original, {
+          pageSetupStates: [{ sheetId: 'sheet-1', fitToPage: true, fitToWidth: 2, fitToHeight: 16_384 }],
+        })
+        const { pageSetup } = await native.readRange(saved, 'Acceptance', range)
+        assert.equal(pageSetup.fitToPage, true)
+        assert.equal(pageSetup.fitToWidth, 2)
+        assert.equal(pageSetup.fitToHeight, 16_384)
+      },
+    )
+    await t.test(
       'clears deleted pending title rows while keeping file-backed title columns',
       async () => {
         const input = await book({

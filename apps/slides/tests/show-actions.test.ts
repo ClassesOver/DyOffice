@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ActionCtx } from '../src/renderer/action-context'
 import { saveRehearseTimings } from '../src/renderer/show-actions'
+import { toggleScreenRecord } from '../src/renderer/insert-actions'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -54,5 +55,59 @@ describe('saveRehearseTimings', () => {
     expect(setAdvanceTimes).toHaveBeenCalledTimes(2)
     expect(setPendingRehearse).toHaveBeenCalledWith(null)
     expect(setDirty).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('screen recording', () => {
+  class Recorder {
+    static isTypeSupported() { return true }
+    state = 'inactive'
+    ondataavailable?: (event: { data: Blob }) => void
+    onstop?: () => void
+    start() { this.state = 'recording' }
+    stop() { this.state = 'inactive'; this.onstop?.() }
+  }
+  function captureContext() {
+    return {
+      slide: {partPath:'ppt/slides/slide1.xml'}, current:0, recorderRef:{current:null},
+      setRecording:vi.fn(), setStatus:vi.fn(),
+    } as unknown as ActionCtx
+  }
+  function fakeStream() {
+    const track = {readyState:'live',getSettings:()=>({}),stop:vi.fn(),addEventListener:vi.fn()}
+    return {track,stream:{getVideoTracks:()=>[track],getTracks:()=>[track]}}
+  }
+
+  it('releases a picker result that arrives after cancellation without starting recording',async()=>{
+    const ctx=captureContext(),{track,stream}=fakeStream(),onActive=vi.fn()
+    let picked!:(value:typeof stream)=>void
+    const getDisplayMedia=vi.fn(()=>new Promise<typeof stream>(resolve=>{picked=resolve}))
+    vi.stubGlobal('navigator',{mediaDevices:{getDisplayMedia}})
+    vi.stubGlobal('MediaRecorder',Recorder)
+    const pending=toggleScreenRecord(ctx,{onActive})
+    await toggleScreenRecord(ctx,{onActive})
+    ctx.recorderRef.current?.cancel()
+    picked(stream)
+    await pending
+    expect(getDisplayMedia).toHaveBeenCalledOnce()
+    expect(onActive.mock.calls).toEqual([[true],[false]])
+    expect(ctx.setRecording).not.toHaveBeenCalledWith(true)
+    expect(track.stop).toHaveBeenCalledOnce()
+  })
+
+  it('stops and releases an oversized capture without inserting a partial clip',async()=>{
+    const ctx=captureContext(),{track,stream}=fakeStream(),onActive=vi.fn()
+    let recorder:Recorder|undefined
+    const addMediaBytes=vi.fn()
+    vi.stubGlobal('window',{slidesApi:{addMediaBytes}})
+    vi.stubGlobal('navigator',{mediaDevices:{getDisplayMedia:async()=>stream}})
+    vi.stubGlobal('MediaRecorder',class extends Recorder { constructor(){super();recorder=this} })
+    await toggleScreenRecord(ctx,{maxBytes:8,onActive})
+    recorder?.ondataavailable?.({data:new Blob(['123456789'])})
+    expect(recorder?.state).toBe('inactive')
+    expect(track.stop).toHaveBeenCalled()
+    expect(onActive.mock.calls).toEqual([[true],[false]])
+    expect(ctx.recorderRef.current).toBeNull()
+    expect(addMediaBytes).not.toHaveBeenCalled()
   })
 })

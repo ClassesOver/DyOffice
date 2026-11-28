@@ -3,7 +3,7 @@ import {createNativeAdmission,type NativeProcess} from './admission.ts'
 import type {XlsxMutationPlan} from './xlsx.ts'
 import {externalLinksResultSchema} from '../../../../sheets/src/shared/external-links-contract.ts'
 
-export type WorkbookPackageQuery={path:string;cachePath:string}|{externalLinks:true}
+export type WorkbookPackageQuery={path:string;cachePath:string}|{externalLinks:true}|{webQuery:string}
 
 const MAX=32*1024*1024,REQUEST_MAX=4*1024*1024
 type WirePlan={replaced:[string,string][];added:[string,string][];addedBinary:[string,string][];removedEntries:string[]}
@@ -62,6 +62,11 @@ export function createGatewayAdapter(process:NativeProcess) {
       }
       let value:unknown;try{value=JSON.parse(output.toString('utf8'))}catch{throw invalid()}
       if(command==='gateway_plan')return decodeGatewayPlan(value)
+      if(record(request)&&typeof request.webQuery==='string'){
+        if(!record(value)||Object.keys(value).join(',')!=='source'||
+          (value.source!==null&&(typeof value.source!=='string'||value.source.length<1||value.source.length>4096)))throw invalid()
+        return value
+      }
       if(record(request)&&request.externalLinks===true){
         const parsed=externalLinksResultSchema.safeParse(value)
         if(!parsed.success||parsed.data.links.some(link=>link.source!==null))throw invalid()
@@ -84,5 +89,7 @@ export function createGatewayAdapter(process:NativeProcess) {
     planFromWorkbook:(bytes:Buffer,request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{request},signal) as Promise<XlsxMutationPlan>,
     readWorkbookPackage:(bytes:Buffer,signal?:AbortSignal,query?:WorkbookPackageQuery)=>run(bytes,'gateway_package',query??{},signal),
     convertMergeSource:(bytes:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal)=>run(bytes,'gateway_convert_merge_source',{format},signal) as Promise<Buffer>,
+    convertCsvImport:(bytes:Buffer,signal?:AbortSignal)=>run(bytes.length?bytes:Buffer.from('\n'),'gateway_convert_merge_source',{format:'csv',allowEmpty:true},signal) as Promise<Buffer>,
+    convertTsvImport:(bytes:Buffer,signal?:AbortSignal)=>run(bytes.length?bytes:Buffer.from('\n'),'gateway_convert_merge_source',{format:'tsv',allowEmpty:true},signal) as Promise<Buffer>,
   }
 }

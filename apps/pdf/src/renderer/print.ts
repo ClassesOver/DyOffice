@@ -1,5 +1,5 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import type { PrintJobOptions } from '../shared/ipc'
+import type { PdfBrowserPrintPage, PrintJobOptions } from '../shared/ipc'
 
 /**
  * Whether a named-printer job may spool the flushed PDF file itself. A
@@ -100,6 +100,7 @@ export async function printPdf(
   doc: PDFDocumentProxy,
   pages?: number[],
   job?: PrintJobOptions,
+  printBrowserPages?: (pages: readonly PdfBrowserPrintPage[]) => Promise<void>,
 ): Promise<void> {
   const root = document.createElement('div')
   root.className = 'pdf-print-root'
@@ -122,7 +123,7 @@ export async function printPdf(
   // First pass: measure each page at unit scale to budget the shared scale.
   // Stream one page at a time so no PDFPageProxy outlives its render — the
   // previous two-pass held all pages alive plus 2× viewports.
-  const areas: number[] = []
+  const measured: { widthPt: number; heightPt: number }[] = []
   // the document's own paper for the CUPS print route: the first target
   // page's size in inches (printToPDF bakes its pages at it instead of
   // Chromium's Letter default, which would rescale every sheet)
@@ -131,8 +132,7 @@ export async function printPdf(
     const page = await doc.getPage(n)
     try {
       const unit = page.getViewport({ scale: 1 })
-      const area = unit.width * unit.height
-      areas.push(Number.isFinite(area) && area > 0 ? area : 0)
+      measured.push({ widthPt: unit.width, heightPt: unit.height })
       if (
         firstPageSizeIn === undefined &&
         Number.isFinite(unit.width) &&
@@ -150,12 +150,16 @@ export async function printPdf(
       }
     }
   }
-  const scale = printScaleForAreas(areas)
+  const scale = printScaleForAreas(measured.map(({ widthPt, heightPt }) => {
+    const area = widthPt * heightPt
+    return Number.isFinite(area) && area > 0 ? area : 0
+  }))
   // Second pass: render at the budgeted scale, bounding each canvas to the
   // pixel budget so a single huge drawing (e.g. 200in² at 150 DPI → >1Bpx)
   // cannot OOM the renderer even at the floor scale.
   const MAX_PAGE_PIXELS = MAX_PRINT_PIXELS
-  for (const n of targets) {
+  const browserPages: PdfBrowserPrintPage[] = []
+  for (const [index, n] of targets.entries()) {
     const page = await doc.getPage(n)
     try {
       let viewport = page.getViewport({ scale })
@@ -179,9 +183,14 @@ export async function printPdf(
       canvas.width = w
       canvas.height = h
       await page.render({ canvas, viewport }).promise
-      const img = document.createElement('img')
-      img.src = canvas.toDataURL('image/jpeg', 0.92)
-      root.appendChild(img)
+      const src = canvas.toDataURL('image/jpeg', 0.92)
+      if (printBrowserPages) {
+        browserPages.push({ src, ...measured[index]! })
+      } else {
+        const img = document.createElement('img')
+        img.src = src
+        root.appendChild(img)
+      }
     } finally {
       try {
         page.cleanup()
@@ -192,6 +201,10 @@ export async function printPdf(
   }
   canvas.width = 0
   canvas.height = 0
+  if (printBrowserPages) {
+    await printBrowserPages(browserPages)
+    return
+  }
   document.body.appendChild(root)
   try {
     await Promise.all([...root.querySelectorAll('img')].map((img) => img.decode()))

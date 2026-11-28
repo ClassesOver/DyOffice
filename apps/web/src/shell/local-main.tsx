@@ -1,8 +1,16 @@
 import {WorkspaceLoading} from './WorkspaceLoading'
+import {applyBrowserEditorTheme} from '../editors/browser-editor-theme'
+import {publishBrowserAssistantPreferences} from '../editors/browser-assistant-appearance'
+import {createAssistantPreferenceSync} from '../editors/assistant-preference-sync'
+import {publishBrowserAutoSaveDefault} from '../editors/browser-autosave-default'
+import type {AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
+import {ASSISTANT_PREFERENCES_FIELDS} from '../../../../packages/web-contracts/src/preferences'
+import type {ConvertedCopyDestination,ImportPromptPreferences} from '../../../../packages/web-contracts/src/file-imports'
+import type {WorkspaceFolderList} from '../../../../packages/web-contracts/src/workspace'
 import {HomeHero} from './HomeHero'
 import type {PreparedAiDocumentCreator} from './pdf-create-document-skill'
 import {createAiDocCreationQueue,type AiDocCreationResult} from './ai-doc-creation'
-import {isRevisionRef,type RevisionRef} from '../../../../packages/web-contracts/src/api'
+import {isRevisionRef,type OpenFileResult,type RevisionRef} from '../../../../packages/web-contracts/src/api'
 import {AssistantChannelsPage} from './AssistantChannelsPage'
 import {BackgroundTasksPage} from './BackgroundTasksPage'
 import React,{useEffect,useState,useCallback,useMemo,useRef} from 'react'
@@ -10,10 +18,14 @@ import {createRoot} from 'react-dom/client'
 import {WorkspaceSettings} from './WorkspaceSettings'
 import {NativeSettingsDialog} from './NativeSettingsDialog'
 import {WorkspaceUploadDialog} from './WorkspaceUploadDialog'
+import {WorkspaceSplitDivider} from './WorkspaceSplitDivider'
+import {listenForWindowReturn,requestWindowReturn,setWindowReturnTarget,windowReturnTarget,workspaceWindowId} from './workspace-window-return'
+import {isWorkspaceFileName,workspaceFileImports} from './workspace-file-formats'
 import {AppFrame} from '../../../shell/src/renderer/src/AppFrame'
 
 import {LocaleProvider} from '../../../shell/src/renderer/src/locale'
 import type {TabsApi} from '../../../shell/src/shared/tabs-api'
+import {DEFAULT_IDLE_MS,SLEEP_SWEEP_INTERVAL_MS,defaultMaxLiveTabs} from '../../../shell/src/main/tab-hibernation'
 import {notifyFilesChanged} from '../../../shell/src/renderer/src/file-events'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -53,12 +65,15 @@ import zhCN from 'antd/locale/zh_CN'
 const workspacePages={channels:'频道分享',tasks:'后台任务',settings:'个人设置',trash:'回收站',results:'数据结果',documentResults:'文档数据结果',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
 type WorkspacePage=keyof typeof workspacePages
 import {AccountMenu} from './AccountMenu'
-import {CitationTabUnverified,createDocumentTabs,type DocumentFormat} from './document-tabs'
+import {CitationTabUnverified,createDocumentTabs,tabCloseTargets,tabMoveIndex,type DocumentFormat,type TabBulkClose} from './document-tabs'
 import {resolvedDocument,readOpenDocument} from './document-entry-reader'
 import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 import {createEntryNavigator} from './workspace-entry-navigation'
-import {createEntryRecovery,entryHash,parseEntryHash,resolveEntrySnapshot} from './workspace-entry-recovery'
-import {DocumentFrame} from './DocumentFrame'
+import {createEntryRecovery,entryHash,parseEntryHash,resolveEntrySnapshot,workspaceFileLink} from './workspace-entry-recovery'
+import {DocumentFrame,type DocumentMenuCommand} from './DocumentFrame'
+import {createWorkspaceWorkbookPicker} from '../editors/workbook-tab-picker'
+import {downloadBrowserFile} from '../editors/browser-download'
+import type {BrowserDocumentCommand} from '../editors/browser-document-command'
 import {DocumentPreview} from './DocumentPreview'
 import './workspace-shell.css'
 import './home-entry-b.css'
@@ -74,6 +89,7 @@ const sessionsClient=createLocalSessionsClient(workspaceSession.sessionFetch,()=
 const historyClient=createLoginHistoryClient(fetch,()=>client.endSession('expired'))
 const preferenceSession=createLocalPreferencesSession(client)
 const preferences=preferenceSession.preferences
+let assistantPreferenceSync: ReturnType<typeof createAssistantPreferenceSync<Awaited<ReturnType<typeof preferences.getPreferences>>>>
 const globalSettingsSession=createLocalGlobalSettingsSession(client)
 const globalSettings=globalSettingsSession.settings
 let userSkills: ReturnType<typeof createUserSkillsClient> | undefined
@@ -85,6 +101,7 @@ let notice=(message:string)=>window.alert(message)
 let showTrash=()=>{}
 let showUpload=(_files:File[]=[])=>{}
 let capabilities:Record<string,string>={}
+const tabRenameListeners=new Set<(id:string)=>void>()
 let showChromeMenu=(kind:'app'|'new'|'tabs'|'tab',x:number,y:number,id?:string)=>{}
 const surface=(id:string)=>[...document.querySelectorAll<HTMLElement>('.workspace-document[data-file-id]')].find(item=>item.dataset.fileId===id)
 const nativeFrame=(element:HTMLElement|undefined)=>element?.querySelector<HTMLIFrameElement>('.workspace-document-frame')
@@ -110,13 +127,72 @@ declare global {
   dyofficeConsumeAiDocContent?:(fileId:string)=>Promise<{title:string;html:string}|null>
   dyofficePrepareAiDoc?:(signal?:AbortSignal,expectedProof?:string)=>Promise<PreparedAiDocumentCreator>
   dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
+  dyofficeRevealPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
+  dyofficePdfCopySaved?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
   dyofficeOpenKnowledgeSource?:(id:string,revision:string)=>Promise<void>
   dyofficeCreateAiDoc?:(request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<RevisionRef>
+  dyofficeCreateAiCsv?:(request:{title:string;content:string})=>Promise<string>
   dyofficeCreateAiXlsx?:(request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
  }
 }
 let entryRecovery:ReturnType<typeof createEntryRecovery>|undefined
 let entryRecoveryNotice=''
+let restoreSession=true
+let sleepInactiveTabs=true
+let workspaceWindow:string|undefined
+let returnWindow:string|undefined
+let canCheckpointWorkspace=false
+function canOpenWorkspaceFileDirectly(file:ReturnType<typeof documentTabs.documents>[number]){
+ return !file.sourceRevision&&!new URL(file.src,location.origin).searchParams.has('channel')
+}
+function saveWorkspaceEntries(tabs:ReturnType<typeof documentTabs.list>){
+ if(!entryRecovery||!restoreSession)return
+ const active=tabs.find(tab=>tab.active)?.id??'home'
+ const entries=documentTabs.documents()
+ const restorable=entries.filter(file=>!file.sourceRevision).map(file=>file.id)
+ const split=documentTabs.splitView()
+ const layout=split&&[split.left,split.right].every(id=>id==='home'||entries.some(file=>file.id===id&&canOpenWorkspaceFileDirectly(file)))?split:null
+ entryRecovery.save(restorable,active,tabs.filter(tab=>tab.pinned).map(tab=>tab.id),layout)
+}
+function applyWorkspaceEditorPreferences(saved:Awaited<ReturnType<typeof preferences.getPreferences>>){
+ for(const tab of documentTabs.renderedDocuments()){
+  const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement
+  if(root){
+   publishBrowserAssistantPreferences(root,saved)
+   publishBrowserAutoSaveDefault(root,saved)
+  }
+ }
+}
+
+async function saveWorkspaceAssistantSide(side:AiPanelSide,proof:string){
+ if(!sourceWorkspace||sourceWorkspace.bound.proof!==proof)throw new Error('登录状态已改变，请重新加载当前工作区。')
+ return saveWorkspacePreferences({aiPanelSide:side})
+}
+
+async function saveWorkspacePreferences(patch:Parameters<typeof preferences.updatePreferences>[0]){
+ const saved=await preferences.updatePreferences(patch)
+ const updateTheme=patch.documentTheme!==undefined||patch.theme!==undefined
+ const updateAssistantPreferences=patch.showAssistant!==undefined||ASSISTANT_PREFERENCES_FIELDS.some(field=>patch[field]!==undefined)
+ if(updateTheme){
+  for(const tab of documentTabs.renderedDocuments()){
+   const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement
+   if(!root)continue
+   if(tab.format==='docx'||tab.format==='xlsx')applyBrowserEditorTheme(root,saved)
+  }
+ }
+ if(updateAssistantPreferences||patch.autoSave!==undefined){
+  assistantPreferenceSync?.saved()
+  applyWorkspaceEditorPreferences(saved)
+ }
+ sleepInactiveTabs=saved.sleepInactiveTabs!==false
+ restoreSession=saved.restoreSession!==false
+ if(restoreSession){
+  if(patch.restoreSession===true)entryRecovery?.resume()
+  saveWorkspaceEntries(documentTabs.list())
+ }else entryRecovery?.clear()
+ return saved
+}
+
 async function resolveOpenDocument(id:string,sourceRevision?:string){
  // Capture the authenticated workspace, not a mutable cookie-only client. The
  // bound reader rechecks session proof after each request, including other tabs.
@@ -131,10 +207,79 @@ async function open(id:string,sourceRevision?:string){
  documentTabs.open(await resolveOpenDocument(id,sourceRevision),token)
 }
 let busy=false
-async function upload(file:File,expectedProof=sourceWorkspace?.bound.proof,autoName=false){if(busy)throw new Error('正在导入，请稍候');if(!/\.(docx|xlsx|pptx|pdf)$/i.test(file.name))throw new Error('请选择 DOCX、XLSX、PPTX 或 PDF 文件。');busy=true;try{if(!expectedProof)throw new Error('登录状态未核验，请重新加载当前工作区。');const result=await client.upload(file,expectedProof,autoName);try{await open(result.file.fileId)}catch{notifyFilesChanged();throw new Error('文件已上传，但打开失败。请从最近文件中打开，不要重复上传。')}}finally{busy=false}}
+const officeImportUnlocks=new Map<string,{revision:string;unlockId:string;proof:string;release:()=>void}>()
+function discardOfficeImportUnlock(fileId:string){
+ const grant=officeImportUnlocks.get(fileId)
+ officeImportUnlocks.delete(fileId)
+ grant?.release()
+}
+function takeOfficeImportUnlock(fileId:string,revision:string){
+ const grant=officeImportUnlocks.get(fileId)
+ if(!grant||grant.revision!==revision||grant.proof!==sourceWorkspace?.bound.proof)return
+ officeImportUnlocks.delete(fileId)
+ return grant.unlockId
+}
+async function upload(file:File,expectedProof:string|undefined,autoName=false,password?:string,destination?:ConvertedCopyDestination){
+ if(busy)throw new Error('正在导入，请稍候')
+ const imports=workspaceFileImports(capabilities)
+ if(!isWorkspaceFileName(file.name,imports))throw new Error(`请选择 ${['DOCX','XLSX','PPTX','PDF',...imports.map(format=>format.toUpperCase())].join('、')} 文件。`)
+ if(!expectedProof)throw new Error('登录状态未核验，请重新加载当前工作区。')
+ busy=true
+ try{
+  const {file:{fileId,revision},unlockId:docxUnlockId}=await client.upload(file,expectedProof,autoName,password,destination)
+  const workspace=sourceWorkspace
+  const endpoint=`/api/v1/files/${encodeURIComponent(fileId)}`
+  let releaseDocx=docxUnlockId&&workspace?.bound.proof===expectedProof
+   ? ()=>{void workspace.bound.request(endpoint+'/docx/import-unlock','DELETE',{revision,unlockId:docxUnlockId}).catch(()=>{})}
+   : undefined
+  try{
+   if(workspace?.bound.proof!==expectedProof)throw new Error('登录状态已改变')
+   const token=documentTabs.reserveOpen(fileId)
+   const document=await resolveOpenDocument(fileId)
+   const nativeProtectedWorkbook=password!==undefined&&document.src.startsWith('/native-xlsx/')
+   const nativeProtectedDocument=password!==undefined&&document.src.startsWith('/native-docx/')
+   let prepared=false
+   if((nativeProtectedWorkbook||nativeProtectedDocument)&&!documentTabs.documents().some(tab=>tab.id===fileId)){
+    const unlockId=nativeProtectedWorkbook
+     ? (await workspace.bound.request<{unlockId:string}>(endpoint+'/sheets/unlock','POST',{revision,password}).catch(()=>undefined))?.unlockId
+     : docxUnlockId
+    if(unlockId){
+     const release=nativeProtectedWorkbook
+      ? ()=>{void workspace.bound.request(endpoint+'/sheets/lock','POST',{revision,unlockId}).catch(()=>{})}
+      : releaseDocx
+     releaseDocx=undefined
+     if(release&&workspace===sourceWorkspace&&!documentTabs.documents().some(tab=>tab.id===fileId)){
+      const grant={revision,unlockId,proof:expectedProof,release}
+      officeImportUnlocks.set(fileId,grant)
+      setTimeout(()=>{if(officeImportUnlocks.get(fileId)===grant)discardOfficeImportUnlock(fileId)},60_000)
+      prepared=true
+     }else release?.()
+    }
+   }
+   if(sourceWorkspace?.bound.proof!==expectedProof)throw new Error('登录状态已改变')
+   documentTabs.open(document,token)
+   if(!documentTabs.renderedDocuments().some(tab=>tab.id===fileId))throw new Error('文档未打开')
+   if((nativeProtectedWorkbook||nativeProtectedDocument)&&!prepared)return 'password-required' as const
+  }catch{
+   discardOfficeImportUnlock(fileId)
+   notifyFilesChanged();throw new Error('文件已上传，但打开失败。请从最近文件中打开，不要重复上传。')
+  }finally{releaseDocx?.()}
+ }finally{busy=false}
+}
 async function browse(){showUpload()}
+async function loadRecentWorkspaceFiles(){
+ const {entries}=await window.aiOffice.recents({limit:10})
+ return entries
+}
+
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
-function installBridge(){
+function installBridge(deploymentId?:string){
+ assistantPreferenceSync?.close()
+ if(deploymentId&&user){
+  assistantPreferenceSync=createAssistantPreferenceSync([deploymentId,user.id],preferences.getPreferences,applyWorkspaceEditorPreferences)
+  client.onSessionEnded(()=>assistantPreferenceSync?.close())
+ }
+ window.dyofficeRegisterWorkbookPicker=createWorkspaceWorkbookPicker(window,id=>documentTabs.activate(id))
  window.dyofficeOpenKnowledgeSource=async (id,revision)=>{
   try{await open(id,revision)}catch(error){
    if(error instanceof CitationTabUnverified){
@@ -162,6 +307,16 @@ function installBridge(){
   signal?.throwIfAborted()
   notifyFilesChanged()
   await openCreatedDocument(documentTabs,capabilities,receipt.fileId,bound.request)
+ }
+ window.dyofficeRevealPdfCopy=async(receipt,proof,signal)=>{
+  await client.bindSession(proof,signal)
+  signal?.throwIfAborted()
+  await window.aiOffice.revealPath(receipt.fileId,signal)
+ }
+ window.dyofficePdfCopySaved=async(_receipt,proof,signal)=>{
+  await client.bindSession(proof,signal)
+  signal?.throwIfAborted()
+  notifyFilesChanged()
  }
  window.dyofficePrepareAiDoc=async(signal,expectedProof)=>{
   const proof=expectedProof??sourceWorkspace?.bound.proof
@@ -207,6 +362,36 @@ function installBridge(){
   }}
  }
  window.dyofficeCreateAiDoc=async input=>(await window.dyofficePrepareAiDoc!()).save({...input,type:input.type??'docx'})
+ const createAiCsv:NonNullable<Window['dyofficeCreateAiCsv']>=async({title,content})=>{
+  const proof=sourceWorkspace?.bound.proof
+  if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。')
+  const bound=await client.bindSession(proof)
+  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
+  if(catalog.csvImport!=='editable')throw new Error('当前运行环境未启用 CSV 编辑，暂不支持新建。')
+  const bytes=new Blob([content])
+  if(bytes.size>32*1024*1024-3)throw new Error('生成的 CSV 超过 32 MiB 存储上限。')
+  const path='/api/v1/ai/csv-documents?'+new URLSearchParams({title})
+  let result:OpenFileResult & {name:string}
+  try{
+   result=await bound.request<typeof result>(path,'POST',bytes)
+   if(!isRevisionRef(result?.file)||result.format!=='csv'||typeof result.name!=='string'||!/\.csv$/i.test(result.name))throw new Error('Invalid CSV receipt')
+  }catch(error){
+   const status=(error as {status?:number}).status
+   if(status===undefined||status===408||status>=500){
+    notifyFilesChanged()
+    throw new Error('无法确认 CSV 创建结果，请先核对工作区文件，不要重复创建。')
+   }
+   throw error
+  }
+  notifyFilesChanged()
+  const id=result.file.fileId
+  try{
+   await openCreatedDocument(documentTabs,catalog,id,bound.request)
+   if(!documentTabs.renderedDocuments().some(tab=>tab.id===id))throw new Error('CSV 未打开')
+  }catch{throw new Error('CSV 已写入工作区，但打开失败。请从最近文件中打开，不要重复创建。')}
+  return result.name
+ }
+ Object.defineProperty(window,'dyofficeCreateAiCsv',{configurable:true,get:()=>capabilities.csvImport==='editable'?createAiCsv:undefined})
  window.dyofficeCreateAiXlsx=async request=>{
   const proof=sourceWorkspace?.bound.proof
   if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。')
@@ -218,7 +403,7 @@ function installBridge(){
   notifyFilesChanged()
   try{await openCreatedDocument(documentTabs,capabilities,id,bound.request)}catch{throw new Error('电子表格已创建，但打开失败。请从最近文件中打开，不要重复创建。')}
  }
- window.aiOfficeTabs={list:async()=>documentTabs.list(),activate:async id=>documentTabs.activate(id),close:async id=>{await documentTabs.close(id)},onChanged:documentTabs.subscribe,showNewMenu:async(x,y)=>showChromeMenu('new',x,y),showAppMenu:async(x,y)=>showChromeMenu('app',x,y),showMenu:async(x,y)=>showChromeMenu('tabs',x,y),showTabMenu:async(id,x,y)=>showChromeMenu('tab',x,y,id),detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:async(id,index)=>documentTabs.reorder(id,index),notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
+ window.aiOfficeTabs={list:async()=>documentTabs.list(),activate:async id=>documentTabs.activate(id),close:async id=>{await documentTabs.close(id)},onChanged:documentTabs.subscribe,onStartRename:listener=>{tabRenameListeners.add(listener);return()=>{tabRenameListeners.delete(listener)}},showNewMenu:async(x,y)=>showChromeMenu('new',x,y),showAppMenu:async(x,y)=>showChromeMenu('app',x,y),showMenu:async(x,y)=>showChromeMenu('tabs',x,y),showTabMenu:async(id,x,y)=>showChromeMenu('tab',x,y,id),detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:async(id,index)=>documentTabs.reorder(id,index),notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
 }
 async function restore(){
  const workspace=await createSourceWorkspaceSession(client)
@@ -227,22 +412,48 @@ async function restore(){
  preferenceSession.bind(bound)
   globalSettingsSession.bind(bound)
  const personal=await preferences.getPreferences()
+ restoreSession=personal.restoreSession!==false
+ sleepInactiveTabs=personal.sleepInactiveTabs!==false
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
  user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
  // Only authenticated identity may select a storage namespace. Legacy servers
  // without a deployment identity safely skip entry restoration.
  if(identity.deploymentId && !documentTabs.documents().length){
-  let storage:Storage|undefined;try{storage=window.sessionStorage}catch{}
-  entryRecovery=storage?createEntryRecovery(storage,identity.deploymentId,user.id):undefined
   const restoringHash=location.hash
-  const restored=await resolveEntrySnapshot(entryRecovery?.read()??{ids:[],active:'home'},parseEntryHash(restoringHash),async id=>resolvedDocument(capabilities,id,await bound.request(`/api/v1/files/${encodeURIComponent(id)}`)))
-  documentTabs.restoreEntries(restored.entries,restored.active)
+  const entryUrl=new URL(location.href)
+  const detached=entryUrl.searchParams.get('window')==='document'
+  let storage:Storage|undefined,lastStorage:Storage|undefined
+  let isolated=detached||window!==window.top
+  try{
+   storage=window.sessionStorage
+   const documentWindowKey='dyoffice:document-window'
+   if(detached)storage.setItem(documentWindowKey,'1')
+   isolated=isolated||storage.getItem(documentWindowKey)==='1'
+  }catch{}
+  try{lastStorage=window.localStorage}catch{}
+  entryRecovery=createEntryRecovery(storage,identity.deploymentId,user.id,lastStorage)
+  workspaceWindow=window===window.top?workspaceWindowId(storage):undefined
+  returnWindow=isolated&&workspaceWindow?windowReturnTarget(storage):undefined
+  canCheckpointWorkspace=!isolated
+  if(!restoreSession)entryRecovery.clear()
+  const allowLast=canCheckpointWorkspace&&!restoringHash&&!entryUrl.search
+  const snapshot=detached||!restoreSession?undefined:entryRecovery.read(allowLast)
+  const restored=await resolveEntrySnapshot(snapshot??{ids:[],active:'home'},parseEntryHash(restoringHash),async id=>resolvedDocument(capabilities,id,await bound.request(`/api/v1/files/${encodeURIComponent(id)}`)))
+  const pinned=detached&&entryUrl.searchParams.get('pinned')==='1'?[restored.active]:restored.pinned
+  documentTabs.restoreEntries(restored.entries,restored.active,pinned,restored.split)
   entryRecoveryNotice=restored.failed?'部分文档入口无法恢复，请从最近文件重新打开。未保存内容不会由入口恢复。':''
   // Let the Shell resolve a newer route instead of normalizing it back to the snapshot.
-  if(location.hash===restoringHash)history.replaceState(null,'',entryHash(restored.active))
+  if(location.hash===restoringHash){
+   if(detached){
+    entryUrl.searchParams.delete('window')
+    entryUrl.searchParams.delete('pinned')
+   }
+   entryUrl.hash=entryHash(restored.active)
+   history.replaceState(null,'',entryUrl)
+  }
  }
- installBridge()
+ installBridge(identity.deploymentId)
 }
 let logoutPending=false
 async function logout(){
@@ -293,7 +504,7 @@ function WorkspacePageContent({page,documentId,onClose,onCloseGuardChange,settin
  }
  if(page==='channels'&&sourceWorkspace)return <AssistantChannelsPage request={sourceWorkspace.bound.request} initialChannelId={channelId} onOpenDocument={openChannelDocument}/>
  if(page==='tasks'&&sourceWorkspace)return <BackgroundTasksPage request={sourceWorkspace.bound.request} onOpenDocument={openChannelDocument} onOpenChannel={onOpenChannel}/>
- if(page==='settings'&&user)return <WorkspaceSettings activeTab={settingsTab} onTabChange={onSettingsTabChange} sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>client.endSession('expired')}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
+ if(page==='settings'&&user)return <WorkspaceSettings activeTab={settingsTab} onTabChange={onSettingsTabChange} sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={saveWorkspacePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>client.endSession('expired')}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
  if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>client.endSession('expired')} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
@@ -309,17 +520,17 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const [resultFileId,setResultFileId]=useState<string>()
  const [channelId,setChannelId]=useState<string|undefined>(undefined)
  const [tabs,setTabs]=useState(documentTabs.list())
+ const movingDocuments=useRef(new Set<string>())
+ const [menuCommand,setMenuCommand]=useState<DocumentMenuCommand|null>(null)
+ const pendingMenuCommand=useRef<DocumentMenuCommand|null>(null)
  const [uploadFiles,setUploadFiles]=useState<File[]|null>(null)
+ const uploadSession=sourceWorkspace?.bound
+ const uploadProof=uploadSession?.proof
+ const fileImports=useMemo(()=>workspaceFileImports(capabilities),[capabilities])
  showUpload=files=>setUploadFiles(files??[])
  const [chromeMenu,setChromeMenu]=useState<{kind:'app'|'new'|'tabs'|'tab';x:number;y:number;id?:string}|null>(null)
  showChromeMenu=(kind,x,y,id)=>setChromeMenu({kind,x,y,id})
  const routeNavigation=useRef(false)
- useEffect(()=>{
-  const dragover=(event:DragEvent)=>{if(event.dataTransfer?.types.includes('Files'))event.preventDefault()}
-  const drop=(event:DragEvent)=>{if(event.target instanceof Element&&event.target.closest('.workspace-upload-modal'))return;const files=[...(event.dataTransfer?.files??[])];if(!files.length)return;event.preventDefault();if(!document.querySelector('.workspace-upload-modal'))showUpload(files)}
-  window.addEventListener('dragover',dragover);window.addEventListener('drop',drop,true)
-  return()=>{window.removeEventListener('dragover',dragover);window.removeEventListener('drop',drop,true)}
- },[])
  const closeGuard=useRef<(()=>boolean)|null>(null)
  const registerGuard=useCallback((guard:(()=>boolean)|null)=>{closeGuard.current=guard},[])
  const [settingsTab,setSettingsTab]=useState('account')
@@ -327,11 +538,17 @@ function Shell({recovery=false}:{recovery?:boolean}){
  useEffect(()=>{
   const selectedHash=(id:string)=>entryHash(documentTabs.documents().some(file=>file.id===id&&file.sourceRevision)?'home':id)
   const changed=(next:ReturnType<typeof documentTabs.list>)=>{
+   if(officeImportUnlocks.size){
+    const rendered=documentTabs.renderedDocuments()
+    for(const id of officeImportUnlocks.keys())if(!rendered.some(file=>file.id===id))discardOfficeImportUnlock(id)
+   }
    setTabs(next)
    const active=next.find(tab=>tab.active)?.id??'home'
-   const entries=documentTabs.documents()
-   const restorable=entries.filter(file=>!file.sourceRevision).map(file=>file.id)
-   entryRecovery?.save(restorable,active)
+   if(pendingMenuCommand.current&&pendingMenuCommand.current.id!==active){
+    pendingMenuCommand.current=null
+    setMenuCommand(null)
+   }
+   saveWorkspaceEntries(next)
    const hash=selectedHash(active)
    if(location.hash!==hash)history[routeNavigation.current?'replaceState':'pushState'](null,'',hash)
   }
@@ -360,8 +577,88 @@ function Shell({recovery=false}:{recovery?:boolean}){
   return()=>{unsubscribe();navigation.dispose();window.removeEventListener('hashchange',navigate)}
  },[])
  const activePage=useRef(page),recoveryBlocked=useRef(recovery)
+ const pendingTabReveal=useRef<AbortController|null>(null)
  activePage.current=page;recoveryBlocked.current=recovery
- useEffect(()=>client.onSessionEnded(()=>{recoveryBlocked.current=true}),[])
+ useEffect(()=>{
+  const stop=client.onSessionEnded(()=>{
+   officeImportUnlocks.clear()
+   recoveryBlocked.current=true
+   pendingTabReveal.current?.abort()
+   pendingMenuCommand.current=null
+   setMenuCommand(null)
+  })
+  return()=>{stop();pendingTabReveal.current?.abort()}
+ },[])
+ useEffect(()=>{
+  const checkpoint=()=>{
+   if(canCheckpointWorkspace&&restoreSession&&!logoutPending&&!recoveryBlocked.current)entryRecovery?.checkpoint()
+  }
+  window.addEventListener('pagehide',checkpoint)
+  return()=>window.removeEventListener('pagehide',checkpoint)
+ },[])
+ useEffect(()=>{
+  const memory=(navigator as Navigator&{deviceMemory?:number}).deviceMemory
+  const policy={maxLiveTabs:defaultMaxLiveTabs((memory??16)*2**30),idleMs:DEFAULT_IDLE_MS}
+  const enabled=()=>sleepInactiveTabs&&!logoutPending&&!recoveryBlocked.current
+  let sweeping=false
+  const timer=window.setInterval(()=>{
+   if(sweeping||!enabled())return
+   sweeping=true
+   void documentTabs.sleepIdleTabs(policy,enabled).catch(()=>{}).finally(()=>{sweeping=false})
+  },SLEEP_SWEEP_INTERVAL_MS)
+  return()=>window.clearInterval(timer)
+ },[])
+ const workspaceShortcutsActive=!page&&uploadFiles===null&&!chromeMenu
+ const acceptsWindowReturn=useRef(workspaceShortcutsActive)
+ acceptsWindowReturn.current=workspaceShortcutsActive
+ useEffect(()=>{
+  const owner=user?.id
+  if(!workspaceWindow||!owner)return
+  return listenForWindowReturn(owner,workspaceWindow,async action=>{
+   if(recoveryBlocked.current||logoutPending||!acceptsWindowReturn.current)return false
+   if(action.type==='ready')return true
+   await open(action.fileId)
+   if(recoveryBlocked.current||!documentTabs.documents().some(file=>file.id===action.fileId))return false
+   if(action.pinned)documentTabs.setPinned(action.fileId,true)
+   window.focus()
+   return true
+  })
+ },[])
+ const openWorkspaceFile=useCallback((files:File[]=[])=>{
+  if(!workspaceShortcutsActive||recoveryBlocked.current)return false
+  setUploadFiles(current=>current??files)
+  return true
+ },[workspaceShortcutsActive])
+ useEffect(()=>{
+  const dragOver=(event:DragEvent)=>{
+   if(event.dataTransfer?.types.includes('Files'))event.preventDefault()
+  }
+  const drop=(event:DragEvent)=>{
+   if(event.target instanceof Element&&event.target.closest('.workspace-upload-modal'))return
+   const files=Array.from(event.dataTransfer?.files??[])
+   if(!files.length)return
+   event.preventDefault()
+   openWorkspaceFile(files)
+  }
+  window.addEventListener('dragover',dragOver)
+  window.addEventListener('drop',drop,true)
+  return()=>{
+   window.removeEventListener('dragover',dragOver)
+   window.removeEventListener('drop',drop,true)
+  }
+ },[openWorkspaceFile])
+ const openShortcut=useCallback((event:KeyboardEvent)=>{
+  if(!workspaceShortcutsActive||recoveryBlocked.current||event.defaultPrevented||
+     event.altKey||event.shiftKey||event.isComposing||!(event.ctrlKey||event.metaKey)||
+     event.key.toLowerCase()!=='o')return
+  event.preventDefault()
+  event.stopPropagation()
+  if(!event.repeat)openWorkspaceFile()
+ },[workspaceShortcutsActive,openWorkspaceFile])
+ useEffect(()=>{
+  window.addEventListener('keydown',openShortcut)
+  return()=>window.removeEventListener('keydown',openShortcut)
+ },[openShortcut])
  useEffect(()=>{
   const host=window as Window & {dyofficeOpenEditorSettings?:(target:'skills'|'models',source:Window)=>void}
   const openSettings=(target:'skills'|'models',source:Window)=>{
@@ -378,12 +675,205 @@ function Shell({recovery=false}:{recovery?:boolean}){
   return()=>{if(host.dyofficeOpenEditorSettings===openSettings)delete host.dyofficeOpenEditorSettings}
  },[])
  const close=()=>{if(closeGuard.current?.()===false)return;setPage(null)}
+ const bulkCloseItems:{key:TabBulkClose;label:string}[]=[
+  {key:'closeOthers',label:'关闭其他页签'},
+  {key:'closeRight',label:'关闭右侧页签'},
+  {key:'closeAll',label:'关闭所有页签'},
+ ]
+ const moveItems=[
+  {key:'moveLeft',label:'向左移动',offset:-1},
+  {key:'moveRight',label:'向右移动',offset:1},
+ ] as const
+ const commandItems=[
+  {key:'save',label:'保存'},
+  {key:'save-as',label:'另存为…'},
+  {key:'print',label:'打印…'},
+ ] as const
+ const split=documentTabs.splitView()
+ const menuDocument=documentTabs.documents().find(file=>file.id===chromeMenu?.id)
+ const tabMenuItems=chromeMenu?.kind==='tab'&&chromeMenu.id?[
+  ...(menuDocument?commandItems.map(item=>({...item,disabled:!!page||uploadFiles!==null||!menuDocument.src.startsWith('/native-')})):[]),
+  ...(chromeMenu.id!=='home'&&user?.roles.includes('personal')?[{key:'documentResults',label:workspacePages.documentResults}]:[]),
+  ...(chromeMenu.id==='home'?[]:[{key:'rename',label:'重命名'},{key:'duplicate',label:'创建副本'},{key:'reveal',label:'打开所在文件夹'}]),
+  ...(menuDocument?[{key:'copyName',label:'复制文件名'},{key:'downloadSavedFile',label:'下载已保存文件'}]:[]),
+  ...(menuDocument&&canOpenWorkspaceFileDirectly(menuDocument)?[{key:'copyWorkspaceLink',label:'复制工作区链接'}]:[]),
+  ...(split?.left===chromeMenu.id||split?.right===chromeMenu.id?[{key:'swapSplit',label:'交换左右窗格'},{key:'endSplit',label:'退出并排查看'}]:menuDocument?[{key:'splitBeside',label:'并排查看'}]:[]),
+  ...(menuDocument?[{key:'moveWindow',label:'在新窗口打开',disabled:!canOpenWorkspaceFileDirectly(menuDocument)}]:[]),
+  ...(menuDocument&&returnWindow?[{key:'returnWindow',label:'移回原工作区',disabled:!canOpenWorkspaceFileDirectly(menuDocument)}]:[]),
+  ...(menuDocument?[{key:'pin',label:tabs.some(tab=>tab.id===menuDocument.id&&tab.pinned)?'取消固定页签':'固定页签'}]:[]),
+  ...(chromeMenu.id==='home'?[]:moveItems.map(({key,label,offset})=>({key,label,disabled:tabMoveIndex(tabs,chromeMenu.id!,offset)===undefined}))),
+  ...(chromeMenu.id==='home'?[]:[{key:'close',label:'关闭文档',danger:true}]),
+  ...bulkCloseItems.map(item=>({...item,disabled:!tabCloseTargets(tabs,chromeMenu.id!,item.key).length})),
+  {key:'reopen',label:'重新打开已关闭的页签',disabled:!documentTabs.canReopenClosed()},
+ ]:[]
+ async function copyWorkspaceFileLink(id:string){
+  if(recoveryBlocked.current)return
+  await navigator.clipboard.writeText(workspaceFileLink(id,location.origin))
+  notice('已复制工作区链接。')
+ }
+ async function copyTabIdentity(id:string,action:'copyName'|'copyWorkspaceLink'){
+  const file=documentTabs.documents().find(document=>document.id===id)
+  if(recoveryBlocked.current||!file)return
+  if(action==='copyWorkspaceLink'){
+   if(canOpenWorkspaceFileDirectly(file))await copyWorkspaceFileLink(id)
+   return
+  }
+  await navigator.clipboard.writeText(file.name)
+  notice('已复制文件名。')
+ }
+ async function downloadSavedTab(id:string){
+  const workspace=sourceWorkspace
+  const file=documentTabs.documents().find(document=>document.id===id)
+  if(recoveryBlocked.current||!workspace||!file)return
+  const path=`/api/v1/files/${encodeURIComponent(id)}`
+  const metadata=await workspace.bound.request<OpenFileResult>(path)
+  if(recoveryBlocked.current||workspace!==sourceWorkspace)return
+  if(!isRevisionRef(metadata?.file)||metadata.file.fileId!==id||metadata.format!==file.format||typeof metadata.name!=='string'||!metadata.name){
+   throw new Error('无法核对下载文件的信息。')
+  }
+  if(file.sourceRevision&&file.sourceRevision!==metadata.file.revision){
+   throw new Error('引用的版本已失效，请重新检索知识库。')
+  }
+  const content=`${path}/content?revision=${encodeURIComponent(metadata.file.revision)}`
+  if(metadata.downloadEndpoint!==content)throw new Error('下载地址无效。')
+  const blob=await workspace.bound.download(content+'&download=1')
+  if(recoveryBlocked.current||workspace!==sourceWorkspace)return
+  if(blob.size!==metadata.file.size)throw new Error('下载文件大小与已保存版本不一致。')
+  downloadBrowserFile(blob,metadata.name)
+ }
+ async function moveTabToWindow(id:string){
+  const file=documentTabs.documents().find(document=>document.id===id)
+  if(recoveryBlocked.current||!file||!canOpenWorkspaceFileDirectly(file)||movingDocuments.current.has(id))return
+  const popup=window.open('about:blank','_blank','popup')
+  if(!popup){notice('浏览器拦截了新窗口，请允许弹窗后重试。');return}
+  movingDocuments.current.add(id)
+  let moved=false
+  try{
+   if(workspaceWindow)setWindowReturnTarget(popup,workspaceWindow)
+   popup.opener=null
+   popup.document.title='正在打开文档…'
+   popup.document.body.textContent='请在原窗口完成文档保存。'
+   const url=new URL('/',location.origin)
+   url.searchParams.set('window','document')
+   if(documentTabs.list().some(tab=>tab.id===id&&tab.pinned))url.searchParams.set('pinned','1')
+   url.hash=entryHash(id)
+   moved=await documentTabs.close(id,{canDispose:()=>!popup.closed&&!recoveryBlocked.current,remember:false})
+   if(!moved){popup.close();return}
+   if(popup.closed)throw Error('新窗口已关闭，文档已在原工作区重新打开。')
+   popup.location.replace(url.href)
+  }catch(error){
+   popup.close()
+   if(moved&&!recoveryBlocked.current){
+    try{await open(id)}catch(cause){notice((cause as Error).message);return}
+   }
+   notice((error as Error).message)
+  }finally{
+   movingDocuments.current.delete(id)
+  }
+ }
+ async function returnTabToWorkspace(id:string){
+  const file=documentTabs.documents().find(document=>document.id===id)
+  const owner=user?.id,target=returnWindow
+  if(recoveryBlocked.current||!file||!owner||!target||!canOpenWorkspaceFileDirectly(file)||movingDocuments.current.has(id))return
+  movingDocuments.current.add(id)
+  const pinned=documentTabs.list().some(tab=>tab.id===id&&tab.pinned)
+  let closed=false
+  try{
+   if(!await requestWindowReturn(owner,target,{type:'ready'})){
+    notice('原工作区暂不可用，请回到原窗口后重试。')
+    return
+   }
+   closed=await documentTabs.close(id,{canDispose:()=>!recoveryBlocked.current,remember:false})
+   if(!closed)return
+   if(!await requestWindowReturn(owner,target,{type:'open',fileId:id,pinned}))throw Error('原工作区未能打开文档。')
+   if(!documentTabs.documents().length)window.close()
+  }catch(error){
+   if(closed&&!recoveryBlocked.current){
+    try{await open(id);if(pinned)documentTabs.setPinned(id,true)}
+    catch(cause){notice((cause as Error).message);return}
+   }
+   notice((error as Error).message)
+  }finally{movingDocuments.current.delete(id)}
+ }
+ async function renameTabFile(id:string,name:string){
+  if(recoveryBlocked.current||!documentTabs.documents().some(file=>file.id===id))return
+  try{
+   const result=await window.aiOffice.renameFile(id,name)
+   if(!result.ok)throw Error(result.error??'重命名失败。')
+   setMessage(current=>current===message?'':current)
+  }catch(error){notice((error as Error).message)}
+ }
+ function queueMenuCommand(id:string,command:BrowserDocumentCommand){
+  if(recoveryBlocked.current||page||uploadFiles!==null||
+     !documentTabs.documents().some(file=>file.id===id&&file.src.startsWith('/native-')))return
+  documentTabs.activate(id)
+  const request:DocumentMenuCommand={id,command,claim(){
+   if(pendingMenuCommand.current!==request||recoveryBlocked.current||
+      !documentTabs.list().some(tab=>tab.id===id&&tab.active))return false
+   pendingMenuCommand.current=null
+   setMenuCommand(null)
+   return true
+  },complete(handled){
+   if(!handled)notice('当前文档无法执行此操作。')
+  }}
+  pendingMenuCommand.current=request
+  setMenuCommand(request)
+ }
+ function moveTabMenuSelection(id:string,key:'moveLeft'|'moveRight'){
+  const index=tabMoveIndex(documentTabs.list(),id,key==='moveLeft'?-1:1)
+  if(index!==undefined)documentTabs.reorder(id,index)
+ }
+ async function revealTab(id:string){
+  pendingTabReveal.current?.abort()
+  const controller=new AbortController()
+  pendingTabReveal.current=controller
+  let active=documentTabs.list().find(tab=>tab.active)?.id
+  const unsubscribe=documentTabs.subscribe(tabs=>{
+   const next=tabs.find(tab=>tab.active)?.id
+   if(!tabs.some(tab=>tab.id===id)||(next!=='home'&&next!==active))controller.abort()
+   active=next
+  })
+  try{await window.aiOffice.revealPath(id,controller.signal)}
+  catch(error){if(!controller.signal.aborted)notice((error as Error).message)}
+  finally{
+   unsubscribe()
+   if(pendingTabReveal.current===controller)pendingTabReveal.current=null
+  }
+ }
+ async function closeTabWithKeyboard(id:string){
+  if(!workspaceShortcutsActive||recoveryBlocked.current)return false
+  try{return await documentTabs.close(id)}
+  catch(error){notice((error as Error).message);return false}
+ }
+ function closeTabMenuSelection(id:string,action:TabBulkClose){
+  const targets=tabCloseTargets(documentTabs.list(),id,action)
+  void documentTabs.closeMany(targets,()=>!recoveryBlocked.current).catch(error=>notice(error.message))
+ }
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} data-file-id={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.format==='pdf'||file.src.startsWith('/native-')?<DocumentFrame key={file.src} file={file} registerGuard={documentTabs.setGuard} onAutoFileName={updateAutoFileTab} sessionActive={()=>!recoveryBlocked.current}/>:<DocumentPreview key={file.src} fileId={file.id} name={file.name} format={file.format} sourceRevision={file.sourceRevision} request={sourceWorkspace?.bound.request??client.request}/>}</div>)}</>}/>
+  <AppFrame hideAppMenu hideSingleTabList allowHomeTabMenu renameTabFile={renameTabFile} closeTabWithKeyboard={closeTabWithKeyboard} detachTabOnDrop={moveTabToWindow} homeBeside={split?.left==='home'?'left':split?.right==='home'?'right':undefined} initialOnboardingSeen={true} homeProps={{copyWorkspaceFileLink,renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf',...fileImports],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=>{
+   const active=tabs.some(tab=>tab.id===file.id&&tab.active)
+   const pane=split?.left===file.id?'left':split?.right===file.id?'right':undefined
+   const selectPane=pane&&!active&&workspaceShortcutsActive?()=>{
+    if(recoveryBlocked.current)return
+    if(!documentTabs.list().some(tab=>tab.active&&tab.id===file.id))documentTabs.activate(file.id)
+   }:undefined
+   return <div key={file.id} data-file-id={file.id} className="workspace-document" hidden={!active&&!pane}
+     data-workspace-pane={pane} onPointerDown={selectPane} onFocusCapture={selectPane}>
+    {file.format==='pdf'||file.src.startsWith('/native-')
+     ?<DocumentFrame key={`${file.src}:${documentTabs.renderGeneration(file.id)}`} file={file} documentShortcutsActive={workspaceShortcutsActive&&active} menuCommand={menuCommand?.id===file.id?menuCommand:null}
+       onOpenShortcut={openShortcut} onOpenWorkspaceFile={openWorkspaceFile} onSaveAssistantSide={saveWorkspaceAssistantSide} takeOfficeImportUnlock={takeOfficeImportUnlock} onPaneInteraction={selectPane} onDropWorkspaceFiles={openWorkspaceFile} fileImports={fileImports}
+       registerGuard={documentTabs.setGuard} registerSleepGuard={documentTabs.setSleepGuard} onAutoFileName={updateAutoFileTab} sessionActive={()=>!recoveryBlocked.current}/>
+     :<DocumentPreview key={file.src} fileId={file.id} name={file.name} format={file.format} sourceRevision={file.sourceRevision} request={sourceWorkspace?.bound.request??client.request}/>}
+   </div>
+  })}{split&&<WorkspaceSplitDivider key={JSON.stringify([split.left,split.right])} disabled={!workspaceShortcutsActive||recovery} initialWidth={split.width} onResize={documentTabs.resizeSplit}/>}</>}/>
   {page&&<NativeSettingsDialog title={page==='documentResults'?workspacePages[page]+' · '+(tabs.find(tab=>tab.id===resultFileId)?.title??''):workspacePages[page]} onClose={close}><WorkspacePageContent key={page} documentId={page==='documentResults'?resultFileId:undefined} page={page} channelId={channelId} onOpenChannel={id=>{setChannelId(id);setPage('channels')}} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/></NativeSettingsDialog>}
-  {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} upload={upload} onClose={()=>setUploadFiles(null)}/>}
-  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[...(chromeMenu.id&&chromeMenu.id!=='home'&&user?.roles.includes('personal')?[{key:'documentResults',label:workspacePages.documentResults}]:[]),{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='documentResults'&&target.id){setResultFileId(target.id);setPage('documentResults')}else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
+  {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} fileImports={fileImports}
+    readImportPromptPreferences={uploadSession&&(()=>uploadSession.request<ImportPromptPreferences>('/api/v1/preferences'))}
+    rememberImportPrompt={uploadSession&&(async field=>{await uploadSession.request('/api/v1/preferences','PUT',{[field]:true})})}
+    loadDestinationFolders={uploadSession&&(async()=>(await uploadSession.request<WorkspaceFolderList>('/api/v1/workspace/folders')).folders)}
+    upload={(file,password,destination)=>upload(file,uploadProof,false,password,destination)} loadRecent={loadRecentWorkspaceFiles} openRecent={open} onClose={()=>setUploadFiles(null)}/>}
+  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?tabMenuItems:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='documentResults'&&target.id){setResultFileId(target.id);setPage('documentResults')}else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&(key==='save'||key==='save-as'||key==='print'))queueMenuCommand(target.id,key);else if(target.kind==='tab'&&target.id&&(key==='copyName'||key==='copyWorkspaceLink'))void copyTabIdentity(target.id,key).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='downloadSavedFile')void downloadSavedTab(target.id).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='splitBeside'&&!recoveryBlocked.current)documentTabs.splitBeside(target.id);else if(target.kind==='tab'&&key==='swapSplit'&&!recoveryBlocked.current)documentTabs.swapSplit();else if(target.kind==='tab'&&key==='endSplit')documentTabs.endSplit();else if(target.kind==='tab'&&target.id&&key==='moveWindow')void moveTabToWindow(target.id);else if(target.kind==='tab'&&target.id&&key==='returnWindow')void returnTabToWorkspace(target.id);else if(target.kind==='tab'&&target.id&&key==='pin'&&!recoveryBlocked.current)documentTabs.setPinned(target.id,!documentTabs.list().some(tab=>tab.id===target.id&&tab.pinned));else if(target.kind==='tab'&&target.id&&(key==='moveLeft'||key==='moveRight')&&!recoveryBlocked.current)moveTabMenuSelection(target.id,key);else if(target.kind==='tab'&&target.id&&(key==='closeOthers'||key==='closeRight'||key==='closeAll'))closeTabMenuSelection(target.id,key);else if(target.kind==='tab'&&key==='reopen'&&!recoveryBlocked.current)void documentTabs.reopenClosed(resolveOpenDocument).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='reveal'&&!recoveryBlocked.current)void revealTab(target.id);else if(target.kind==='tab'&&target.id&&key==='rename'&&!recoveryBlocked.current)tabRenameListeners.forEach(listener=>listener(target.id!));else if(target.kind==='tab'&&target.id&&key==='duplicate'&&!recoveryBlocked.current)void window.aiOffice.duplicateFile(target.id).then(()=>setMessage(current=>current===message?'':current)).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
   {message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}
  </>
 }

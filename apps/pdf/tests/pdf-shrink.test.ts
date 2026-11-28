@@ -47,6 +47,7 @@ describe('shrinkDocument', () => {
       ColorSpace: 'DeviceRGB',
       BitsPerComponent: 8,
       Filter: 'FlateDecode',
+      Mask: doc.context.register(doc.context.obj([0, 0, 0, 0, 0, 0])),
       Length: 1,
     })
     const ref = doc.context.nextRef()
@@ -159,6 +160,7 @@ describe('shrinkDocument', () => {
     doc.addPage([300, 300])
     const w = 4000
     const h = 1000
+    const maskRef = doc.context.nextRef()
     const baseRef = doc.context.nextRef()
     doc.context.assign(
       baseRef,
@@ -176,7 +178,6 @@ describe('shrinkDocument', () => {
         deflateSync(new Uint8Array(w * h * 3).fill(200)),
       ),
     )
-    const maskRef = doc.context.nextRef()
     const maskDict = doc.context.obj({
       Type: 'XObject',
       Subtype: 'Image',
@@ -193,8 +194,11 @@ describe('shrinkDocument', () => {
     maskDict.set(PDFName.of('Matte'), doc.context.obj([1, 0, 0, -1, 0, h]))
     const withMatte = shrinkDocument(doc)
     expect(withMatte.imagesDownsampled).toBe(0)
-    // without the Matte the pair shrinks to the same new dimensions
     maskDict.delete(PDFName.of('Matte'))
+    maskDict.set(PDFName.of('DecodeParms'), doc.context.obj({ Predictor: 12 }))
+    expect(shrinkDocument(doc).imagesDownsampled).toBe(0)
+    maskDict.delete(PDFName.of('DecodeParms'))
+    // Both compatible streams shrink together even when the mask sorts first.
     const paired = shrinkDocument(doc)
     expect(paired.imagesDownsampled).toBe(2)
     const dims = (r: unknown) => {

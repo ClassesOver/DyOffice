@@ -51,18 +51,22 @@ async function execute(packet:Record<string,unknown>) {
   const bytes=await readBounded(resolveWorkPath('/work/input.xlsx'),MAX)
   let result:unknown
   if(packet.command==='gateway_convert_merge_source'){
-    if(Object.keys(request).join(',')!=='format'||(request.format!=='csv'&&request.format!=='tsv'&&request.format!=='xls'))throw invalidInput()
+    const keys=Object.keys(request).sort().join(',')
+    const allowEmpty=keys==='allowEmpty,format'&&(request.format==='csv'||request.format==='tsv')&&request.allowEmpty===true
+    if((keys!=='format'&&!allowEmpty)||(request.format!=='csv'&&request.format!=='tsv'&&request.format!=='xls'))throw invalidInput()
     try{
       if(request.format==='xls')result=convertLegacyXls(bytes)
       else{
         const converted=await csvToXlsxBufferForOpen(decodeCsvBuffer(bytes),'Sheet1',request.format==='tsv'?'\t':undefined)
-        if(converted.empty)throw invalidInput()
+        if(converted.empty&&!allowEmpty)throw invalidInput()
         result=converted.buffer
       }
     }catch{throw invalidInput()}
   }else if(packet.command==='gateway_package') {
     if(Object.keys(request).length===0) result=await readWorkbookPackage(bytes)
     else if(Object.keys(request).join(',')==='externalLinks'&&request.externalLinks===true) result=await readWorkbookPackage(bytes,undefined,{externalLinks:true})
+    else if(Object.keys(request).join(',')==='webQuery'&&typeof request.webQuery==='string'&&request.webQuery.length>0&&request.webQuery.length<=200)
+      result=await readWorkbookPackage(bytes,undefined,{webQuery:request.webQuery})
     else {
       if(Object.keys(request).sort().join(',')!=='cachePath,path'||typeof request.path!=='string'||typeof request.cachePath!=='string')throw invalidInput()
       result=await readWorkbookPackage(bytes,undefined,{path:request.path,cachePath:request.cachePath})

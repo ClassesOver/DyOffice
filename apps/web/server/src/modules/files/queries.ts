@@ -3,9 +3,9 @@ import type { BusinessPrincipal, PrincipalTransactions, FileCredential } from '.
 import { authorize } from '../policy/authorize.ts'
 import { authError } from '../auth/sessions.ts'
 import { UNSUPPORTED_CAPABILITIES } from '../../../../../../packages/web-contracts/src/host.ts'
-import type { OfficeFormat, OpenFileResult } from '../../../../../../packages/web-contracts/src/api.ts'
-export type Upload = { id: string; file_id: string; revision_id: string; workspace_id: string; name: string; format: OfficeFormat; expected_size: number; auth_version: number; state: string; sha256: string | null; attempt_id: string | null; expires_at: Date; kind: 'import' | 'revision'; base_revision: string | null; lease_epoch: string | null; editor_id: string | null; session_id: string | null; restored_from: string | null; job_id: string | null; job_epoch: string | null; pdf_auto_name: string | null; auto_name_pending:boolean; office_signature_protected: boolean | null }
-export type FileRow = { id: string; workspace_id: string; name: string; format: OfficeFormat; current_revision: string; deleted_at: Date | null; created_at: Date; updated_at: Date; object_key: string; sha256: string; size: number; pdf_auto_name_pending: boolean; auto_name_pending:boolean; office_signature_protected: boolean | null }
+import type { WorkspaceFileFormat, OpenFileResult } from '../../../../../../packages/web-contracts/src/api.ts'
+export type Upload = { id: string; file_id: string; revision_id: string; workspace_id: string; name: string; format: WorkspaceFileFormat; expected_size: number; auth_version: number; state: string; sha256: string | null; attempt_id: string | null; expires_at: Date; kind: 'import' | 'revision'; base_revision: string | null; lease_epoch: string | null; editor_id: string | null; session_id: string | null; restored_from: string | null; job_id: string | null; job_epoch: string | null; pdf_auto_name: string | null; auto_name_pending:boolean; office_signature_protected: boolean | null; office_password_protected: boolean; pdf_encrypted: boolean; office_password_change: boolean; import_folder_id: string | null }
+export type FileRow = { id: string; workspace_id: string; name: string; format: WorkspaceFileFormat; current_revision: string; deleted_at: Date | null; created_at: Date; updated_at: Date; object_key: string; sha256: string; size: number; pdf_auto_name_pending: boolean; auto_name_pending:boolean; office_signature_protected: boolean | null; office_password_protected: boolean; pdf_encrypted: boolean }
 export const uuid = (id: string) => { if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw authError(400); return id.toLowerCase() }
 export const scope = (p: BusinessPrincipal) => [p.deploymentId,p.userId]
 export const objectKey = (p: BusinessPrincipal, revisionId: string) => `${p.deploymentId}/${p.userId}/objects/${revisionId}`
@@ -63,7 +63,7 @@ export async function loadFile(connection: PoolClient, principal: BusinessPrinci
   // A fresh statement after the lock sees the matching committed revision.
   const locked = await connection.query(`SELECT id FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NULL ${includeTrash ? '' : 'AND deleted_at IS NULL'} FOR ${lock}`, [...scope(principal),id])
   if (!locked.rowCount) throw authError(404)
-  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size,r.office_signature_protected FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 AND f.purge_started_at IS NULL ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
+  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size,r.office_signature_protected,r.office_password_protected,r.pdf_encrypted FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 AND f.purge_started_at IS NULL ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
   if (!row) throw authError(404)
   return row
 }

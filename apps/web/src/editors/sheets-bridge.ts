@@ -1,8 +1,20 @@
 import type {SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
+import {isSpreadsheetArchive} from '../../../../packages/web-contracts/src/api.ts'
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {messages} from './messages.ts'
+import {browserEditorTheme} from './browser-editor-theme'
+import {browserAutoSaveDefault} from './browser-autosave-default'
 import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
+import {downloadWebCsv} from './web-ai-document-api'
+import {printInBrowser} from './browser-print.ts'
+import {browserFileName} from './browser-download'
+import {subscribeBrowserDocumentCommands} from './browser-document-command'
+import {draftCopyParentActive} from './draft-copy-authority'
+import type {RegisterWorkbookPicker} from './workbook-tab-picker'
+import type {WorkspaceSourceAccess} from './workspace-source-picker'
+import type {HomeApi} from '../../../shell/src/shared/home-api'
+import {CSV_IMPORT_DEFAULT_LIMIT_MB} from '@genoffice/xlsx-gateway/gateway/csv-limits'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
   workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,externalLinksUpdateResultSchema,
@@ -10,24 +22,46 @@ import {
   workbookFormulaCellsRequestSchema, workbookFormulaCellsResultSchema, workbookRowOutlineResultSchema,
   workbookRedactionsResultSchema, workbookSlicerStateResultSchema, workbookQueriesResultSchema,
   workbookRecalcRequestSchema,workbookRecalcResultSchema,
-  workbookConnectionsResultSchema, workbookSaveRequestSchema,
+  workbookConnectionsResultSchema, workbookRefreshRequestSchema, workbookRefreshResultSchema, workbookSaveRequestSchema,
   workbookFindCellsRequestSchema, workbookFindCellsResultSchema,
+  workbookExportPdfRequestSchema, workbookCreateDocumentRequestSchema,
   type DesktopApi, type WorkbookFile, type WorkbookSaveRequest, type WorkbookRangeResult,
 } from '../../../sheets/src/shared/desktop-api'
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
 type ParentAiWindow = Window & {
+  aiOffice?: Pick<HomeApi,'revealPath'>
+  dyofficeRegisterWorkbookPicker?:RegisterWorkbookPicker
+  dyofficeCreateAiCsv?: (request:{title:string;content:string}) => Promise<string>
   dyofficeCreateAiXlsx?: (request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
   dyofficeCreateAiDoc?: (request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<void>
 }
 type SaveResult = {canceled: false; file: WorkbookFile; touchedEntries: string[]}
-type Recovery = {saved?: Awaited<ReturnType<SessionFileHost['saveSheets']>>; resolve(value: SaveResult): void; reject(error: unknown): void}
+type SavedWorkbook = Awaited<ReturnType<SessionFileHost['saveSheets']>>
+type ApplySavedWorkbook = (saved:SavedWorkbook)=>Promise<WorkbookFile>
+type Recovery = {saved?:SavedWorkbook; apply:ApplySavedWorkbook; resolve(value:SaveResult):void; reject(error:unknown):void}
 type OpeningViewport = {sheetId:string;endRow:number;endColumn:number;result:WorkbookRangeResult}
 type Session = {openingViewport?:OpeningViewport; revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
 const mergeExtensions = ['xlsx','xlsm','xls','csv','tsv'] as const
+const mergeMaxFiles=8
+const localMergeAccept=mergeExtensions.map(ext=>'.'+ext).join(',')
 const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean;getExportLayout?:(sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
+type SheetsBridgeOptions = {
+  fetchImpl?: typeof fetch
+  onChange?: () => void
+  getAttachmentFile?: (path:string)=>Promise<File|null>
+  docxCreationAvailable?: boolean
+  isCsv?: boolean
+  confirmCsvSave?: ()=>Promise<'csv'|'xlsx'|'cancel'>
+  getExportLayout?: (sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout
+  pickMergeFiles?: (signal:AbortSignal)=>Promise<File[]>
+  workspaceSources?: WorkspaceSourceAccess & {proof: string}
+}
+export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {
+  fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,
+  isCsv=false,confirmCsvSave=async()=>'cancel',pickMergeFiles,workspaceSources,
+}: SheetsBridgeOptions = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
@@ -36,6 +70,12 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   }
   let committed: import('../../../../packages/web-contracts/src/api').RevisionRef | null = null
   const sessions = new Map<string,Session>(), controllers = new Set<AbortController>()
+  const activeWorkbook = () => [...sessions.values()].find(current=>!current.attachment)
+  const picker = (()=>{
+    if (typeof window==='undefined' || window.parent===window) return
+    try { return (window.parent as ParentAiWindow).dyofficeRegisterWorkbookPicker?.(window,fileId,()=>!disposed&&!!activeWorkbook()) }
+    catch { return }
+  })()
   const renameListeners = new Set<(name:string)=>void>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
   let recovery: Recovery | null = null, confirming = false
@@ -53,30 +93,44 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   let inFlight = 0
   const waiting: (() => void)[] = []
   let csrf: string | undefined, disposed = false, queued = true, pendingEdits = 0
+  let unlockGrant: {revision:string;id:string} | undefined
   const noEvent = () => () => {}
   const unavailable = async (): Promise<never> => { throw new Error(text.unavailable) }
   const session = (id: string) => { const current = sessions.get(id); if (disposed || !current) throw hostError('INVALID_REVISION','workbook session'); return current }
-  async function exportDraftCopy(id: string, phases: WorkbookSaveRequest[], proof: string, signal: AbortSignal): Promise<Blob> {
+  async function prepareDraftCopy(id: string, phases: WorkbookSaveRequest[], name: string, proof: string, signal: AbortSignal, folderId?: string):
+    Promise<{blob:Blob}|{uploadId:string;check:()=>void}> {
     const current = session(id), { lease } = host.getState(fileId)
+    const grant = unlockGrant
+    const revision = current.revision
     const check = () => {
       signal.throwIfAborted()
       const state = host.getState(fileId)
       if (session(id) !== current || current.attachment || !lease || recovery || state.status !== 'idle' ||
-          state.revision.revision !== current.revision || state.lease?.editorId !== lease.editorId || state.lease.leaseEpoch !== lease.leaseEpoch) {
+          state.revision.revision !== revision || current.revision !== revision || state.lease?.editorId !== lease.editorId ||
+          state.lease.leaseEpoch !== lease.leaseEpoch || (current.file.passwordProtected && (!grant || unlockGrant !== grant || grant.revision !== revision))) {
         throw hostError('CONFLICT','workbook draft copy')
       }
       return lease
     }
     const {editorId, leaseEpoch} = check()
-    const body = JSON.stringify({baseRevision:current.revision, editorId, leaseEpoch, phases:phases.map(phase=>workbookSaveRequestSchema.parse(phase))})
+    const protectedCopy = current.file.passwordProtected && grant
+    const body = JSON.stringify({baseRevision:revision, editorId, leaseEpoch, phases:phases.map(phase=>workbookSaveRequestSchema.parse(phase)),
+      ...(protectedCopy?{name,folderId}:{})})
     if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','workbook draft copy')
-    const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/export`,{method:'POST',credentials:'same-origin',redirect:'error',signal,
-      headers:{'content-type':'application/json','x-csrf-token':proof},body})
-    if (!response.ok || response.headers.get('content-type') !== 'application/octet-stream') throw hostError('UNAVAILABLE','workbook draft copy')
+    const endpoint = protectedCopy ? 'copy/uploads' : 'export'
+    const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${endpoint}`,{method:'POST',credentials:'same-origin',redirect:'error',signal,
+      headers:{'content-type':'application/json','x-csrf-token':proof,...(protectedCopy?{'x-dyoffice-workbook-unlock':protectedCopy.id}:{})},body})
+    if (!response.ok) throw hostError('UNAVAILABLE','workbook draft copy')
+    if (protectedCopy) {
+      const {uploadId} = await response.json()
+      if (typeof uploadId !== 'string' || !workbookId.test(uploadId)) throw hostError('INVALID_RESPONSE','workbook draft copy')
+      return {uploadId,check}
+    }
+    if (response.headers.get('content-type') !== 'application/octet-stream') throw hostError('UNAVAILABLE','workbook draft copy')
     const blob = await response.blob()
     check()
     if (!blob.size || blob.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','workbook draft copy')
-    return blob
+    return {blob}
   }
   async function request(revision: string, method: string, input: object = {}) {
     if (disposed) throw hostError('UNAVAILABLE','disposed')
@@ -91,39 +145,65 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
           csrf = body.csrfToken
         }
         const proof=csrf
-        const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${method}`,{method:'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':proof!},body:JSON.stringify({revision,...input})})
+        const grant=method!=='unlock'?unlockGrant?.id:undefined
+        const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${method}`,{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':proof!,...(grant?{'x-dyoffice-workbook-unlock':grant}:{})},body:JSON.stringify({revision,...input})})
         if(response.status===403 && attempt===0){if(csrf===proof)csrf=undefined;continue}
-        if (!response.ok) throw hostError(response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : response.status === 409 ? 'CONFLICT' : 'UNAVAILABLE','workbook read')
+        if(response.status===422&&method==='unlock')throw Error(prefs.language==='en'?'The workbook password is incorrect.':'工作簿密码错误。')
+        if (!response.ok) throw Object.assign(hostError(response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : response.status === 409 ? 'CONFLICT' : 'UNAVAILABLE','workbook read'),{status:response.status})
         if (!response.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE','workbook read')
         return await response.json()
       }
     } finally { controllers.delete(controller) }
   }
-  async function requestAttachment(revision:string,name:string,file:File){
+  async function unlockWorkbook(password:string) {
+    const revision=host.getState(fileId).revision.revision
+    const result=await call(revision,'unlock',{password})
+    if(disposed||host.getState(fileId).revision.revision!==revision||typeof result?.unlockId!=='string'||!workbookId.test(result.unlockId))throw hostError('CONFLICT','workbook unlock')
+    unlockGrant={revision,id:result.unlockId}
+  }
+  function releaseWorkbookUnlock(){
+    const grant=unlockGrant
+    unlockGrant=undefined
+    if(grant&&csrf)void fetchImpl(`/api/v1/files/${fileId}/sheets/lock`,{method:'POST',credentials:'same-origin',keepalive:true,redirect:'error',
+      headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({revision:grant.revision,unlockId:grant.id})}).catch(()=>{})
+  }
+  async function adoptWorkbookImportUnlock(revision:string,id:string){
+    if(disposed||!workbookId.test(id)||host.getState(fileId).revision.revision!==revision)return false
+    unlockGrant={revision,id}
+    try{
+      await call(revision,'inspect')
+      if(!disposed&&host.getState(fileId).revision.revision===revision)return true
+    }catch{
+      // A stale import grant falls back to the normal password prompt.
+    }
+    releaseWorkbookUnlock()
+    return false
+  }
+  async function requestAttachment(revision:string,name:string,file:File,sessionProof?:string){
     if(disposed)throw hostError('UNAVAILABLE','disposed')
     const controller=new AbortController();controllers.add(controller)
     try{
       for(let attempt=0;attempt<2;attempt++){
-        if(!csrf){const response=await fetchImpl('/api/v1/auth/csrf',{credentials:'same-origin',cache:'no-store',signal:controller.signal});if(!response.ok)throw hostError('UNAUTHORIZED','session');const body=await response.json();if(typeof body?.csrfToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken))throw hostError('INVALID_RESPONSE','csrf');csrf=body.csrfToken}
-        const proof=csrf,query=new URLSearchParams({revision,name})
+        if(!sessionProof&&!csrf){const response=await fetchImpl('/api/v1/auth/csrf',{credentials:'same-origin',cache:'no-store',signal:controller.signal});if(!response.ok)throw hostError('UNAUTHORIZED','session');const body=await response.json();if(typeof body?.csrfToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken))throw hostError('INVALID_RESPONSE','csrf');csrf=body.csrfToken}
+        const proof=sessionProof??csrf,query=new URLSearchParams({revision,name})
         const response=await fetchImpl(`/api/v1/files/${fileId}/sheets/merge-sources/open?${query}`,{method:'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/octet-stream','x-csrf-token':proof!},body:file})
-        if(response.status===403&&attempt===0){if(csrf===proof)csrf=undefined;continue}
+        if(!sessionProof&&response.status===403&&attempt===0){if(csrf===proof)csrf=undefined;continue}
         if(!response.ok)throw hostError(response.status===401||response.status===403?'UNAUTHORIZED':response.status===409?'CONFLICT':'UNAVAILABLE','merge attachment')
         if(!response.headers.get('content-type')?.includes('application/json'))throw hostError('INVALID_RESPONSE','merge attachment')
         return await response.json()
       }
     }finally{controllers.delete(controller)}
   }
-  async function openMergeFiles(files:File[],revision:string,check=()=>true){
+  async function openMergeFiles(files:File[],revision:string,check=()=>true,sessionProof?:string){
     const supported:readonly string[]=mergeExtensions
-    if(files.length>8||files.some(file=>!file.size||file.size>50*1024*1024||!supported.includes(file.name.split('.').at(-1)?.toLowerCase()??''))){
+    if(files.length>mergeMaxFiles||files.some(file=>!file.size||file.size>50*1024*1024||!supported.includes(file.name.split('.').at(-1)?.toLowerCase()??''))){
       throw new Error(prefs.language==='zh'?'请选择最多 8 个工作簿，每个最多 50 MiB。':'Choose up to 8 supported workbooks, each at most 50 MiB.')
     }
     const opened:WorkbookFile[]=[]
     try{
       for(const file of files){
         if(!check()||host.getState(fileId).revision.revision!==revision)throw hostError('CONFLICT','merge source revision')
-        const raw=await requestAttachment(revision,file.name,file)
+        const raw=await requestAttachment(revision,file.name,file,sessionProof)
         const source=workbookFileSchema.parse({...raw,readOnly:true,needsSaveAs:false,automaticRecoveryDisabled:true})
         sessions.set(source.sessionId,{revision,file:source,attachment:true})
         opened.push(source)
@@ -138,6 +218,16 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       throw error
     }
   }
+  async function chooseMergeFiles(signal:AbortSignal):Promise<File[]> {
+    if(pickMergeFiles)return pickMergeFiles(signal)
+    if(!workspaceSources)return pickLocalFiles(localMergeAccept,signal,true)
+    const {pickWorkspaceSourceFiles}=await import('./workspace-source-picker')
+    const language=prefs.language
+    return pickWorkspaceSourceFiles(workspaceSources,{
+      title:language==='en'?'Select workbooks to merge':'选择要合并的工作簿',
+      formats:['xlsx','xlsm','csv'],language,localAccept:localMergeAccept,maxFiles:mergeMaxFiles,maxBytes:32*1024*1024,
+    },signal)
+  }
   async function call(revision: string, method: string, input: object = {}) {
     if (waiting.length >= 64) throw hostError('UNAVAILABLE','read capacity')
     if (inFlight >= 2) await new Promise<void>(resolve => waiting.push(resolve))
@@ -147,7 +237,8 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   }
   async function open(withViewport=false) {
     const state = host.getState(fileId), {openingViewport,...raw} = await call(state.revision.revision,'inspect',withViewport?{openingViewport:true}:{})
-    const file = workbookFileSchema.parse({...raw,sessionId:crypto.randomUUID(),name:state.name,sha256:state.revision.sha256,fileBytes:state.revision.size,readOnly:!state.lease,needsSaveAs:false,automaticRecoveryDisabled:true})
+    const file = workbookFileSchema.parse({...raw,sessionId:crypto.randomUUID(),name:state.name,sha256:state.revision.sha256,fileBytes:state.revision.size,readOnly:!state.lease,needsSaveAs:false,automaticRecoveryDisabled:true,...(isCsv?{csvPath:fileId}:{}),...(unlockGrant?{passwordProtected:true}:{})})
+    if(unlockGrant)unlockGrant.revision=state.revision.revision
     if (disposed) throw hostError('UNAVAILABLE','disposed')
     const result=withViewport&&openingViewport&&file.sheets.some(s=>s.id===openingViewport.sheetId)
       &&Number.isInteger(openingViewport.endRow)&&openingViewport.endRow>=0&&openingViewport.endRow<160
@@ -181,6 +272,23 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     if(disposed)throw hostError('UNAVAILABLE','disposed')
     return current.file
   }
+  async function persistWorkbook(submit:()=>Promise<SavedWorkbook>,apply:ApplySavedWorkbook):Promise<SaveResult>{
+    const finishSave=beginActiveSave()
+    try{
+      if(saveFence&&!saveFence())throw hostError('UNAVAILABLE','save authorization changed')
+      let saved:SavedWorkbook|undefined
+      try{
+        saved=await submit()
+        committed=saved
+        return {canceled:false,file:await apply(saved),touchedEntries:saved.touchedEntries}
+      }catch(error){
+        if(disposed)throw hostError('UNAVAILABLE','disposed')
+        if(!saved&&host.getState(fileId).status!=='unknown')throw error
+        // Confirmation resumes the original receipt without staging a second revision.
+        return await new Promise<SaveResult>((resolve,reject)=>{recovery={...(saved?{saved}:{}),apply,resolve,reject};onChange()})
+      }
+    }finally{finishSave()}
+  }
   function sheet(current: Session, sheetId: string) {
     const value = current.file.sheets.find(value => value.id === sheetId)
     if (!value) throw hostError('INVALID_REVISION','worksheet')
@@ -213,7 +321,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         const body:{files?:unknown;nextCursor?:unknown}=await response.json()
         if(!Array.isArray(body?.files))throw hostError('INVALID_RESPONSE','workspace workbooks')
         for(const item of body.files) {
-          if(item?.format==='xlsx'&&item.id!==fileId&&typeof item.name==='string'&&
+          if(item&&isSpreadsheetArchive(item.format)&&item.id!==fileId&&typeof item.name==='string'&&
             typeof item.id==='string'&&workbookId.test(item.id)&&typeof item.revision==='string'&&workbookId.test(item.revision)){
             workbooks.push({id:item.id,name:item.name,revision:item.revision})
           }
@@ -237,9 +345,36 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     url.searchParams.set('revision',revision)
     return url.href
   }
+  const workspaceHome = (() => {
+    if (typeof window === 'undefined' || window.parent === window || !draftCopyParentActive(window)) return
+    try { return (window.parent as ParentAiWindow).aiOffice }
+    catch { return undefined }
+  })()
   const workspaceLinks = {
-    listSources:listWorkspaceWorkbooks,
+    async pickSource(signal:AbortSignal) {
+      if(!workspaceSources)throw hostError('UNAVAILABLE','workspace source')
+      const {pickWorkspaceSourceRevision}=await import('./workspace-source-picker')
+      const source=await pickWorkspaceSourceRevision(workspaceSources,{
+        title:prefs.language==='en'?'Choose a workbook source':'选择来源工作簿',
+        formats:['xlsx','xlsm'],language:prefs.language,excludeFileId:fileId,
+      },signal)
+      return source?{id:source.fileId,revision:source.revision}:null
+    },
     sourceTarget:workspaceSourceTarget,
+    ...(workspaceHome?.revealPath ? {async revealSource(sessionId:string,index:number){
+      const current=session(sessionId), revision=current.revision
+      if(current.attachment)throw hostError('INVALID_REVISION','workspace source')
+      const listing=await workspaceLinkMetadata(current)
+      const link=listing.links.find(link=>link.index===index)
+      const id=link&&workspaceSourceId(link.rawTarget)
+      if(!id||!(await listWorkspaceWorkbooks()).some(file=>file.id===id))throw hostError('UNAVAILABLE','workspace source')
+      if(disposed||sessions.get(sessionId)!==current||current.revision!==revision||
+        host.getState(fileId).revision.revision!==revision||!draftCopyParentActive(window))throw hostError('CONFLICT','workspace source')
+      const controller=new AbortController()
+      controllers.add(controller)
+      try{await workspaceHome.revealPath(id,controller.signal)}
+      finally{controllers.delete(controller)}
+    }} : {}),
     async refresh(sessionId:string){
       const current=session(sessionId)
       if(current.attachment||current.revision!==host.getState(fileId).revision.revision)throw hostError('CONFLICT','external links')
@@ -255,8 +390,8 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       const savedLinks=report.links.map(link=>{
         const id=workspaceSourceId(link.rawTarget)
         const source=id?workbooks.get(id):undefined
-        if(!source||!link.reachable)return link
-        return {...link,displayName:source.name}
+        if(!source)return link
+        return {...link,source:link.rawTarget,displayName:source.name}
       })
       return {...report,links:savedLinks}
     },
@@ -265,25 +400,29 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   const api = {
     saveEditsInlineMaxBytes: 4 * 1024 * 1024,
     getLanguage: async () => prefs.language === 'en' ? 'en' as const : 'zh' as const,
-    getTheme: async () => prefs.theme,
-    getDocumentTheme: async () => 'follow' as const,
-    getAutoSaveDefault: async () => ({on:prefs.autoSave === true,updatedAt:1}),
+    ...browserEditorTheme(prefs),
+    ...browserAutoSaveDefault(prefs),
     getAiPanelPrefs: async () => ({side:'left' as const,fontSize:'default' as const,customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:true}),
     getUserDisplayName: async () => prefs.authorName ?? '',
-    onLanguageChanged:noEvent,onThemeChanged:noEvent,onDocumentThemeChanged:noEvent,onAutoSaveDefaultChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
-    onWorkbookPickArmed:noEvent,onWorkbookPickSelected:noEvent,onWorkbookPickCancelled:noEvent,
+    onLanguageChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
+    onWorkbookPickArmed:picker?.onArmed??noEvent,onWorkbookPickSelected:picker?.onSelected??noEvent,onWorkbookPickCancelled:picker?.onCancelled??noEvent,
     isCopyEmfAvailable:async()=>false,
     onChromePressed:noEvent,onCloseSaveRequest:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,
     onMenuAction(listener: Parameters<DesktopApi['onMenuAction']>[0]){
       const keydown = (event: KeyboardEvent) => {
-        if (disposed || event.isComposing || event.altKey || event.shiftKey ||
-            (!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== 's') return
+        if (disposed || event.isComposing || event.altKey ||
+            (!event.ctrlKey && !event.metaKey)) return
+        const key = event.key.toLowerCase()
+        const action = key === 's' ? event.shiftKey ? 'save-as' : 'save' : key === 'p' && !event.shiftKey ? 'print' : undefined
+        if (!action) return
         event.preventDefault()
         event.stopPropagation()
-        if (!event.repeat) listener('save')
+        if (event.repeat || (action === 'print' && host.getState(fileId).status === 'unauthorized')) return
+        listener(action)
       }
       window.addEventListener('keydown', keydown, true)
-      return () => window.removeEventListener('keydown', keydown, true)
+      const unsubscribe=subscribeBrowserDocumentCommands({print:()=>listener('print'),save:()=>listener('save'),'save-as':()=>listener('save-as')},()=>!disposed&&host.getState(fileId).status!=='unauthorized')
+      return () => {unsubscribe();window.removeEventListener('keydown', keydown, true)}
     },
     onWorkbookRenamed(listener:(name:string)=>void){
       renameListeners.add(listener)
@@ -350,29 +489,15 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async listWorkbookConnections({sessionId}){return workbookConnectionsResultSchema.parse((await extras(sessionId)).connections)},
     async readWorkbookQueries({sessionId}){return workbookQueriesResultSchema.parse((await extras(sessionId)).queries)},
     async saveWorkbookEdits(input){
-      const finishSave=beginActiveSave()
-      try {
-      if(saveFence&&!saveFence())throw hostError('UNAVAILABLE','save authorization changed')
       const request=workbookSaveRequestSchema.parse(input),current=session(request.sessionId)
       if (host.getState(fileId).revision.revision!==current.revision) throw hostError('CONFLICT','workbook base')
-      let saved: Awaited<ReturnType<SessionFileHost['saveSheets']>> | undefined
-      try {
-        saved=await host.saveSheets(fileId,request,saveFence??(()=>true))
-        committed=saved
-        return {canceled:false as const,file:await openSaved(saved.revision),touchedEntries:saved.touchedEntries}
-      } catch(error) {
-        // Teardown cannot undo a dispatched commit. Leave its durable/unknown
-        // state in the host, but never recreate recovery for an unmounted view.
-        if (disposed) throw hostError('UNAVAILABLE','disposed')
-        if (!saved && host.getState(fileId).status !== 'unknown') {
-          if ((error as {code?:string}).code === 'PAYLOAD_TOO_LARGE') throw new Error(prefs.language === 'en' ? 'Web save exceeds the 4 MiB request limit. Your edits are still unsaved; keep this page open.' : '本次保存超过 Web 请求的 4 MiB 限制。更改仍未保存，请保留当前页面，不要关闭或刷新。')
-          throw error
-        }
-        // Keep save-actions' original Promise, journal snapshot and view alive.
-        // Confirmation resumes that exact save, including its late-edit carry.
-        return new Promise<SaveResult>((resolve,reject)=>{recovery={...(saved ? {saved} : {}),resolve,reject};onChange()})
+      try{
+        const authorized=saveFence??(()=>true)
+        return await persistWorkbook(()=>host.saveSheets(fileId,request,authorized,unlockGrant?.id),saved=>openSaved(saved.revision))
+      }catch(error){
+        if((error as {code?:string}).code==='PAYLOAD_TOO_LARGE')throw new Error(prefs.language==='en'?'Web save exceeds the 4 MiB request limit. Your edits are still unsaved; keep this page open.':'本次保存超过 Web 请求的 4 MiB 限制。更改仍未保存，请保留当前页面，不要关闭或刷新。')
+        throw error
       }
-      } finally {finishSave()}
     },
     async autoRenameWorkbook(sessionId:string,candidate:string){
       const current=session(sessionId)
@@ -386,6 +511,15 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async createDocument(input:import('../../../sheets/src/shared/desktop-api').WorkbookCreateDocumentRequest){
       try{
         const parent=parentWindow()
+        if(input.type==='csv'){
+          const {title,content}=workbookCreateDocumentRequestSchema.parse(input)
+          let create:ParentAiWindow['dyofficeCreateAiCsv']
+          try{create=parent?.dyofficeCreateAiCsv}catch{/* A foreign parent has no workspace bridge. */}
+          if(disposed)throw new Error(text.unavailable)
+          if(create)return {ok:true,name:await create({title,content})}
+          downloadWebCsv({type:'csv',title,content:'\ufeff'+content})
+          return {ok:true,downloaded:true}
+        }
         if(input.type==='xlsx'&&typeof parent?.dyofficeCreateAiXlsx==='function'){await parent.dyofficeCreateAiXlsx({title:input.title,...(input.sheetName?{sheetName:input.sheetName,...(getExportLayout?{layout:getExportLayout(input.sheetName)}:{})}:{}),content:input.content});return {ok:true}}
         if(input.type==='docx'&&docxCreationAvailable&&typeof parent?.dyofficeCreateAiDoc==='function'){await parent.dyofficeCreateAiDoc({title:input.title,content:input.content});return {ok:true}}
         if(input.type==='pdf'&&typeof parent?.dyofficeCreateAiDoc==='function'){
@@ -404,18 +538,18 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       const controller=new AbortController()
       controllers.add(controller)
       try{
-        const files=await pickMergeFiles(controller.signal)
+        const files=await chooseMergeFiles(controller.signal)
         if(!files.length)return []
         const stillCurrent=()=>{
           const current=host.getState(fileId)
           return !disposed&&!!base.lease&&!!current.lease&&base.revision.revision===current.revision.revision&&
             base.lease.editorId===current.lease.editorId&&base.lease.leaseEpoch===current.lease.leaseEpoch
         }
-        return await openMergeFiles(files,base.revision.revision,stillCurrent)
+        return await openMergeFiles(files,base.revision.revision,stillCurrent,workspaceSources?.proof)
       }finally{controllers.delete(controller)}
     },
     async openWorkbooksForMerge(paths:string[]){
-      if(!getAttachmentFile||!Array.isArray(paths)||paths.length<1||paths.length>8)throw new Error(text.unavailable)
+      if(!getAttachmentFile||!Array.isArray(paths)||paths.length<1||paths.length>mergeMaxFiles)throw new Error(text.unavailable)
       const files:File[]=[]
       for(const path of paths){
         if(typeof path!=='string'||!path.startsWith('web-attachment:'))throw new Error(text.unavailable)
@@ -431,15 +565,27 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       const current=session(sessionId)
       if(current.attachment)throw hostError('INVALID_REVISION','external links')
       const result=await workspaceLinkMetadata(current)
-      if(!result.workspaceSources||!result.links.some(link=>workspaceSourceId(link.rawTarget)))return result
+      if(!result.links.some(link=>workspaceSourceId(link.rawTarget)))return result
       const names=new Map((await listWorkspaceWorkbooks()).map(file=>[file.id,file.name]))
       return {...result,links:result.links.map(link=>{
         const id=workspaceSourceId(link.rawTarget)
         const displayName=id?names.get(id):undefined
-        return displayName?{...link,displayName}:link
+        return displayName?{...link,source:link.rawTarget,displayName}:link
       })}
     },
-    refreshWorkbookConnection:unavailable,readLocalImage:unavailable,
+    async refreshWorkbookConnection(input){
+      const {sessionId,connectionId}=workbookRefreshRequestSchema.parse(input)
+      const current=session(sessionId), before=host.getState(fileId), lease=before.lease
+      if(current.attachment||!lease||before.revision.revision!==current.revision)throw hostError('CONFLICT','workbook query')
+      const result=await call(current.revision,'web-query',{connectionId,editorId:lease.editorId,leaseEpoch:lease.leaseEpoch})
+      const after=host.getState(fileId)
+      if(disposed||sessions.get(sessionId)!==current||after.revision.revision!==current.revision||
+          after.lease?.editorId!==lease.editorId||after.lease.leaseEpoch!==lease.leaseEpoch){
+        throw hostError('CONFLICT','workbook query')
+      }
+      return workbookRefreshResultSchema.parse(result)
+    },
+    readLocalImage:unavailable,
     async readPivotDefinition(input){
       const request=workbookPivotRequestSchema.parse(input),current=session(request.sessionId)
       if(current.attachment||!current.file.sheets.some(sheet=>sheet.pivotTables.some(pivot=>pivot.path===request.path&&pivot.cachePath===request.cachePath)))throw hostError('INVALID_REVISION','pivot parts')
@@ -454,11 +600,60 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         ...(resumeAt?{resumeAt:{row:resumeAt.row,column:resumeAt.column}}:{}),
       }))
     },
-    updateWorkbookPassword:unavailable,
+    async updateWorkbookPassword(sessionId,newPassword){
+      const current=session(sessionId),grant=unlockGrant
+      if(!grant||current.attachment||!current.file.passwordProtected||current.revision!==host.getState(fileId).revision.revision)throw hostError('CONFLICT','workbook password')
+      const {file}=await persistWorkbook(()=>host.changeSheetsPassword(fileId,newPassword,grant.id,saveFence??(()=>true)),async saved=>{
+        const assertSavedRevision=()=>{
+          if(disposed||session(sessionId)!==current||host.getState(fileId).revision.revision!==saved.revision)throw hostError('CONFLICT','workbook password revision')
+        }
+        assertSavedRevision()
+        try{await call(saved.revision,'inspect')}
+        catch(error){
+          if((error as {status?:number})?.status!==423)throw error
+          // The revision receipt is durable even when the in-memory grant has expired.
+          assertSavedRevision()
+          await unlockWorkbook(newPassword)
+        }
+        assertSavedRevision()
+        // Rotation leaves the underlying package identical. Keep the active
+        // renderer session and point its future reads and saves at the new head.
+        if(unlockGrant)unlockGrant.revision=saved.revision
+        current.revision=saved.revision
+        delete current.extras
+        current.file={...current.file,sha256:saved.sha256,fileBytes:saved.size,passwordProtected:true}
+        return current.file
+      })
+      if(file.fileBytes===undefined)throw hostError('INVALID_RESPONSE','workbook password receipt')
+      return {sha256:file.sha256,fileBytes:file.fileBytes,passwordProtected:true as const}
+    },
     readExternalLinkUsage:unavailable,
-    // Browser editors use the typed-range picker for external workbook links.
-    async listWorkbookTabs(){return {tabs:[]}},
-    writeWorkbookRecovery:unavailable,exportPdf:unavailable,printWorkbook:unavailable,exportCsv:unavailable,
+    async listWorkbookTabs(){
+      const current=activeWorkbook(),open=picker?.list()??[]
+      if (!current || !open.length) return {tabs:[]}
+      const {links}=await workspaceLinkMetadata(current)
+      return {tabs:links.flatMap(link=>{
+        const target=open.find(item=>item.id===workspaceSourceId(link.rawTarget))
+        return target?[{wcId:target.wcId,name:link.displayName??target.id,path:link.rawTarget}]:[]
+      })}
+    },
+    armWorkbookPick:picker?.arm??unavailable,
+    async sendWorkbookPickSelection(selection:Parameters<DesktopApi['sendWorkbookPickSelection']>[0]){await picker?.send(selection)},
+    async cancelWorkbookPick(pickId:string){await picker?.cancel(pickId)},
+    browserPrintDialog:true,
+    async listPrinters(){return []},
+    async printWorkbook(input){
+      const request=workbookExportPdfRequestSchema.parse(input)
+      try{
+        await printInBrowser(request.html,browserFileName(request.fileName.replace(/\.pdf$/i,''),'Workbook'))
+        return {ok:true}
+      }catch{
+        return {ok:false,error:prefs.language==='en'?'Browser printing is unavailable.':'浏览器打印不可用。'}
+      }
+    },
+    writeWorkbookRecovery:unavailable,exportPdf:unavailable,exportCsv:unavailable,
+    confirmCsvSave,
+    async getCsvImportLimit(){return (await host.getPreferences()).csvImportLimitMb??CSV_IMPORT_DEFAULT_LIMIT_MB},
     openAiModelSettings:async()=>{
       const parent=typeof window!=='undefined'?(window.parent as unknown as {dyofficeOpenEditorSettings?:(tab:'models'|'skills',source:Window)=>Promise<void>}):undefined
       if(parent&&typeof parent.dyofficeOpenEditorSettings==='function')return parent.dyofficeOpenEditorSettings('models',window)
@@ -479,13 +674,23 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       pending.saved ??= await host.reconcileSheets(fileId,saveFence??(()=>true))
       if (disposed) throw hostError('UNAVAILABLE','disposed')
       committed=pending.saved
-      const file=await openSaved(pending.saved.revision)
+      const file=await pending.apply(pending.saved)
       recovery=null
       pending.resolve({canceled:false,file,touchedEntries:pending.saved.touchedEntries})
     } catch(error) {
       if (!pending.saved && host.getState(fileId).status !== 'unknown') {recovery=null;pending.reject(error)}
       throw error
     } finally {confirming=false;if(!disposed)onChange()}
+  }
+  async function saveCsv(sessionId:string,content:string) {
+    const current=session(sessionId)
+    if(!isCsv||current.attachment||host.getState(fileId).revision.revision!==current.revision)throw hostError('CONFLICT','CSV base')
+    try {
+      return await persistWorkbook(()=>host.saveCsv(fileId,content,saveFence??(()=>true)),saved=>openSaved(saved.revision))
+    }catch(error){
+      if((error as {code?:string}).code==='PAYLOAD_TOO_LARGE')throw new Error(prefs.language==='en'?'CSV save exceeds the 32 MiB storage limit. Your edits are still unsaved.':'CSV 超过 32 MiB 存储上限，更改仍未保存。')
+      throw error
+    }
   }
   async function prepareDownload(editor: {saveAndWait(): Promise<boolean>; isDirty(): boolean}) {
     if(disposed)throw hostError('UNAVAILABLE','disposed')
@@ -531,5 +736,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     supportedMergeExtensions: mergeExtensions,
-    api,workspaceLinks,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+    api,workspaceLinks,saveCsv,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,prepareDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;picker?.dispose();recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

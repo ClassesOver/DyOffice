@@ -2,7 +2,16 @@
 /// External targets live as TargetMode="External" relationships referenced by
 /// r:id; internal anchors use the `location` attribute and need no rel.
 
-import { escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { appendRelationshipRecord, decodeAttribute, findRelationshipsRoot, nextFreeRelationshipId } from './xlsx-sheets.ts'
+import {
+  OFFICE_RELATIONSHIPS_NAMESPACE,
+  readRelationshipId,
+  relationshipNamespaceOverride,
+  xmlAttributeValues,
+} from './xlsx-namespace.ts'
+import { childElements } from './xlsx-style-entries.ts'
+import { readWorksheetTagAttribute } from './xlsx-structure.ts'
+import { isElement, prefixOf, scopedChildren, withBody, worksheetRoot, type ScopedElement } from './xlsx-worksheet-xml.ts'
 
 export { ensureRelationshipNamespace } from './xlsx-namespace.ts'
 
@@ -25,41 +34,47 @@ export interface HyperlinkPatch {
   readonly relsChanged: boolean
 }
 
-const HYPERLINK_REL_TYPE =
-  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+const HYPERLINK_REL_TYPE = `${OFFICE_RELATIONSHIPS_NAMESPACE}/hyperlink`
 const EMPTY_RELS =
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   '</Relationships>'
+
+export function hyperlinkAnchorReference(reference: string): string {
+  return (reference.split(':', 1)[0] ?? '').replaceAll('$', '').toUpperCase()
+}
 
 export function applyHyperlinkEdits(
   worksheetXml: string,
   relsXml: string | null,
   edits: readonly HyperlinkEdit[],
 ): HyperlinkPatch {
-  let xml = worksheetXml
   let rels = relsXml
   let relsChanged = false
+  const root = worksheetRoot(worksheetXml)
+  const children = root ? scopedChildren(root).filter((child) => child.namespace === root.namespace) : []
+  const section = children.find((child) => child.local === 'hyperlinks')
+  const parent = section?.opening ?? ''
+  const rootOpening = root?.opening ?? ''
+  const qualifier = prefixOf(section?.name ?? root?.name ?? '')
+  const relationshipBinding = relationshipNamespaceOverride(parent, rootOpening)
+  const removedIds = new Set<string>()
+  let body = section?.inner ?? ''
 
-  const relIdsInUse = (): Set<string> => {
-    const used = new Set<string>()
-    for (const element of xml.matchAll(/<hyperlink\b[^>]*?\br:id="([^"]+)"/g)) {
-      if (element[1]) used.add(element[1])
-    }
-    return used
-  }
-  const dropUnusedRel = (relId: string): void => {
-    if (rels === null || relIdsInUse().has(relId)) return
-    // Quote-agnostic like the id scan in xlsx-sheets.ts: a single-quoted
-    // r:id is document-controlled; unescaped it could match every relationship.
-    const next = rels.replace(
-      new RegExp(`<Relationship\\b[^>]*\\bId=["']${escapeRegExp(relId)}["'][^>]*/>`),
-      '',
-    )
-    if (next !== rels) {
-      rels = next
-      relsChanged = true
-    }
+  const dropRel = (relId: string): void => {
+    if (rels === null) return
+    const root = findRelationshipsRoot(rels)
+    if (!root) return
+    const name = root.name.slice(0, -1)
+    const entry = childElements(root.inner).find((child) => {
+      if (child.name !== name || !readWorksheetTagAttribute(child.opening, 'Type')?.endsWith('/hyperlink')) return false
+      const id = readWorksheetTagAttribute(child.opening, 'Id')
+      return id !== undefined && decodeAttribute(id) === relId
+    })
+    if (!entry) return
+    const start = root.start + root.opening.length + entry.start
+    rels = rels.slice(0, start) + rels.slice(start + entry.xml.length)
+    relsChanged = true
   }
   const allocateRel = (target: string): string => {
     if (rels === null) {
@@ -67,65 +82,74 @@ export function applyHyperlinkEdits(
       relsChanged = true
     }
     const relId = nextFreeRelationshipId(rels)
-    const element =
-      `<Relationship Id="${relId}" Type="${HYPERLINK_REL_TYPE}" ` +
-      `Target="${escapeXmlAttribute(target)}" TargetMode="External"/>`
-    const close = rels.replace('</Relationships>', () => `${element}</Relationships>`)
-    if (close !== rels) {
-      rels = close
-    } else {
-      const emptyRoot = /<Relationships\b([^>]*)\/>/.exec(rels)
-      if (emptyRoot) {
-        rels = rels.replace(
-          emptyRoot[0],
-          `<Relationships${emptyRoot[1]}>${element}</Relationships>`,
-        )
-      }
-    }
+    const added = appendRelationshipRecord(rels, relId, HYPERLINK_REL_TYPE, target, 'External')
+    if (added === undefined) throw new HyperlinkEditError('Worksheet has no relationships root element.')
+    rels = added
     relsChanged = true
     return relId
   }
 
   for (const edit of edits) {
     const ref = toA1(edit.row, edit.column)
-    const existingPattern = new RegExp(`<hyperlink\\b[^>]*?\\bref="${ref}"[^>]*/>`)
-    const existing = existingPattern.exec(xml)?.[0]
-    const existingRelId =
-      existing === undefined ? undefined : /\br:id="([^"]+)"/.exec(existing)?.[1]
-    if (existing !== undefined) {
-      xml = xml.replace(existingPattern, '')
+    const links = section
+      ? scopedChildren({ ...section, inner: body }).filter((link) => isElement(link, 'hyperlink', section.namespace))
+      : childElements(body).filter((link) => link.name === qualifier + 'hyperlink')
+    const matches = new Map<(typeof links)[number], string>()
+    for (const link of links) {
+      const raw = readWorksheetTagAttribute(link.opening, 'ref')
+      if (raw === undefined) continue
+      const reference = decodeAttribute(raw)
+      if (hyperlinkAnchorReference(reference) === ref) matches.set(link, reference)
     }
-    if (existingRelId !== undefined) dropUnusedRel(existingRelId)
+    for (const link of [...matches.keys()].reverse()) {
+      body = body.slice(0, link.start) + body.slice(link.start + link.xml.length)
+      const rawId = readRelationshipId(link.opening, parent, rootOpening)
+      if (rawId !== undefined) removedIds.add(decodeAttribute(rawId))
+    }
     if (edit.target === null) continue
 
-    const element = edit.target.startsWith('#')
-      ? `<hyperlink ref="${ref}" location="${escapeXmlAttribute(edit.target.slice(1))}"/>`
-      : `<hyperlink ref="${ref}" r:id="${allocateRel(edit.target)}"/>`
-    xml = insertHyperlinkElement(xml, element)
+    // Earlier saves could append a single-cell link next to its original range.
+    const reference = escapeXmlAttribute([...matches.values()].find((value) => value.includes(':')) ?? ref)
+    body += edit.target.startsWith('#')
+      ? `<${qualifier}hyperlink ref="${reference}" location="${escapeXmlAttribute(edit.target.slice(1))}"/>`
+      : `<${qualifier}hyperlink ref="${reference}"${relationshipBinding} r:id="${allocateRel(edit.target)}"/>`
   }
 
-  // An emptied section must go — Excel repairs `<hyperlinks/>` with no children.
-  xml = xml.replace(/<hyperlinks>\s*<\/hyperlinks>/, '')
+  let xml = worksheetXml
+  if (root && section && body !== section.inner) {
+    const start = root.start + root.opening.length + section.start
+    const replacement = body.trim() ? withBody(section, body) : ''
+    xml = worksheetXml.slice(0, start) + replacement + worksheetXml.slice(start + section.xml.length)
+  } else if (!section && body !== '') {
+    if (!root) throw new HyperlinkEditError('Worksheet has no closing element.')
+    xml = insertHyperlinkSection(worksheetXml, root, children, body)
+  }
+  // Worksheet extensions can also reference relationships owned by this part.
+  if (removedIds.size > 0) {
+    for (const value of xmlAttributeValues(xml)) {
+      removedIds.delete(value)
+      if (removedIds.size === 0) break
+    }
+    for (const id of removedIds) dropRel(id)
+  }
   return { worksheetXml: xml, relsXml: rels, relsChanged }
 }
 
-function insertHyperlinkElement(xml: string, element: string): string {
-  if (xml.includes('</hyperlinks>')) {
-    return xml.replace('</hyperlinks>', () => `${element}</hyperlinks>`)
-  }
-  const section = `<hyperlinks>${element}</hyperlinks>`
-  // Schema order: hyperlinks follows dataValidations / conditionalFormatting /
-  // mergeCells / sheetData and precedes print-related elements and drawings.
-  const anchor =
-    /<printOptions\b|<pageMargins\b|<pageSetup\b|<headerFooter\b|<rowBreaks\b|<colBreaks\b|<drawing\b|<legacyDrawing\b|<picture\b|<oleObjects\b|<tableParts\b|<extLst\b/.exec(
-      xml,
-    )
-  if (anchor) {
-    return xml.slice(0, anchor.index) + section + xml.slice(anchor.index)
-  }
-  const end = xml.lastIndexOf('</worksheet>')
-  if (end === -1) throw new HyperlinkEditError('Worksheet has no closing element.')
-  return xml.slice(0, end) + section + xml.slice(end)
+function insertHyperlinkSection(
+  xml: string,
+  root: ScopedElement,
+  children: readonly ScopedElement[],
+  body: string,
+): string {
+  // Schema order: hyperlinks precedes print settings and drawings.
+  const following = ['printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks',
+    'colBreaks', 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing',
+    'legacyDrawing', 'legacyDrawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems',
+    'tableParts', 'extLst']
+  const next = children.find((child) => following.includes(child.local))
+  const at = root.start + root.opening.length + (next?.start ?? root.inner.length)
+  const name = prefixOf(root.name) + 'hyperlinks'
+  return xml.slice(0, at) + `<${name}>${body}</${name}>` + xml.slice(at)
 }
 
 function toA1(row: number, column: number): string {

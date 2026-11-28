@@ -75,10 +75,10 @@ test('host event type rejects a single-element array', () => {
   assert.throws(()=>decodeHostEvent(JSON.stringify({protocolVersion:1,messageId:'m',sessionId:'s',fileId:'f',type:['command.request'],payload:{}})), err=>err.code === 'INVALID_RESPONSE')
 })
 test('public preferences validate every optional field type', async () => {
-  for (const invalid of [{authorName:{apiKey:'secret'}},{autoSave:'false'},{showAssistant:1}]) {
+  for (const invalid of [{authorName:{apiKey:'secret'}},{autoSave:'false'},{showAssistant:1},{csvImportLimitMb:32},{csvImportLimitMb:'64'}]) {
     await assert.rejects(createBrowserHost({getPreferences:async()=>({theme:'dark',language:'zh',...invalid})}).getPreferences(), err=>err.code === 'INVALID_RESPONSE')
   }
-  const prefs={theme:'system',language:'zh',authorName:'',autoSave:false,showAssistant:true}
+  const prefs={theme:'system',language:'zh',authorName:'',autoSave:false,showAssistant:true,csvImportLimitMb:128}
   assert.deepEqual(await createBrowserHost({getPreferences:async()=>prefs}).getPreferences(),prefs)
 })
 test('open only returns public DTO fields, including its nested revision', async () => {

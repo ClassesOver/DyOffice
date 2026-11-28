@@ -10,6 +10,8 @@ import {
   MAX_CREATE_DOCUMENT_TITLE_CHARS,
   MAX_CSV_EXPORT_CHARS,
   MAX_PDF_TEMPLATE_CHARS,
+  MAX_PRINT_AREA_FORMULA_CHARS,
+  MAX_PRINT_AREA_SAVE_CHARS,
   MAX_SAVE_EDITS,
   MAX_SAVE_EDITS_TOTAL,
   SAVE_EDITS_CHUNK_JSON_MAX,
@@ -96,6 +98,8 @@ const worksheetMetadataSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
+    /// The workbook relationship references a chartsheet instead of a worksheet.
+    chartSheet: z.literal(true).optional(),
     rowCount: z.number().int().positive(),
     columnCount: z.number().int().positive(),
     /// Uncompressed worksheet XML size reported by the sidecar. Optional for
@@ -319,7 +323,7 @@ const worksheetMetadataSchema = z
       .default([]),
     /// Saved `_xlnm.Print_Area` / `_xlnm.Print_Titles` formulas for this
     /// sheet, verbatim from workbook.xml.
-    printArea: z.string().min(1).max(2_000).optional(),
+    printArea: z.string().min(1).max(MAX_PRINT_AREA_FORMULA_CHARS).optional(),
     printTitles: z.string().min(1).max(2_000).optional(),
     /// Any localSheetId-scoped definedName targets this sheet (hidden and
     /// _xlnm.* built-ins included); duplication is gated on it up front
@@ -572,6 +576,7 @@ const visualObjectSchema = z
               lineColor: z.string().optional(),
               /// spPr/a:ln/@w in CSS px (EMU / 12700 pt · 96/72).
               lineWidth: z.number().finite().optional(),
+              lineDash: z.string().optional(),
               smooth: z.boolean().optional(),
               /// c:marker symbol — "none" hides scatter/line markers.
               marker: z.string().optional(),
@@ -786,6 +791,21 @@ const visualObjectSchema = z
     /// anchor stores rotated bounds, centered on the shape center).
     frameWidth: z.number().finite().positive().optional(),
     frameHeight: z.number().finite().positive().optional(),
+    /// The composed transform of a child of a rotated group. The anchor
+    /// is its axis-aligned bounds, and width/height are local EMU extents.
+    groupTransform: z
+      .object({
+        matrix: z.tuple([
+          z.number().finite(),
+          z.number().finite(),
+          z.number().finite(),
+          z.number().finite(),
+        ]),
+        width: z.number().finite().nonnegative(),
+        height: z.number().finite().nonnegative(),
+      })
+      .strict()
+      .optional(),
     /// Save-side edit locator: the drawing part this visual lives in and its
     /// anchor index within that part (document order, skipped anchors counted).
     drawingPath: z
@@ -1047,11 +1067,14 @@ export const workbookRangeResultSchema = z
     pageSetup: z
       .object({
         orientation: z.enum(['portrait', 'landscape']).optional(),
+        pageOrder: z.enum(['downThenOver', 'overThenDown']).optional(),
         paperSize: z.number().int().min(1).max(256).optional(),
         scale: z.number().int().min(10).max(400).optional(),
         fitToWidth: z.number().int().min(0).max(32_767).optional(),
         fitToHeight: z.number().int().min(0).max(32_767).optional(),
         fitToPage: z.boolean().optional(),
+        blackAndWhite: z.boolean().optional(),
+        draft: z.boolean().optional(),
         /// Inches.
         margins: z
           .object({
@@ -1066,11 +1089,14 @@ export const workbookRangeResultSchema = z
           .optional(),
         printGridlines: z.boolean().optional(),
         printHeadings: z.boolean().optional(),
+        horizontalCentered: z.boolean().optional(),
+        verticalCentered: z.boolean().optional(),
+        firstPageNumber: z.number().int().min(-32_767).max(0xffffffff).optional(),
         /// Excel-encoded odd header/footer (&L/&C/&R sections, field codes).
         oddHeader: z.string().min(1).max(500).optional(),
         oddFooter: z.string().min(1).max(500).optional(),
         /// headerFooter/@differentOddEven and @differentFirst: even pages
-        /// print the even* texts, page 1 the first* texts.
+        /// print the even* texts, the sheet's first page the first* texts.
         differentOddEven: z.boolean().optional(),
         differentFirst: z.boolean().optional(),
         /// headerFooter/@scaleWithDoc="0": the header/footer keeps its size
@@ -1492,8 +1518,8 @@ export const workbookPageSetupStateSchema = z
     /// OOXML paper-size code (1 = Letter, 9 = A4, …).
     paperSize: z.number().int().min(1).max(118).optional(),
     scale: z.number().int().min(10).max(400).optional(),
-    fitToWidth: z.number().int().min(0).max(1_000).optional(),
-    fitToHeight: z.number().int().min(0).max(1_000).optional(),
+    fitToWidth: z.number().int().min(0).max(32_767).optional(),
+    fitToHeight: z.number().int().min(0).max(32_767).optional(),
     fitToPage: z.boolean().optional(),
     margins: z.enum(['normal', 'wide', 'narrow']).optional(),
     printGridlines: z.boolean().optional(),
@@ -1505,10 +1531,11 @@ export const workbookPageSetupStateSchema = z
     showHeadings: z.boolean().optional(),
     /// sheetView/@rightToLeft — the grid is mirrored (column A at the right).
     rightToLeft: z.boolean().optional(),
-    printArea: z.union([z.string().min(1).max(255), z.null()]).optional(),
+    printArea: z.union([z.string().min(1).max(MAX_PRINT_AREA_SAVE_CHARS), z.null()]).optional(),
     printTitles: z.union([z.string().regex(/^\d{1,7}:\d{1,7}$/), z.null()]).optional(),
     /// A structural edit removed the pending repeat rows. Keep file-backed repeat columns.
     clearPrintTitleRows: z.literal(true).optional(),
+    clearPrintTitleColumns: z.literal(true).optional(),
     /// Frozen pane counts; both present together, 0/0 removes the pane.
     frozenRows: z.number().int().min(0).max(1_048_575).optional(),
     frozenColumns: z.number().int().min(0).max(16_383).optional(),
@@ -2231,14 +2258,14 @@ export const workbookSaveRequestSchema = z
     /// pivotTableDefinition's location ref is widened to newOutputRef (conflict
     /// checks fail closed in the gateway). When relayout (an A3 layout edit) is
     /// present, the whole definition/cacheDefinition is regenerated from the new
-    /// layout (original name/cacheId/records rel kept; records are emptied and
-    /// rebuilt via refreshOnLoad); its name is a placeholder — the saver uses the
-    /// original name from the file.
+    /// layout. A shared cache gets a separate cache ID. Excel rebuilds that
+    /// cache's records on open. The saver keeps the pivot's original name.
     pivotRefreshUpdates: z
       .array(
         z
           .object({
             cachePath: z.string().regex(/^xl\/[A-Za-z0-9._/-]+\.xml$/),
+            pivotPath: z.string().regex(/^xl\/[A-Za-z0-9._/-]+\.xml$/).optional(),
             sheetId: z.string().min(1),
             newOutputRef: z.string().min(3).max(64),
             relayout: workbookPivotAddSchema.optional(),
@@ -2367,7 +2394,7 @@ export const workbookSaveRequestSchema = z
       })
       .strict()
       .nullable(),
-    /// Document theme change (null = untouched): rewrites theme1.xml's
+    /// Document theme change (null = untouched): rewrites the active theme's
     /// clrScheme and/or fontScheme. Colors are #RRGGBB in theme index order.
     themeState: z
       .object({
@@ -3311,6 +3338,7 @@ export const workbookCreateDocumentRequestSchema = z
 export const workbookCreateDocumentResultSchema = z
   .object({
     ok: z.boolean(),
+    name: z.string().min(1).optional(),
     path: z.string().min(1).optional(),
     downloaded: z.boolean().optional(),
     error: z.string().optional(),
@@ -3404,6 +3432,8 @@ export interface McpCommandResult {
 }
 
 export interface DesktopApi {
+  /** Output is handled in the browser's print/save dialog. */
+  browserPrintDialog?: boolean
   /** Same-process Web bridge: no Electron structured-clone transfer required. */
   saveEditsInlineMaxBytes?: number | undefined
   /** open any shell-routed document path (an AI answer's filenav citation) */

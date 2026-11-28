@@ -1,5 +1,5 @@
 import {inflateSync} from 'node:zlib'
-import {PDFArray,PDFName,PDFStream} from 'pdf-lib'
+import {PDFArray,PDFName,PDFStream} from '../../../../pdf/src/shared/pdf-lib.ts'
 const fail=()=>{throw Object.assign(Error('PDF_EDIT_UNSUPPORTED_STRUCTURE'),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})}
 const white=c=>/[\x00\t\n\f\r ]/.test(c),delimiter=c=>c===undefined||white(c)||'()<>[]{}/%'.includes(c)
 // Appended overlays need the initial page graphics state. Reject ambiguous or

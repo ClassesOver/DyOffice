@@ -26,13 +26,15 @@ export interface PrintJobInput {
   currentPage: number
   /** Saves pending edits first; undefined = the save failed and the job is off */
   flushThen: (job: () => Promise<void>) => Promise<void | undefined>
+  savePdfCopy?: (pages: number[]) => Promise<unknown>
   opFailed: (error: string) => void
   /** The on-disk file's password; CUPS cannot open encrypted files, so those raster */
   diskPasswordRef: { current: string | null }
 }
 
 export function usePrintJob(input: PrintJobInput) {
-  const { filePath, pageCount, currentPage, flushThen, opFailed, diskPasswordRef } = input
+  const { filePath, pageCount, currentPage, flushThen, savePdfCopy, opFailed, diskPasswordRef } = input
+  const browserPrintDialog = typeof window.pdfApi.printBrowserPages === 'function'
   const [printDlg, setPrintDlg] = useState(false)
   const [printMode, setPrintMode] = useState<'all' | 'current' | 'custom'>('all')
   const [printInput, setPrintInput] = useState('')
@@ -60,6 +62,7 @@ export function usePrintJob(input: PrintJobInput) {
     setPrintInvalid(false)
     setPrintParity('all')
     setPrintDlg(true)
+    if (browserPrintDialog) return
     window.pdfApi
       .listPrinters()
       .then(setPrinters)
@@ -76,7 +79,7 @@ export function usePrintJob(input: PrintJobInput) {
     if (printBusyRef.current) return
     printBusyRef.current = true
     const job =
-      printDevice === PRINT_SYSTEM_DIALOG
+      browserPrintDialog || printDevice === PRINT_SYSTEM_DIALOG
         ? undefined
         : {
             deviceName: printDevice,
@@ -105,11 +108,12 @@ export function usePrintJob(input: PrintJobInput) {
             return
           }
           const data = await readFileBytes(window.pdfApi, filePath)
-          const pdoc = await getDocument({ data, ...DOC_OPTS }).promise
+          const password = diskPasswordRef.current
+          const task = getDocument({ data, ...DOC_OPTS, ...(password === null ? {} : { password }) })
           try {
-            await printPdf(pdoc, pages, job)
+            await printPdf(await task.promise, pages, job, window.pdfApi.printBrowserPages)
           } finally {
-            void pdoc.loadingTask.destroy()
+            await task.destroy()
           }
         } catch (err) {
           opFailed(err instanceof Error ? err.message : String(err))
@@ -122,8 +126,9 @@ export function usePrintJob(input: PrintJobInput) {
     }
   }
 
-  /** Print dialog confirm: visible page numbers → 1-based file pages */
-  const confirmPrint = () => {
+  /** Resolve the same visible page range for printing and saving a copy. */
+  const confirmSelection = (run: (pages: number[]) => void) => {
+    if (printBusyRef.current) return
     const pages =
       printMode === 'all'
         ? Array.from({ length: pageCount }, (_x, i) => i + 1)
@@ -136,10 +141,20 @@ export function usePrintJob(input: PrintJobInput) {
       return
     }
     setPrintDlg(false)
-    void printDoc(printMode === 'all' && printParity === 'all' ? undefined : subset)
+    run(subset)
   }
+  const confirmPrint = () => confirmSelection(pages => {
+    void printDoc(printMode === 'all' && printParity === 'all' ? undefined : pages)
+  })
+  const confirmSavePdfCopy = savePdfCopy ? () => confirmSelection(pages => {
+    printBusyRef.current = true
+    void savePdfCopy(pages)
+      .catch(error => opFailed(error instanceof Error ? error.message : String(error)))
+      .finally(() => { printBusyRef.current = false })
+  }) : undefined
 
   return {
+    browserPrintDialog,
     printing,
     printDlg,
     setPrintDlg,
@@ -168,6 +183,7 @@ export function usePrintJob(input: PrintJobInput) {
     printCurrentPage,
     openPrintDlg,
     confirmPrint,
+    confirmSavePdfCopy,
   }
 }
 

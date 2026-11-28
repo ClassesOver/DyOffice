@@ -72,7 +72,7 @@ import {
 import { SlideShowView } from './components/SlideShowView'
 import type { NarrationTake } from './narration/use-recording'
 import { IconNotes, IconPlayBoxed } from './components/icons'
-import { PresenterView } from './components/PresenterView'
+import { PresenterView, type PresenterBrowserAudience } from './components/PresenterView'
 import { CustomShowDialog } from './components/CustomShowDialog'
 import { PrintDialog } from './components/PrintDialog'
 import { ExportVideoDialog } from './components/ExportVideoDialog'
@@ -150,11 +150,11 @@ import { formatRulerValue, type RulerUnit } from './ruler-ticks'
 import * as fileActions from './file-actions'
 import * as clipboardActions from './clipboard-actions'
 import * as insertActions from './insert-actions'
+import type { ScreenRecordingSession } from './action-context'
 import * as model3dActions from './model3d/actions'
 import { Model3dTurnHandle } from './model3d/Model3dTurnHandle'
 import type { Model3dRotation } from '@genoffice/pptx-engine/model3d'
-import { bytesToBase64 } from './insert-actions'
-import { classifyDroppedFile, fileExt } from '../shared/media-kinds'
+import { classifyDroppedFile } from '../shared/media-kinds'
 import * as animationActions from './animation-actions'
 import * as showActions from './show-actions'
 import * as slideActions from './slide-actions'
@@ -369,6 +369,7 @@ export interface SlidesEditorHandle {
   analysis?:import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   /** Run the renderer's full save flow (flush the edit overlay + notes, then save in place). */
   saveAndWait(): Promise<boolean>
+  saveAsCopy(): Promise<void>
   /** Wait for active saves through renderer-side dirty-state cleanup. */
   waitForSave(): Promise<void> | undefined
   /** True when the session or the local speaker notes have unsaved changes. */
@@ -381,20 +382,28 @@ export interface SlidesEditorHandle {
 
 /** Optional host seam: everything keeps desktop-IPC behavior when absent. */
 export interface SlidesAppHost {
+  openWorkspaceFile?: () => boolean
   saveDownload?: React.ReactNode
   downloadImages?: fileActions.SlideImageDownload
-  downloadPdf?: fileActions.SlidePdfDownload
+  browserPdfExport?: fileActions.BrowserSlidePdfExport
+  searchablePdf?: {label:string; print:fileActions.BrowserSlidePdfPrint}
   namedCopy?: fileActions.SlidesNamedCopy
+  saveAsCopy?: fileActions.SlidesNamedCopy['save']
+  canSaveAsCopy?: boolean
   hasGeneratedName?:()=>boolean
   analysisGeneration?:()=>number|null
   runAnalysis?:(ops:unknown[],check:()=>boolean,adopt:(slides:RenderSlide[])=>void)=>Promise<boolean>
   /** Another editor holds the document: block text-edit entry and mutating chords (the API layer fences everything else). */
   readOnly?: boolean
+  readBrowserPaste?: (transfer: DataTransfer) => ReturnType<Window['slidesApi']['clipboardExternal']>
   /** Saves commit in place without dialogs (the Web workspace). */
   inPlaceSave?: boolean
   /** Maximum speaker notes length accepted by this host. */
   notesTextLimit?: number
+  mediaFileSizeLimit?: number
+  onScreenRecordingActive?: (active: boolean) => void
   presenterAudienceAvailable?: boolean
+  presenterBrowserAudience?: PresenterBrowserAudience
   /** Stable browser storage identity for this workspace document. */
   documentStorageScope?: string
   /** false hides the AI dock and rail entirely. */
@@ -406,6 +415,7 @@ export interface SlidesAppHost {
     extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]
     agents?: readonly import('@genoffice/ui').AssistantParticipant[]
     mediaCapabilities?: {imageGeneration:boolean;mediaAnalysis:boolean}
+    supportsVision?: () => boolean
     onManageAgents?: () => void
     control?: import('@genoffice/ui').AssistantControl
     continuation?: SlidesAssistantContinuation
@@ -435,7 +445,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const [slides, setSlides] = useState<RenderSlide[]>([])
   // Layouts may reference Office-private fonts (resolved in main); register them as FontFaces
   useEffect(() => {
-    if (slides.length) void syncPrivateFonts()
+    if (slides.length) void syncPrivateFonts(hostRef.current?.inPlaceSave)
   }, [slides])
   const [path, setPath] = useState<string | null>(null)
   const documentStorageScope = path ? (host?.documentStorageScope ?? path) : null
@@ -459,7 +469,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   useEffect(
     () =>
       window.slidesApi.onFontsChanged?.(() => {
-        void syncPrivateFonts()
+        void syncPrivateFonts(hostRef.current?.inPlaceSave)
         refreshMissingFonts()
       }),
     [refreshMissingFonts],
@@ -496,6 +506,20 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const [drawKind, setDrawKind] = useState<InsertKind | null>(null)
   /** Latest-state bundle for the extracted action modules; refreshed every render (see action-context.ts). */
   const ctxRef = useRef<ActionCtx>(null as unknown as ActionCtx)
+  const dropTail = useRef<Promise<void>>(Promise.resolve())
+  const documentOpenEpoch = useRef(0)
+  useEffect(() => () => { documentOpenEpoch.current++ }, [])
+  const slideInputTarget = useCallback(() => {
+    const target = ctxRef.current
+    const epoch = documentOpenEpoch.current
+    const canInsert = () => {
+      const active = ctxRef.current
+      return documentOpenEpoch.current === epoch && !hostRef.current?.readOnly &&
+        active.path === target.path && active.current === target.current &&
+        active.slide?.partPath === target.slide?.partPath
+    }
+    return { target, canInsert }
+  }, [])
   const [zoom, setZoom] = useState(1)
   /** unscaled layout size of .stage-scale — its transform-scaled visual size is
    * scaleBox * zoom, which the wrapper zoom-box adopts so scrolling can reach it all */
@@ -559,7 +583,8 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
-  const [autoSave, setAutoSave] = useAutoSavePref('ai-slides-auto-save', window.slidesApi)
+  const autoSaveKey = host?.documentStorageScope ? `ai-slides-auto-save:${host.documentStorageScope}` : 'ai-slides-auto-save'
+  const [autoSave, setAutoSave] = useAutoSavePref(autoSaveKey, window.slidesApi)
   useEffect(() => {
     window.slidesApi.setAutoSavePref?.(autoSave)
   }, [autoSave])
@@ -775,8 +800,17 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const [zoomDialog, setZoomDialog] = useState<zoomActions.ZoomMode | null>(null)
   /** Design › Slide Size › Custom Size… open, with the deck size it opened on */
   const [slideSizeDialog, setSlideSizeDialog] = useState<{ cx: number; cy: number } | null>(null)
-  const recorderRef = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null)
+  const recorderRef = useRef<ScreenRecordingSession | null>(null)
   const [recording, setRecording] = useState(false)
+  useEffect(() => () => {
+    const capture=recorderRef.current
+    recorderRef.current=null
+    capture?.cancel()
+    if(capture)hostRef.current?.onScreenRecordingActive?.(false)
+  }, [])
+  useEffect(() => {
+    if(host?.readOnly)recorderRef.current?.cancel()
+  }, [host?.readOnly])
   // ── Layout picking: layout list + slide size (loaded after the file opens) ─────────────────
   const [layoutsResult, setLayoutsResult] = useState<GetLayoutsResult | null>(null)
   // ── Picture crop mode ─────────────────────────────────────────────────────
@@ -1099,6 +1133,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const applyOpen = useCallback(
     (result: { path: string; slides: RenderSlide[]; defaultFont?: string } | null) => {
       if (!result) return
+      documentOpenEpoch.current++
       setSlides(result.slides)
       setDefaultFont(result.defaultFont ?? null)
       setPath(result.path)
@@ -1170,10 +1205,14 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   )
 
   const openDialog = useCallback(async () => {
+    if (host?.inPlaceSave) {
+      host.openWorkspaceFile?.()
+      return
+    }
     if (customShowDraftRef.current) return
     const r = await window.slidesApi.openPptx(FIT_WIDTH)
     applyOpen(r)
-  }, [applyOpen])
+  }, [applyOpen, host?.inPlaceSave, host?.openWorkspaceFile])
 
   // Save/export flows live in file-actions.ts; the editing-active flag lets ⌘S wait for the edit overlay to commit
   const editingActiveRef = useRef(false)
@@ -1225,6 +1264,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   useEffect(() => {
     host?.onEditorReady?.({
       saveAndWait: () => saveRef.current(true),
+      saveAsCopy: () => saveAsRef.current(),
       waitForSave,
       analysis:{captureAnalysis:()=>captureSlideAnalysis({current:(forSave=false)=>{
         const ctx=ctxRef.current,generation=hostRef.current?.analysisGeneration?.()
@@ -1333,8 +1373,12 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   }, [autoSave, path, editing, editingCell, save])
 
   const saveAs = useCallback(async () => {
-    if (await commitCustomShows()) await fileActions.saveAs(() => ctxRef.current)
+    const host = hostRef.current
+    if (host?.inPlaceSave && !host.canSaveAsCopy) return
+    if (await commitCustomShows()) await fileActions.saveAs(() => ctxRef.current, host?.saveAsCopy)
   }, [commitCustomShows])
+  const saveAsRef = useRef(saveAs)
+  saveAsRef.current = saveAs
   const nameWithAi = useCallback(async () => {
     if (await commitCustomShows()) await fileActions.nameWithAi(() => ctxRef.current, hostRef.current?.namedCopy)
   }, [commitCustomShows])
@@ -1346,10 +1390,17 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     finally { exportingImages.current = false }
   }, [])
   const exportingPdf = useRef(false)
-  const exportPdf = useCallback(async () => {
+  const exportPdf = useCallback(async (searchable = false) => {
     if (exportingPdf.current) return
     exportingPdf.current = true
-    try { await fileActions.exportPdf(ctxRef.current,undefined,hostRef.current?.downloadPdf) }
+    try {
+      const host = hostRef.current
+      if (searchable) {
+        if (host?.searchablePdf) await fileActions.printSearchablePdf(ctxRef.current,host.searchablePdf.print)
+      } else {
+        await fileActions.exportPdf(ctxRef.current,undefined,host?.browserPdfExport)
+      }
+    }
     finally { exportingPdf.current = false }
   }, [])
   const [videoDlgOpen, setVideoDlgOpen] = useState(false)
@@ -1454,11 +1505,27 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       // shared handler; navigation and server-fenced ops pass through harmlessly.
       if (hostReadOnly && (e.key === 'Delete' || e.key === 'Backspace' || ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'm' || e.key === 'M')))) return
       if (customShowDraftRef.current) return
-      handleGlobalKeydown(ctxRef.current, e)
+      handleGlobalKeydown(ctxRef.current, e, navigator.platform, !!hostRef.current?.readBrowserPaste)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const readPaste = hostRef.current?.readBrowserPaste
+      if (!readPaste || e.defaultPrevented || !e.clipboardData || inTextField() || customShowDraftRef.current) return
+      const { target, canInsert } = slideInputTarget()
+      if (!target.slide || !canInsert() || target.editing || target.editingCell ||
+          target.masterItems || target.slideShow || target.presenter || target.overlayOpen) return
+      e.preventDefault()
+      void clipboardActions.pasteClipboard(target, readPaste(e.clipboardData), canInsert).catch(error => {
+        if (canInsert() && error instanceof Error) target.setStatus(error.message)
+      })
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [slideInputTarget])
 
   // Zoom preview shared by trackpad pinch and the status-bar slider: a setZoom per event
   // re-renders the whole App (thumbnails included) dozens of times per gesture and froze
@@ -1921,19 +1988,6 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const copySelected = useCallback(() => clipboardActions.copySelected(ctxRef.current), [])
   const cutSelected = useCallback(() => clipboardActions.cutSelected(ctxRef.current), [])
 
-  /** Insert an external image at PowerPoint's dpi-aware size, centered on the page or drop point. */
-  const insertExternalImage = useCallback(
-    (base64: string, ext: string, atPx?: { x: number; y: number }) =>
-      clipboardActions.insertExternalImage(ctxRef.current, base64, ext, atPx),
-    [],
-  )
-
-  const insertDroppedMedia = useCallback(
-    (file: File, kind: 'video' | 'audio', atPx: { x: number; y: number }) =>
-      insertActions.insertDroppedMedia(ctxRef.current, file, kind, atPx),
-    [],
-  )
-
   // The clipboard lives in the main process, so a slide copied here can be pasted
   // into any other open deck.
   const [canPasteSlide, setCanPasteSlide] = useState(false)
@@ -1949,7 +2003,10 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     [],
   )
 
-  const pasteClipboard = useCallback(() => clipboardActions.pasteClipboard(ctxRef.current), [])
+  const pasteClipboard = useCallback(() => {
+    const { target, canInsert } = slideInputTarget()
+    return clipboardActions.pasteClipboard(target, undefined, canInsert)
+  }, [slideInputTarget])
   const duplicateSelected = useCallback(
     (ids: string[], dxPx = 16, dyPx = 16) =>
       clipboardActions.duplicateSelected(ctxRef.current, ids, dxPx, dyPx),
@@ -2053,7 +2110,15 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     [],
   )
   const insertModel3dFile = useCallback(() => model3dActions.insertModel3dFile(ctxRef.current), [])
-  const toggleScreenRecord = useCallback(() => insertActions.toggleScreenRecord(ctxRef.current), [])
+  const toggleScreenRecord = useCallback(() => {
+    const mediaHost=hostRef.current
+    return insertActions.toggleScreenRecord(ctxRef.current, {
+      maxBytes:mediaHost?.mediaFileSizeLimit,
+      onActive:mediaHost?.onScreenRecordingActive,
+      targetIndex:partPath=>ctxRef.current.slides.findIndex(slide=>slide.partPath===partPath),
+      canInsert:()=>!hostRef.current?.readOnly,
+    })
+  }, [])
 
   // Reflect the current page's transition effect on page/document changes
   useEffect(() => {
@@ -3253,10 +3318,10 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
 
   const model3dNode = useMemo(
     () =>
-      selectedNode?.type === 'picture' && selectedNode.model3d
+      !hostReadOnly && selectedNode?.type === 'picture' && selectedNode.model3d
         ? (selectedNode as PictureRenderNode & { model3d: Model3dRotation })
         : null,
-    [selectedNode],
+    [hostReadOnly, selectedNode],
   )
 
   const [selectedChartData, setSelectedChartData] = useState<Awaited<
@@ -3675,14 +3740,22 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         autoSave={autoSave}
         onAutoSaveChange={setAutoSave}
         onOpen={() => void openDialog()}
+        openAvailable={!host?.inPlaceSave || !!host.openWorkspaceFile}
         onSave={() => void save()}
         onUndo={() => void undo()}
         onRedo={() => void redo()}
         onSaveAs={() => void saveAs()}
         saveDownload={host?.saveDownload}
+        saveAsAvailable={!host?.inPlaceSave || host.canSaveAsCopy === true}
         onNameWithAi={() => void nameWithAi()}
         desktopMediaAvailable={!host?.inPlaceSave}
+        model3dAvailable={!host?.inPlaceSave || !host.readOnly}
+        videoExportAvailable={!host?.inPlaceSave || (typeof VideoEncoder === 'function' && typeof VideoFrame === 'function')}
+        fileMediaAvailable={!host?.inPlaceSave || (!!host.mediaFileSizeLimit && !host.readOnly)}
+        screenRecordingAvailable={!host?.inPlaceSave || (!!host.mediaFileSizeLimit && !host.readOnly && !!insertActions.screenRecordingMime())}
+        printAvailable={!host?.inPlaceSave || window.slidesApi.browserPrintDialog === true}
         onExportPdf={() => void exportPdf()}
+        searchablePdf={host?.searchablePdf ? {label:host.searchablePdf.label,run:() => void exportPdf(true)} : undefined}
         onPrint={() => setPrintDlgOpen(true)}
         onExportImages={() => void exportImages('png')}
         onExportImagesJpg={() => void exportImages('jpg')}
@@ -4015,6 +4088,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                 assistantAgents={host?.assistant?.agents}
                 extraSkills={host?.assistant?.extraSkills}
                 mediaCapabilities={host?.assistant?.mediaCapabilities}
+                supportsVision={host?.assistant?.supportsVision}
                 onManageAgents={host?.assistant?.onManageAgents}
                 onGeneratedDraftReady={host?.hasGeneratedName?async()=>{if(hostRef.current?.hasGeneratedName?.())await saveRef.current(true,true)}:undefined}
                 key={aiPanelKey}
@@ -4489,20 +4563,15 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                                 x: ((e.clientX - rect.left) / rect.width) * slide.widthPx,
                                 y: ((e.clientY - rect.top) / rect.height) * slide.heightPx,
                               }
-                              for (const { f, kind } of files) {
-                                if (kind !== 'image') {
-                                  if (!hostRef.current?.inPlaceSave) void insertDroppedMedia(f, kind, at)
-                                  continue
-                                }
-                                void f.arrayBuffer().then((buf) => {
-                                  const ext = fileExt(f.name) || 'png'
-                                  void insertExternalImage(
-                                    bytesToBase64(new Uint8Array(buf)),
-                                    ext === 'jpeg' ? 'jpg' : ext,
-                                    at,
-                                  )
-                                })
-                              }
+                              const mediaHost = hostRef.current
+                              if (mediaHost?.readOnly) return
+                              const accepted = mediaHost?.inPlaceSave && !mediaHost.mediaFileSizeLimit
+                                ? files.filter(({ kind }) => kind === 'image')
+                                : files
+                              const { target, canInsert } = slideInputTarget()
+                              dropTail.current = dropTail.current.then(() =>
+                                insertActions.insertDroppedFiles(target, accepted, at, canInsert, mediaHost?.mediaFileSizeLimit),
+                              )
                             }}
                           >
                             <SlideCanvas
@@ -4967,6 +5036,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
           onExit={exitPresenterView}
           onUseSlideShow={switchPresenterToShow}
           audienceAvailable={host?.presenterAudienceAvailable}
+          browserAudience={host?.presenterBrowserAudience}
         />
       )}
 
@@ -5061,6 +5131,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
           slides={slides}
           images={images}
           current={current}
+          documentName={fileActions.exportBaseName(ctxRef.current)}
           onClose={() => setPrintDlgOpen(false)}
           setStatus={setStatus}
         />
@@ -5085,7 +5156,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         <ExportVideoDialog
           slideCount={slides.length}
           run={(opts, onProgress, signal) =>
-            fileActions.exportVideoFile(ctxRef.current, opts, onProgress, signal)
+            fileActions.exportVideoFile(ctxRef.current, opts, onProgress, signal, host?.inPlaceSave === true)
           }
           onClose={() => setVideoDlgOpen(false)}
         />

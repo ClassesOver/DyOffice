@@ -11,10 +11,11 @@
  * preview source, so what the dialog shows is exactly what prints.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PrintDuplex, PrintPaper, PrinterInfo } from '../../shared/ipc'
+import type { PrintDuplex, PrinterInfo } from '../../shared/ipc'
 import { useI18n } from '../i18n/locale'
+import { addBrowserPrintLinks } from '../pdf-internal-links'
 import { parsePrintRange } from '../print-range'
-import { clearPrintZoom, setPrintZoom } from '../print-zoom'
+import { clearPrintZoom, paperOfPage, setPrintZoom } from '../print-zoom'
 
 type RangeMode = 'all' | 'current' | 'custom'
 
@@ -30,22 +31,16 @@ const pvPages = (): HTMLElement[] => [
   ...document.querySelectorAll<HTMLElement>('.pagination-preview .pv-page'),
 ]
 
-/** The preview uses CSS pixels at 96 px per inch. Inline dimensions retain
- * the fractional pixels for paper sizes such as A4. */
-function paperOfPage(page: HTMLElement | undefined): PrintPaper | undefined {
-  if (!page) return undefined
-  const w = Number.parseFloat(page.style.width) || page.offsetWidth
-  const h = Number.parseFloat(page.style.height) || page.offsetHeight
-  if (!(w > 0) || !(h > 0)) return undefined
-  return { widthTwips: Math.round(w * 15), heightTwips: Math.round(h * 15) }
-}
-
 export function PrintDialog({
   browserOnly = false,
+  documentName,
+  internalLinkBlocks,
   onClose,
   setStatus,
 }: {
   browserOnly?: boolean
+  documentName: string
+  internalLinkBlocks?: Parameters<typeof addBrowserPrintLinks>[2]
   onClose: () => void
   setStatus: (s: string) => void
 }) {
@@ -54,6 +49,7 @@ export function PrintDialog({
   const [page, setPage] = useState(0)
   const [rangeMode, setRangeMode] = useState<RangeMode>('all')
   const [customRange, setCustomRange] = useState('')
+  const [pdfName, setPdfName] = useState(() => documentName.replace(/\.docx$/i, ''))
   const [printing, setPrinting] = useState(false)
   const [printers, setPrinters] = useState<PrinterInfo[]>([])
   const [deviceName, setDeviceName] = useState(browserOnly || IS_MAC ? SYSTEM_DIALOG : DEFAULT_PRINTER)
@@ -151,7 +147,7 @@ export function PrintDialog({
     return () => ro.disconnect()
   }, [applyZoom, ready])
 
-  const doPrint = async () => {
+  const doPrint = async (outputName?: string) => {
     const els = pvPages()
     if (!selected || selected.length === 0 || printing) return
     const sel = new Set(selected)
@@ -160,6 +156,9 @@ export function PrintDialog({
     if (!last) return
     const paper = paperOfPage(browserOnly ? pages[0] : els[0])
     const app = browserOnly ? last.closest('.app') : null
+    const removeLinks = browserOnly && internalLinkBlocks
+      ? addBrowserPrintLinks(els, pages, internalLinkBlocks)
+      : undefined
     setPrinting(true)
     app?.classList.add('pv-printing')
     els.forEach((el, i) => el.classList.toggle('pv-print-skip', !sel.has(i)))
@@ -171,6 +170,7 @@ export function PrintDialog({
         scale,
         systemDialog ? { deviceName: null } : { deviceName, copies, collate, duplex },
         paper,
+        outputName,
       )
       if (r.ok) {
         onClose()
@@ -180,6 +180,7 @@ export function PrintDialog({
       // not ok without an error = canceled in the system dialog: keep the dialog open
     } finally {
       if (!browserOnly) clearPrintZoom()
+      removeLinks?.()
       app?.classList.remove('pv-printing')
       last.classList.remove('pv-print-tail')
       els.forEach((el) => el.classList.remove('pv-print-skip'))
@@ -317,7 +318,7 @@ export function PrintDialog({
               </label>
               <input
                 type="text"
-                className={`print-range-input ${rangeInvalid ? 'invalid' : ''}`}
+                className={`print-text-input ${rangeInvalid ? 'invalid' : ''}`}
                 placeholder={t('appPrintRangeHint')}
                 value={customRange}
                 disabled={rangeMode !== 'custom'}
@@ -325,6 +326,18 @@ export function PrintDialog({
                 onChange={(e) => setCustomRange(e.target.value)}
               />
             </fieldset>
+            {browserOnly && (
+              <label className="print-field">
+                <span>{t('ribbonFieldFileName')}</span>
+                <input
+                  type="text"
+                  className="print-text-input"
+                  value={pdfName}
+                  disabled={printing}
+                  onChange={(e) => setPdfName(e.target.value)}
+                />
+              </label>
+            )}
             <div className="print-page-count">
               {ready && selected && selected.length > 0
                 ? t('appPrintPageCount', { n: selected.length })
@@ -334,6 +347,14 @@ export function PrintDialog({
         </div>
         <div className="modal-actions">
           <button disabled={printing} onClick={onClose}>{t('appCancel')}</button>
+          {browserOnly && (
+            <button
+              disabled={!ready || !selected?.length || printing || !pdfName.trim()}
+              onClick={() => void doPrint(pdfName.trim())}
+            >
+              {t('appExportPdf')}
+            </button>
+          )}
           <button
             className="primary"
             disabled={!ready || !selected || selected.length === 0 || printing}

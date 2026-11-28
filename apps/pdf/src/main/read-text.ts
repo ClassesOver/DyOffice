@@ -7,6 +7,7 @@
  * as the "does this page have a text layer at all" probe (scanned pages are 0).
  */
 import { chainPdfium, loadPdfium, withDocument, type Pdfium } from './text-edit'
+import { readPdfiumPageText } from '../shared/pdfium-page-text'
 
 export interface PdfPageText {
   /** 1-based page number */
@@ -68,26 +69,6 @@ function metaText(m: Pdfium, doc: number, tag: string): string {
     }
   } finally {
     m._free(tagPtr)
-  }
-}
-
-/** whole textpage text (UTF-16LE, pdfium uses \r\n line breaks) normalized to \n */
-function pageText(m: Pdfium, textPage: number, count: number): string {
-  if (count <= 0) return ''
-  // pdfium writes count chars plus a UTF-16 NUL terminator
-  const buf = m._malloc((count + 1) * 2)
-  if (!buf) return ''
-  try {
-    const written = m._FPDFText_GetText(textPage, 0, count, buf)
-    if (written <= 0) return ''
-    return Buffer.from(m.HEAPU8.subarray(buf, buf + written * 2))
-      .toString('utf16le')
-      .replace(/\0+$/, '')
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      .trimEnd()
-  } finally {
-    m._free(buf)
   }
 }
 
@@ -159,7 +140,7 @@ export function readPdfText(
               truncated = true
               break
             }
-            let text = pageText(m, textPage, chars)
+            let text = readPdfiumPageText(m, textPage, chars)
             if (spent + text.length > budget) {
               text = text.slice(0, Math.max(0, budget - spent))
               truncated = true

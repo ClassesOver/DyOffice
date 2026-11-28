@@ -9,7 +9,7 @@ import { baseName } from '../shared/base-name'
 import { modelSaveAsName } from './file-naming'
 import type { ActionCtx } from './action-context'
 import { collectExportPdfLinks } from './export-links'
-import { renderSlidesToPdfPages } from './export-pages'
+import { renderSlidesToPdfPages, type PdfExportPages } from './export-pages'
 import { renderSlidesToImageBase64 } from './export-render'
 import {
   exportVideo,
@@ -142,8 +142,8 @@ export async function save(getCtx: () => ActionCtx, quiet = false): Promise<bool
   })
 }
 
-export async function saveAs(getCtx: () => ActionCtx): Promise<void> {
-  await saveAsWithName(getCtx, null)
+export async function saveAs(getCtx: () => ActionCtx, copy?: SlidesNamedCopy['save']): Promise<void> {
+  await saveAsWithName(getCtx, null, copy)
 }
 
 /**
@@ -170,16 +170,7 @@ export async function nameWithAi(getCtx: () => ActionCtx, copy?: SlidesNamedCopy
   const deck = editing ? getCtx() : ctx
   const stem = await modelSaveAsName(deck.slides, copy?.suggest)
   if (!stem) return
-  if (copy) {
-    await runSerialized(async () => {
-      const current = getCtx()
-      if (!await flushActiveEdit(current)) return
-      if (!await flushNotesForSave(current)) return
-      await copy.save(stem)
-    })
-    return
-  }
-  await saveAsWithName(getCtx, `${stem}.pptx`)
+  await saveAsWithName(getCtx, `${stem}.pptx`, copy?.save)
 }
 
 /**
@@ -188,7 +179,9 @@ export async function nameWithAi(getCtx: () => ActionCtx, copy?: SlidesNamedCopy
  * A null name means "the deck's current name", which is read inside the queue:
  * a save that landed while this call was waiting may have changed it.
  */
-export async function saveAsWithName(getCtx: () => ActionCtx, name: string | null): Promise<void> {
+export async function saveAsWithName(
+  getCtx: () => ActionCtx, name: string | null, copy?: SlidesNamedCopy['save'],
+): Promise<void> {
   // Same queue as save(): Save + Save As (or double Save As) write through
   // the same main-process pipe and would interleave without it.
   await runSerialized(async () => {
@@ -196,6 +189,10 @@ export async function saveAsWithName(getCtx: () => ActionCtx, name: string | nul
     if (!await flushActiveEdit(ctx)) return
     if (!await flushNotesForSave(ctx)) return
     const target = name ?? (baseName(ctx.path ?? '') || 'presentation.pptx')
+    if (copy) {
+      await copy(target.replace(/\.pptx$/i, ''))
+      return
+    }
     const r = await window.slidesApi.saveAs(target)
     if (r.ok) {
       if (r.slides) adoptSavedSlides(ctx, r.slides)
@@ -269,6 +266,7 @@ export async function exportVideoFile(
   opts: VideoExportOptions,
   onProgress: (fraction: number) => void,
   signal: AbortSignal,
+  browserDownload = false,
 ): Promise<VideoExportResult> {
   if (!ctx.slides.some((s) => !s.hidden)) {
     ctx.setStatus(t('appExportNoSlides'))
@@ -277,7 +275,7 @@ export async function exportVideoFile(
   const path = await window.slidesApi.pickExportVideoPath(`${exportBaseName(ctx)}.mp4`)
   if (!path) return { ok: false, cancelled: true }
   const r = await exportVideo(
-    { slides: ctx.slides, images: ctx.images, path },
+    { slides: ctx.slides, images: ctx.images, path, requireNarration: browserDownload },
     opts,
     onProgress,
     signal,
@@ -323,7 +321,35 @@ async function collectPdfLinks(ctx: ActionCtx): Promise<ExportPdfLink[][]> {
   }
 }
 
-export type SlidePdfDownload = (baseName: string, pages: string[], widthPx: number, heightPx: number, links: ExportPdfLink[][]) => Promise<string>
+export type SlidePdfPages = { pages: string[]; widthPx: number; heightPx: number; links: ExportPdfLink[][] }
+export type BrowserSlidePdfExport = (baseName: string, render: () => Promise<SlidePdfPages>) => Promise<string | null>
+export type BrowserSlidePdfPrint = (baseName: string, pages: PdfExportPages & Omit<SlidePdfPages, 'pages'>) => Promise<void>
+
+function checkBrowserPdfDimensions(slides: ActionCtx['slides']): void {
+  if (slides.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
+    throw new Error('Slide dimensions exceed the PDF export limit')
+  }
+}
+
+export async function printSearchablePdf(ctx: ActionCtx, print: BrowserSlidePdfPrint): Promise<void> {
+  const visible = ctx.slides.filter(slide => !slide.hidden)
+  const first = visible[0]
+  if (!first) {
+    ctx.setStatus(t('appExportNoSlides'))
+    return
+  }
+  try {
+    checkBrowserPdfDimensions(visible)
+    ctx.setStatus(t('appPrintProgress'))
+    const pages = await renderSlidesToPdfPages(visible, ctx.images, 64 * 1024 * 1024)
+    if (pages.pages.some(page => 'png' in page && !page.png)) throw new Error('A slide could not be rendered.')
+    const links = await collectPdfLinks(ctx)
+    await print(exportBaseName(ctx), {...pages, widthPx:first.widthPx, heightPx:first.heightPx, links})
+    ctx.setStatus('')
+  } catch (error) {
+    ctx.setStatus(t('appPrintFailed', { error: String(error) }))
+  }
+}
 
 /**
  * Export as PDF: each page (skipping hidden ones) rendered to vector SVG (text
@@ -333,22 +359,22 @@ export type SlidePdfDownload = (baseName: string, pages: string[], widthPx: numb
  * `outPath` skips the save dialog — the headless CLI entry already knows where
  * the file goes. Resolves true only when a PDF was written.
  */
-export async function exportPdf(ctx: ActionCtx, outPath?: string, download?: SlidePdfDownload): Promise<boolean> {
+export async function exportPdf(ctx: ActionCtx, outPath?: string, browserExport?: BrowserSlidePdfExport): Promise<boolean> {
   const visible = ctx.slides.filter((s) => !s.hidden)
   if (visible.length === 0) {
     ctx.setStatus(t('appExportNoSlides'))
     return false
   }
   try {
-    if (download) {
-      if (visible.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
-        throw new Error('Slide dimensions exceed the PDF export limit')
-      }
-      ctx.setStatus(t('appExportPdfProgress'))
-      const pages = await renderSlidesToImageBase64(visible,ctx.images,{format:'png',maxOutputChars:64 * 1024 * 1024})
-      const path = await download(exportBaseName(ctx),pages,visible[0].widthPx,visible[0].heightPx,await collectPdfLinks(ctx))
-      ctx.setStatus(t('appExportPdfDone',{path}))
-      return true
+    if (browserExport) {
+      checkBrowserPdfDimensions(visible)
+      const path = await browserExport(exportBaseName(ctx),async () => {
+        ctx.setStatus(t('appExportPdfProgress'))
+        const pages = await renderSlidesToImageBase64(visible,ctx.images,{format:'png',maxOutputChars:64 * 1024 * 1024})
+        return {pages,widthPx:visible[0].widthPx,heightPx:visible[0].heightPx,links:await collectPdfLinks(ctx)}
+      })
+      ctx.setStatus(path ? t('appExportPdfDone',{path}) : '')
+      return Boolean(path)
     }
     const target = outPath ?? (await window.slidesApi.pickExportPdfPath(`${exportBaseName(ctx)}.pdf`))
     if (!target) return false

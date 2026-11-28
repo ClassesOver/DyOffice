@@ -17,21 +17,27 @@ export interface PdfExportPages {
 export async function renderSlidesToPdfPages(
   slides: RenderSlide[],
   images: Map<string, HTMLImageElement>,
+  maxOutputChars = Infinity,
 ): Promise<PdfExportPages> {
   const pages: ExportPdfPage[] = []
   const fonts = new Set<string>()
+  let outputChars = 0
   for (const [i, slide] of slides.entries()) {
+    let content: ExportPdfPage
     try {
       const page = await renderSlideToSvg(slide, images, {
         rasterizeNode: (node) => rasterizeSlideNode(node, slide, images),
         idPrefix: `p${i + 1}-`,
       })
       for (const f of page.fontFamilies) fonts.add(f)
-      pages.push({ svg: page.svg })
+      content = { svg: page.svg }
     } catch {
       const [png] = await renderSlidesToPngBase64([slide], images)
-      pages.push({ png: png ?? '' })
+      content = { png: png ?? '' }
     }
+    outputChars += 'svg' in content ? content.svg.length : content.png.length
+    if (outputChars > maxOutputChars) throw new Error('PDF export exceeds its size limit.')
+    pages.push(content)
   }
   let fontCss = ''
   try {
@@ -39,5 +45,6 @@ export async function renderSlidesToPdfPages(
   } catch {
     // no embedded faces: the print window falls back to the CSS chains' system fonts
   }
+  if (outputChars + fontCss.length > maxOutputChars) throw new Error('PDF export exceeds its size limit.')
   return { pages, fontCss }
 }
