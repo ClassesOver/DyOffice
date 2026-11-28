@@ -9,6 +9,12 @@ import {
 
 let current: AiPanelPrefs = DEFAULT_AI_PANEL_PREFS
 const listeners = new Set<() => void>()
+let openStateStorage: Pick<Storage, 'getItem' | 'setItem'> | undefined
+
+/** Browser editors can use account-scoped storage for remembered panel state. */
+export function setAiPanelOpenStorage(storage: Pick<Storage, 'getItem' | 'setItem'>): void {
+  openStateStorage = storage
+}
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
@@ -50,13 +56,14 @@ export function aiPanelWidthAtPointer(clientX: number): number {
 export function aiPanelInitiallyOpen(storageKey: string): boolean {
   if (!current.showAiSidebar) return false
   if (!current.openInNewDocs) return false
-  return localStorage.getItem(storageKey) !== '0'
+  return (openStateStorage ?? localStorage).getItem(storageKey) !== '0'
 }
 
 /** Persist the panel state for `aiPanelInitiallyOpen`; a no-op while the setting is off so the memory survives */
 export function rememberAiPanelOpen(storageKey: string, open: boolean): void {
   if (!current.openInNewDocs) return
-  localStorage.setItem(storageKey, open ? '1' : '0')
+  const storage = openStateStorage ?? localStorage
+  storage.setItem(storageKey, open ? '1' : '0')
 }
 
 export function useAiPanelPrefs(): AiPanelPrefs {

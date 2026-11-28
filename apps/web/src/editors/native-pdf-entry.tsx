@@ -49,7 +49,7 @@ import '@genoffice/ui/screentip.css'
 import '@genoffice/ui/ribbon-collapse.css'
 import '../../../pdf/src/renderer/styles.css'
 import '@genoffice/ui/ai-panel-prefs.css'
-import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
+import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import './native-pdf-assistant.css'
 
 const element=document.getElementById('root')!
@@ -64,7 +64,7 @@ async function mount(){
   grant.getPreferences().catch(()=>undefined),
   params.get('guest')==='1'?undefined:grant.accountIdentity(browserActions.signal).catch(()=>undefined),
  ])
- installBrowserAssistantAppearance(prefs)
+ await installBrowserAssistantPreferences(prefs)
  const lastZoomStorage={
   getItem:(key:string)=>account?localStorage.getItem(`${key}:${account.join(':')}`):null,
   setItem(key:string,value:string){
@@ -933,7 +933,7 @@ async function mount(){
   }finally{ribbonBusy=false;if(!disposed)render()}
  }
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
-  <App hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
+  <App hostAssistantOpenState hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">

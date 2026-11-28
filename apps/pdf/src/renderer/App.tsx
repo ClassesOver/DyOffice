@@ -483,7 +483,7 @@ type WritePageRewrite = () => Promise<SavePdfResult>
 type PreparePageRewrite = () => WritePageRewrite | Promise<WritePageRewrite | null>
 type PageRewriteRun = { write: WritePageRewrite; afterReload?: () => void; restore?: boolean }
 
-export default function App({ hostReadOnly = false, hostInspectDocument, hostLastZoomStorage, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize }: {
+export default function App({ hostReadOnly = false, hostInspectDocument, hostLastZoomStorage, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostAssistantOpenState, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize }: {
   hostReadOnly?: boolean
   hostInspectDocument?: (bytes: Uint8Array, encrypted: boolean) => Promise<{
     restriction: string | null
@@ -491,6 +491,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   }>
   hostLastZoomStorage?: Pick<Storage, 'getItem' | 'setItem'>
   hostLifecycle?: (editor: PdfHostLifecycle | null) => void
+  hostAssistantOpenState?: boolean
   hostAssistant?: (view: PdfAssistantView) => ReactNode
   hostOpenFile?: () => boolean
   hostDownloadUrl?: () => string
@@ -627,7 +628,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   }
   // Persisted so a closed AI panel stays closed on next launch (docs/slides parity)
   const [aiCollapsed, setAiCollapsed] = useState(
-    () => !!hostSave || !aiPanelInitiallyOpen('genoffice-pdf-show-ai'),
+    () => (!!hostSave && !hostAssistantOpenState) || !aiPanelInitiallyOpen('genoffice-pdf-show-ai'),
   )
   /** the panel setter in the "true = visible" sense the sidebar hook expects */
   const setAiOpen = useCallback((open: boolean) => setAiCollapsed(!open), [])
@@ -638,9 +639,10 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
     window.addEventListener('dyoffice:open-handoff-assistant',show)
     return ()=>window.removeEventListener('dyoffice:open-handoff-assistant',show)
   },[])
+  const rememberHostAssistant = hostAssistantOpenState && !!hostAssistant
   useEffect(() => {
-    if (!hostSave) rememberAiPanelOpen('genoffice-pdf-show-ai', !aiCollapsed)
-  }, [aiCollapsed, hostSave])
+    if (!hostSave || rememberHostAssistant) rememberAiPanelOpen('genoffice-pdf-show-ai', !aiCollapsed)
+  }, [aiCollapsed, hostSave, rememberHostAssistant])
   /** One-shot prompt pushed by the ribbon AI buttons; the panel auto-runs it (docs preset pattern) */
   const [aiPreset, setAiPreset] = useState<{ text: string; nonce: number } | null>(null)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')

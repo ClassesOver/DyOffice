@@ -118,3 +118,17 @@ test('assistant appearance round trips and rejects malformed receipts',async()=>
   await assert.rejects(client.getPreferences(),/无法确认/)
  }
 })
+
+test('assistant startup preference persists both choices and rejects a non-boolean receipt',async()=>{
+ let response=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')response={...response,...patch}
+  return response
+ })
+ for(const aiOpenInNewDocs of [true,false]){
+  assert.equal((await client.updatePreferences({aiOpenInNewDocs})).aiOpenInNewDocs,aiOpenInNewDocs)
+  assert.equal((await client.getPreferences()).aiOpenInNewDocs,aiOpenInNewDocs)
+ }
+ response={...response,aiOpenInNewDocs:'false'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})

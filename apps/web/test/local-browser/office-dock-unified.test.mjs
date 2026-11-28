@@ -106,7 +106,8 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','large')
    const rail=frame(file).locator(format==='xlsx'?'.expand-copilot':'.ai-rail').first()
    await expect.poll(async()=>await rail.isVisible()||await composer(file).isVisible(),{timeout:15000}).toBe(true)
-   if(await rail.isVisible())await rail.click()
+   await expect(rail).toBeVisible()
+   await rail.click()
    await expect(composer(file)).toHaveJSProperty('spellcheck',false)
    if(format==='pptx'){
     await frame(file).locator('.ai-panel-side-button').click()
@@ -145,6 +146,40 @@ test('four real Office editors share assistant chrome and retain drafts across c
   }finally{await reopened.close()}
   await saveAppearance('default',true)
   for(const file of Object.values(appearanceFiles))await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
+  async function setStartup(enabled){
+   await accountAction(page,'个人设置')
+   const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+   await settingsTab(settings,'通用偏好')
+   await settings.getByRole('switch',{name:'在新文档中恢复 AI 助手',exact:true}).setChecked(enabled)
+   await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+   await expect(settings).toContainText('个人偏好已保存')
+   await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+  }
+  await setStartup(true)
+  const fresh=await context.newPage()
+  const freshComposer=fresh.locator('.ai-composer textarea').first()
+  async function openFresh(format,bytes,name){
+   const {file}=await importFile(f,f.alice.token,bytes,name+'.'+format)
+   await fresh.goto(origin+'/native-'+format+'/?fileId='+file.fileId,{waitUntil:'commit'})
+   await expect(fresh.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+  }
+  try{
+   for(const [format,bytes] of fixtures){
+    await openFresh(format,bytes,'assistant-startup')
+    await expect(freshComposer).toBeVisible({timeout:15000})
+   }
+   const [word,wordBytes]=fixtures[0]
+   await openFresh(word,wordBytes,'assistant-collapse')
+   await fresh.locator('.ai-panel-collapse').first().click()
+   await openFresh(word,wordBytes,'assistant-remembered')
+   await expect(fresh.locator('.ai-rail').first()).toBeVisible({timeout:15000})
+   await fresh.locator('.ai-rail').first().click()
+   await expect(freshComposer).toBeVisible()
+   await setStartup(false)
+   await expect(freshComposer).toBeVisible()
+   await openFresh(word,wordBytes,'assistant-disabled')
+   await expect(fresh.locator('.ai-rail').first()).toBeVisible({timeout:15000})
+  }finally{await fresh.close()}
  })
  for(const format of ['docx','xlsx','pptx','pdf']){
   if(format==='pdf')await f.preferences.update(f.alice.token,{theme:'dark'})

@@ -89,6 +89,10 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
     <div><label htmlFor={`${preferenceId}-assistant-spellcheck`}>AI 助手拼写检查</label><p id={`${preferenceId}-assistant-spellcheck-hint`} className="personal-page-field-hint">检查助手输入框中的拼写。</p></div>
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-spellcheck`} aria-describedby={`${preferenceId}-assistant-spellcheck-hint`} checked={draft?.aiSpellcheck!==false} onChange={event=>edit({aiSpellcheck:event.target.checked})}/>
    </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant-startup`}>在新文档中恢复 AI 助手</label><p id={`${preferenceId}-assistant-startup-hint`} className="personal-page-field-hint">开启后按编辑器记住上次的展开或收起状态。关闭后，新打开的文档会收起助手。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-startup`} aria-describedby={`${preferenceId}-assistant-startup-hint`} checked={draft?.aiOpenInNewDocs===true} onChange={event=>edit({aiOpenInNewDocs:event.target.checked})}/>
+   </div>
    <div className="personal-page-preference-row">
     <div><label htmlFor={`${preferenceId}-pdf-zoom`}>PDF 默认缩放</label><p id={`${preferenceId}-pdf-zoom-hint`} className="personal-page-field-hint">打开没有阅读记录的 PDF 时使用的缩放。</p></div>
     <select id={`${preferenceId}-pdf-zoom`} aria-describedby={`${preferenceId}-pdf-zoom-hint`} value={draft?.pdfDefaultZoom??'width'} onChange={event=>edit({pdfDefaultZoom:event.target.value as NonNullable<PersonalPreferences['pdfDefaultZoom']>})}>

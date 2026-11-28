@@ -1,6 +1,6 @@
 import {takeOfficeImportUnlock,workspaceOpenAction} from './browser-document-command'
 import {applyBrowserEditorTheme} from './browser-editor-theme'
-import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
+import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import { officeSignatureNotice } from './office-signature-notice'
 import {createDraftCopyAuthority,draftCopyParentActive} from './draft-copy-authority'
 import {mountDocumentHandoff} from './document-handoff'
@@ -81,7 +81,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const assistantNotice = guest||passwordProtected?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
-  const appearance=installBrowserAssistantAppearance(prefs,panelPrefs)
+  const appearance=await installBrowserAssistantPreferences(prefs,panelPrefs)
   Object.defineProperty(window,'desktopApi',{value:{...documentApi,...assistant?.api,...(workbookImages?{generateImage:workbookImages.generateImage,fetchImage:workbookImages.fetchImage}:{}),getAiPanelPrefs:async()=>appearance.withAppearance(panelPrefs)} as unknown as DesktopApi,configurable:true})
   installScreenTips(); installCanvasFontFallback()
   const loads: Promise<unknown>[] = [registerTextDingbatsFace()]

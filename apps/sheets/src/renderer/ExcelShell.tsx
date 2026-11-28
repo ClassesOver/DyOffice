@@ -635,8 +635,8 @@ export function ExcelShell({
     return () => window.removeEventListener('wheel', scrollRibbonOnWheel)
   }, [])
   useEffect(() => {
-    rememberAiPanelOpen('ai-sheets-show-ai', isCopilotOpen)
-  }, [isCopilotOpen])
+    if (assistantAvailable) rememberAiPanelOpen('ai-sheets-show-ai', isCopilotOpen)
+  }, [isCopilotOpen, assistantAvailable])
   // the "show the AI sidebar" setting off hides the copilot rail (soft hide):
   // an explicit AI action (ribbon run, toggle) still opens the panel, and
   // closing it returns to hidden — no dead affordances, no invisible runs

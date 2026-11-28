@@ -1,7 +1,7 @@
 import {BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES} from '../../../docs/src/shared/merge-data'
 import {takeOfficeImportUnlock,workspaceOpenAction} from './browser-document-command'
 import {applyBrowserEditorTheme} from './browser-editor-theme'
-import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
+import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import { officeSignatureNotice } from './office-signature-notice'
 import {readHandoffSkill} from './document-handoff-spec'
 import {joinWordCollab,type WordSyncState} from './word-collab'
@@ -329,7 +329,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       try { return await normalizeWebp(image.base64) } catch { return null }
     },
   } : {}
-  const appearance=installBrowserAssistantAppearance(prefs,panelPrefs)
+  const appearance=await installBrowserAssistantPreferences(prefs,panelPrefs)
   window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => appearance.withAppearance({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
   installScreenTips()
   let initialLease = canEdit()

@@ -1848,8 +1848,8 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
   }, [])
 
   useEffect(() => {
-    rememberAiPanelOpen('aidocs.showAi', showAi)
-  }, [showAi])
+    if (host?.assistantAvailable !== false) rememberAiPanelOpen('aidocs.showAi', showAi)
+  }, [showAi, host?.assistantAvailable])
 
   useEffect(() => {
     saveLeftPane(leftPane)

@@ -28,7 +28,7 @@ import type {SlidesApi} from '../../../slides/src/shared/ipc'
 import {WEB_SLIDE_MEDIA_MAX_BYTES} from '../../../slides/src/shared/media-kinds'
 import {WEB_NOTES_TEXT_LIMIT} from '../../../slides/src/shared/notes-draft'
 import {installScreenTips} from '@genoffice/ui'
-import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
+import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
 import '@genoffice/ui/ai-model-picker.css'
@@ -97,7 +97,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       skillText: name => sharedAssistant?.api.skillText(name) ?? Promise.reject(new Error(text.unavailable)),
     },
   })
-  const appearance=installBrowserAssistantAppearance(prefs,await bridge.api.getAiPanelPrefs())
+  const appearance=await installBrowserAssistantPreferences(prefs,{...await bridge.api.getAiPanelPrefs(),showAiSidebar:!guest&&prefs.showAssistant!==false})
   Object.defineProperty(window, 'slidesApi', {value: {...bridge.api,...audience.api,...fullscreen,
     getAiPanelPrefs:async()=>appearance.withAppearance(),
     setAiPanelPrefs:async(patch:Parameters<SlidesApi['setAiPanelPrefs']>[0])=>appearance.updatePanelPrefs(patch),
@@ -369,10 +369,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const desktop={...(stage.desktop??{}),...value.api} as typeof stage.desktop
     Object.defineProperty(stage,'desktop',{value:desktop,configurable:true,writable:true})
     installedDesktop=desktop
-    if(!disposed){
-      appearance.updatePanelPrefs({showAiSidebar:value.available})
-    }
-  }).catch(()=>{}).finally(()=>{assistantLoadFinished=true;if(!disposed)changed()})
+  }).catch(()=>{}).finally(()=>{assistantLoadFinished=true;if(!disposed){appearance.updatePanelPrefs({showAiSidebar:sharedAssistant?.available===true});changed()}})
   const closeState=()=>({dirty:dirty()||bridge.isDirty(),blocked:copying||downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})
   registerDisplayedRevision(()=>{
     const state=closeState(),current=host.getState(fileId)
