@@ -60,7 +60,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
  const files={}
  const fixtures=[['docx',await docxBytes()],['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))],['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',Buffer.from(await pdf.save())]]
  for(const [format,bytes] of fixtures)files[format]=(await importFile(f,f.alice.token,bytes,'dock.'+format)).file
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner,sheetsPackageReader,slidesHost})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner,sheetsPackageReader,slidesHost})
  browser=await launchTestBrowser()
  const context=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:1440,height:1000}})
  const page=await context.newPage(),errors=[],turns=[]
@@ -155,13 +155,17 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await expect(settings).toContainText('个人偏好已保存')
    await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
   }
+  await page.reload()
+  await expect(page.locator('.home')).toBeVisible()
   await setStartup(true)
   const fresh=await context.newPage()
+  let startupEnabled=true
   const freshComposer=fresh.locator('.ai-composer textarea').first()
   async function openFresh(format,bytes,name){
    const {file}=await importFile(f,f.alice.token,bytes,name+'.'+format)
-   await fresh.goto(origin+'/native-'+format+'/?fileId='+file.fileId,{waitUntil:'commit'})
-   await expect(fresh.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   const response=await fresh.goto(origin+'/native-'+format+'/?fileId='+file.fileId,{waitUntil:'commit'})
+   assert.equal(response?.status(),200,format+' native editor response')
+   await expect(fresh.locator('html'),format+' native editor ready').toHaveAttribute('data-document-loading','ready',{timeout:45000})
   }
   try{
    for(const [format,bytes] of fixtures){
@@ -176,10 +180,15 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await fresh.locator('.ai-rail').first().click()
    await expect(freshComposer).toBeVisible()
    await setStartup(false)
+   startupEnabled=false
    await expect(freshComposer).toBeVisible()
    await openFresh(word,wordBytes,'assistant-disabled')
    await expect(fresh.locator('.ai-rail').first()).toBeVisible({timeout:15000})
-  }finally{await fresh.close()}
+  }finally{
+   await fresh.close()
+   await page.bringToFront()
+   if(startupEnabled)await f.preferences.update(f.alice.token,{aiOpenInNewDocs:false})
+  }
  })
  for(const format of ['docx','xlsx','pptx','pdf']){
   if(format==='pdf')await f.preferences.update(f.alice.token,{theme:'dark'})
