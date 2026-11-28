@@ -1,13 +1,12 @@
 import type { SettingsRequest } from '../../../../packages/browser-host/src/preferences'
-import { isRevisionRef, type OpenFileResult } from '../../../../packages/web-contracts/src/api'
+import { isRevisionRef, type OpenFileResult, type WorkspaceFileFormat } from '../../../../packages/web-contracts/src/api'
 import type { WorkspaceFileList, WorkspaceFolderList } from '../../../../packages/web-contracts/src/workspace'
 import { folderChoices } from '../workspace-folder-options'
 import { pickLocalFiles } from './pick-local-files'
 import './web-ai-naming.css'
 
-const formatLabels = { xlsx: 'Excel (.xlsx)', xlsm: 'Excel (.xlsm)', csv: 'CSV (.csv)', docx: 'Word (.docx)', pdf: 'PDF (.pdf)' }
-type SourceFormat = keyof typeof formatLabels
-type WorkspaceChoice = { id: string; format: SourceFormat }
+const formatLabels = { xlsx: 'Excel (.xlsx)', xlsm: 'Excel (.xlsm)', csv: 'CSV (.csv)', docx: 'Word (.docx)', pptx: 'PowerPoint (.pptx)', pdf: 'PDF (.pdf)' } satisfies Record<WorkspaceFileFormat,string>
+type WorkspaceChoice = { id: string; format: WorkspaceFileFormat }
 type Choice = 'local' | WorkspaceChoice[]
 const PAGE_SIZE = 50
 export type WorkspaceSourceAccess = {
@@ -17,11 +16,13 @@ export type WorkspaceSourceAccess = {
 }
 type PickerOptions = {
   title: string
-  formats: readonly SourceFormat[]
+  formats: readonly WorkspaceFileFormat[]
   language: string
   maxBytes: number
+  maxTotalBytes?: number
   localAccept?: string
   allowLocal?: boolean
+  readAsAttachment?: boolean
 }
 
 function selectSource(request: SettingsRequest, { title: heading, formats, language, allowLocal = true }: PickerOptions, signal: AbortSignal, maxFiles: number): Promise<Choice | null> {
@@ -72,7 +73,7 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
     const option = files.selectedOptions[0]
     if (!option || add.disabled) return
     const id = option.value
-    selected.set(id, {id, format: format.value as SourceFormat})
+    selected.set(id, {id, format: format.value as WorkspaceFileFormat})
     const item = document.createElement('li')
     const name = document.createElement('span')
     name.textContent = option.textContent
@@ -170,7 +171,7 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
     form.onsubmit = event => {
       event.preventDefault()
       if (use.disabled) return
-      finish(multiple ? [...selected.values()] : [{id: files.value, format: format.value as SourceFormat}])
+      finish(multiple ? [...selected.values()] : [{id: files.value, format: format.value as WorkspaceFileFormat}])
     }
     dialog.addEventListener('keydown', event => event.stopPropagation())
     dialog.oncancel = event => { event.preventDefault(); cancel() }
@@ -192,7 +193,7 @@ export async function pickWorkspaceSourceFile(
 
 export async function pickWorkspaceSourceFiles(
   access: WorkspaceSourceAccess,
-  options: PickerOptions & {maxFiles?: number; maxTotalBytes?: number},
+  options: PickerOptions & {maxFiles?: number},
   signal: AbortSignal,
 ): Promise<File[]> {
   const en = options.language === 'en'
@@ -216,11 +217,12 @@ export async function pickWorkspaceSourceFiles(
     if (source.format !== format || !isRevisionRef(source.file) || source.file.fileId !== id || !source.name) {
       throw new Error(en ? 'The selected file is unavailable.' : '所选文件不可用。')
     }
-    if (source.workbookPasswordProtected || source.documentPasswordProtected) {
+    if (!options.readAsAttachment && (source.workbookPasswordProtected || source.documentPasswordProtected)) {
       throw new Error(en ? 'Choose a file without an open password.' : '请选择未设置打开密码的文件。')
     }
-    if (!source.file.size || source.file.size > options.maxBytes) {
+    if (source.file.size > options.maxBytes || (!options.readAsAttachment && !source.file.size)) {
       const limit = options.maxBytes / (1024 * 1024)
+      if (options.readAsAttachment) throw new Error(en ? `Choose an attachment up to ${limit} MiB.` : `请选择不超过 ${limit} MiB 的附件。`)
       throw new Error(en ? `Choose a nonempty file up to ${limit} MiB.` : `请选择不超过 ${limit} MiB 的非空文件。`)
     }
     total += source.file.size

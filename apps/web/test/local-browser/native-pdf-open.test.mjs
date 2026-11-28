@@ -8,7 +8,7 @@ import {deflateSync} from 'node:zlib'
 import JSZip from 'jszip'
 import {PDFArray,PDFDict,PDFDocument,PDFHexString,PDFName,PDFRawStream,PDFString,concatTransformationMatrix,degrees,drawObject,popGraphicsState,pushGraphicsState,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
-import {fileFixture,importFile} from '../helpers/files.mjs'
+import {docxBytes,fileFixture,importFile} from '../helpers/files.mjs'
 import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -1980,7 +1980,15 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
 })
 
 
-test('native Web PDF saves and exports empty and 20 MiB attachments',{skip:!directory,timeout:90000},async t=>{
+async function chooseLocalPdfAttachment(page){
+ await page.getByRole('button',{name:'Add attachment',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'Choose a PDF attachment',exact:true})
+ await expect(dialog).toBeVisible({timeout:5000})
+ const [chooser]=await Promise.all([page.waitForEvent('filechooser'),dialog.getByRole('button',{name:'Choose local file…',exact:true}).click()])
+ return chooser
+}
+
+test('native Web PDF saves and exports workspace and 20 MiB local attachments',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -1990,6 +1998,7 @@ test('native Web PDF saves and exports empty and 20 MiB attachments',{skip:!dire
  await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
  const pdf=await PDFDocument.create();pdf.addPage([240,300]).drawText('Attachment boundary fixture',{x:20,y:240})
  const original=Buffer.from(await pdf.save()),{file}=await importFile(f,f.alice.token,original,'attachments.pdf')
+ const empty=Buffer.alloc(0),{file:workspaceFile}=await importFile(f,f.alice.token,empty,'empty-workspace.csv')
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
  f.cleanup.unshift(()=>app.close())
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
@@ -2003,26 +2012,58 @@ test('native Web PDF saves and exports empty and 20 MiB attachments',{skip:!dire
   await page.getByRole('button',{name:'Attachments',exact:true}).click()
  }
  await panel()
+ const workspacePicker=page.getByRole('dialog',{name:'Choose a PDF attachment',exact:true})
+ const openWorkspacePicker=async()=>{
+  await page.getByRole('button',{name:'Add attachment',exact:true}).click()
+  await expect(workspacePicker).toBeVisible({timeout:5000})
+ }
+ await openWorkspacePicker()
+ await workspacePicker.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(workspacePicker).toHaveCount(0)
+ await expect(page.locator('.pdf-attachment')).toHaveCount(0)
+ await openWorkspacePicker()
+ await workspacePicker.getByRole('combobox',{name:'File type',exact:true}).selectOption('csv')
+ await workspacePicker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(workspaceFile.fileId)
+ const [workspaceRead]=await Promise.all([
+  page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${workspaceFile.fileId}/content`),
+  workspacePicker.getByRole('button',{name:'Use selected file',exact:true}).click(),
+ ])
+ assert.ok(workspaceRead.ok())
+ assert.equal(new URL(workspaceRead.url()).searchParams.get('revision'),workspaceFile.revision)
+ await expect(page.locator('.pdf-attachment-name[title="empty-workspace.csv"]')).toBeVisible()
  const large=Buffer.alloc(20*1024*1024,0xa5)
  large.set(Buffer.from('PDF attachment starts here'))
  large[large.length-1]=0x5a
- const attachments=[['empty.txt',Buffer.alloc(0)],['large.bin',large]]
+ const attachments=[['empty.txt',empty],['large.bin',large]]
  for(const [name,buffer] of attachments){
-  const [picker]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('button',{name:'Add attachment',exact:true}).click()])
+  const picker=await chooseLocalPdfAttachment(page)
   await picker.setFiles({name,mimeType:'application/octet-stream',buffer})
   await expect(page.locator(`.pdf-attachment-name[title="${name}"]`)).toBeVisible({timeout:6000})
  }
- const [extra]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('button',{name:'Add attachment',exact:true}).click()])
+ const extra=await chooseLocalPdfAttachment(page)
  await extra.setFiles({name:'extra.txt',mimeType:'text/plain',buffer:Buffer.from('x')})
  await expect(page.getByText('New attachments can total up to 20 MiB per save.')).toBeVisible()
  await expect(page.locator('.pdf-attachment-name[title="extra.txt"]')).toHaveCount(0)
+ const {file:oversized}=await importFile(f,f.alice.token,Buffer.from('x'),'workspace-overflow.csv')
+ const overflowReads=[]
+ const trackOverflow=request=>{
+  if(new URL(request.url()).pathname===`/api/v1/files/${oversized.fileId}/content`)overflowReads.push(request.url())
+ }
+ page.on('request',trackOverflow)
+ await openWorkspacePicker()
+ await workspacePicker.getByRole('combobox',{name:'File type',exact:true}).selectOption('csv')
+ await workspacePicker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(oversized.fileId)
+ await workspacePicker.getByRole('button',{name:'Use selected file',exact:true}).click()
+ await expect(page.getByText('The selected files exceed the combined size limit.')).toBeVisible()
+ page.off('request',trackOverflow)
+ assert.deepEqual(overflowReads,[])
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  await page.keyboard.press('ControlOrMeta+s')
  await expect.poll(head,{timeout:35000}).not.toBe(file.revision)
  const revision=await head()
  await page.reload()
  await panel()
- for(const [name,buffer] of attachments){
+ for(const [name,buffer] of [['empty-workspace.csv',empty],...attachments]){
   const entry=page.locator('.pdf-attachment').filter({has:page.getByText(name,{exact:true})})
   const [download]=await Promise.all([page.waitForEvent('download',{timeout:20000}),entry.getByRole('button',{name:'Export',exact:true}).click()])
   assert.equal(download.suggestedFilename(),name)
@@ -2030,6 +2071,8 @@ test('native Web PDF saves and exports empty and 20 MiB attachments',{skip:!dire
  }
  assert.equal(await head(),revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ assert.equal((await f.files.openFile(f.alice.token,workspaceFile.fileId)).file.revision,workspaceFile.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,workspaceFile.fileId,workspaceFile.revision),empty)
 })
 
 test('native Web PDF compares local files and downloads page images and an embedded attachment',{skip:!directory,timeout:90000},async t=>{
@@ -2117,9 +2160,23 @@ test('native Web PDF compares local files and downloads page images and an embed
   await page.getByRole('button',{name:'Attachments',exact:true}).click()
  }
  const addedBytes=Buffer.from('New browser attachment')
- const [pickAttachment]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('button',{name:'Add attachment',exact:true}).click()])
+ const pickAttachment=await chooseLocalPdfAttachment(page)
  await pickAttachment.setFiles({name:'added.txt',mimeType:'text/plain',buffer:addedBytes})
  await expect(page.locator('.pdf-attachment-name[title="added.txt"]')).toBeVisible()
+ const {default:officeCrypto}=await import('officecrypto-tool')
+ const protectedName='protected-attachment.docx'
+ const openPassword='attachment fixture password'
+ const protectedBytes=Buffer.from(officeCrypto.encrypt(await docxBytes(),{password:openPassword}))
+ const stage=await f.files.stageUpload(f.alice.token,{name:protectedName,size:protectedBytes.length})
+ await f.files.receiveUpload(f.alice.token,stage.uploadId,protectedBytes,{password:openPassword,format:'docx'})
+ const {file:protectedFile}=await f.files.finishUpload(f.alice.token,stage.uploadId)
+ assert.equal((await f.files.openFile(f.alice.token,protectedFile.fileId)).documentPasswordProtected,true)
+ await page.getByRole('button',{name:'Add attachment',exact:true}).click()
+ const attachmentPicker=page.getByRole('dialog',{name:'Choose a PDF attachment',exact:true})
+ await attachmentPicker.getByRole('combobox',{name:'File type',exact:true}).selectOption('docx')
+ await attachmentPicker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(protectedFile.fileId)
+ await attachmentPicker.getByRole('button',{name:'Use selected file',exact:true}).click()
+ await expect(page.locator('.pdf-attachment-name[title="protected-attachment.docx"]')).toBeVisible()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  await page.getByRole('button',{name:'Home',exact:true}).click()
  await page.getByRole('button',{name:'PDF Converter',exact:true}).click()
@@ -2131,9 +2188,14 @@ test('native Web PDF compares local files and downloads page images and an embed
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'View',exact:true}).click()
  await page.getByRole('button',{name:'Attachments',exact:true}).click()
- const added=page.locator('.pdf-attachment').filter({hasText:'added.txt'})
- const [stored]=await Promise.all([page.waitForEvent('download'),added.getByRole('button',{name:'Export',exact:true}).click()])
- assert.deepEqual(await readFile(await stored.path()),addedBytes)
+ for(const [name,bytes] of [['added.txt',addedBytes],[protectedName,protectedBytes]]){
+  const added=page.locator('.pdf-attachment').filter({has:page.getByText(name,{exact:true})})
+  const [stored]=await Promise.all([page.waitForEvent('download'),added.getByRole('button',{name:'Export',exact:true}).click()])
+  assert.equal(stored.suggestedFilename(),name)
+  assert.deepEqual(await readFile(await stored.path()),bytes)
+ }
+ assert.equal((await f.files.openFile(f.alice.token,protectedFile.fileId)).file.revision,protectedFile.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,protectedFile.fileId,protectedFile.revision),protectedBytes)
 })
 
 test('native Web PDF publishes and opens merged workspace PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{

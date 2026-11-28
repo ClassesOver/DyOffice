@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {PDFDocument,PDFName,PDFDict,PDFArray,PDFString,StandardFonts} from 'pdf-lib'
+import {PDFDocument,PDFName,PDFDict,PDFArray,PDFString,StandardFonts} from '../../pdf/src/shared/pdf-lib.ts'
 import {PNG} from 'pngjs'
 import {createHash} from 'node:crypto'
 import {execFile as run} from 'node:child_process'

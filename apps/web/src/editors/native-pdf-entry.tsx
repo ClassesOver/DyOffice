@@ -59,6 +59,7 @@ reportDocumentLoading('reading')
 async function mount(){
  const openWorkspaceFile=workspaceOpenAction()
  const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
+ const canChooseWorkspaceFile=!params.has('sourceRevision')&&params.get('guest')!=='1'
  const grant=await openNativePdfBrowserFile({fileId,editorId:params.get('guest')==='1'?params.get('editorId')??undefined:undefined,expectedRevision:params.get('sourceRevision')??undefined})
  const browserActions=new AbortController()
  const [prefs,account]=await Promise.all([
@@ -85,6 +86,7 @@ async function mount(){
  const unsubscribe=()=>()=>{}
  const empty=async()=>[]
  let disposed=false,view:PdfAssistantView|undefined
+ let choosingAttachment=false
  const certificate=createBrowserPdfCertificate({
   path:grant.path,signal:browserActions.signal,current:grant.current,readPdf:grant.api.readFile,
   canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length,
@@ -120,7 +122,7 @@ async function mount(){
    try{
     const language=prefs?.language??'zh'
     const accept='application/pdf,.pdf'
-    const file=params.has('sourceRevision')||params.get('guest')==='1'
+    const file=!canChooseWorkspaceFile
      ? (await pickLocalFiles(accept,browserActions.signal))[0]
      : await (await import('./workspace-source-picker')).pickWorkspaceSourceFile(grant.workspaceSources,{
       title:language==='en'?'Select a PDF to compare':'选择要比较的 PDF',
@@ -150,24 +152,36 @@ async function mount(){
    }catch(error){return {ok:false as const,error:error instanceof Error?error.message:String(error)}}
   },
   async pickAttachmentFile(pending={count:0,bytes:0}){
+   const cancelled={ok:false as const,cancelled:true as const}
+   if(choosingAttachment)return cancelled
+   const signal=browserActions.signal,base=grant.current()
+   const zh=prefs?.language==='zh'
+   choosingAttachment=true
    try{
-    const zh=prefs?.language==='zh'
     if(pending.count>=MAX_PDF_ATTACHMENT_ADDITIONS){
      throw Error(zh?`一次最多新增 ${MAX_PDF_ATTACHMENT_ADDITIONS} 个附件。`:`Add up to ${MAX_PDF_ATTACHMENT_ADDITIONS} attachments per save.`)
     }
-    const [file]=await pickLocalFiles('',browserActions.signal)
-    if(!file)return {ok:false as const,cancelled:true as const}
+    const file=canChooseWorkspaceFile
+     ?await (await import('./workspace-source-picker')).pickWorkspaceSourceFile(grant.workspaceSources,{
+      title:zh?'选择 PDF 附件':'Choose a PDF attachment',
+      formats:['pdf','docx','xlsx','xlsm','pptx','csv'],language:zh?'zh':'en',localAccept:'',
+      maxBytes:MAX_PDF_ATTACHMENT_BYTES,maxTotalBytes:MAX_PDF_ATTACHMENT_BYTES-pending.bytes,readAsAttachment:true,
+     },signal)
+     :(await pickLocalFiles('',signal))[0]
+    if(!file)return cancelled
     if(!isPdfAttachmentName(file.name))throw Error(zh?'请选择名称有效的附件。':'Choose an attachment with a valid name.')
     if(file.size+pending.bytes>MAX_PDF_ATTACHMENT_BYTES){
      const limit=MAX_PDF_ATTACHMENT_BYTES/(1024*1024)
      throw Error(zh?`本次新增附件的总大小不能超过 ${limit} MiB。`:`New attachments can total up to ${limit} MiB per save.`)
     }
     const bytes=new Uint8Array(await file.arrayBuffer())
-    browserActions.signal.throwIfAborted()
+    signal.throwIfAborted()
+    if(grant.current()!==base)throw Error(zh?'选择附件时 PDF 已发生变化，请重新选择。':'The PDF changed while choosing an attachment. Choose it again.')
     const parts:string[]=[]
     for(let offset=0;offset<bytes.length;offset+=32768)parts.push(String.fromCharCode(...bytes.subarray(offset,offset+32768)))
     return {ok:true as const,name:file.name,bytesBase64:btoa(parts.join(''))}
-   }catch(error){return {ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+   }catch(error){return signal.aborted?cancelled:{ok:false as const,reason:error instanceof Error?error.message:String(error)}}
+   finally{choosingAttachment=false}
   },
   async exportAttachment(path:string,name:string,data:string){
    try{
@@ -293,7 +307,7 @@ async function mount(){
    return open?grant.pageCopies(open,reveal,saved):undefined
   }catch{return undefined}
  })()
- const workspaceCopies=params.has('sourceRevision')||params.get('guest')==='1'?undefined:copies
+ const workspaceCopies=canChooseWorkspaceFile?copies:undefined
  let ribbonBusy=false,ribbonPending=false,ribbonError=''
  async function ribbonSingleCopy(path:string,suggestedName:string,fallback:string,
   publish:(client:NonNullable<typeof copies>,destination:PdfCopyDestination,signal:AbortSignal)=>Promise<boolean>){
@@ -335,7 +349,7 @@ async function mount(){
   return !disposed&&editor?.status==='ready'&&!!state&&!state.dirty&&!state.blocked
  }
  const canRewritePages=()=>!disposed&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length
- const pickPageWorkspaceSource=params.has('sourceRevision')||params.get('guest')==='1'?undefined:async(signal:AbortSignal)=>{
+ const pickPageWorkspaceSource=!canChooseWorkspaceFile?undefined:async(signal:AbortSignal)=>{
   const {pickWorkspaceSourceFile}=await import('./workspace-source-picker')
   const language=prefs?.language??'zh'
   return pickWorkspaceSourceFile(grant.workspaceSources,{
