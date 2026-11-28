@@ -3,6 +3,7 @@ import {isSpreadsheetArchive} from '../../../../packages/web-contracts/src/api.t
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {messages} from './messages.ts'
 import {browserEditorTheme} from './browser-editor-theme'
+import {browserAutoSaveDefault} from './browser-autosave-default'
 import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
 import {downloadWebCsv} from './web-ai-document-api'
@@ -400,10 +401,10 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     saveEditsInlineMaxBytes: 4 * 1024 * 1024,
     getLanguage: async () => prefs.language === 'en' ? 'en' as const : 'zh' as const,
     ...browserEditorTheme(prefs),
-    getAutoSaveDefault: async () => ({on:prefs.autoSave === true,updatedAt:1}),
+    ...browserAutoSaveDefault(prefs),
     getAiPanelPrefs: async () => ({side:'left' as const,fontSize:'default' as const,customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:true}),
     getUserDisplayName: async () => prefs.authorName ?? '',
-    onLanguageChanged:noEvent,onAutoSaveDefaultChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
+    onLanguageChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
     onWorkbookPickArmed:picker?.onArmed??noEvent,onWorkbookPickSelected:picker?.onSelected??noEvent,onWorkbookPickCancelled:picker?.onCancelled??noEvent,
     isCopyEmfAvailable:async()=>false,
     onChromePressed:noEvent,onCloseSaveRequest:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,

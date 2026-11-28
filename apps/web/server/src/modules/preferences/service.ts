@@ -21,6 +21,7 @@ export function createPreferenceService(transactions: PrincipalTransactions) {
   const safe = (value: Record<string, unknown>) => Object.fromEntries([
     ...defaultFields.map(key => [key, value[key] ?? preferenceDefaults[key as keyof typeof preferenceDefaults]]),
     ...IMPORT_PROMPT_FIELDS.map(field => [field, skipsImportPrompt(value as ImportPromptPreferences, field)]),
+    ...(value.autoSaveUpdatedAt === undefined ? [] : [['autoSaveUpdatedAt', value.autoSaveUpdatedAt]]),
   ])
   return {
     get: (token: string) => access<Record<string, unknown>>(token, 'preferences:read', async (connection, principal) => {
@@ -33,7 +34,15 @@ export function createPreferenceService(transactions: PrincipalTransactions) {
       if ((value.csvImportLimitMb !== undefined && !isCsvImportLimitMb(value.csvImportLimitMb)) || !isAssistantPreferences(value) || (value.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(value.documentTheme as DocumentTheme))) throw authError(400)
       if ((value.theme !== undefined && !['light','dark','system'].includes(value.theme as string)) || (value.language !== undefined && !['zh','en'].includes(value.language as string)) || (value.authorName !== undefined && (typeof value.authorName !== 'string' || [...value.authorName].length > 100)) || ['autoSave','showAssistant','restoreSession','sleepInactiveTabs','skipOdfImportPrompt',...IMPORT_PROMPT_FIELDS].some(key => value[key] !== undefined && typeof value[key] !== 'boolean') || (value.pdfDefaultZoom !== undefined && !PDF_DEFAULT_ZOOM_MODES.includes(value.pdfDefaultZoom as PdfDefaultZoom))) throw authError(400)
       return access<Record<string, unknown>>(token, 'preferences:write', async (connection, principal, workspaceId) => {
-        const result = await connection.query('INSERT INTO personal_preferences(deployment_id,owner_id,workspace_id,data) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(deployment_id,owner_id) DO UPDATE SET data=personal_preferences.data||$5::jsonb,revision=personal_preferences.revision+1 RETURNING data', [principal.deploymentId, principal.userId, workspaceId, JSON.stringify({ ...preferenceDefaults,...value }), JSON.stringify(value)])
+        const initial = { ...preferenceDefaults, ...value, ...(value.autoSave === false ? { autoSaveUpdatedAt: 2 } : {}) }
+        const result = await connection.query(`INSERT INTO personal_preferences(deployment_id,owner_id,workspace_id,data)
+          VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(deployment_id,owner_id) DO UPDATE SET
+          data=personal_preferences.data || $5::jsonb || CASE
+            WHEN $5::jsonb ? 'autoSave' AND COALESCE(personal_preferences.data->'autoSave','true'::jsonb) IS DISTINCT FROM $5::jsonb->'autoSave'
+            THEN jsonb_build_object('autoSaveUpdatedAt', COALESCE((personal_preferences.data->>'autoSaveUpdatedAt')::bigint, 1) + 1)
+            ELSE '{}'::jsonb END,
+          revision=personal_preferences.revision+1 RETURNING data`,
+        [principal.deploymentId, principal.userId, workspaceId, JSON.stringify(initial), JSON.stringify(value)])
         return safe(result.rows[0].data)
       })
     },

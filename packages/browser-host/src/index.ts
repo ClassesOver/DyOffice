@@ -7,7 +7,7 @@ import type { BrowserHost, CapabilityCatalog } from '../../web-contracts/src/hos
 import { ASSISTANT_PREFERENCES_FIELDS, DOCUMENT_THEME_MODES, isAssistantPreferences } from '../../web-contracts/src/preferences.ts'
 
 const CAPABILITIES = new Set(['unsupported', 'read_only', 'editable'])
-const ALLOWED_PREFS = new Set(['theme', 'documentTheme', 'language', 'authorName', 'autoSave', 'showAssistant', 'csvImportLimitMb', ...ASSISTANT_PREFERENCES_FIELDS])
+const ALLOWED_PREFS = new Set(['theme', 'documentTheme', 'language', 'authorName', 'autoSave', 'autoSaveUpdatedAt', 'showAssistant', 'csvImportLimitMb', ...ASSISTANT_PREFERENCES_FIELDS])
 function nonempty(value: string, field: string): void {
   if (typeof value !== 'string' || !value.length) throw new HostError('INVALID_RESPONSE', `Missing ${field}`)
 }
@@ -99,6 +99,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       if (prefs.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(prefs.documentTheme)) throw hostError('INVALID_RESPONSE', 'getPreferences')
       if (prefs.csvImportLimitMb !== undefined && !isCsvImportLimitMb(prefs.csvImportLimitMb)) throw hostError('INVALID_RESPONSE', 'getPreferences')
       if (!isAssistantPreferences(prefs)) throw hostError('INVALID_RESPONSE', 'getPreferences')
+      if (prefs.autoSaveUpdatedAt !== undefined && (!Number.isSafeInteger(prefs.autoSaveUpdatedAt) || prefs.autoSaveUpdatedAt < 1)) throw hostError('INVALID_RESPONSE', 'getPreferences')
       if (prefs.authorName !== undefined && (typeof prefs.authorName !== 'string' || prefs.authorName.length > 100)) throw hostError('INVALID_RESPONSE', 'getPreferences')
       for (const name of ['autoSave', 'showAssistant'] as const) {
         if (prefs[name] !== undefined && typeof prefs[name] !== 'boolean') throw hostError('INVALID_RESPONSE', 'getPreferences')

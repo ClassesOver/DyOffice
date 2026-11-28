@@ -3,6 +3,7 @@ import {isSelfContainedGlb,WEB_MODEL3D_MAX_BYTES} from '../../../slides/src/shar
 import type {SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 import {websitePictureSource} from '../../../../packages/ui/src/clipboard-picture'
+import {browserAutoSaveDefault} from './browser-autosave-default'
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {mapScriptOpsForWidth} from '../../../../packages/pptx-ops/src/ops/script-map.ts'
 import {parsePageSpec} from '../../../../packages/pipelines/src/slides/page-spec-parser.ts'
@@ -24,7 +25,7 @@ import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {createDocumentImageApi} from './web-ai-media-api.ts'
 import type {AiPanelPrefs} from '@genoffice/ui'
 import type {
-  SlidesApi, OpenResult, SlideUpdate, SectionInfo, CustomShowInfo, UiTheme, AutoSaveDefault, ApplyTxnOp, ApplyTxnResult,
+  SlidesApi, OpenResult, SlideUpdate, SectionInfo, CustomShowInfo, UiTheme, ApplyTxnOp, ApplyTxnResult,
   AiSettings, TransitionKind, ShowTiming, GetLayoutsResult, SlideComment, AnimationItem, ShapeKey,
   ApplyEditScriptOp,
   EditTextOp, AddSlideOp, AddBlankSlideOp, MoveSlideOp, AddElementOp, DeleteElementOp,
@@ -726,12 +727,12 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   const api = {
     getLanguage: async () => prefs.language === 'en' ? 'en' as const : 'zh' as const,
     getTheme: async (): Promise<UiTheme> => prefs.theme,
-    getAutoSaveDefault: async (): Promise<AutoSaveDefault> => ({on: prefs.autoSave === true, updatedAt: 1}),
+    ...browserAutoSaveDefault(prefs),
     getAiPanelPrefs: async (): Promise<AiPanelPrefs> => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger: true} as AiPanelPrefs),
     setAiPanelPrefs: async (patch: Partial<AiPanelPrefs>) => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger: true, ...patch} as AiPanelPrefs),
     getAiSettings: async () => ({provider: 'genspark', providers: {}}) as unknown as AiSettings,
     setAiSettings: async () => {},
-    onLanguageChanged: noEvent, onThemeChanged: noEvent, onAutoSaveDefaultChanged: noEvent,
+    onLanguageChanged: noEvent, onThemeChanged: noEvent,
     onAiPanelPrefsChanged: noEvent, onAiSettingsChanged: noEvent,
     onChromePressed: noEvent, onFontsChanged: noEvent, onRenamed: noEvent,
     onMenuCommand(listener:Parameters<SlidesApi['onMenuCommand']>[0]){

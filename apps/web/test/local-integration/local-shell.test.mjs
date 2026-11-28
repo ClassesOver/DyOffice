@@ -47,3 +47,27 @@ test('import confirmation preferences inherit older ODF choices and merge indepe
  assert.equal((await put({skipHwpImportPrompt:'yes'})).statusCode,400)
  assert.equal((await put({skipUnknownImportPrompt:true})).statusCode,400)
 })
+
+test('workspace autosave versions advance only when the default changes',async t=>{
+ const f=await fileFixture(t),url='/api/v1/preferences'
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+ const headers=token=>({origin:restrictedOrigin,cookie:`${SESSION_COOKIE}=${token}`,'x-csrf-token':csrf.sessionToken(token)})
+ const get=async token=>(await f.app.inject({url,headers:headers(token)})).json()
+ const put=(payload)=>f.app.inject({method:'PUT',url,headers:headers(f.alice.token),payload})
+ const initial=(await get(f.alice.token)).autoSaveUpdatedAt??1
+ const off=await put({autoSave:false})
+ assert.equal(off.statusCode,200,off.body)
+ assert.ok(off.json().autoSaveUpdatedAt>initial)
+ const stamp=off.json().autoSaveUpdatedAt
+ for(const patch of [{autoSave:false},{authorName:'Reviewer'}]){
+  const saved=await put(patch)
+  assert.equal(saved.statusCode,200,saved.body)
+  assert.equal(saved.json().autoSaveUpdatedAt,stamp)
+ }
+ const on=await put({autoSave:true})
+ assert.equal(on.statusCode,200,on.body)
+ assert.ok(on.json().autoSaveUpdatedAt>stamp)
+ assert.equal((await get(f.alice.token)).autoSaveUpdatedAt,on.json().autoSaveUpdatedAt)
+ assert.equal((await get(f.bob.token)).autoSaveUpdatedAt??1,initial)
+ assert.equal((await put({autoSaveUpdatedAt:99})).statusCode,400)
+})

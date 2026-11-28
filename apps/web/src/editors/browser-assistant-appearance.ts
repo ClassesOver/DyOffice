@@ -6,6 +6,7 @@ import {createLocalShellClient} from '../shell/local-client'
 import {createLocalPreferencesSession} from '../shell/local-preferences-session'
 import type {WorkspaceOpenFrame} from './browser-document-command'
 import {createAssistantPreferenceSync} from './assistant-preference-sync'
+import {publishBrowserAutoSaveDefault} from './browser-autosave-default'
 
 type BrowserAssistantPreferences = AssistantPreferences & Pick<PublicSettings,'showAssistant'>
 
@@ -44,6 +45,7 @@ export async function installBrowserAssistantPreferences(prefs: BrowserAssistant
       standalone.bind(binding)
       sync = createAssistantPreferenceSync([deploymentId,user.id],standalone.preferences.getPreferences,saved => {
         publishBrowserAssistantPreferences(root,saved)
+        publishBrowserAutoSaveDefault(root,saved)
         apply()
       })
       client.onSessionEnded(() => sync?.close())

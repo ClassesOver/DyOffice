@@ -9,6 +9,7 @@ export interface PersonalPreferences extends AssistantPreferences, ImportPromptP
   language: 'zh' | 'en'
   authorName: string
   autoSave: boolean
+  autoSaveUpdatedAt?: number
   showAssistant: boolean
   restoreSession?: boolean
   sleepInactiveTabs?: boolean
@@ -22,7 +23,9 @@ function project(value: unknown): PersonalPreferences {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无法确认偏好保存结果，请重新加载。')
   const v = value as PersonalPreferences
   if (!['light', 'dark', 'system'].includes(v.theme) || !['zh', 'en'].includes(v.language) || typeof v.authorName !== 'string' || typeof v.autoSave !== 'boolean' || typeof v.showAssistant !== 'boolean' || [v.restoreSession,v.sleepInactiveTabs,v.skipOdfImportPrompt,...IMPORT_PROMPT_FIELDS.map(field=>v[field])].some(value=>value!==undefined&&typeof value!=='boolean') || (v.csvImportLimitMb !== undefined && !isCsvImportLimitMb(v.csvImportLimitMb)) || (v.pdfDefaultZoom !== undefined && !PDF_DEFAULT_ZOOM_MODES.includes(v.pdfDefaultZoom)) || (v.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(v.documentTheme)) || !isAssistantPreferences(v)) throw new Error('无法确认偏好保存结果，请重新加载。')
-  return Object.fromEntries(fields.filter(key => v[key] !== undefined).map(key => [key, v[key]])) as unknown as PersonalPreferences
+  const stamp = v.autoSaveUpdatedAt
+  if (stamp !== undefined && (!Number.isSafeInteger(stamp) || stamp < 1)) throw new Error('无法确认偏好保存结果，请重新加载。')
+  return Object.fromEntries([...fields, 'autoSaveUpdatedAt' as const].filter(key => v[key] !== undefined).map(key => [key, v[key]])) as unknown as PersonalPreferences
 }
 
 /** Keep one client for a session so replacing a settings panel cannot duplicate a write. */

@@ -18,7 +18,7 @@ export type JobRef = Readonly<{ id: string }>
 export type RevisionRef = Readonly<{ fileId: string; revision: string; sha256: string; size: number }>
 export type SaveInput = Readonly<{ fileId: string; uploadId: string; baseRevision: string; idempotencyKey: string; leaseEpoch: number; wordVersion?: number; sourceCommandId?: string }>
 export type OpenFileResult = Readonly<{ name?: string; pdfAutoNamePending?: true; autoNamePending?: true; officeSignatureProtected?: true; workbookPasswordProtected?: true; documentPasswordProtected?: true; file: RevisionRef; format: WorkspaceFileFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
-export type PublicSettings = Readonly<{ theme: 'light' | 'dark' | 'system'; documentTheme?: DocumentTheme; language: string; authorName?: string; autoSave?: boolean; showAssistant?: boolean; csvImportLimitMb?: CsvImportLimitMb } & AssistantPreferences>
+export type PublicSettings = Readonly<{ theme: 'light' | 'dark' | 'system'; documentTheme?: DocumentTheme; language: string; authorName?: string; autoSave?: boolean; autoSaveUpdatedAt?: number; showAssistant?: boolean; csvImportLimitMb?: CsvImportLimitMb } & AssistantPreferences>
 
 export function isRevisionRef(value: unknown): value is RevisionRef {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false

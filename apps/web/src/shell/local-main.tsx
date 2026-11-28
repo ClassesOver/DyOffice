@@ -2,6 +2,7 @@ import {WorkspaceLoading} from './WorkspaceLoading'
 import {applyBrowserEditorTheme} from '../editors/browser-editor-theme'
 import {publishBrowserAssistantPreferences} from '../editors/browser-assistant-appearance'
 import {createAssistantPreferenceSync} from '../editors/assistant-preference-sync'
+import {publishBrowserAutoSaveDefault} from '../editors/browser-autosave-default'
 import type {AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
 import {ASSISTANT_PREFERENCES_FIELDS} from '../../../../packages/web-contracts/src/preferences'
 import type {ConvertedCopyDestination,ImportPromptPreferences} from '../../../../packages/web-contracts/src/file-imports'
@@ -153,10 +154,13 @@ function saveWorkspaceEntries(tabs:ReturnType<typeof documentTabs.list>){
  const layout=split&&[split.left,split.right].every(id=>id==='home'||entries.some(file=>file.id===id&&canOpenWorkspaceFileDirectly(file)))?split:null
  entryRecovery.save(restorable,active,tabs.filter(tab=>tab.pinned).map(tab=>tab.id),layout)
 }
-function applyWorkspaceAssistantPreferences(saved:Awaited<ReturnType<typeof preferences.getPreferences>>){
+function applyWorkspaceEditorPreferences(saved:Awaited<ReturnType<typeof preferences.getPreferences>>){
  for(const tab of documentTabs.renderedDocuments()){
   const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement
-  if(root)publishBrowserAssistantPreferences(root,saved)
+  if(root){
+   publishBrowserAssistantPreferences(root,saved)
+   publishBrowserAutoSaveDefault(root,saved)
+  }
  }
 }
 
@@ -176,9 +180,9 @@ async function saveWorkspacePreferences(patch:Parameters<typeof preferences.upda
    if(tab.format==='docx'||tab.format==='xlsx')applyBrowserEditorTheme(root,saved)
   }
  }
- if(updateAssistantPreferences){
+ if(updateAssistantPreferences||patch.autoSave!==undefined){
   assistantPreferenceSync?.saved()
-  applyWorkspaceAssistantPreferences(saved)
+  applyWorkspaceEditorPreferences(saved)
  }
  sleepInactiveTabs=saved.sleepInactiveTabs!==false
  restoreSession=saved.restoreSession!==false
@@ -272,7 +276,7 @@ const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本�
 function installBridge(deploymentId?:string){
  assistantPreferenceSync?.close()
  if(deploymentId&&user){
-  assistantPreferenceSync=createAssistantPreferenceSync([deploymentId,user.id],preferences.getPreferences,applyWorkspaceAssistantPreferences)
+  assistantPreferenceSync=createAssistantPreferenceSync([deploymentId,user.id],preferences.getPreferences,applyWorkspaceEditorPreferences)
   client.onSessionEnded(()=>assistantPreferenceSync?.close())
  }
  window.dyofficeRegisterWorkbookPicker=createWorkspaceWorkbookPicker(window,id=>documentTabs.activate(id))

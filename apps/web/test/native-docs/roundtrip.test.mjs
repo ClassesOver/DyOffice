@@ -13,6 +13,7 @@ import { PDFDocument } from 'pdf-lib'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import { password } from '../helpers/identity.mjs'
+import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
 import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
@@ -240,6 +241,55 @@ test('native Word Save As keeps the original password on a protected draft copy'
  await dialog.getByLabel('Password',{exact:true}).fill(secret)
  await dialog.getByRole('button',{name:'Open',exact:true}).click()
  await expect(copyPage.locator('.tiptap.doc-page').first()).toContainText(marker,{timeout:20000})
+})
+
+test('native Word follows workspace autosave changes while its document stays open',{timeout:90000},async t=>{
+ const localShellDirectory=fileURLToPath(new URL('../../dist-local-shell/',import.meta.url))
+ const f=await fixture(t,{autoSave:true,localShellDirectory}),{page,context}=f,file=f.opened.file
+ const embedded=(await importFile(f,f.alice.token,f.original,'embedded-autosave.docx')).file
+ const shell=await context.newPage()
+ await shell.goto(f.origin+'/?entry=autosave#/file/'+embedded.fileId)
+ const embeddedToggle=shell.frameLocator(`iframe[data-document-id="${embedded.fileId}"]`).locator('.autosave-toggle input')
+ await expect(embeddedToggle).toBeChecked({timeout:30000})
+ await shell.locator('.tab-home').click()
+ await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+ const toggle=page.locator('.autosave-toggle input')
+ await expect(toggle).toBeChecked()
+ await page.locator('.autosave-toggle').click()
+ await expect(toggle).not.toBeChecked()
+ const updateDefault=async on=>{
+  await accountAction(shell,'个人设置')
+  const settings=shell.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  const pref=settings.getByRole('switch',{name:'自动保存',exact:true})
+  if(await pref.isChecked()!==on)await settings.locator('label').filter({hasText:/^自动保存$/}).click()
+  const [saved]=await Promise.all([shell.waitForResponse(r=>r.url().endsWith('/preferences')&&r.request().method()==='PUT'),
+   settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()])
+  assert.equal(saved.status(),200)
+  await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+ }
+ await updateDefault(false)
+ await expect(toggle).not.toBeChecked()
+ await expect(embeddedToggle).not.toBeChecked()
+ await updateDefault(true)
+ await expect(toggle).toBeChecked()
+ await expect(embeddedToggle).toBeChecked()
+
+ const marker='Live workspace autosave'
+ await page.bringToFront()
+ const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(marker)
+ const [committed]=await Promise.all([page.waitForResponse(r=>r.request().method()==='POST'&&r.url().endsWith('/commits')&&r.ok()),
+  page.evaluate(()=>window.dispatchEvent(new Event('blur')))])
+ assert.equal(committed.status(),200)
+ await expectCleanPersistence(page)
+ const saved=(await f.files.openFile(f.alice.token,file.fileId)).file
+ assert.notEqual(saved.revision,file.revision)
+ const archive=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,saved.revision))
+ assert.match(await archive.file('word/document.xml').async('string'),new RegExp(marker))
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),f.original)
 })
 
 test('native Word can copy a protected document after autosave advances the source in the naming dialog',{timeout:90000},async t=>{

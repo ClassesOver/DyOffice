@@ -1,5 +1,6 @@
 import {createWebKnowledge} from './web-knowledge'
 import {browserEditorTheme} from './browser-editor-theme'
+import {browserAutoSaveDefault} from './browser-autosave-default'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
 import {isRevisionRef} from '../../../../packages/web-contracts/src/api.ts'
 import {bytesBase64} from '../../../../packages/browser-host/src/analysis-image.ts'
@@ -147,11 +148,11 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     getSystemLocale: async () => navigator.language,
     ...browserEditorTheme(prefs),
     getAuthorName: async () => prefs.authorName ?? '',
-    getAutoSaveDefault: async () => ({ on: prefs.autoSave ?? true,updatedAt: 1 }),
+    ...browserAutoSaveDefault(prefs,true),
     getAiPanelPrefs: async () => ({...panelPrefs}),
     setAiPanelPrefs: async (patch: Partial<typeof panelPrefs>) => {panelPrefs={...panelPrefs,...patch};for(const listener of panelListeners)listener({...panelPrefs});return {...panelPrefs}},
     onAiPanelPrefsChanged: (listener:(value:typeof panelPrefs)=>void) => {panelListeners.add(listener);return()=>{panelListeners.delete(listener)}},
-    onLanguageChanged: noEvent,onAuthorNameChanged: noEvent,onAutoSaveDefaultChanged: noEvent,
+    onLanguageChanged: noEvent,onAuthorNameChanged: noEvent,
     onOpenDocx: noEvent,onRenamedDocx: noEvent,onTeardown: noEvent,onViewImage: noEvent,onContextMenuRequest: noEvent,onCloseCheck: noEvent,onCloseSaveRequest: noEvent,
     onMenuCommand(listener:Parameters<DesktopApi['onMenuCommand']>[0]){
       return subscribeBrowserDocumentCommands({print:()=>listener('print'),save:()=>listener('save'),'save-as':()=>listener('save-as'),
