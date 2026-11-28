@@ -277,6 +277,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration },{
         tsv:config.sheetsNative?.convertTsvImport,
         xls:config.sheetsNative?.convertLegacyXls,
+        ods:config.sheetsNative?.convertOdfSpreadsheet,
+        ots:config.sheetsNative?.convertOdfSpreadsheet,
       })
       registerMcpRoutes(app,transactions,files,csrf,config.objectStore,config.filePolicy,
         config.sheetsPlanner && config.sheetsWorkbookPlanner && config.sheetsNative?.savePlan ? {

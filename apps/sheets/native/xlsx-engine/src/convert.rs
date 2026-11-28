@@ -75,28 +75,36 @@ fn unreadable_container_hint(source: &Path) -> Option<String> {
 }
 
 pub fn convert_to_xlsx(source: &Path, target: &Path) -> Result<ConvertResult, SidecarError> {
-    convert_workbook(source, target, false)
+    convert_workbook(source, target, None)
 }
 
-pub(crate) fn convert_legacy_xls_to_xlsx(
+pub(crate) enum WorkbookImport {
+    Xls,
+    OpenDocument,
+}
+
+pub(crate) fn convert_workspace_workbook(
     source: &Path,
     target: &Path,
+    format: WorkbookImport,
 ) -> Result<ConvertResult, SidecarError> {
-    convert_workbook(source, target, true)
+    convert_workbook(source, target, Some(format))
 }
 
 fn convert_workbook(
     source: &Path,
     target: &Path,
-    legacy_xls: bool,
+    format: Option<WorkbookImport>,
 ) -> Result<ConvertResult, SidecarError> {
     // The Web sandbox uses a fixed input.xlsx path regardless of the uploaded extension.
-    let opened = if legacy_xls {
-        open_workbook(source)
+    let opened = match format {
+        Some(WorkbookImport::Xls) => open_workbook(source)
             .map(Sheets::Xls)
-            .map_err(calamine::Error::Xls)
-    } else {
-        open_workbook_auto(source)
+            .map_err(calamine::Error::Xls),
+        Some(WorkbookImport::OpenDocument) => open_workbook(source)
+            .map(Sheets::Ods)
+            .map_err(calamine::Error::Ods),
+        None => open_workbook_auto(source),
     };
     let mut workbook = match opened {
         Ok(workbook) => workbook,
@@ -106,7 +114,7 @@ fn convert_workbook(
             // nothing in its header for calamine to go on. The SpreadsheetML
             // importer is the only reader that can still make sense of it;
             // the container hint below covers everything left over.
-            if spreadsheetml::probe(source) {
+            if !matches!(format, Some(WorkbookImport::OpenDocument)) && spreadsheetml::probe(source) {
                 return spreadsheetml::convert_to_xlsx(source, target);
             }
             return Err(SidecarError::Workbook(
@@ -678,7 +686,7 @@ mod tests {
         let sandbox_output = dir.path().join("output.xlsx");
         std::fs::copy(fixture, &sandbox_input).unwrap();
         convert_to_xlsx(fixture, &desktop_output).unwrap();
-        convert_legacy_xls_to_xlsx(&sandbox_input, &sandbox_output).unwrap();
+        convert_workspace_workbook(&sandbox_input, &sandbox_output, WorkbookImport::Xls).unwrap();
         for entry in [
             "xl/worksheets/sheet1.xml",
             "xl/styles.xml",
@@ -845,6 +853,12 @@ mod tests {
         assert_eq!(result.sheets, 2);
         let sheet = read_entry(&target, "xl/worksheets/sheet1.xml");
         assert!(sheet.contains(r#"<c r="C1"><f>A1+B1*2</f><v>20</v></c>"#));
+        let sandbox_input = dir.path().join("input.xlsx");
+        let sandbox_output = dir.path().join("output.xlsx");
+        std::fs::copy(&source, &sandbox_input).unwrap();
+        convert_workspace_workbook(&sandbox_input, &sandbox_output, WorkbookImport::OpenDocument)
+            .unwrap();
+        assert_eq!(sheet, read_entry(&sandbox_output, "xl/worksheets/sheet1.xml"));
     }
 
     fn ods_fixture_with_mimetype(path: &Path, mimetype: &str) {

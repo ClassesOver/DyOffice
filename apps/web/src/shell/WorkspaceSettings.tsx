@@ -120,6 +120,10 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
     <div><label htmlFor={`${preferenceId}-sleep`}>休眠不活跃的标签页</label><p id={`${preferenceId}-sleep-hint`} className="personal-page-field-hint">打开较多文档时，释放长时间未查看的后台编辑器。点击页签即可重新打开。</p></div>
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-sleep`} aria-describedby={`${preferenceId}-sleep-hint`} checked={draft?.sleepInactiveTabs!==false} onChange={event=>edit({sleepInactiveTabs:event.target.checked})}/>
    </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-odf-import`}>确认 OpenDocument 转换</label><p id={`${preferenceId}-odf-import-hint`} className="personal-page-field-hint">导入 ODS 或 OTS 并创建 XLSX 副本前询问。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-odf-import`} aria-describedby={`${preferenceId}-odf-import-hint`} checked={draft?.skipOdfImportPrompt!==true} onChange={event=>edit({skipOdfImportPrompt:!event.target.checked})}/>
+   </div>
    <p className="personal-page-field-hint">更改语言后，请刷新页面或重新打开文档。</p>
   </fieldset>
  </form>

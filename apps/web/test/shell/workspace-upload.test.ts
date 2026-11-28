@@ -119,7 +119,25 @@ test('queued files can be removed before uploading',async()=>{
  expect(upload).not.toHaveBeenCalled()
 })
 
-test.each(['TSV','XLS'] as const)('%s uploads convert within the bound session and stage the XLSX copy',async format=>{
+test('ODF conversion waits for consent, skips a declined file and remembers a confirmed choice',async()=>{
+ const files=['decline.ods','template.ots','next.ods'].map(name=>new File(['workbook'],name))
+ const upload=vi.fn(async(_file:File)=>{})
+ const rememberOdfPrompt=vi.fn(async()=>{})
+ ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
+ document.body.innerHTML='<div id="upload"></div>';root=createRoot(document.getElementById('upload')!)
+ await act(async()=>root.render(h(WorkspaceUploadDialog,{open:true,initialFiles:files,workbookImports:['ods','ots'],rememberOdfPrompt,upload,onClose:vi.fn()})))
+ await click('开始上传（3）')
+ expect(upload).not.toHaveBeenCalled()
+ expect(document.querySelector('[aria-label="OpenDocument 转换"]')?.textContent).toContain('decline.ods')
+ await click('跳过此文件')
+ expect(document.querySelector('[aria-label="OpenDocument 转换"]')?.textContent).toContain('template.ots')
+ await act(async()=>document.querySelector<HTMLInputElement>('[aria-label="下次直接转换"]')!.click())
+ await click('转换并打开')
+ await vi.waitFor(()=>expect(upload.mock.calls.map(([file])=>file.name)).toEqual(['template.ots','next.ods']))
+ expect(rememberOdfPrompt).toHaveBeenCalledOnce()
+})
+
+test.each(['TSV','XLS','ODS','OTS'] as const)('%s uploads convert within the bound session and stage the XLSX copy',async format=>{
  const proof='p'.repeat(43),staged:string[]=[]
  const input=new File(['Workbook source'],`Report.${format}`)
  const converted=new Blob(['converted workbook'],{type:'application/octet-stream'})

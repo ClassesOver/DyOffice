@@ -23,7 +23,7 @@ const built=Boolean(process.env.DYOFFICE_TEST_OFFICE_ASSETS||(
 ))
 
 const workbookImportWasi=process.env.DYOFFICE_TEST_XLSX_WASI_REFRESH_RUNNER
-test(`workspace opens TSV${workbookImportWasi?' and legacy XLS':''} uploads as editable XLSX copies`,{skip:!built,timeout:180000},async t=>{
+test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} uploads as editable XLSX copies`,{skip:!built,timeout:workbookImportWasi?240000:120000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+9
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
@@ -106,6 +106,52 @@ test(`workspace opens TSV${workbookImportWasi?' and legacy XLS':''} uploads as e
   const edited=await JSZip.loadAsync(await f.files.readFile(f.alice.token,legacy.id,await legacyHead()))
   assert.match(await edited.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*\br="A20"[^>]*>\s*<v>73<\/v>/)
   assert.deepEqual(await edited.file('xl/media/image1.png').async('nodebuffer'),image)
+  await legacyTab.focus()
+  await page.keyboard.press('ControlOrMeta+o')
+  await expect(picker).toHaveAttribute('accept',/\.ods,\.ots$/)
+  const odf=await readFile(new URL('../../../sheets/native/xlsx-engine/tests/fixtures/cross-sheet-references.ods',import.meta.url))
+  const template=await JSZip.loadAsync(odf)
+  template.file('mimetype','application/vnd.oasis.opendocument.spreadsheet-template')
+  await picker.setInputFiles([
+   {name:'Skip.ods',mimeType:'application/vnd.oasis.opendocument.spreadsheet',buffer:odf},
+   {name:'References.ods',mimeType:'application/vnd.oasis.opendocument.spreadsheet',buffer:odf},
+   {name:'Template.ots',mimeType:'application/vnd.oasis.opendocument.spreadsheet-template',buffer:await template.generateAsync({type:'nodebuffer'})},
+  ])
+  await upload.getByRole('button',{name:'开始上传（3）',exact:true}).click()
+  const prompt=upload.getByRole('group',{name:'OpenDocument 转换'})
+  await expect(prompt).toContainText('Skip.ods')
+  await prompt.getByRole('button',{name:'跳过此文件'}).click()
+  await expect(prompt).toContainText('References.ods')
+  await prompt.getByRole('checkbox',{name:'下次直接转换'}).check()
+  await prompt.getByRole('button',{name:'转换并打开'}).click()
+  await expect(upload).toContainText('已完成 2 · 已跳过 1',{timeout:60000})
+  await upload.getByRole('button',{name:'完成',exact:true}).click()
+  assert.equal((await f.preferences.get(f.alice.token)).skipOdfImportPrompt,true)
+  const postImport=(await f.files.listFiles(f.alice.token)).files
+  assert.equal(postImport.some(file=>file.name==='Skip.xlsx'),false)
+  for(const name of ['References.xlsx','Template.xlsx']){
+   const file=postImport.find(file=>file.name===name)
+   assert.ok(file)
+   const converted=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.id,file.revision))
+   const xml=await converted.file('xl/worksheets/sheet1.xml').async('string')
+   assert.match(xml,/<f>Other!A1\*2<\/f><v>200<\/v>/)
+  }
+  const references=postImport.find(file=>file.name==='References.xlsx')
+  const referencesTab=page.getByRole('tab',{name:references.name,exact:true})
+  await referencesTab.click()
+  const referencesHtml=frame(references).locator('html')
+  await expect(referencesHtml).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+  await referencesHtml.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A20').setValue(52))
+  await referencesTab.focus()
+  await page.keyboard.press('ControlOrMeta+s')
+  const referenceHead=async()=>(await f.files.openFile(f.alice.token,references.id)).file.revision
+  await expect.poll(referenceHead,{timeout:30000}).not.toBe(references.revision)
+  const savedOdf=await JSZip.loadAsync(await f.files.readFile(f.alice.token,references.id,await referenceHead()))
+  const savedSheet=await savedOdf.file('xl/worksheets/sheet1.xml').async('string')
+  assert.match(savedSheet,/<c\b[^>]*\br="A20"[^>]*>\s*<v>52<\/v>/)
+  assert.match(savedSheet,/<f>Other!A1\*2<\/f>/)
+  await page.reload()
+  await expect.poll(()=>referencesHtml.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A20').getValue()),{timeout:30000}).toBe(52)
   await tab.click()
  }
  await page.reload()

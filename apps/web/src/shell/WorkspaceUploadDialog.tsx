@@ -11,6 +11,8 @@ type WorkspaceUploadDialogProps={
  open:boolean
  initialFiles?:File[]
  workbookImports?:readonly WorkbookImportFormat[]
+ readSkipOdfPrompt?:()=>Promise<boolean>
+ rememberOdfPrompt?:()=>Promise<void>
  upload:(file:File,password?:string)=>Promise<void|'password-required'>
  onClose:()=>void
  loadRecent?:()=>Promise<RecentDocument[]>
@@ -18,22 +20,24 @@ type WorkspaceUploadDialogProps={
 }
 const maxFileSize=32*1024*1024
 const sizeLabel=(size:number)=>size<1024?`${size} B`:size<1024*1024?`${(size/1024).toFixed(1)} KB`:`${(size/1024/1024).toFixed(1)} MB`
-const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,tsv:FileExcelOutlined,xls:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
+const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,tsv:FileExcelOutlined,xls:FileExcelOutlined,ods:FileExcelOutlined,ots:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
 const compoundFileHeader=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]
 async function needsOfficePassword(file:File){
  if(!/\.(docx|xlsx)$/i.test(file.name)||file.size<compoundFileHeader.length)return false
  const header=new Uint8Array(await file.slice(0,compoundFileHeader.length).arrayBuffer())
  return compoundFileHeader.every((byte,index)=>header[index]===byte)
 }
-export function WorkspaceUploadDialog({open,initialFiles=[],workbookImports=[],upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
+export function WorkspaceUploadDialog({open,initialFiles=[],workbookImports=[],readSkipOdfPrompt,rememberOdfPrompt,upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
  const sequence=useRef(0),locked=useRef(false)
  const mounted=useRef(false),answerPassword=useRef<((password:string|null)=>void)|null>(null)
+ const answerOdf=useRef<((remember:boolean|null)=>void)|null>(null)
+ const [odfPrompt,setOdfPrompt]=useState<File|null>(null),[rememberOdf,setRememberOdf]=useState(false)
  const [passwordPrompt,setPasswordPrompt]=useState<{file:File;incorrect:boolean}|null>(null)
  const [password,setPassword]=useState('')
  const passwordLabel=passwordPrompt?.file.name.toLowerCase().endsWith('.docx')?'文档密码':'工作簿密码'
  useEffect(()=>{
   mounted.current=true
-  return()=>{mounted.current=false;answerPassword.current?.(null);answerPassword.current=null}
+  return()=>{mounted.current=false;answerPassword.current?.(null);answerPassword.current=null;answerOdf.current?.(null);answerOdf.current=null}
  },[])
  useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(locked.current){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
  function item(file:File):UploadItem{const error=!isWorkspaceFileName(file.name,workbookImports)?'不支持此格式':file.size>maxFileSize?'文件超过 32 MiB 限制':undefined;return {id:sequence.current++,file,state:error?'rejected':'queued',error}}
@@ -75,6 +79,13 @@ export function WorkspaceUploadDialog({open,initialFiles=[],workbookImports=[],u
   setPasswordPrompt(null)
   answer(value)
  }
+ function submitOdf(value:boolean|null){
+  const answer=answerOdf.current
+  answerOdf.current=null
+  setOdfPrompt(null)
+  setRememberOdf(false)
+  answer?.(value)
+ }
  async function uploadFile(file:File){
   const protectedOffice=await needsOfficePassword(file)
   if(!mounted.current)return 'skipped'
@@ -91,15 +102,28 @@ export function WorkspaceUploadDialog({open,initialFiles=[],workbookImports=[],u
  async function start(){
   if(locked.current||!queued.length)return
   locked.current=true;setBusy(true)
+  let skipOdfPrompt:boolean|undefined
   const update=(id:number,state:UploadItem['state'],error?:string)=>setItems(current=>current.map(entry=>entry.id===id?{...entry,state,error}:entry))
   try{for(const entry of queued){
    if(!mounted.current)break
    update(entry.id,'processing')
-   try{const state=await uploadFile(entry.file);if(mounted.current)update(entry.id,state)}
+   try{
+    if(/\.(ods|ots)$/i.test(entry.file.name)){
+     skipOdfPrompt??=await readSkipOdfPrompt?.().catch(()=>false)??false
+     if(!mounted.current)break
+     if(!skipOdfPrompt){
+      const remember=await new Promise<boolean|null>(resolve=>{answerOdf.current=resolve;setOdfPrompt(entry.file)})
+      if(!mounted.current)break
+      if(remember===null){update(entry.id,'skipped');continue}
+      if(remember){skipOdfPrompt=true;await rememberOdfPrompt?.().catch(()=>{})}
+     }
+    }
+    const state=await uploadFile(entry.file);if(mounted.current)update(entry.id,state)
+   }
    catch(error){if(mounted.current)update(entry.id,'error',error instanceof Error?error.message:'导入未完成。请核对工作区中的文件。')}
   }}finally{locked.current=false;if(mounted.current)setBusy(false)}
  }
- return <Modal className="workspace-upload-modal" title="上传文件" open={open} centered width={680} mask={{closable:false}} closable={{disabled:busy}} keyboard={!busy} onCancel={close} footer={showRecent?<Button autoInsertSpace={false} disabled={busy} onClick={close}>取消</Button>:<div className="workspace-upload-footer"><Typography.Text type="secondary">{passwordPrompt?'等待输入打开密码':busy?'文件正在逐个上传，请稍候':items.length?`已选择 ${items.length} 个 · 已完成 ${completed}${skipped?` · 已跳过 ${skipped}`:''}${failed?` · 未完成 ${failed}`:''}`:'支持多文件，按顺序上传'}</Typography.Text><Space><Button autoInsertSpace={false} disabled={busy} onClick={close}>{completed||failed||skipped?'完成':'取消'}</Button><Button autoInsertSpace={false} type="primary" disabled={busy||!queued.length} loading={busy&&!passwordPrompt} onClick={()=>void start()}>{passwordPrompt?'等待密码':busy?'正在上传…':`开始上传${queued.length?`（${queued.length}）`:''}`}</Button></Space></div>}>
+ return <Modal className="workspace-upload-modal" title="上传文件" open={open} centered width={680} mask={{closable:false}} closable={{disabled:busy}} keyboard={!busy} onCancel={close} footer={showRecent?<Button autoInsertSpace={false} disabled={busy} onClick={close}>取消</Button>:<div className="workspace-upload-footer"><Typography.Text type="secondary">{passwordPrompt?'等待输入打开密码':odfPrompt?'等待确认格式转换':busy?'文件正在逐个上传，请稍候':items.length?`已选择 ${items.length} 个 · 已完成 ${completed}${skipped?` · 已跳过 ${skipped}`:''}${failed?` · 未完成 ${failed}`:''}`:'支持多文件，按顺序上传'}</Typography.Text><Space><Button autoInsertSpace={false} disabled={busy} onClick={close}>{completed||failed||skipped?'完成':'取消'}</Button><Button autoInsertSpace={false} type="primary" disabled={busy||!queued.length} loading={busy&&!passwordPrompt&&!odfPrompt} onClick={()=>void start()}>{passwordPrompt?'等待密码':odfPrompt?'等待确认':busy?'正在上传…':`开始上传${queued.length?`（${queued.length}）`:''}`}</Button></Space></div>}>
   {loadRecent&&openRecent&&!items.length&&<div className="workspace-open-choices">
    <Space>
     <Button autoInsertSpace={false} type={showRecent?'default':'primary'} aria-pressed={!showRecent} disabled={busy} onClick={()=>setShowRecent(false)}>本地上传</Button>
@@ -127,6 +151,12 @@ export function WorkspaceUploadDialog({open,initialFiles=[],workbookImports=[],u
    {passwordPrompt.incorrect&&<span className="workspace-upload-file-error" id="workspace-upload-password-error" role="alert">{passwordLabel}错误，请重试。</span>}
    <Space><Button autoInsertSpace={false} onClick={()=>submitPassword(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" htmlType="submit" disabled={!password}>确认密码</Button></Space>
   </form>}
+  {odfPrompt&&<section className="workspace-upload-password" aria-label="OpenDocument 转换" role="group">
+   <Typography.Text strong>转换 {odfPrompt.name}？</Typography.Text>
+   <Typography.Text>工作区会创建 XLSX 副本。数值、日期和兼容的公式会转换，部分样式和图表可能丢失。</Typography.Text>
+   {rememberOdfPrompt&&<label><input type="checkbox" aria-label="下次直接转换" checked={rememberOdf} onChange={event=>setRememberOdf(event.target.checked)}/> 下次直接转换，不再提示</label>}
+   <Space><Button autoInsertSpace={false} onClick={()=>submitOdf(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" onClick={()=>submitOdf(rememberOdf)}>转换并打开</Button></Space>
+  </section>}
   <Typography.Paragraph type="secondary" className="workspace-upload-intro">将本地文件添加到工作区，上传成功后在文档标签页中打开。</Typography.Paragraph>
   <div onKeyDown={event=>{if(event.key===' '&&event.target instanceof HTMLElement&&event.target.getAttribute('role')==='button'){event.preventDefault();if(!locked.current&&!event.repeat)event.target.click()}}}>
   <Upload.Dragger multiple accept={[workspaceFileAccept,...workbookImports.map(format=>'.'+format)].join(',')} showUploadList={false} disabled={busy} beforeUpload={file=>{if(!locked.current)setItems(current=>[...current,item(file)]);return Upload.LIST_IGNORE}}>

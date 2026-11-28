@@ -14,7 +14,7 @@ const commands = new Set([
   'open', 'close', 'save_archive', 'read_range', 'read_formula_cells', 'find_cells',
   'read_row_outline', 'read_media', 'recalc_cells', 'refresh_bound_external_links', 'probe', 'network',
   'pids', 'sleep', 'busy', 'allocate', 'flood', 'output', 'symlink',
-  'park', 'gateway_package', 'gateway_plan', 'gateway_convert_merge_source', 'convert_legacy_xls',
+  'park', 'gateway_package', 'gateway_plan', 'gateway_convert_merge_source', 'convert_legacy_xls', 'convert_odf_spreadsheet',
 ])
 
 let active = 0

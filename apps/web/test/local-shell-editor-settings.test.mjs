@@ -8,6 +8,7 @@ import {createEntryNavigator} from '../src/shell/workspace-entry-navigation.ts'
 import {createEntryRecovery,entryHash,parseEntryHash,resolveEntrySnapshot} from '../src/shell/workspace-entry-recovery.ts'
 import {defaultMaxLiveTabs,DEFAULT_IDLE_MS,SLEEP_SWEEP_INTERVAL_MS} from '../../shell/src/main/tab-hibernation.ts'
 import {localNewFormats} from '../src/shell/local-new-sheet.ts'
+import {workspaceWorkbookImports} from '../src/shell/workspace-file-formats.ts'
 const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.url),'utf8')
 const {code}=await transform(source.slice(source.indexOf('function Shell('),source.indexOf('function Login(')),{loader:'tsx',target:'es2022',jsxFactory:'jsx'})
 function fixture({roles=['personal','config_admin'],recovery=false,openInitial=true,initialHash,resolveOpenDocument=async()=>{throw Error('Unexpected document navigation')}}={}){
@@ -20,10 +21,10 @@ function fixture({roles=['personal','config_admin'],recovery=false,openInitial=t
  const context={
   jsx:(type,props,...children)=>({type,props:{...props,children}}),
   useState:initial=>{const i=stateIndex++;if(!(i in values))values[i]=typeof initial==='function'?initial():initial;return[values[i],value=>{values[i]=typeof value==='function'?value(values[i]):value}]},
-  useRef:initial=>{const i=refIndex++;return refs[i]??(refs[i]={current:initial})},useCallback:fn=>fn,
+  useRef:initial=>{const i=refIndex++;return refs[i]??(refs[i]={current:initial})},useCallback:fn=>fn,useMemo:fn=>fn(),
   useEffect:(fn,deps)=>{const i=effectIndex++,old=installed[i];if(!old||!deps||deps.some((value,index)=>!Object.is(value,old.deps[index])))effects.push(()=>{old?.cleanup?.();installed[i]={deps,cleanup:fn()}})},
   client:{onSessionEnded:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}},documentTabs,entryRecoveryNotice:'',entryRecovery:undefined,sourceWorkspace:undefined,
-  createEntryNavigator,entryHash,parseEntryHash,localNewFormats,resolveOpenDocument,
+  createEntryNavigator,entryHash,parseEntryHash,localNewFormats,workspaceWorkbookImports,resolveOpenDocument,
   URL,URLSearchParams,navigator:{deviceMemory:16},location,history:{replaceState(_data,_title,hash){location.hash=hash},pushState(_data,_title,hash){location.hash=hash}},window:stage,
   workspaceWindow:undefined,officeImportUnlocks:new Map(),takeOfficeImportUnlock(){},saveWorkspaceEntries(){},updateAutoFileTab(){},saveWorkspaceAssistantSide(){throw new Error('Unexpected preference save')},
   defaultMaxLiveTabs,DEFAULT_IDLE_MS,SLEEP_SWEEP_INTERVAL_MS,sleepInactiveTabs:false,canCheckpointWorkspace:false,restoreSession:false,logoutPending:false,

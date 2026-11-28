@@ -45,7 +45,8 @@ const sheetSizes = (maxIndex:number) => ({type:'array',maxItems:maxIndex,items:{
 const sheetLayout = {type:'object',additionalProperties:false,required:['defaultRowHeight','defaultColumnWidth','rows','columns'],properties:{
   defaultRowHeight:{type:'number',exclusiveMinimum:0},defaultColumnWidth:{type:'number',exclusiveMinimum:0},rows:sheetSizes(1048576),columns:sheetSizes(16384),
 }}
-type WorkbookConverters = Partial<Record<'tsv' | 'xls', (bytes: Buffer, signal: AbortSignal) => Promise<Buffer>>>
+const workbookImportFormats = ['tsv','xls','ods','ots'] as const
+type WorkbookConverters = Partial<Record<(typeof workbookImportFormats)[number], (bytes: Buffer, signal: AbortSignal) => Promise<Buffer>>>
 export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }, workbookConverters: WorkbookConverters = {}) {
   const admission = objectTransferAdmission(app)
   const { transfer } = admission
@@ -58,7 +59,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       // Hold admission through processing AND response completion. A client
       // disconnect cannot free capacity while object work still owns buffers.
       const path = request.routeOptions.url
-      const convertingWorkbook = path === '/api/v1/files/convert-tsv' || path === '/api/v1/files/convert-xls'
+      const convertingWorkbook = workbookImportFormats.some(format => path === `/api/v1/files/convert-${format}`)
       if ((['PUT','GET','HEAD'].includes(request.method) && path?.endsWith('/content')) || (request.method === 'POST' && (path?.endsWith('/uploads') || path?.endsWith('/purge') || path?.endsWith('/finish') || path?.endsWith('/commits') || path?.endsWith('/restoration-uploads') || path?.endsWith('/ai/xlsx-documents') || path?.endsWith('/docx/unlock') || path?.endsWith('/docx/import-unlock') || path?.endsWith('/docx/recovery-draft') || path?.endsWith('/files/new-pdf') || convertingWorkbook))) {
         if (request.method === 'PUT') {
           const format = encryptedFormat(contentType(request.headers['content-type']))
@@ -88,10 +89,9 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.addContentTypeParser([encryptedDocumentMime,documentPasswordChangeMime], { parseAs: 'buffer' }, (_request, body, done) => done(null, body))
     api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => ({
       ...files.capabilities,
-      ...(converters.tsv ? {tsvImport:'editable'} : {}),
-      ...(converters.xls ? {xlsImport:'editable'} : {}),
+      ...Object.fromEntries(workbookImportFormats.filter(format=>converters[format]).map(format=>[`${format}Import`,'editable'])),
     }))
-    for (const format of ['tsv','xls'] as const) {
+    for (const format of workbookImportFormats) {
       const convert = converters[format]
       if (!convert) continue
       api.post(`/api/v1/files/convert-${format}`, {bodyLimit:MAX_OBJECT_BYTES,schema:{querystring:emptyQuery}}, (request,reply)=>withDisconnect(request,reply,signal=>transfer(request,reply,async()=>{

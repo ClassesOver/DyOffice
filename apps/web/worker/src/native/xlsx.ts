@@ -58,20 +58,23 @@ export interface BoundWorkbookSource {
 export function createXlsxNativeWorker(process: NativeProcess, nodeEngine=false) {
   const native = createNativeAdmission(process)
   let refreshing = false
-  return {
-    async convertLegacyXls(input: Uint8Array, signal?: AbortSignal) {
-      if (!input.byteLength) throw Object.assign(new Error('Invalid XLS workbook'), { statusCode: 400 })
+  async function convertWorkbook(command:'convert_legacy_xls'|'convert_odf_spreadsheet', input:Uint8Array, signal?:AbortSignal) {
+      const invalid = () => Object.assign(new Error('Invalid source workbook'), { statusCode: 400 })
+      if (!input.byteLength) throw invalid()
       const result = await native.run(input, async io => {
-        const reply = await io.request('convert_legacy_xls', {path:'/work/input.xlsx',targetPath:'/work/output.xlsx'}) as Record<string,unknown>
+        const reply = await io.request(command, {path:'/work/input.xlsx',targetPath:'/work/output.xlsx'}) as Record<string,unknown>
         if (reply?.invalidInput === true && Object.keys(reply).length === 1) return null
         if (reply?.written !== true || Object.keys(reply).length !== 1) throw new SandboxError('INVALID_PROTOCOL')
         const bytes = await io.readOutput()
         if (bytes.length < 4 || bytes.readUInt32LE(0) !== 0x04034b50) throw new SandboxError('INVALID_OUTPUT')
         return bytes
       }, {signal})
-      if (!result) throw Object.assign(new Error('Invalid XLS workbook'), { statusCode: 400 })
+      if (!result) throw invalid()
       return result
-    },
+  }
+  return {
+    convertLegacyXls:(input:Uint8Array,signal?:AbortSignal)=>convertWorkbook('convert_legacy_xls',input,signal),
+    convertOdfSpreadsheet:(input:Uint8Array,signal?:AbortSignal)=>convertWorkbook('convert_odf_spreadsheet',input,signal),
     async refreshExternalLinks(input: Uint8Array, sources: readonly BoundWorkbookSource[], signal?: AbortSignal) {
       if (!(input instanceof Uint8Array) || !Array.isArray(sources) || sources.length > 256) {
         throw new SandboxError('INPUT_LIMIT')
