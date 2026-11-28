@@ -42,7 +42,7 @@ export function downloadWebCsv(input:CsvRequest,platform:DownloadPlatform={docum
  ;(platform.schedule??(callback=>setTimeout(callback,0)))(()=>platform.url.revokeObjectURL(url))
 }
 
-export function createWebWorkbookDocumentApi<T extends CreateApi>(base:T,createCsv:(input:CsvRequest)=>Promise<void>,{language='zh',confirmCsvExport=(message:string)=>window.confirm(message),chooseCsvExport:choose=chooseCsvExport}:{language?:string;confirmCsvExport?:(message:string)=>boolean;chooseCsvExport?:(message:string,language:string,hasFormulas:boolean)=>Promise<CsvChoice>}={}){
+export function createWebWorkbookDocumentApi<T extends CreateApi>(base:T,downloadCsv:(input:CsvRequest)=>Promise<void>,{language='zh',confirmCsvExport=(message:string)=>window.confirm(message),chooseCsvExport:choose=chooseCsvExport}:{language?:string;confirmCsvExport?:(message:string)=>boolean;chooseCsvExport?:(message:string,language:string,hasFormulas:boolean)=>Promise<CsvChoice>}={}){
  return {
   ...base,
   async exportCsv(input:WorkbookExportCsvRequest):Promise<WorkbookExportCsvResult>{
@@ -55,16 +55,8 @@ export function createWebWorkbookDocumentApi<T extends CreateApi>(base:T,createC
    if(choice==='cancel')return {canceled:true}
    if(choice==='xlsx')return {canceled:true,saveAsXlsxInstead:true}
    const title=csvTitle(request.fileName.replace(/\.csv$/i,''))
-   await createCsv({type:'csv',title,content:'\uFEFF'+request.content})
+   await downloadCsv({type:'csv',title,content:'\uFEFF'+request.content})
    return {canceled:false,path:`${title}.csv`}
-  },
-  async createDocument(input:WorkbookCreateDocumentRequest):Promise<WorkbookCreateDocumentResult>{
-   if(input.type==='csv'){
-    if(typeof input.title!=='string'||typeof input.content!=='string')return {ok:false,error:'Invalid CSV export request.'}
-    try{await createCsv({type:'csv',title:input.title,content:input.content});return {ok:true,downloaded:true}}
-    catch(error){return {ok:false,error:error instanceof Error?error.message:'CSV export failed.'}}
-   }
-   return base.createDocument(input)
   },
  }
 }

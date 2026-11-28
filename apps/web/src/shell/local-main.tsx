@@ -126,6 +126,7 @@ declare global {
   dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
   dyofficeOpenKnowledgeSource?:(id:string,revision:string)=>Promise<void>
   dyofficeCreateAiDoc?:(request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<RevisionRef>
+  dyofficeCreateAiCsv?:(request:{title:string;content:string})=>Promise<string>
   dyofficeCreateAiXlsx?:(request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
  }
 }
@@ -343,6 +344,36 @@ function installBridge(deploymentId?:string){
   }}
  }
  window.dyofficeCreateAiDoc=async input=>(await window.dyofficePrepareAiDoc!()).save({...input,type:input.type??'docx'})
+ const createAiCsv:NonNullable<Window['dyofficeCreateAiCsv']>=async({title,content})=>{
+  const proof=sourceWorkspace?.bound.proof
+  if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。')
+  const bound=await client.bindSession(proof)
+  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
+  if(catalog.csvImport!=='editable')throw new Error('当前运行环境未启用 CSV 编辑，暂不支持新建。')
+  const bytes=new Blob([content])
+  if(bytes.size>32*1024*1024-3)throw new Error('生成的 CSV 超过 32 MiB 存储上限。')
+  const path='/api/v1/ai/csv-documents?'+new URLSearchParams({title})
+  let result:OpenFileResult & {name:string}
+  try{
+   result=await bound.request<typeof result>(path,'POST',bytes)
+   if(!isRevisionRef(result?.file)||result.format!=='csv'||typeof result.name!=='string'||!/\.csv$/i.test(result.name))throw new Error('Invalid CSV receipt')
+  }catch(error){
+   const status=(error as {status?:number}).status
+   if(status===undefined||status===408||status>=500){
+    notifyFilesChanged()
+    throw new Error('无法确认 CSV 创建结果，请先核对工作区文件，不要重复创建。')
+   }
+   throw error
+  }
+  notifyFilesChanged()
+  const id=result.file.fileId
+  try{
+   await openCreatedDocument(documentTabs,catalog,id,bound.request)
+   if(!documentTabs.renderedDocuments().some(tab=>tab.id===id))throw new Error('CSV 未打开')
+  }catch{throw new Error('CSV 已写入工作区，但打开失败。请从最近文件中打开，不要重复创建。')}
+  return result.name
+ }
+ Object.defineProperty(window,'dyofficeCreateAiCsv',{configurable:true,get:()=>capabilities.csvImport==='editable'?createAiCsv:undefined})
  window.dyofficeCreateAiXlsx=async request=>{
   const proof=sourceWorkspace?.bound.proof
   if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。')

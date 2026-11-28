@@ -87,7 +87,7 @@ export async function createAiDocument(
   if (!result.ok) return { ok: false, error: result.error ?? 'creating the file failed' }
   return {
     ok: true,
-    name: `${title}.${request.type}`,
+    name: result.name ?? `${title}.${request.type}`,
     sheetName,
     hadFormulas: sheetHasFormulas(sheet),
     ...(result.downloaded ? { downloaded: true } : {}),

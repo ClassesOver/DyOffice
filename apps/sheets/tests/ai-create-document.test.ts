@@ -294,6 +294,15 @@ describe('createAiDocument (renderer bridge)', () => {
     })
   })
 
+  it('reports the workspace-assigned CSV name', async () => {
+    createDocumentBridge.mockResolvedValue({ ok: true, name: 'Report-2.csv' })
+    const outcome = await createAiDocument(fakeContext([fakeSheet([['x']])]), {
+      type: 'csv',
+      title: 'Report',
+    })
+    expect(outcome).toMatchObject({ ok: true, name: 'Report-2.csv' })
+  })
+
   it('passes the worksheet name through for xlsx', async () => {
     createDocumentBridge.mockResolvedValue({ ok: true, path: '/tmp/out.xlsx' })
     const outcome = await createAiDocument(fakeContext([fakeSheet([['x']], { name: 'de' })]), {

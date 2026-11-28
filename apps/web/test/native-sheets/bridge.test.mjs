@@ -137,19 +137,26 @@ test('browser printing keeps the selected workbook pages alive until the print d
  assert.equal(removed,true)
 })
 
-test('AI create_document delegates XLSX output to the authenticated shell creator', async t => {
+test('AI create_document delegates CSV and XLSX output to the authenticated shell creator', async t => {
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-create-xlsx-'));t.after(()=>rm(dir,{recursive:true,force:true}))
  const outfile=join(dir,'bridge.mjs')
  await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
  const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
  const previous=globalThis.window,received=[]
- globalThis.window={parent:{dyofficeCreateAiXlsx:async input=>received.push(input)}}
+ globalThis.window={parent:{
+  dyofficeCreateAiXlsx:async input=>received.push(input),
+  dyofficeCreateAiCsv:async input=>{received.push(input);return 'Quarterly-2.csv'},
+ }}
  t.after(()=>{globalThis.window=previous})
  const bridge=createSheetsBridge({},'unused',{language:'en',theme:'light'});t.after(()=>bridge.dispose())
  assert.deepEqual(bridge.supportedCreateDocumentTypes,['xlsx','csv'])
  const result=await bridge.api.createDocument({type:'xlsx',title:'Quarterly',sheetName:'Results',content:'Name,Value\nA,42'})
  assert.deepEqual(result,{ok:true})
  assert.deepEqual(received,[{title:'Quarterly',sheetName:'Results',content:'Name,Value\nA,42'}])
+ assert.deepEqual(await bridge.api.createDocument({type:'csv',title:'Quarterly',content:'Name,Value\nA,007'}),{ok:true,name:'Quarterly-2.csv'})
+ assert.deepEqual(received.at(-1),{title:'Quarterly',content:'Name,Value\nA,007'})
+ globalThis.window.parent.dyofficeCreateAiCsv=async()=>{throw new Error('CSV created but could not be opened')}
+ assert.deepEqual(await bridge.api.createDocument({type:'csv',title:'Quarterly',content:'Name,Value\nA,007'}),{ok:false,error:'CSV created but could not be opened'})
  const {runInNewContext}=await import('node:vm')
  globalThis.window.parent.dyofficeCreateAiXlsx=async()=>{throw runInNewContext('new Error("The workbook was created but could not be opened; check recent files before retrying.")')}
  assert.deepEqual(await bridge.api.createDocument({type:'xlsx',title:'Quarterly',content:'Name,Value\nA,42'}),{ok:false,error:'The workbook was created but could not be opened; check recent files before retrying.'})

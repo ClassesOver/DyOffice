@@ -111,7 +111,7 @@ test('workspace Sheets imports text into a selection with undo and save',{skip:!
  await expect.poll(()=>values(['J18','K18'])).toEqual(['A, B, C, D, E',57])
 })
 
-test('workspace opens and saves CSV with its original name and supports making an XLSX copy',{skip:!built,timeout:210000},async t=>{
+test('workspace opens and saves CSV with its original name and supports XLSX copies and AI CSV creation',{skip:!built,timeout:210000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+11
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'en',autoSave:true,showAssistant:false})
@@ -205,6 +205,24 @@ test('workspace opens and saves CSV with its original name and supports making a
  await expect.poll(blankHead,{timeout:30000}).not.toBe(blank.revision)
  assert.deepEqual(await f.files.readFile(token,blank.id,blank.revision),Buffer.alloc(0))
  assert.deepEqual(await f.files.readFile(token,blank.id,await blankHead()),Buffer.from('\ufeffFirst row\r\n'))
+
+ const sourceRevision=await blankHead()
+ const generatedText='Label,Code\r\n"West, coast",007\r\n'
+ const generated=await emptyWorkbook.evaluate((_node,content)=>window.desktopApi.createDocument({
+  type:'csv',title:'Ledger',content,
+ }),generatedText)
+ assert.deepEqual(generated,{ok:true,name:'Ledger-2.csv'})
+ assert.equal(await blankHead(),sourceRevision)
+ await expect(page.getByRole('tab',{name:generated.name,exact:true})).toHaveAttribute('aria-selected','true')
+ const generatedFile=(await f.files.listFiles(token)).files.find(item=>item.name===generated.name)
+ assert.equal(generatedFile.format,'csv')
+ assert.deepEqual(await f.files.readFile(token,generatedFile.id,generatedFile.revision),Buffer.from('\ufeff'+generatedText))
+ const generatedWorkbook=page.frameLocator(`iframe[data-document-id="${generatedFile.id}"]`).locator('html')
+ await expect(generatedWorkbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expect.poll(()=>generatedWorkbook.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return sheet&&['A2','B2'].map(cell=>sheet.getRange(cell).getValue())
+ })).toEqual(['West, coast','007'])
 })
 
 test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} uploads as editable XLSX copies`,{skip:!built,timeout:workbookImportWasi?240000:120000},async t=>{

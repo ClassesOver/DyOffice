@@ -4,6 +4,7 @@ import {messages} from './messages.ts'
 import {browserEditorTheme} from './browser-editor-theme'
 import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
+import {downloadWebCsv} from './web-ai-document-api'
 import {printInBrowser} from './browser-print.ts'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {draftCopyParentActive} from './draft-copy-authority'
@@ -19,7 +20,7 @@ import {
   workbookRecalcRequestSchema,workbookRecalcResultSchema,
   workbookConnectionsResultSchema, workbookRefreshRequestSchema, workbookRefreshResultSchema, workbookSaveRequestSchema,
   workbookFindCellsRequestSchema, workbookFindCellsResultSchema,
-  workbookExportPdfRequestSchema,
+  workbookExportPdfRequestSchema, workbookCreateDocumentRequestSchema,
   type DesktopApi, type WorkbookFile, type WorkbookSaveRequest, type WorkbookRangeResult,
 } from '../../../sheets/src/shared/desktop-api'
 
@@ -27,6 +28,7 @@ type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
 type ParentAiWindow = Window & {
   aiOffice?: Pick<HomeApi,'revealPath'>
   dyofficeRegisterWorkbookPicker?:RegisterWorkbookPicker
+  dyofficeCreateAiCsv?: (request:{title:string;content:string}) => Promise<string>
   dyofficeCreateAiXlsx?: (request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
   dyofficeCreateAiDoc?: (request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<void>
 }
@@ -471,6 +473,15 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async createDocument(input:import('../../../sheets/src/shared/desktop-api').WorkbookCreateDocumentRequest){
       try{
         const parent=parentWindow()
+        if(input.type==='csv'){
+          const {title,content}=workbookCreateDocumentRequestSchema.parse(input)
+          let create:ParentAiWindow['dyofficeCreateAiCsv']
+          try{create=parent?.dyofficeCreateAiCsv}catch{/* A foreign parent has no workspace bridge. */}
+          if(disposed)throw new Error(text.unavailable)
+          if(create)return {ok:true,name:await create({title,content})}
+          downloadWebCsv({type:'csv',title,content:'\ufeff'+content})
+          return {ok:true,downloaded:true}
+        }
         if(input.type==='xlsx'&&typeof parent?.dyofficeCreateAiXlsx==='function'){await parent.dyofficeCreateAiXlsx({title:input.title,...(input.sheetName?{sheetName:input.sheetName,...(getExportLayout?{layout:getExportLayout(input.sheetName)}:{})}:{}),content:input.content});return {ok:true}}
         if(input.type==='docx'&&docxCreationAvailable&&typeof parent?.dyofficeCreateAiDoc==='function'){await parent.dyofficeCreateAiDoc({title:input.title,content:input.content});return {ok:true}}
         if(input.type==='pdf'&&typeof parent?.dyofficeCreateAiDoc==='function'){

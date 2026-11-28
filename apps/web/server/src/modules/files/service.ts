@@ -29,7 +29,7 @@ function assertProtectedOfficeImport(row: Upload, principal: BusinessPrincipal, 
 
 export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
 
-function fitCopyStem(stem: string, ending: string) {
+export function fitFileStem(stem: string, ending: string) {
   let fitted = '', size = Buffer.byteLength(ending)
   for (const character of stem) {
     size += Buffer.byteLength(character)
@@ -331,7 +331,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (language !== 'en' && language !== 'zh') throw authError(400)
       return service.finishUpload(token,uploadId,undefined,{copy:{id:uuid(fileId),revision:uuid(revision),suffix:language==='en'?'Copy':'副本'}})
     },
-    async finishUpload(token: FileCredential, uploadId: string, authorize?: (connection: PoolClient, principal: BusinessPrincipal) => Promise<void>, options: {blankPdf?: boolean;copy?:{id:string;revision:string;suffix:string}} = {}) {
+    async finishUpload(token: FileCredential, uploadId: string, authorize?: (connection: PoolClient, principal: BusinessPrincipal) => Promise<void>, options: {blankPdf?: boolean;uniqueGeneratedName?: boolean;copy?:{id:string;revision:string;suffix:string}} = {}) {
       const id = uuid(uploadId)
       return personal(token, 'files:write', async (connection, principal) => {
         await authorize?.(connection, principal)
@@ -353,7 +353,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
             [...scope(principal),sourceId],
           )).rows[0]?.folder_id ?? null
           const dot = source.name.lastIndexOf('.'), stem = source.name.slice(0,dot), extension = source.name.slice(dot)
-          const prefix = fitCopyStem(stem,` ${suffix} ${Number.MAX_SAFE_INTEGER}${extension}`)
+          const prefix = fitFileStem(stem,` ${suffix} ${Number.MAX_SAFE_INTEGER}${extension}`)
           const names = (await connection.query<{name:string}>(`SELECT f.name FROM files f
             LEFT JOIN workspace_file_state s ON s.deployment_id=f.deployment_id AND s.owner_id=f.owner_id AND s.file_id=f.id
             WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.deleted_at IS NULL AND f.purge_started_at IS NULL
@@ -363,8 +363,22 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
           const occupied = new Set(names.map(item=>item.name))
           for (let index = 1; ;index++) {
             const ending = ` ${suffix}${index===1?'':` ${index}`}${extension}`
-            name = fitCopyStem(stem,ending)+ending
+            name = fitFileStem(stem,ending)+ending
             if (!occupied.has(name)) break
+          }
+        } else if (options.uniqueGeneratedName) {
+          const dot = name.lastIndexOf('.'), stem = name.slice(0,dot), extension = name.slice(dot)
+          const prefix = fitFileStem(stem,`-${Number.MAX_SAFE_INTEGER}${extension}`)
+          const names = (await connection.query<{name:string}>(`SELECT lower(f.name) AS name FROM files f
+            LEFT JOIN workspace_file_state s ON s.deployment_id=f.deployment_id AND s.owner_id=f.owner_id AND s.file_id=f.id
+            WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.deleted_at IS NULL AND f.purge_started_at IS NULL
+              AND s.folder_id IS NULL AND starts_with(lower(f.name),lower($3))`,
+            [...scope(principal),prefix],
+          )).rows
+          const occupied = new Set(names.map(item=>item.name))
+          for (let index = 2; occupied.has(name.toLowerCase());index++) {
+            const ending = `-${index}${extension}`
+            name = fitFileStem(stem,ending)+ending
           }
         }
         await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })

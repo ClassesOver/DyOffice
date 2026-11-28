@@ -3338,6 +3338,7 @@ export const workbookCreateDocumentRequestSchema = z
 export const workbookCreateDocumentResultSchema = z
   .object({
     ok: z.boolean(),
+    name: z.string().min(1).optional(),
     path: z.string().min(1).optional(),
     downloaded: z.boolean().optional(),
     error: z.string().optional(),

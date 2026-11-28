@@ -12,7 +12,7 @@ import { uuidSchema as id, fileParamsSchema as params, emptyQuerySchema as empty
 import { registerRevisionRoutes } from '../revisions/routes.ts'
 import type { RevisionService } from '../revisions/service.ts'
 import type { LeaseService } from '../leases/service.ts'
-import { createAiXlsxDocument, type AiXlsxInput } from '../sheets/create-document.ts'
+import { createAiCsvDocument, createAiXlsxDocument, type AiXlsxInput } from '../sheets/create-document.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type { EncryptedOfficeFormat } from './workbook-password-core.ts'
 
@@ -60,7 +60,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       // disconnect cannot free capacity while object work still owns buffers.
       const path = request.routeOptions.url
       const convertingWorkbook = workbookImportFormats.some(format => path === `/api/v1/files/convert-${format}`)
-      if ((['PUT','GET','HEAD'].includes(request.method) && path?.endsWith('/content')) || (request.method === 'POST' && (path?.endsWith('/uploads') || path?.endsWith('/purge') || path?.endsWith('/finish') || path?.endsWith('/commits') || path?.endsWith('/restoration-uploads') || path?.endsWith('/ai/xlsx-documents') || path?.endsWith('/docx/unlock') || path?.endsWith('/docx/import-unlock') || path?.endsWith('/docx/recovery-draft') || path?.endsWith('/files/new-pdf') || convertingWorkbook))) {
+      if ((['PUT','GET','HEAD'].includes(request.method) && path?.endsWith('/content')) || (request.method === 'POST' && (path?.endsWith('/uploads') || path?.endsWith('/purge') || path?.endsWith('/finish') || path?.endsWith('/commits') || path?.endsWith('/restoration-uploads') || path?.endsWith('/ai/xlsx-documents') || path?.endsWith('/ai/csv-documents') || path?.endsWith('/docx/unlock') || path?.endsWith('/docx/import-unlock') || path?.endsWith('/docx/recovery-draft') || path?.endsWith('/files/new-pdf') || convertingWorkbook))) {
         if (request.method === 'PUT') {
           const format = encryptedFormat(contentType(request.headers['content-type']))
           const upload = await files.preflightUpload(credential, (request.params as { id: string }).id, format)
@@ -143,6 +143,14 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.post('/api/v1/ai/xlsx-documents', { bodyLimit: 16*1024*1024, schema: { querystring: emptyQuery, body: { type:'object',additionalProperties:false,required:['title','content'],properties:{title:{type:'string',minLength:1,maxLength:200},sheetName:{type:'string',minLength:1,maxLength:31},content:{type:'string',minLength:1,maxLength:15*1024*1024},layout:sheetLayout} } } }, (request,reply) => transfer(request,reply,async()=>{
       if(files.capabilities.xlsx!=='editable')throw authError(415)
       return createAiXlsxDocument(files,token(request),request.body as AiXlsxInput)
+    }))
+    api.post<{Querystring:{title:string}}>('/api/v1/ai/csv-documents', {
+      bodyLimit:MAX_OBJECT_BYTES-3,
+      schema:{querystring:{type:'object',additionalProperties:false,required:['title'],properties:{title:{type:'string',minLength:1,maxLength:200}}}},
+    },(request,reply)=>transfer(request,reply,async()=>{
+      if(!editableCsv||contentType(request.headers['content-type'])!=='application/octet-stream')throw authError(415)
+      if(!Buffer.isBuffer(request.body))throw authError(400)
+      return createAiCsvDocument(files,token(request),request.query.title,request.body)
     }))
     api.delete('/api/v1/uploads/:id', { schema: { params, querystring: emptyQuery } }, async (request, reply) => {
       await files.cancelUpload(token(request), (request.params as { id: string }).id)

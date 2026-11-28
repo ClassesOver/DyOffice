@@ -588,3 +588,30 @@ test('a zero-byte CSV survives upload, download, duplicate and version restore w
   assert.deepEqual(await f.files.readFile(token,fileId,restored.revision),empty)
   assert.deepEqual(await f.files.readFile(token,fileId,saved.revision),text)
 })
+
+test('generated CSV writes BOM-prefixed worksheet values with a unique workspace name', async t => {
+  const f=await fileFixture(t,{buildApp:false}),token=f.alice.token
+  const {createApiShell}=await import('../../server/src/framework.ts')
+  const {registerFileRoutes}=await import('../../server/src/modules/files/routes.ts')
+  const app=await createApiShell();t.after(()=>app.close())
+  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+  registerFileRoutes(app,f.files,f.sessions,csrf,undefined,{},true)
+  const existing=await importFile(f,token,Buffer.from('existing'),'地区_收入.CSV')
+  const headers={cookie:'__Host-dyoffice-session='+token,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(token),'content-type':'application/octet-stream'}
+  const url='/api/v1/ai/csv-documents?'+new URLSearchParams({title:'地区/收入'})
+  const payload=Buffer.from('地区,数值\r\n华东,007\r\n')
+  const create=options=>app.inject({method:'POST',url,headers,payload,...options})
+  assert.equal((await create({headers:{...headers,'x-csrf-token':'invalid'}})).statusCode,403)
+  assert.equal((await create({payload:Buffer.from([0xff])})).statusCode,400)
+  const created=await Promise.all([create(),create()])
+  assert.ok(created.every(response=>response.statusCode===200),created.map(response=>response.body).join('\n'))
+  const files=created.map(response=>response.json())
+  assert.deepEqual(files.map(file=>file.name).sort(),['地区_收入-2.csv','地区_收入-3.csv'])
+  assert.notEqual(files[0].file.fileId,files[1].file.fileId)
+  for(const result of files){
+    assert.equal(result.format,'csv')
+    assert.deepEqual(await f.files.readFile(token,result.file.fileId,result.file.revision),Buffer.concat([Buffer.from([0xef,0xbb,0xbf]),payload]))
+    await assert.rejects(f.files.openFile(f.bob.token,result.file.fileId),{statusCode:404})
+  }
+  assert.deepEqual(await f.files.readFile(token,existing.file.fileId,existing.file.revision),Buffer.from('existing'))
+})
