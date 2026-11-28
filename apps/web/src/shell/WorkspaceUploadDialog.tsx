@@ -20,7 +20,7 @@ type WorkspaceUploadDialogProps={
 }
 const maxFileSize=32*1024*1024
 const sizeLabel=(size:number)=>size<1024?`${size} B`:size<1024*1024?`${(size/1024).toFixed(1)} KB`:`${(size/1024/1024).toFixed(1)} MB`
-const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,csv:FileExcelOutlined,tsv:FileExcelOutlined,xls:FileExcelOutlined,ods:FileExcelOutlined,ots:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
+const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,xlsm:FileExcelOutlined,csv:FileExcelOutlined,tsv:FileExcelOutlined,xls:FileExcelOutlined,ods:FileExcelOutlined,ots:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
 const compoundFileHeader=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]
 async function needsOfficePassword(file:File){
  if(!/\.(docx|xlsx)$/i.test(file.name)||file.size<compoundFileHeader.length)return false
@@ -163,7 +163,7 @@ export function WorkspaceUploadDialog({open,initialFiles=[],workbookImports=[],r
    <span className="workspace-upload-drop-icon"><CloudUploadOutlined/></span>
    <span className="workspace-upload-drop-title">点击选择文件，或拖拽到这里</span>
    <span className="workspace-upload-drop-hint">支持 Word、Excel、PowerPoint 和 PDF · 单个文件最大 32 MiB</span>
-   <span className="workspace-upload-formats"><Tag>DOCX</Tag><Tag>XLSX</Tag><Tag>PPTX</Tag><Tag>PDF</Tag>{workbookImports.map(format=><Tag key={format}>{format.toUpperCase()}{format!=='csv'&&' 转 XLSX'}</Tag>)}</span>
+   <span className="workspace-upload-formats"><Tag>DOCX</Tag><Tag>XLSX</Tag><Tag>PPTX</Tag><Tag>PDF</Tag>{workbookImports.map(format=><Tag key={format}>{format.toUpperCase()}{format!=='csv'&&format!=='xlsm'&&' 转 XLSX'}</Tag>)}</span>
   </Upload.Dragger>
   </div>
   {items.length>0&&<><div className="workspace-upload-list-heading"><Typography.Text strong>文件列表</Typography.Text><Typography.Text type="secondary">{items.length} 个文件</Typography.Text></div><ul className="workspace-upload-list" aria-label="待上传文件">{items.map(entry=>{

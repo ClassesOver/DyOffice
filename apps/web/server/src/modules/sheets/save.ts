@@ -1,3 +1,4 @@
+import { isSpreadsheetArchive } from '../../../../../../packages/web-contracts/src/api.ts'
 import { createHash } from 'node:crypto'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import type { FileService } from '../files/service.ts'
@@ -32,10 +33,12 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
 }) {
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
-  async function assertSource(token: string, fileId: string, input: SheetsRevisionInput, format: 'xlsx'|'csv'|'spreadsheet' = 'xlsx') {
+  async function assertSource(token: string, fileId: string, input: SheetsRevisionInput, format: 'archive'|'csv'|'spreadsheet' = 'archive') {
     await leases.renewLease(token, fileId, { editorId: input.editorId, leaseEpoch: input.leaseEpoch })
     const head = await files.openFile(token, fileId)
-    if (head.format !== format && !(format==='spreadsheet' && (head.format==='csv'||head.format==='xlsx'))) throw authError(415)
+    const valid = format === 'csv' ? head.format === 'csv'
+      : isSpreadsheetArchive(head.format) || (format === 'spreadsheet' && head.format === 'csv')
+    if (!valid) throw authError(415)
     if (head.file.revision !== input.baseRevision) throw authError(409)
     return head
   }

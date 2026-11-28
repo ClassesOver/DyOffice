@@ -6192,7 +6192,7 @@ export function App({
     if (!(await commitActiveEditor())) return
     const state = lazyWorkbookRef.current
     if (!state) return
-    const extension = state.file.csvPath === undefined ? /\.xlsx$/i : /\.csv$/i
+    const extension = /\.(xlsx|xlsm|csv)$/i
     const stem = namedByAi
       ? await modelSaveAsName(readContext(), copy.suggest)
       : state.file.name.replace(extension, '')

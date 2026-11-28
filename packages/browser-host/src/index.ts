@@ -55,7 +55,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       nonempty(fileId, 'fileId')
       if (!adapter.open) throw hostError('UNSUPPORTED', 'open')
       const result = await adapter.open(fileId)
-      if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf','csv'].includes(result.format) || !isSameOriginPath(result.downloadEndpoint)) throw hostError('INVALID_RESPONSE', 'open')
+      if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf','csv','xlsm'].includes(result.format) || !isSameOriginPath(result.downloadEndpoint)) throw hostError('INVALID_RESPONSE', 'open')
       if (result.name !== undefined && (typeof result.name !== 'string' || !result.name.length || result.name.length > 255 || /[\\/\u0000-\u001f]/.test(result.name))) throw hostError('INVALID_RESPONSE', 'file name')
       return {
         ...(result.name === undefined ? {} : { name: result.name }),

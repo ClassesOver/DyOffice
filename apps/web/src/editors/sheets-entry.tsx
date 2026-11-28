@@ -60,8 +60,9 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   }
   const guest=new URLSearchParams(location.search).get('guest')==='1'
   const opened = await host.open(fileId)
-  const isCsv=opened.format==='csv'
-  if (opened.format !== 'xlsx' && !isCsv) throw new Error(messages.zh.failed)
+  const isCsv=opened.format==='csv', isXlsm=opened.format==='xlsm'
+  const copyExtension=isXlsm?'.xlsm':'.xlsx'
+  if (opened.format !== 'xlsx' && !isCsv && !isXlsm) throw new Error(messages.zh.failed)
   const signed=opened.officeSignatureProtected===true, passwordProtected=opened.workbookPasswordProtected===true
   const lockedToViewing=signed
   const copyAuthority=guest?undefined:await createDraftCopyAuthority(()=>draftCopyParentActive(window))
@@ -174,18 +175,18 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       }
       try {
         if (!await copyAuthority?.verify() || !canCopy()) throw Error('Draft session ended')
-        const csv = captureCsv && (await request<Record<string,string>>('/api/v1/capabilities','GET',undefined,signal)).csvImport==='editable'
+        const csv = !isXlsm && captureCsv && (await request<Record<string,string>>('/api/v1/capabilities','GET',undefined,signal)).csvImport==='editable'
           ? captureCsv : undefined
         if (!canCopy()) return
         const csvNotice = locale === 'en'
           ? 'CSV saves the current sheet as displayed values. Formulas, formatting, and other sheets are omitted.'+(passwordProtected?' The CSV copy is unencrypted.':'')
           : 'CSV 只保存当前工作表的显示值。公式、格式和其他工作表会丢失。'+(passwordProtected?' CSV 副本未加密。':'')
-        const chosen = await confirmWebFileName(stem+'.xlsx',{locale,signal,...(csv?{csvNotice}:{})})
+        const chosen = await confirmWebFileName(stem+copyExtension,{locale,signal,...(csv?{csvNotice}:{})})
         if (!chosen || !canCopy()) return
         const csvCopy = csv && /\.csv$/i.test(chosen) ? csv : undefined
-        const base = chosen.replace(csvCopy?/\.csv$/i:/\.xlsx$/i,'').trim()
+        const base = chosen.replace(csvCopy?/\.csv$/i:/\.(xlsx|xlsm)$/i,'').trim()
         if (!base) return
-        const name = base+(csvCopy?'.csv':'.xlsx')
+        const name = base+(csvCopy?'.csv':copyExtension)
         copyNotice = ''; actionError = ''; changed()
         if (csvCopy) {
           const content = await csvCopy()

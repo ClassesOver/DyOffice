@@ -107,3 +107,49 @@ test('Sheets reads a stored CSV as cells without replacing the source revision',
  assert.equal((await request('range',query,f.bob.token)).statusCode,404)
  assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),bytes)
 })
+
+test('normal Sheets revision saves preserve the workbook type and opaque VBA project',async t=>{
+ const {macroWorkbook,vbaFixture}=await import('../helpers/xlsm.mjs')
+ const JSZip=(await import('jszip')).default
+ const f=await fileFixture(t,{buildApp:false})
+ const directory=await mkdtemp(join(tmpdir(),'dyoffice-xlsm-runtime-'))
+ t.after(()=>rm(directory,{recursive:true,force:true}))
+ await buildSheetsGateway(join(directory,'gateway.mjs'))
+ const runtime=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
+ },{enabled:true})
+ t.after(()=>runtime.close())
+ const {buildLocalApp}=await import('../../server/src/app.ts')
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin:restrictedOrigin,csrfKey:f.csrfKey,objectStore:f.objects,...runtime,
+ })
+ t.after(()=>app.close())
+ const token=f.alice.token
+ const original=await macroWorkbook(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ const {file}=await importFile(f,token,original,'Ledger.XLSM')
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+ const headers={cookie:'__Host-dyoffice-session='+token,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(token)}
+ const post=(path,payload)=>app.inject({method:'POST',url:'/api/v1/files/'+file.fileId+path,headers,payload})
+ const editorId=randomUUID()
+ const lease=await post('/lease',{editorId})
+ assert.equal(lease.statusCode,200,lease.body)
+ const {leaseEpoch}=lease.json()
+ const opened=await post('/sheets/inspect',{revision:file.revision})
+ assert.equal(opened.statusCode,200,opened.body)
+ const sheet=opened.json().sheets[0]
+ const draft=await post('/sheets/uploads',{baseRevision:file.revision,leaseEpoch,editorId,
+  request:sheetsSaveRequest(sheet.id,[{row:1,column:0,writeValue:true,value:58}]),
+ })
+ assert.equal(draft.statusCode,200,draft.body)
+ const result=await post('/commits',{fileId:file.fileId,baseRevision:file.revision,leaseEpoch,uploadId:draft.json().uploadId,idempotencyKey:randomUUID()})
+ assert.equal(result.statusCode,200,result.body)
+ const saved=await f.files.openFile(token,file.fileId)
+ assert.equal(saved.format,'xlsm')
+ assert.equal(saved.name,'Ledger.XLSM')
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),original)
+ const zip=await JSZip.loadAsync(await f.files.readFile(token,file.fileId,saved.file.revision))
+ assert.deepEqual(await zip.file('xl/vbaProject.bin').async('nodebuffer'),vbaFixture)
+ assert.match(await zip.file('[Content_Types].xml').async('string'),/sheet\.macroEnabled\.main\+xml/)
+ assert.match(await zip.file('xl/_rels/workbook.xml.rels').async('string'),/Target="vbaProject.bin"/)
+ assert.match(await zip.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="A2"[^>]*>\s*<v>58<\/v>/)
+})

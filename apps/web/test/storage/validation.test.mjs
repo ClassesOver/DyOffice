@@ -148,3 +148,16 @@ test('zero-byte CSV validation does not depend on the workbook worker deadline',
   })
   await assert.rejects(() => validate(empty, 'empty.xlsx'), { statusCode: 400 })
 })
+
+test('XLSM validates the macro-enabled workbook type and leaves VBA bytes opaque', async () => {
+  const { macroWorkbook } = await import('../helpers/xlsm.mjs')
+  const { readFile } = await import('node:fs/promises')
+  const xlsx = await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+  const bytes = await macroWorkbook(xlsx)
+  const validate = await validator()
+  const result = await validate(bytes, 'Ledger.XLSM')
+  assert.equal(result.format, 'xlsm')
+  assert.equal(result.sha256, createHash('sha256').update(bytes).digest('hex'))
+  await assert.rejects(() => validate(bytes, 'Ledger.xlsx'), {statusCode:400})
+  await assert.rejects(() => validate(xlsx, 'Ledger.xlsm'), {statusCode:400})
+})

@@ -240,6 +240,68 @@ test('workspace opens and saves CSV with its original name and supports XLSX cop
  })).toEqual(['West, coast','007'])
 })
 
+test('workspace opens XLSM, writes cell edits and saves XLSM copies with the original VBA part',{skip:!built,timeout:180000},async t=>{
+ const {macroWorkbook,vbaFixture}=await import('../helpers/xlsm.mjs')
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+12
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),...sheets})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ const picker=upload.locator('input[type=file]')
+ await expect(picker).toHaveAttribute('accept',/(?:^|,)\.xlsm(?:,|$)/)
+ const original=await macroWorkbook(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ await picker.setInputFiles({name:'Ledger.XLSM',mimeType:'application/vnd.ms-excel.sheet.macroEnabled.12',buffer:original})
+ await upload.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+ await expect(upload).toContainText('已完成 1',{timeout:60000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ const token=f.alice.token,[file]=(await f.files.listFiles(token)).files
+ assert.equal(file.format,'xlsm')
+ const editor=page.frameLocator(`iframe[data-document-id="${file.id}"]`),html=editor.locator('html')
+ const tab=page.getByRole('tab',{name:'Ledger.XLSM',exact:true})
+ await expect(html).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await html.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(58))
+ const head=async()=>(await f.files.openFile(token,file.id)).file.revision
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+s')
+ await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
+ async function verify(id,revision){
+  const zip=await JSZip.loadAsync(await f.files.readFile(token,id,revision))
+  assert.deepEqual(await zip.file('xl/vbaProject.bin').async('nodebuffer'),vbaFixture)
+  assert.match(await zip.file('[Content_Types].xml').async('string'),/sheet\.macroEnabled\.main\+xml/)
+  assert.match(await zip.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="A2"[^>]*>\s*<v>58<\/v>/)
+ }
+ await verify(file.id,await head())
+ assert.deepEqual(await f.files.readFile(token,file.id,file.revision),original)
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ const dialog=editor.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(dialog.getByLabel('File name')).toHaveValue('Ledger.xlsm')
+ await dialog.getByLabel('File name').fill('Ledger copy.xlsm')
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(editor.getByText('Saved copy: Ledger copy.xlsm',{exact:true})).toBeVisible({timeout:30000})
+ const copy=(await f.files.listFiles(token)).files.find(item=>item.name==='Ledger copy.xlsm')
+ assert.equal(copy.format,'xlsm')
+ await verify(copy.id,copy.revision)
+})
+
 test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} uploads as editable XLSX copies`,{skip:!built,timeout:workbookImportWasi?240000:120000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+9
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})

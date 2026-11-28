@@ -2,7 +2,11 @@ import type { AssistantPreferences, DocumentTheme } from './preferences.ts'
 import type { CsvImportLimitMb } from '../../xlsx-gateway/src/gateway/csv-limits.ts'
 
 export type OfficeFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf'
-export type WorkspaceFileFormat = OfficeFormat | 'csv'
+export type WorkspaceFileFormat = OfficeFormat | 'csv' | 'xlsm'
+
+export function isSpreadsheetArchive(format: string): format is 'xlsx' | 'xlsm' {
+  return format === 'xlsx' || format === 'xlsm'
+}
 export type Principal = Readonly<{ userId: string; sessionId: string; deploymentId: string; roles: readonly string[]; scopes: readonly string[] }>
 /** Stable job identity only; endpoint-specific status DTOs belong to T08. */
 export type JobRef = Readonly<{ id: string }>

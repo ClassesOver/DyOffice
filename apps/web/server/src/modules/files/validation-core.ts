@@ -19,13 +19,14 @@ const opcSignatureTypes = new Set([
 const definitions = {
   docx: { path: 'word/document.xml', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', root: 'document', namespace: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
   xlsx: { path: 'xl/workbook.xml', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', root: 'workbook', namespace: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  xlsm: { path: 'xl/workbook.xml', type: 'application/vnd.ms-excel.sheet.macroEnabled.main+xml', root: 'workbook', namespace: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', mime: 'application/vnd.ms-excel.sheet.macroEnabled.12' },
   pptx: { path: 'ppt/presentation.xml', type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml', root: 'presentation', namespace: 'http://schemas.openxmlformats.org/presentationml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
 } as const
 
 export function validateFileName(name: string): WorkspaceFileFormat {
   if (typeof name !== 'string' || name.trim() !== name || Buffer.byteLength(name) > 255 || name.startsWith('.') || /[\\/\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u.test(name)) throw storageError(400)
   const format = name.split('.').at(-1)?.toLowerCase()
-  if (!['docx','xlsx','pptx','pdf','csv'].includes(format ?? '') || !name.includes('.')) throw storageError(400)
+  if (!['docx','xlsx','pptx','pdf','csv','xlsm'].includes(format ?? '') || !name.includes('.')) throw storageError(400)
   return format as WorkspaceFileFormat
 }
 
@@ -82,7 +83,7 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
     for await (const entry of zip.eachEntry()) {
       if (++count > limits.maxEntries || entry.uncompressedSize > limits.maxPartBytes || total + entry.uncompressedSize > limits.maxInflatedBytes) throw storageError(413)
       const name = entry.fileName
-      if (names.has(name.toLowerCase()) || name.includes('\\') || name.includes('\0') || name.split('/').some(segment => segment === '..' || segment === '.') || name.startsWith('/') || /vbaProject/i.test(name) || entry.isEncrypted() || ![0,8].includes(entry.compressionMethod) || entry.versionNeededToExtract >= 45 || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw storageError(400)
+      if (names.has(name.toLowerCase()) || name.includes('\\') || name.includes('\0') || name.split('/').some(segment => segment === '..' || segment === '.') || name.startsWith('/') || (format !== 'xlsm' && /vbaProject/i.test(name)) || entry.isEncrypted() || ![0,8].includes(entry.compressionMethod) || entry.versionNeededToExtract >= 45 || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw storageError(400)
       names.add(name.toLowerCase())
       const header = await zip.readLocalFileHeaderPromise(entry)
       if (!header.fileName.equals(entry.fileNameRaw) || header.generalPurposeBitFlag !== entry.generalPurposeBitFlag || header.compressionMethod !== entry.compressionMethod || header.fileDataStart + entry.compressedSize > directory) throw storageError(400)
@@ -107,7 +108,11 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
   const types = xmlRoot(parts.get('[Content_Types].xml')!, 'Types', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const overrides = children(types, 'Override', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const contentTypes = [...children(types,'Default', 'http://schemas.openxmlformats.org/package/2006/content-types'),...overrides].map(item => String(item['@_ContentType']))
-  if (overrides.filter(item => item['@_PartName'] === '/' + definition.path && item['@_ContentType'] === definition.type).length !== 1 || contentTypes.some(type => /macroEnabled|vbaProject/i.test(type))) throw storageError(400)
+  if (overrides.filter(item => item['@_PartName'] === '/' + definition.path && item['@_ContentType'] === definition.type).length !== 1) throw storageError(400)
+  // VBA is an opaque archive part of an explicitly macro-enabled spreadsheet.
+  // Ordinary Office packages keep their existing macro rejection.
+  if (contentTypes.some(type => /macroEnabled|vbaProject/i.test(type) &&
+      (format !== 'xlsm' || (type !== definition.type && !/^application\/vnd\.ms-office\.vbaProject(?:Signature(?:Agile|V3)?)?$/i.test(type))))) throw storageError(400)
   const relations = xmlRoot(parts.get('_rels/.rels')!, 'Relationships', 'http://schemas.openxmlformats.org/package/2006/relationships')
   const relationships = children(relations,'Relationship', 'http://schemas.openxmlformats.org/package/2006/relationships')
   const roots = relationships.filter(item => item['@_Type'] === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument')

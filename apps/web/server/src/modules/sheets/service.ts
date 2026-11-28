@@ -1,3 +1,4 @@
+import { isSpreadsheetArchive } from '../../../../../../packages/web-contracts/src/api.ts'
 import {fetchRemoteTable} from '@genoffice/electron-utils/remote-table'
 import type {LeaseService} from '../leases/service.ts'
 import type {BoundWorkbookSource,FindInput,FormulaIndexSheet,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
@@ -98,7 +99,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
   function pruneMergeSessions(){const now=Date.now();for(const [id,session] of mergeSessions)if(session.expiresAt<=now){clearTimeout(session.timer);mergeSessions.delete(id)}}
   async function assertMergeContext(token:string,fileId:string,revision:string){
     const current=await files.openFile(token,fileId)
-    if(current.format!=='xlsx')throw authError(415)
+    if(!isSpreadsheetArchive(current.format))throw authError(415)
     if(current.file.revision!==revision)throw authError(409)
     return current
   }
@@ -143,7 +144,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
         return result
       }
       const source = await files.download(token, fileId, revision, undefined, signal)
-      if (source.format !== 'xlsx' && source.format !== 'csv') throw authError(415)
+      if (!isSpreadsheetArchive(source.format) && source.format !== 'csv') throw authError(415)
       if (source.workbookPasswordProtected) throw authError(423)
       signal?.throwIfAborted()
       const bytes = source.format === 'csv' ? await csvView(revision, source.bytes, signal) : source.bytes
@@ -256,7 +257,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
       for(const binding of bindings){
         signal?.throwIfAborted()
         const source=await files.download(token,binding.fileId,binding.revision,remaining)
-        if(source.format!=='xlsx')throw authError(415)
+        if(!isSpreadsheetArchive(source.format))throw authError(415)
         remaining-=source.bytes.length
         sources.push({index:binding.index,bytes:source.bytes})
       }
