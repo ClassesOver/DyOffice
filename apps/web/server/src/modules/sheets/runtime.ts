@@ -77,6 +77,7 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
       recalculate:refresh?.recalculate ?? (!nodeEngine ? native.recalculate : undefined),
       refreshExternalLinks:refresh?.refreshExternalLinks,
       convertMergeSource:gateway.convertMergeSource,
+      convertCsvImport:gateway.convertCsvImport,
       convertTsvImport:gateway.convertTsvImport,
       convertLegacyXls:refresh?.convertLegacyXls,
       convertOdfSpreadsheet:refresh?.convertOdfSpreadsheet,

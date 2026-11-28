@@ -52,7 +52,7 @@ async function execute(packet:Record<string,unknown>) {
   let result:unknown
   if(packet.command==='gateway_convert_merge_source'){
     const keys=Object.keys(request).sort().join(',')
-    const allowEmpty=keys==='allowEmpty,format'&&request.format==='tsv'&&request.allowEmpty===true
+    const allowEmpty=keys==='allowEmpty,format'&&(request.format==='csv'||request.format==='tsv')&&request.allowEmpty===true
     if((keys!=='format'&&!allowEmpty)||(request.format!=='csv'&&request.format!=='tsv'&&request.format!=='xls'))throw invalidInput()
     try{
       if(request.format==='xls')result=convertLegacyXls(bytes)

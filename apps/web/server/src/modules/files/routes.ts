@@ -47,7 +47,7 @@ const sheetLayout = {type:'object',additionalProperties:false,required:['default
 }}
 const workbookImportFormats = ['tsv','xls','ods','ots'] as const
 type WorkbookConverters = Partial<Record<(typeof workbookImportFormats)[number], (bytes: Buffer, signal: AbortSignal) => Promise<Buffer>>>
-export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }, workbookConverters: WorkbookConverters = {}) {
+export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }, workbookConverters: WorkbookConverters = {}, editableCsv = false) {
   const admission = objectTransferAdmission(app)
   const { transfer } = admission
   const converters = files.capabilities?.xlsx === 'editable' ? workbookConverters : {}
@@ -89,6 +89,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.addContentTypeParser([encryptedDocumentMime,documentPasswordChangeMime], { parseAs: 'buffer' }, (_request, body, done) => done(null, body))
     api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => ({
       ...files.capabilities,
+      ...(editableCsv && {csvImport:'editable'}),
       ...Object.fromEntries(workbookImportFormats.filter(format=>converters[format]).map(format=>[`${format}Import`,'editable'])),
     }))
     for (const format of workbookImportFormats) {

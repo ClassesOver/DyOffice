@@ -279,7 +279,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         xls:config.sheetsNative?.convertLegacyXls,
         ods:config.sheetsNative?.convertOdfSpreadsheet,
         ots:config.sheetsNative?.convertOdfSpreadsheet,
-      })
+      },Boolean(config.nativeSheetsDirectory && config.sheetsNative?.convertCsvImport))
       registerMcpRoutes(app,transactions,files,csrf,config.objectStore,config.filePolicy,
         config.sheetsPlanner && config.sheetsWorkbookPlanner && config.sheetsNative?.savePlan ? {
           native: config.sheetsNative as SheetsSaveNative,
@@ -383,7 +383,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-xlsx'.length)
           if (path === '/' || path === '/index.html') {
             const opened = await files.openFile(editorFileToken(request),url.searchParams.get('fileId') ?? '')
-            if (opened.format !== 'xlsx') throw authError(404)
+            if (opened.format !== 'xlsx' && !(opened.format === 'csv' && config.sheetsNative?.convertCsvImport)) throw authError(404)
           }
           // No source fallback and no arbitrary file paths: only verified build assets.
           const response = reply.raw

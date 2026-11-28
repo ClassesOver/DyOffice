@@ -44,7 +44,7 @@ import './ribbon-file-button.css'
 import './ai-dock-theme.css'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import {createWorkbookImageApi} from './web-ai-media-api'
-import {createWebWorkbookDocumentApi,downloadWebCsv} from './web-ai-document-api'
+import {confirmWebCsvSave,createWebWorkbookDocumentApi,downloadWebCsv} from './web-ai-document-api'
 import {confirmWebFileName,suggestWebFileName} from './web-ai-naming'
 
 export async function mountSheetsEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
@@ -60,7 +60,8 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   }
   const guest=new URLSearchParams(location.search).get('guest')==='1'
   const opened = await host.open(fileId)
-  if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
+  const isCsv=opened.format==='csv'
+  if (opened.format !== 'xlsx' && !isCsv) throw new Error(messages.zh.failed)
   const signed=opened.officeSignatureProtected===true, passwordProtected=opened.workbookPasswordProtected===true
   const lockedToViewing=signed
   const copyAuthority=guest?undefined:await createDraftCopyAuthority(()=>draftCopyParentActive(window))
@@ -73,7 +74,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   applyBrowserEditorTheme(document.documentElement, prefs)
   let naming = false, copying = false, copyNotice = ''
   const copyLifetime = new AbortController()
-  const bridge = createSheetsBridge(host,fileId,prefs,{getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
+  const bridge = createSheetsBridge(host,fileId,prefs,{isCsv,confirmCsvSave:()=>confirmWebCsvSave(locale,!!copyAuthority?.current() && canCopy()),getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
   const revision=host.getState(fileId).revision.revision
   const importUnlock=passwordProtected&&!guest?takeOfficeImportUnlock(revision):undefined
   const initiallyUnlocked=!passwordProtected||!!importUnlock&&await bridge.adoptWorkbookImportUnlock(revision,importUnlock)
@@ -279,7 +280,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       <App queuedWorkbookAtBoot host={{readOnly,saveDownload,fileMenu,
         ...(passwordProtected?{workbookPasswordLimit:255}:{}),
         ...(passwordProtected&&bridge.needsConfirmation()?{confirmWorkbookPasswordSave:{label:text.retry,busy:confirming,...(actionError?{error:actionError}:{}),run:()=>{void confirmSave()}}}:{}),
-        getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,...(workbookImages?{setImageAttachments:workbookImages.setImageAttachments}:{}),supportedMergeExtensions:bridge.supportedMergeExtensions,workspaceCopy:loaded&&!copying&&canCopy()?workspaceCopy:undefined,inPlaceSave:true,workspaceLinks:bridge.workspaceLinks,assistantAvailable,...(assistant?{assistant}:{}),...(harnessRecovery?{harnessRecovery}:{}),onWorkbookOpened:()=>{documentLoaded=true;setLoaded(true)},onOpenFailed:()=>{documentLoaded=false;setFailed(true);reportDocumentLoading('error')},onEditorReady:handle=>{editor=handle}}} />
+        getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,...(workbookImages?{setImageAttachments:workbookImages.setImageAttachments}:{}),supportedMergeExtensions:bridge.supportedMergeExtensions,workspaceCopy:loaded&&!copying&&canCopy()?workspaceCopy:undefined,inPlaceSave:true,...(isCsv?{saveCsvContent:bridge.saveCsv}:{}),workspaceLinks:bridge.workspaceLinks,assistantAvailable,...(assistant?{assistant}:{}),...(harnessRecovery?{harnessRecovery}:{}),onWorkbookOpened:()=>{documentLoaded=true;setLoaded(true)},onOpenFailed:()=>{documentLoaded=false;setFailed(true);reportDocumentLoading('error')},onEditorReady:handle=>{editor=handle}}} />
     </div>
   }
   reportDocumentLoading(initiallyUnlocked?'rendering':'ready')

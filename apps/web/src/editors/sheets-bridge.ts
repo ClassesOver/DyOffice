@@ -39,7 +39,7 @@ type Session = {openingViewport?:OpeningViewport; revision: string; file: Workbo
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
 const mergeExtensions = ['xlsx','xlsm','xls','csv','tsv'] as const
 const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean;getExportLayout?:(sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
+export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,isCsv=false,confirmCsvSave=async()=>'cancel' as const,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean;isCsv?:boolean;confirmCsvSave?:()=>Promise<'csv'|'xlsx'|'cancel'>;getExportLayout?:(sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
@@ -205,7 +205,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   }
   async function open(withViewport=false) {
     const state = host.getState(fileId), {openingViewport,...raw} = await call(state.revision.revision,'inspect',withViewport?{openingViewport:true}:{})
-    const file = workbookFileSchema.parse({...raw,sessionId:crypto.randomUUID(),name:state.name,sha256:state.revision.sha256,fileBytes:state.revision.size,readOnly:!state.lease,needsSaveAs:false,automaticRecoveryDisabled:true,...(unlockGrant?{passwordProtected:true}:{})})
+    const file = workbookFileSchema.parse({...raw,sessionId:crypto.randomUUID(),name:state.name,sha256:state.revision.sha256,fileBytes:state.revision.size,readOnly:!state.lease,needsSaveAs:false,automaticRecoveryDisabled:true,...(isCsv?{csvPath:fileId}:{}),...(unlockGrant?{passwordProtected:true}:{})})
     if(unlockGrant)unlockGrant.revision=state.revision.revision
     if (disposed) throw hostError('UNAVAILABLE','disposed')
     const result=withViewport&&openingViewport&&file.sheets.some(s=>s.id===openingViewport.sheetId)
@@ -452,7 +452,8 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       const request=workbookSaveRequestSchema.parse(input),current=session(request.sessionId)
       if (host.getState(fileId).revision.revision!==current.revision) throw hostError('CONFLICT','workbook base')
       try{
-        return await persistWorkbook(()=>host.saveSheets(fileId,request,saveFence??(()=>true),unlockGrant?.id),saved=>openSaved(saved.revision))
+        const authorized=saveFence??(()=>true)
+        return await persistWorkbook(()=>host.saveSheets(fileId,request,authorized,unlockGrant?.id),saved=>openSaved(saved.revision))
       }catch(error){
         if((error as {code?:string}).code==='PAYLOAD_TOO_LARGE')throw new Error(prefs.language==='en'?'Web save exceeds the 4 MiB request limit. Your edits are still unsaved; keep this page open.':'本次保存超过 Web 请求的 4 MiB 限制。更改仍未保存，请保留当前页面，不要关闭或刷新。')
         throw error
@@ -602,6 +603,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     writeWorkbookRecovery:unavailable,exportPdf:unavailable,exportCsv:unavailable,
+    confirmCsvSave,
     async getCsvImportLimit(){return (await host.getPreferences()).csvImportLimitMb??CSV_IMPORT_DEFAULT_LIMIT_MB},
     openAiModelSettings:async()=>{
       const parent=typeof window!=='undefined'?(window.parent as unknown as {dyofficeOpenEditorSettings?:(tab:'models'|'skills',source:Window)=>Promise<void>}):undefined
@@ -630,6 +632,16 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       if (!pending.saved && host.getState(fileId).status !== 'unknown') {recovery=null;pending.reject(error)}
       throw error
     } finally {confirming=false;if(!disposed)onChange()}
+  }
+  async function saveCsv(sessionId:string,content:string) {
+    const current=session(sessionId)
+    if(!isCsv||current.attachment||host.getState(fileId).revision.revision!==current.revision)throw hostError('CONFLICT','CSV base')
+    try {
+      return await persistWorkbook(()=>host.saveCsv(fileId,content,saveFence??(()=>true)),saved=>openSaved(saved.revision))
+    }catch(error){
+      if((error as {code?:string}).code==='PAYLOAD_TOO_LARGE')throw new Error(prefs.language==='en'?'CSV save exceeds the 32 MiB storage limit. Your edits are still unsaved.':'CSV 超过 32 MiB 存储上限，更改仍未保存。')
+      throw error
+    }
   }
   async function prepareDownload(editor: {saveAndWait(): Promise<boolean>; isDirty(): boolean}) {
     if(disposed)throw hostError('UNAVAILABLE','disposed')
@@ -675,5 +687,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     supportedMergeExtensions: mergeExtensions,
-    api,workspaceLinks,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,prepareDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;picker?.dispose();recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+    api,workspaceLinks,saveCsv,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,prepareDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;picker?.dispose();recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

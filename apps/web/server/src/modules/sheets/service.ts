@@ -20,6 +20,7 @@ const fetchWorkbookQuery:SheetsQueryFetcher=(source,signal)=>fetchRemoteTable(so
 })
 export type SheetsPackageReader = (bytes: Buffer, signal?: AbortSignal, query?: WorkbookPackageQuery) => Promise<unknown>
 export interface SheetsNative {
+  convertCsvImport?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
   convertTsvImport?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
   convertLegacyXls?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
   convertOdfSpreadsheet?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
@@ -40,6 +41,32 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
   let queryActive = false
+  // Raw bytes are authorized and read on every call. Only the isolated
+  // conversion is cached, so a cache hit cannot grant revision access.
+  const csvViews = new Map<string,Buffer>()
+  const csvViewLimit = 64 * 1024 * 1024
+  async function csvView(revision: string, source: Buffer, signal?: AbortSignal) {
+    if (!native.convertCsvImport) throw authError(415)
+    const cached = csvViews.get(revision)
+    if (cached) {
+      csvViews.delete(revision)
+      csvViews.set(revision,cached)
+      return cached
+    }
+    const bytes = await native.convertCsvImport(source,signal)
+    signal?.throwIfAborted()
+    if (bytes.length <= csvViewLimit) {
+      csvViews.delete(revision)
+      let retained = [...csvViews.values()].reduce((total,view)=>total+view.length,0)
+      while (csvViews.size >= 8 || retained + bytes.length > csvViewLimit) {
+        const oldest = csvViews.keys().next().value!
+        retained -= csvViews.get(oldest)!.length
+        csvViews.delete(oldest)
+      }
+      csvViews.set(revision,bytes)
+    }
+    return bytes
+  }
   const mergeSessions = new Map<string,{tokenDigest:string;fileId:string;revision:string;bytes:Buffer;expiresAt:number;sheets:Set<string>;timer:NodeJS.Timeout}>()
   const maxMergeBytes=50*1024*1024,maxMergeSessionBytes=100*1024*1024,maxMergeSessions=8,mergeSessionTtlMs=10*60_000
   const mergeBytes=()=>[...mergeSessions.values()].reduce((total,session)=>total+session.bytes.length,0)
@@ -115,11 +142,12 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
         if (authorizedUnlock(token,fileId,revision,unlockId)!==grant) throw authError(423)
         return result
       }
-      const source = await files.download(token, fileId, revision)
-      if (source.format !== 'xlsx') throw authError(415)
+      const source = await files.download(token, fileId, revision, undefined, signal)
+      if (source.format !== 'xlsx' && source.format !== 'csv') throw authError(415)
       if (source.workbookPasswordProtected) throw authError(423)
       signal?.throwIfAborted()
-      const result = await operation(source.bytes)
+      const bytes = source.format === 'csv' ? await csvView(revision, source.bytes, signal) : source.bytes
+      const result = await operation(bytes)
       signal?.throwIfAborted()
       // Native work runs outside the database transaction. Reauthenticate and
       // check that the file is still visible before releasing its result.

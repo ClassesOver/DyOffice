@@ -26,6 +26,13 @@ function chooseCsvExport(message:string,language:string,hasFormulas:boolean):Pro
  })
 }
 
+export function confirmWebCsvSave(language:string,offerCopy:boolean):Promise<CsvChoice>{
+ const message=language==='en'
+  ? 'Keep this file in CSV format? CSV saves the current sheet’s values. Formulas, formatting, and other sheets are lost.'
+  : '保留 CSV 格式？CSV 仅保存当前工作表的值，公式、格式和其他工作表会丢失。'
+ return chooseCsvExport(message,language,offerCopy)
+}
+
 export function downloadWebCsv(input:CsvRequest,platform:DownloadPlatform={document,url:URL}){
  const title=csvTitle(input.title)
  const blob=new Blob([input.content],{type:'text/csv;charset=utf-8'})

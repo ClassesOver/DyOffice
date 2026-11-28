@@ -684,6 +684,7 @@ export interface SheetsEditorHost {
   }
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
+  saveCsvContent?: SaveContext['saveCsvContent']
   workspaceLinks?: {
     listSources(): Promise<readonly {id:string;name:string;revision:string}[]>
     sourceTarget(id: string, revision: string): string
@@ -1488,7 +1489,7 @@ export function App({
           ? 'Finishing pending workbook changes before saving…'
           : MUTATION_SAVE_MESSAGE)
       },
-      ...(hostRef.current?.inPlaceSave ? {
+      ...(hostRef.current?.inPlaceSave && lazyWorkbookRef.current?.file.csvPath === undefined ? {
         applySavedWorkbook: (file: WorkbookFile) => {
           const state = lazyWorkbookRef.current
           if (!state) return
@@ -1502,6 +1503,8 @@ export function App({
           if (previousSession !== file.sessionId) void window.desktopApi.closeWorkbook(previousSession).catch(() => undefined)
         },
       } : {}),
+      ...(hostRef.current?.saveCsvContent ? { saveCsvContent: hostRef.current.saveCsvContent } : {}),
+      ...(hostRef.current?.inPlaceSave ? { exportCsvAsWorkbook: () => saveWorkspaceCopyUnderGate(false) } : {}),
       flushPendingChanges: async () => {
         flushPendingChartDataSync(visualSyncContext())
         await flushChartDataSync(visualSyncContext())
@@ -6169,23 +6172,26 @@ export function App({
    * no-op rather than a failure.
    */
   async function saveWorkspaceCopy(namedByAi: boolean): Promise<void> {
+    const gate = saveGateRef.current
+    if (gate.busy) return
+    await gate.run(() => saveWorkspaceCopyUnderGate(namedByAi))
+  }
+
+  async function saveWorkspaceCopyUnderGate(namedByAi: boolean): Promise<void> {
     const web = hostRef.current
     const copy = web?.workspaceCopy
-    const gate = saveGateRef.current
-    if (!copy || web.readOnly || gate.busy || (namedByAi && !copy.suggest)) return
-    // Keep autosave from writing back while the user is naming the copy.
-    await gate.run(async () => {
-      if (!(await commitActiveEditor())) return
-      const state = lazyWorkbookRef.current
-      if (!state) return
-      const stem = namedByAi
-        ? await modelSaveAsName(readContext(), copy.suggest)
-        : state.file.name.replace(/\.xlsx$/i, '')
-      if (!stem || hostRef.current?.readOnly || lazyWorkbookRef.current !== state) return
-      await copy.save(stem, async (exportCopy) => {
-        if (hostRef.current?.readOnly || lazyWorkbookRef.current !== state || !(await commitActiveEditor())) return { ok: false }
-        return exportWorkbookDraft(saveContext(), exportCopy)
-      })
+    if (!copy || web.readOnly || (namedByAi && !copy.suggest)) return
+    if (!(await commitActiveEditor())) return
+    const state = lazyWorkbookRef.current
+    if (!state) return
+    const extension = state.file.csvPath === undefined ? /\.xlsx$/i : /\.csv$/i
+    const stem = namedByAi
+      ? await modelSaveAsName(readContext(), copy.suggest)
+      : state.file.name.replace(extension, '')
+    if (!stem || hostRef.current?.readOnly || lazyWorkbookRef.current !== state) return
+    await copy.save(stem, async (exportCopy) => {
+      if (hostRef.current?.readOnly || lazyWorkbookRef.current !== state || !(await commitActiveEditor())) return { ok: false }
+      return exportWorkbookDraft(saveContext(), exportCopy)
     })
   }
 

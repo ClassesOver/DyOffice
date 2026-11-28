@@ -77,6 +77,8 @@ export interface SaveContext {
   /** Web opt-in: adopt the saved session without replacing the live runtime.
    * The caller retains the open-time metadata/visual baseline used by undo. */
   applySavedWorkbook?: (file: WorkbookFile) => void | Promise<void>
+  exportCsvAsWorkbook?: () => Promise<void>
+  saveCsvContent?: (sessionId: string, text: string) => Promise<{ file: WorkbookFile }>
   /** Await debounced chart reads after formulas settle, before snapshotting. */
   flushPendingChanges?: () => Promise<void>
   onMutationPhase?: (phase: MutationPhase) => void
@@ -810,12 +812,14 @@ async function handlePreparedSave(
   // Slicer parts address their host sheet by name; the same rename hazard as
   // pivots, so they ride phase two of a split save.
   const heldSlicerState = hasShifts ? slicerState : null
-  const splitSave =
+  const writingRawCsv = mode === 'save' && state.file.csvPath !== undefined && ctx.saveCsvContent !== undefined
+  const splitSave = !writingRawCsv && (
     heldPivots.length > 0 ||
     heldTables.length > 0 ||
     heldTableEdits.length > 0 ||
     heldNames !== null ||
     heldSlicerState !== null
+  )
   if (splitSave) {
     const addedSheetIds = state.editJournal.sheets.added
     const strandedHeld = [
@@ -901,6 +905,10 @@ async function handlePreparedSave(
         return { ok: false }
       }
       if (choice === 'xlsx') {
+        if (ctx.exportCsvAsWorkbook) {
+          await ctx.exportCsvAsWorkbook()
+          return { ok: false }
+        }
         return await handleSave(ctx, 'save-as', quiet, explicitTarget)
       }
       if (state.flags.preloadComplete) confirmedCsvSaves.add(csvPath)
@@ -928,6 +936,25 @@ async function handlePreparedSave(
     if (serialized === null) {
       ctx.setMessage(t('appSaveFailed'))
       return { ok: false }
+    }
+    if (ctx.saveCsvContent) {
+      try {
+        ctx.setMessage(t('appSavingEdits', { count: total }))
+        const { file } = await ctx.saveCsvContent(state.file.sessionId, serialized)
+        if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
+        stashUndoCarry(null)
+        ctx.stashViewRestore(viewAtSave)
+        if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, journalAtSave, file))) return { ok: false }
+        const saved = t('appSaved')
+        ctx.setMessage(saved)
+        if (!quiet) showToast(saved)
+        return { ok: true }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : t('appSaveFailed')
+        ctx.setMessage(message)
+        if (!quiet) showToast(message, 'error')
+        return { ok: false, error: message }
+      }
     }
     csvContent = serialized
   }

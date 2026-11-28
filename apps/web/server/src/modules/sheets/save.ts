@@ -13,6 +13,7 @@ export type SheetsPlanner = (bytes: Buffer, sheets: readonly { id: string; name:
 export type SheetsWorkbookPlanner = (bytes: Buffer, request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
 export type SheetsFollowUpPlan = (source: Buffer, edited: Buffer, signal?: AbortSignal) => Promise<XlsxMutationPlan | undefined>
 export interface SheetsSaveNative {
+  convertCsvImport?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
   inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
   savePlan(input: Uint8Array, plan: XlsxMutationPlan, signal?: AbortSignal): Promise<{ bytes: Buffer }>
 }
@@ -31,10 +32,10 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
 }) {
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
-  async function assertSource(token: string, fileId: string, input: SheetsRevisionInput, format: 'xlsx'|'csv' = 'xlsx') {
+  async function assertSource(token: string, fileId: string, input: SheetsRevisionInput, format: 'xlsx'|'csv'|'spreadsheet' = 'xlsx') {
     await leases.renewLease(token, fileId, { editorId: input.editorId, leaseEpoch: input.leaseEpoch })
     const head = await files.openFile(token, fileId)
-    if (head.format !== format) throw authError(415)
+    if (head.format !== format && !(format==='spreadsheet' && (head.format==='csv'||head.format==='xlsx'))) throw authError(415)
     if (head.file.revision !== input.baseRevision) throw authError(409)
     return head
   }
@@ -93,10 +94,16 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
       active++
       try {
         signal?.throwIfAborted()
-        if((await assertSource(token, fileId, input)).workbookPasswordProtected)throw authError(423)
+        const source=await assertSource(token, fileId, input, 'spreadsheet')
+        if(source.workbookPasswordProtected)throw authError(423)
         const base = await files.readFile(token, fileId, input.baseRevision, signal)
-        const bytes = await materializeDraft(base, input.phases, signal)
-        await assertSource(token, fileId, input)
+        let workbook=base
+        if(source.format==='csv'){
+          if(!native.convertCsvImport)throw authError(415)
+          workbook=await native.convertCsvImport(base,signal)
+        }
+        const bytes = await materializeDraft(workbook, input.phases, signal)
+        await assertSource(token, fileId, input, 'spreadsheet')
         signal?.throwIfAborted()
         return bytes
       } finally { active-- }

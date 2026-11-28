@@ -4,7 +4,11 @@ import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 import {createLeaseService} from '../../server/src/modules/leases/service.ts'
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {readFile} from 'node:fs/promises'
+import {mkdtemp,readFile,rm} from 'node:fs/promises'
+import {join} from 'node:path'
+import {tmpdir} from 'node:os'
+import {buildSheetsGateway} from '../../server/sheets/build.mjs'
+import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
@@ -69,4 +73,37 @@ test('CSV save route stages binary bytes with the authenticated revision and lea
  assert.equal(response.json().baseRevision,file.revision)
  assert.deepEqual(response.json().touchedEntries,[])
  assert.deepEqual((await f.files.openFile(token,file.fileId)).file,file)
+})
+
+test('Sheets reads a stored CSV as cells without replacing the source revision',async t=>{
+ const f=await fileFixture(t,{buildApp:false})
+ const directory=await mkdtemp(join(tmpdir(),'dyoffice-csv-runtime-'))
+ t.after(()=>rm(directory,{recursive:true,force:true}))
+ await buildSheetsGateway(join(directory,'gateway.mjs'))
+ const runtime=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
+ },{enabled:true})
+ t.after(()=>runtime.close())
+ const {buildLocalApp}=await import('../../server/src/app.ts')
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin:restrictedOrigin,csrfKey:f.csrfKey,objectStore:f.objects,...runtime,
+ })
+ t.after(()=>app.close())
+ const token=f.alice.token,bytes=Buffer.from('sep=;\r\nName;Code\r\nAlpha;007\r\n=1+2;42\r\n')
+ const {file}=await importFile(f,token,bytes,'Ledger.csv')
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+ const request=(path,payload,credential=token)=>app.inject({method:'POST',url:'/api/v1/files/'+file.fileId+'/sheets/'+path,
+  headers:{cookie:'__Host-dyoffice-session='+credential,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(credential)},
+  payload:{revision:file.revision,...payload},
+ })
+ const opened=await request('inspect',{})
+ assert.equal(opened.statusCode,200,opened.body)
+ assert.deepEqual(opened.json().sheets.map(sheet=>sheet.name),['Sheet1'])
+ const query={sheetName:'Sheet1',range:{startRow:1,endRow:2,startColumn:0,endColumn:1}}
+ const range=await request('range',query)
+ assert.equal(range.statusCode,200,range.body)
+ assert.deepEqual(range.json().cells.map(cell=>cell.value),['Alpha','007','=1+2',42])
+ assert.equal(range.json().cells[2].formula,undefined)
+ assert.equal((await request('range',query,f.bob.token)).statusCode,404)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),bytes)
 })

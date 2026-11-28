@@ -223,7 +223,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     if(!staged||staged.base!==input.baseRevision||staged.epoch!==input.leaseEpoch||ctx.pending||ctx.preparing)throw hostError('INVALID_REVISION','snapshot')
     return commit(id,ctx,{input:Object.freeze({...input}),sha256:staged.sha256,size:staged.size,...(staged.sourceSha256?{sourceSha256:staged.sourceSha256}:{}),...(staged.passwordChange?{passwordChange:staged.passwordChange}:{})},authorized)
   }
-  async function prepareAndCommitSheets(fileId:string,payload:{request:unknown;unlockId?:string}|{newPassword:string;unlockId:string},authorized:()=>boolean) {
+  async function prepareAndCommitSheets(fileId:string,payload:{request:unknown;unlockId?:string}|{newPassword:string;unlockId:string}|{csvContent:string},authorized:()=>boolean) {
     if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
     const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease, base = ctx.revision.revision
     // An uncertain receipt must be reconciled before replaying edits: sheet
@@ -233,16 +233,25 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     ctx.preparing = true; ctx.status = 'saving'; emit()
     let committing = false
     try {
-      const changingPassword = 'newPassword' in payload
-      const body = {
-        baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor,
-        ...(changingPassword ? {newPassword:payload.newPassword} : {request:structuredClone(payload.request)}),
-        ...(payload.unlockId ? {unlockId:uuid(payload.unlockId)} : {}),
+      const authority={baseRevision:base,leaseEpoch:lease.leaseEpoch,editorId:editor}
+      const path=`/api/v1/files/${id}/sheets`
+      let draft
+      if('csvContent' in payload){
+        const bytes=new Blob(['\ufeff',payload.csvContent])
+        if(bytes.size>32*1024*1024)throw hostError('PAYLOAD_TOO_LARGE','CSV save; edits remain unsaved')
+        const query=new URLSearchParams({...authority,leaseEpoch:String(lease.leaseEpoch)})
+        draft=await mutation(path+'/csv-uploads?'+query,'POST',bytes,true,false,authorized)
+      }else{
+        const changingPassword = 'newPassword' in payload
+        const body = {...authority,
+          ...(changingPassword ? {newPassword:payload.newPassword} : {request:structuredClone(payload.request)}),
+          ...(payload.unlockId ? {unlockId:uuid(payload.unlockId)} : {}),
+        }
+        // Match the server's body limit for the full UTF-8 JSON edit envelope.
+        if (!changingPassword && new TextEncoder().encode(JSON.stringify(body)).byteLength > 4 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','workbook save; edits remain unsaved')
+        const endpoint = changingPassword ? 'password-uploads' : 'uploads'
+        draft=await mutation(path+'/'+endpoint,'POST',body)
       }
-      // Match the server's body limit for the full UTF-8 JSON edit envelope.
-      if (!changingPassword && new TextEncoder().encode(JSON.stringify(body)).byteLength > 4 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','workbook save; edits remain unsaved')
-      const endpoint = changingPassword ? 'password-uploads' : 'uploads'
-      const draft = await mutation(`/api/v1/files/${id}/sheets/${endpoint}`,'POST',body)
       const uploadId = uuid(draft?.uploadId)
       if (draft.baseRevision !== base || draft.leaseEpoch !== lease.leaseEpoch || typeof draft.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(draft.sha256) || !Number.isSafeInteger(draft.size) || draft.size < 1 || draft.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','prepared workbook')
       if (context(id) !== ctx || ctx.revision.revision !== base || ctx.lease?.leaseEpoch !== lease.leaseEpoch) throw hostError('CONFLICT','changed save authority')
@@ -523,6 +532,9 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     },
     saveSheets(fileId:string,edits:unknown,authorized:()=>boolean=()=>true,unlockId?:string) {
       return prepareAndCommitSheets(fileId,{request:edits,...(unlockId?{unlockId}:{})},authorized)
+    },
+    saveCsv(fileId:string,csvContent:string,authorized:()=>boolean=()=>true) {
+      return prepareAndCommitSheets(fileId,{csvContent},authorized)
     },
     async changeSheetsPassword(fileId:string,newPassword:string,unlockId:string,authorized:()=>boolean=()=>true) {
       if(typeof newPassword!=='string'||!newPassword.length||newPassword.length>255)throw hostError('INVALID_RESPONSE','workbook password length')
