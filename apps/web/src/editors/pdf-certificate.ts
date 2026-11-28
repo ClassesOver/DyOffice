@@ -1,5 +1,4 @@
 import type { PdfApi, SignWithCertificateRequest, SignWithCertificateResult } from '../../../pdf/src/shared/ipc'
-import { browserFileName, downloadBrowserFile } from './browser-download'
 import { pickLocalFiles } from './pick-local-files'
 import type { CertificateReply, CertificateTask } from './pdf-certificate.worker'
 
@@ -41,13 +40,14 @@ type CertificateApi = Pick<PdfApi, 'pickCertificate' | 'inspectCertificate' | 'r
 
 /** The picker and signing worker run in the browser. Certificate material stays in this document. */
 export function createBrowserPdfCertificate<R extends { size: number }>({
-  path, signal, current, canSign, readPdf,
+  path, signal, current, canSign, readPdf, deliverSigned,
 }: {
   path: string
   signal: AbortSignal
   current: () => R
   canSign: () => boolean
   readPdf: (path: string) => Promise<ArrayBuffer>
+  deliverSigned: (bytes: Uint8Array<ArrayBuffer>, revision: R, signal: AbortSignal) => Promise<SignWithCertificateResult>
 }): CertificateApi {
   let certificate: { id: string; file: File; lifetime: AbortController } | undefined
   const certificateFor = (id: string) => certificate?.id === id ? certificate : undefined
@@ -113,9 +113,7 @@ export function createBrowserPdfCertificate<R extends { size: number }>({
         active.throwIfAborted()
         if (!signed.ok) return signed
         if (!('signed' in signed) || current() !== revision || !canSign()) return fail
-        const name = browserFileName(path.split('/').at(-1)!.replace(/\.pdf$/i, ''), 'document') + '-signed.pdf'
-        downloadBrowserFile(new Blob([signed.signed], { type: 'application/pdf' }), name)
-        return { ok: true, path: name }
+        return await deliverSigned(signed.signed, revision, active)
       } catch {
         return active.aborted ? { ok: false, cancelled: true } : fail
       }

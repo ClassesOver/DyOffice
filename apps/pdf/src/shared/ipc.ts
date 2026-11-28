@@ -227,8 +227,8 @@ export interface SignWithCertificateRequest {
 }
 
 export type SignWithCertificateResult =
-  | { ok: true; path: string }
-  | { ok: false; cancelled: true }
+  | { ok: true; path: string; workspace?: true }
+  | { ok: false; cancelled: true; pending?: true }
   | {
       ok: false
       cancelled?: false

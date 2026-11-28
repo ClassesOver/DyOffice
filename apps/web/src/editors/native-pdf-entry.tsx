@@ -15,7 +15,7 @@ import {viewToPdf} from '../../../pdf/src/renderer/annotations'
 import {findPatternsInIndex} from '../../../pdf/src/renderer/search'
 import {isScannedText} from '../../../pdf/src/renderer/ocr-layer'
 import {REDACT_PATTERNS,type RedactPattern} from '../../../pdf/src/renderer/redact-patterns'
-import type {PageImageRef,RedactionInput} from '../../../pdf/src/shared/ipc'
+import type {PageImageRef,RedactionInput,SignWithCertificateResult} from '../../../pdf/src/shared/ipc'
 import type {PdfHostImageBake} from '../../../pdf/src/shared/ipc'
 import {fileToCanvas} from '../../../pdf/src/renderer/SignatureDialog'
 import {inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
@@ -89,7 +89,8 @@ async function mount(){
  let choosingAttachment=false
  const certificate=createBrowserPdfCertificate({
   path:grant.path,signal:browserActions.signal,current:grant.current,readPdf:grant.api.readFile,
-  canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length,
+  canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length&&!workspaceCopies?.hasPending(),
+  deliverSigned:deliverSignedCopy,
  })
  const copyName=(value:string|undefined,fallback:string,extension='pdf')=>{
   const suffix='.'+extension
@@ -351,6 +352,50 @@ async function mount(){
  })()
  const workspaceCopies=canChooseWorkspaceFile?copies:undefined
  let ribbonBusy=false,ribbonPending=false,ribbonError=''
+ async function deliverSignedCopy(bytes:Uint8Array<ArrayBuffer>,base:RevisionRef,signal:AbortSignal):Promise<SignWithCertificateResult>{
+  const publisher=workspaceCopies
+  const locale=prefs?.language==='en'?'en':'zh'
+  const active=()=>!signal.aborted&&isClean()&&grant.current()===base
+  const cancelled={ok:false,cancelled:true} as const
+  const failure={ok:false,error:'sign-failed'} as const
+  const name=copyName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-signed','document-signed')
+  const download=(path:string)=>{
+   downloadBrowserFile(new Blob([bytes],{type:'application/pdf'}),path)
+   return {ok:true,path} as const
+  }
+  if(!active())return failure
+  if(!publisher)return download(name)
+  if(ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher.hasPending())return failure
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
+  try{
+   if(bytes.byteLength>MAX_WORKSPACE_COPY_BYTES){
+    const prompt=locale==='en'
+     ?'The signed PDF exceeds the 32 MiB workspace file limit. Download the signed copy?'
+     :'签名后的 PDF 超过工作区 32 MiB 上限。要下载签名副本吗？'
+    return window.confirm(prompt)&&active()?download(name):cancelled
+   }
+   const chosen=await confirmWorkspaceCopy(name,{locale,signal,request:grant.workspaceRequest,fileId,
+    downloadLabel:locale==='en'?'Download signed copy':'下载签名副本',
+   })
+   if(!chosen||signal.aborted)return cancelled
+   if(!active())return failure
+   const path=copyName(chosen.name,'document-signed')
+   if(chosen.download)return download(path)
+   if(!await publisher.publish(bytes,{name:path,folderId:chosen.folderId},active,signal))return failure
+   return {ok:true,path,workspace:true}
+  }catch{
+   ribbonPending=publisher.hasPending()
+   if(ribbonPending){
+    ribbonError=locale==='en'?'Confirm the signed copy’s save result.':'请确认签名副本的保存结果。'
+    return {...cancelled,pending:true}
+   }
+   if(signal.aborted)return cancelled
+   return failure
+  }finally{
+   ribbonBusy=false
+   if(!disposed)render()
+  }
+ }
  async function ribbonSingleCopy(path:string,suggestedName:string,fallback:string,
   publish:(client:NonNullable<typeof copies>,destination:PdfCopyDestination,signal:AbortSignal)=>Promise<boolean>){
   const signal=browserActions.signal,base=grant.current(),locale=prefs?.language==='en'?'en':'zh'
@@ -1140,6 +1185,9 @@ async function mount(){
  }
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
   <App hostAssistantOpenState hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available?value=><Dock value={value}/>:undefined}
+   hostCertificateWorkspaceIntro={workspaceCopies?(prefs?.language==='en'
+    ?'Sign the saved PDF and choose where to save the copy. The certificate file and password stay in this browser.'
+    :'为已保存的 PDF 签名并选择副本的保存位置。证书文件和密码仅在当前浏览器中处理。'):undefined}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">

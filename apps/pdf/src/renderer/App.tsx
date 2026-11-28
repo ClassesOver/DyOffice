@@ -483,7 +483,7 @@ type WritePageRewrite = () => Promise<SavePdfResult>
 type PreparePageRewrite = () => WritePageRewrite | Promise<WritePageRewrite | null>
 type PageRewriteRun = { write: WritePageRewrite; afterReload?: () => void; restore?: boolean }
 
-export default function App({ hostReadOnly = false, hostInspectDocument, hostLastZoomStorage, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostAssistantOpenState, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize }: {
+export default function App({ hostReadOnly = false, hostInspectDocument, hostLastZoomStorage, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostAssistantOpenState, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize, hostCertificateWorkspaceIntro }: {
   hostReadOnly?: boolean
   hostInspectDocument?: (bytes: Uint8Array, encrypted: boolean) => Promise<{
     restriction: string | null
@@ -503,6 +503,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   hostImageBakePreview?: (operations: readonly PdfHostImageBake[], signal: AbortSignal) => Promise<Uint8Array>
   hostOcr?: (png: string, signal?: AbortSignal) => Promise<PdfOcrLine[] | null>
   hostProtectCopy?: (path: string, protection: PdfEncryptionInput, flushDraft: () => Promise<boolean>) => Promise<string | null>
+  hostCertificateWorkspaceIntro?: string
   hostMergePdf?: (request: MergePdfRequest, flushDraft: () => Promise<boolean>) => Promise<MergePdfResult>
   hostConvertOffice?: (format: PdfConvertFormat, password: string | undefined, snapshot?: PdfHostConversionDraft) => Promise<void>
   hostReduceFileSize?: () => Promise<{ bytesBefore: number; bytesAfter: number } | null>
@@ -12091,11 +12092,12 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                 currentPage={currentPage}
                 hasSignatures={digitalSignatures.length > 0}
                 webHost={Boolean(hostSave)}
+                workspaceIntro={hostCertificateWorkspaceIntro}
                 onCancel={() => setCertSignDlg(false)}
-                onSigned={(path) => {
+                onSigned={(path, workspace) => {
                   if (hostSave) {
                     setCertSignDlg(false)
-                    showNotice(t('certDownloaded', { name: path }))
+                    showNotice(t(workspace ? 'certSigned' : 'certDownloaded', { name: path }))
                   } else {
                     void adoptSignedFile(path)
                   }
