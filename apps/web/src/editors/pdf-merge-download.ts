@@ -1,7 +1,7 @@
 import {mergePdfBytes} from '../../../pdf/src/shared/merge-pdf'
 
-const PDF_MERGE_MAX_FILES = 32
-const PDF_MERGE_MAX_BYTES = 64 * 1024 * 1024
+export const PDF_MERGE_MAX_FILES = 32
+export const PDF_MERGE_MAX_BYTES = 64 * 1024 * 1024
 const PDF_MERGE_MAX_PAGES = 500
 
 export function validatePdfMergeFiles(files: readonly File[]): number {

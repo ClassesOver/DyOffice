@@ -2136,7 +2136,7 @@ test('native Web PDF compares local files and downloads page images and an embed
  assert.deepEqual(await readFile(await stored.path()),addedBytes)
 })
 
-test('native Web PDF publishes and opens merged local PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{
+test('native Web PDF publishes and opens merged workspace PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -2186,10 +2186,16 @@ test('native Web PDF publishes and opens merged local PDFs as one workspace copy
  await source.getByRole('button',{name:'Pages',exact:true}).click()
  await source.getByRole('button',{name:'Rotate right',exact:true}).click()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
- const pick=async()=> (await Promise.all([
-  page.waitForEvent('filechooser',{timeout:5000}),
-  source.getByRole('button',{name:'Merge PDF',exact:true}).click(),
- ]))[0]
+ const merge=source.getByRole('button',{name:'Merge PDF',exact:true})
+ const sources=source.getByRole('dialog',{name:'Select PDFs to merge',exact:true})
+ const pick=async()=>{
+  await merge.click()
+  await expect(sources).toBeVisible({timeout:5000})
+  return (await Promise.all([
+   page.waitForEvent('filechooser',{timeout:5000}),
+   sources.getByRole('button',{name:'Choose local files…',exact:true}).click(),
+  ]))[0]
+ }
  const canceled=await pick()
  await canceled.setFiles([])
  await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
@@ -2212,7 +2218,27 @@ test('native Web PDF publishes and opens merged local PDFs as one workspace copy
  assert.equal(await head(),file.revision)
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
 
- await (await pick()).setFiles(inputs)
+ const donors=[]
+ for(const input of inputs)donors.push((await importFile(f,f.alice.token,input.buffer,input.name)).file)
+ await merge.click()
+ const search=sources.getByRole('searchbox',{name:'Search files',exact:true})
+ const list=sources.getByRole('listbox',{name:'Workspace files',exact:true})
+ const use=sources.getByRole('button',{name:'Use selected files',exact:true})
+ const add=sources.getByRole('button',{name:'Add selected file',exact:true})
+ await expect(use).toBeDisabled()
+ for(const [index,input] of inputs.entries()){
+  await search.fill(input.name)
+  await expect(list.getByRole('option',{name:input.name,exact:true})).toHaveCount(1)
+  await list.selectOption(donors[index].fileId)
+  await add.click()
+  await expect(add).toBeDisabled()
+ }
+ const order=sources.getByRole('list',{name:'Merge order',exact:true}).getByRole('listitem')
+ await sources.getByRole('button',{name:'Remove a-second.pdf',exact:true}).click()
+ await expect(order).toHaveCount(1)
+ await add.click()
+ await expect(order).toHaveText([/^z-first\.pdf/, /^a-second\.pdf/])
+ await use.click()
  await destination.getByRole('textbox',{name:'File name'}).fill('Client packet')
  await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
  let copy
@@ -2234,7 +2260,11 @@ test('native Web PDF publishes and opens merged local PDFs as one workspace copy
  assert.deepEqual(finishes,[finishes[0],finishes[0]])
  const copies=(await workspace.listFiles(f.alice.token,{folderId:folder.id})).files
  assert.deepEqual(copies.map(item=>[item.id,item.name]),[[copy.fileId,'Client packet.pdf']])
- assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,4)
+ for(const [index,donor] of donors.entries()){
+  assert.equal((await f.files.openFile(f.alice.token,donor.fileId)).file.revision,donor.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,donor.fileId,donor.revision),Buffer.from(inputs[index].buffer))
+ }
  const downloaded=await f.files.readFile(f.alice.token,copy.fileId,copy.revision)
  const merged=await PDFDocument.load(downloaded)
  assert.deepEqual(merged.getPages().map(p=>p.getWidth()),[240,250,260,270])
@@ -2302,7 +2332,7 @@ test('native Web PDF publishes and opens merged local PDFs as one workspace copy
  ])
  assert.equal(directDownload.suggestedFilename(),'merge-source-merged.pdf')
  assert.deepEqual((await PDFDocument.load(await readFile(await directDownload.path()))).getPages().map(page=>page.getWidth()),[240,270])
- assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,4)
 
 })
 

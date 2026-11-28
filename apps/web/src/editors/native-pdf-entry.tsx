@@ -194,7 +194,19 @@ async function mount(){
    if(publisher?.hasPending())return fail(locale==='en'?'Confirm the pending PDF copy before merging.':'请先确认待保存的 PDF 副本。')
    ribbonBusy=true;ribbonError=''
    try{
-    const files=await pickLocalFiles('application/pdf,.pdf',signal,true)
+    const accept='application/pdf,.pdf'
+    let files:File[]
+    if(publisher){
+     const {PDF_MERGE_MAX_FILES,PDF_MERGE_MAX_BYTES}=await import('./pdf-merge-download')
+     const {pickWorkspaceSourceFiles}=await import('./workspace-source-picker')
+     files=await pickWorkspaceSourceFiles(grant.workspaceSources,{
+      title:locale==='en'?'Select PDFs to merge':'选择要合并的 PDF',
+      formats:['pdf'],language:locale,localAccept:accept,
+      maxFiles:PDF_MERGE_MAX_FILES,maxBytes:MAX_WORKSPACE_COPY_BYTES,maxTotalBytes:PDF_MERGE_MAX_BYTES-initial.size,
+     },signal)
+    }else{
+     files=await pickLocalFiles(accept,signal,true)
+    }
     if(!files.length)return canceled
     const {preparePdfMerge,validatePdfMergeFiles}=await import('./pdf-merge-download')
     signal.throwIfAborted()
