@@ -1049,8 +1049,10 @@ test('PPTX presenter opens a private synced audience window',{skip:!built,timeou
   return ctx&&ctx.getImageData(0,0,canvas.width,canvas.height).data.some((channel,index)=>index%4===3&&channel>0)
  })).toBe(true)
  const closed=audience.waitForEvent('close')
- await audience.keyboard.press('Escape')
- await closed
+ // Keydown closes the popup before Playwright can dispatch keyup.
+ await Promise.all([closed,audience.keyboard.press('Escape',{delay:250}).catch(error=>{
+  if(!audience.isClosed()||!(error instanceof Error)||!error.message.includes('Target page, context or browser has been closed'))throw error
+ })])
  await expect(presenter).toHaveCount(0)
  await expect.poll(shellFullscreen).toBe(false)
  assert.equal(await editor.locator('html').evaluate(()=>window.dyofficeEditorCanSleep()),true)

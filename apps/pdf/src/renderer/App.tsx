@@ -1259,6 +1259,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
   /** Reading position saved when this file was last viewed; applied once after open */
   const pendingViewRestoreRef = useRef<PdfViewState | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const pageJumpRef = useRef<{ doc: PDFDocumentProxy | null; scrollTop: number } | null>(null)
   const thumbsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   /** Local approximations of document fonts by pdf.js font id (see doc-font.ts);
@@ -2124,6 +2125,9 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el || rows.length === 0) return
+    const jump = pageJumpRef.current
+    if (jump && jump.doc === doc && jump.scrollTop === el.scrollTop) return
+    pageJumpRef.current = null
     const anchor = el.scrollTop + el.clientHeight * 0.4
     let rowIdx = 0
     for (let i = 0; i < rows.length; i++) {
@@ -2133,13 +2137,18 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     const page = visList.indexOf(rows[rowIdx]![0]!) + 1
     setCurrentPage(page)
     setPageInput(String(page))
-  }, [rows, rowTop, visList])
+  }, [doc, rows, rowTop, visList])
 
   const scrollToPage = (n: number) => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el || pageCount === 0 || !Number.isInteger(n)) return
     const target = Math.min(Math.max(1, n), pageCount)
     el.scrollTop = rowTop(rowOfVis(target - 1)) - PAGE_GAP / 2
+    // Several pages can already fit in the viewport. Keep the explicit target
+    // selected until the reading position actually moves again.
+    pageJumpRef.current = { doc, scrollTop: el.scrollTop }
+    setCurrentPage(target)
+    setPageInput(String(target))
   }
 
   // genoffice CLI (`open --page`, `selection`): the shell evaluates this hook
@@ -2262,8 +2271,6 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     if (visibleIndex < 0) return
     setActiveFormWidgetId(widget.id)
     scrollToPage(visibleIndex + 1)
-    setCurrentPage(visibleIndex + 1)
-    setPageInput(String(visibleIndex + 1))
     let attempts = 0
     const focusWhenMounted = () => {
       if (assistantHoldsKeyboard()) return

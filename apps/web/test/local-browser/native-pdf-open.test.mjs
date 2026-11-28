@@ -1022,10 +1022,11 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  f.cleanup.unshift(()=>app.close())
  await app.listen({port:4251,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage()
+ const page=await browser.newPage({viewport:{width:960,height:2400}})
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
  const calls=[
+  ['goto_page',{page:1}],
   ['goto_page',{page:2}],
   ['apply_ops',{ops:[{op:'setPageOrder',order:[2,1]}]}],
   ['add_form_mark',{page:1,kind:'check',x:40,y:84}],
@@ -1048,19 +1049,21 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await expect(page.locator('.home')).toBeVisible()
  await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const scroller=page.locator('.pdf-scroll')
+ await expect.poll(()=>scroller.evaluate(el=>el.scrollHeight-el.clientHeight)).toBe(0)
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
  for(const step of calls.keys()){
   await assistant.getByRole('textbox',{name:'消息'}).fill('Apply form step '+step)
   await assistant.getByRole('button',{name:'发送',exact:true}).click()
   await expect(assistant.getByText('Form step '+step,{exact:true})).toBeVisible({timeout:15000})
-  if(step===0)await expect(page.locator('.pdf-thumb').nth(1)).toHaveClass(/pdf-thumb-active/)
+  if(step<2)await expect(page.locator('.pdf-thumb').nth(step)).toHaveClass(/pdf-thumb-active/)
  }
  for(const result of results)assert.ok(!result.isError,result.output)
- assert.equal(results[0].name,'goto_page')
- assert.match(results[0].output,/Navigated to page 2/)
+ assert.equal(results[1].name,'goto_page')
+ assert.match(results[1].output,/Navigated to page 2/)
  recordVerifiedOfficeEffect('pdf','goto_page')
- assert.match(results[2].output,/OriginalSecond/)
+ assert.match(results[3].output,/OriginalSecond/)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  await page.getByRole('button',{name:'保存',exact:true}).click()
