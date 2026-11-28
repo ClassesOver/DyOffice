@@ -14,7 +14,9 @@ import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
+import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {createXlsxNativeWorker} from '../../worker/src/native/xlsx.ts'
+import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
@@ -37,13 +39,26 @@ test('four real Office editors share assistant chrome and retain drafts across c
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'test-key'}],defaults:{chat:'chat'}})
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false,showAssistant:true})
  await createSkillService(f.transactions).save(f.alice.token,'review-office',{description:'核对 Word、Excel、PowerPoint 和 PDF 内容与保存结果，保持修改可追溯。',body:'Review the current document and report the verified results.'})
- const gateway=await sheetsGateway(t),metadata=JSON.parse(await readFile(new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))
- const sheetsNative=createXlsxNativeWorker(createCrossPlatformProcess({deploymentId:f.deploymentId,binary:metadata.nativeBinary,sha256:metadata.nativeSha256,allowedCommands:['open','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive','close']}))
+ let sheetsNative,sheetsPlanner,sheetsPackageReader
+ if(process.env.DYOFFICE_TEST_HOST_MANIFEST){
+  const gateway=await sheetsGateway(t),metadata=JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST,'utf8'))
+  sheetsNative=createXlsxNativeWorker(createCrossPlatformProcess({deploymentId:f.deploymentId,binary:metadata.nativeBinary,sha256:metadata.nativeSha256,allowedCommands:['open','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive','close']}))
+  sheetsPlanner=gateway.planWorkbookSave
+  sheetsPackageReader=gateway.readWorkbookPackage
+ }else{
+  await buildSheetsGateway(join(directory,'gateway.mjs'))
+  const runtime=await configuredSheetsRuntime({
+   DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+   DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
+  },{enabled:true})
+  t.after(()=>runtime.close())
+  ;({sheetsNative,sheetsPlanner,sheetsPackageReader}=runtime)
+ }
  const slidesHost={openSession(input){return openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,unsafeTestOnly:true})}}
  const pdf=await PDFDocument.create();pdf.addPage([400,300]).drawText('Office assistant layout')
  const files={}
  for(const [format,bytes] of [['docx',await docxBytes()],['xlsx',await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))],['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',Buffer.from(await pdf.save())]])files[format]=(await importFile(f,f.alice.token,bytes,'dock.'+format)).file
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage,slidesHost})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner,sheetsPackageReader,slidesHost})
  browser=await launchTestBrowser()
  const page=await browser.newPage({ignoreHTTPSErrors:true,viewport:{width:1440,height:1000}}),errors=[],turns=[]
  await stubHomeHero(page)

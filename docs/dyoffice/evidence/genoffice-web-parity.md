@@ -97,6 +97,8 @@ Web Word 知识库把文件名保留为来源标签，模型收到的引用路�
 
 基于 `5647d1ea` 重建 XLSX 和工作区后，Chromium 与 PostgreSQL 定向复验通过 3 项打开密码流程。从工作区打开本地加密文件，错误密码不会发布文件，输入正确密码后直接进入工作表，导入修订的密文字节与本地原件一致。同一工作簿连续保存两次，两个成品均保持加密，重开后可读回编辑。密码轮换期间丢失提交响应后，编辑器用同一提交参数恢复回执并继续保存。新密码可解密并重开最新成品，旧密码被拒绝，历史原件保持原字节。[XLSX 浏览器用例](../../../apps/web/test/native-sheets/entry.test.mjs)
 
+`375bcbd0` 的 XLSX“另存为”复验通过普通和加密工作簿。用原密码重开加密副本后读回源标签页中的未保存单元格。源标签页保持可编辑，源文件的修订和字节保持不变。服务端拒绝缺少有效解锁凭据的复制请求，副本通过独立上传回执发布。[XLSX 浏览器用例](../../../apps/web/test/native-sheets/entry.test.mjs) [保存服务用例](../../../apps/web/test/native-sheets/save-service.test.mjs)
+
 F14 的 OOXML 包签名存在保存缺口。在 `e5719120` 上使用 Apache POI 的三个签名样本，分别核对 DOCX 正文、XLSX 工作表和 PPTX 幻灯片的签名摘要。原始部件摘要与签名包清单一致，清单摘要也与 `SignedInfo` 一致，样本自带的公钥可验证 `SignatureValue`。修改被签名的部件并保留签名声明后，三个部件摘要均失配，保存服务仍会接受并切为当前修订。三个历史原件的下载字节保持一致。[Microsoft OPC 签名说明](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/digital-signatures-overview) [Apache POI 原始签名样本](https://github.com/apache/poi/tree/c94ee8ad9096bdb8cf8e5e59d8d12432e950dbf3/test-data/xmldsign)
 
 修复后，服务端识别三种 OOXML 包的签名声明。使用上述真实样本复跑，三个样本的修改上传准备均返回 423，当前修订和下载原件的字节保持一致。PostgreSQL 回归另验证十进制和十六进制 XML 字符引用。迁移前 DOCX 的 5 次并发打开只读取并校验一次原件，旧草稿提交被拒绝。同一所有者的两个登录会话可只读浏览同一 PPTX 并翻页，跨账户翻页返回 404，错误修订返回 409。OOXML 保护依据是包签名声明，签名人信任和证书验证仍待独立验收。[修订保护回归](../../../apps/web/test/local-integration/revision-commit.test.mjs) [签名样本](../../../apps/web/test/fixtures/signed-office/README.md)
@@ -170,6 +172,8 @@ Chromium 回归在交付物下载期间释放真实的工作表载入请求。�
 XLSX 的大型多附件合并保留用户当前工作表，避免 Univer 在导入时同步排版长文本。Chromium 的测试模型用例同时合并 BIFF XLS、预览截断的 XLSX 和 CSV，核对当前标签、原始修订、下载文件尾行及所有工作表重开。真实模型用例按配置跳过。定向单元测试 8 项、Web 类型检查及构建通过，原生结构变更保存另行通过 Chromium 复跑。
 
 XLSX 外链保真用例从 Web 编辑普通单元格后保存、下载并重开。成品保留未修改的外链公式及缓存、工作簿中的引用、外链工作表缓存和目标关系部件。独立比较确认原始修订保持原字节。测试中的外部源监听器收到 0 次请求。 Web 的“公式 → 外部链接”复用原面板和工作簿子进程。Chromium 通过了显示链接地址与缓存工作表名称、拒绝跨账户读取和拒绝客户端传入路径，以及保存重开后再次显示同一链接的场景。
+
+从保存的 XLSX 刷新网页查询时，服务端从指定修订读取连接定义并按既有外网访问规则获取表格。Chromium 定向复验通过普通和已解锁工作簿的查询结果保存与重开，并核对连接定义和历史原件字节。PostgreSQL 集成复验确认借用其他会话的解锁凭据无法发起查询，刷新途中重新锁定时结果也无法返回。[工作簿查询用例](../../../apps/web/test/native-sheets/entry.test.mjs) [解锁授权用例](../../../apps/web/test/native-sheets/service.test.mjs)
 
 断开外链复用工作簿保存与修订链。确认后使用已保存版本的公式缓存写入字面值，并以新版本重开网格。保存、编辑准入及面板定向单测共 51 项通过，包含只读面板仍显示外链信息。网关外链操作回归 8 项通过，覆盖保留其他外链及拒绝会留下悬空引用的断开操作。保存期间新完成的编辑仍留在当前会话中，待单独保存。
 

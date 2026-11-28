@@ -21,10 +21,10 @@
 | App | `browser-native` | `server-api` | `isolated-worker` | `unsupported` | `desktop-only` | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | docs | 23 | 49 | 8 | 15 | 23 | 118 |
-| sheets | 19 | 42 | 24 | 20 | 11 | 116 |
+| sheets | 19 | 43 | 25 | 18 | 11 | 116 |
 | slides | 160 | 46 | 1 | 7 | 12 | 226 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 212 | 169 | 59 | 52 | 54 | 546 |
+| **all** | 212 | 170 | 60 | 50 | 54 | 546 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -75,7 +75,9 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `docx-crypto-conversion` | `isolated-worker` | 5 | T07 | Authorized job; password never logged or persisted | Encryption and altChunk HTML conversion run in main today (html2docx has 3 Node-importing files); compound-file itself is Node-free, so a browser port is a T07 option to evaluate. |
 | `xlsx-sidecar` | `isolated-worker` | 22 | T09 | XLSX worker job (Rust sidecar under T08 sandbox), output via T06 | These are served by the native Rust XLSX sidecar; native build is blocked on the verification host (compatibility.md). |
 | `xlsx-external-link-list` | `isolated-worker` | 1 | T09 | Revision-bound workbook link metadata | The gateway reads stored package relationships and cached sheet names without accessing link targets. |
-| `xlsx-external-data` | `unsupported` | 5 | T15 | Read-only data sources (T15) are the governed replacement | Workbook connections and external links reach arbitrary local files/servers; enabling them server-side needs T15 egress and credential policy. |
+| `xlsx-workbook-query-list` | `isolated-worker` | 1 | T09 | List refreshable Web queries from the saved workbook package | The authorized package reader extracts connection metadata from the revision. Encrypted workbooks require the current unlock. |
+| `xlsx-workbook-query-refresh` | `server-api` | 1 | T15 | Resolve a saved connection and fetch its public table using the egress policy | The server checks the revision, editor lease and any workbook unlock before returning bounded table rows to the editor. |
+| `xlsx-external-data` | `unsupported` | 3 | T15 | The Web host uses the workspace external-links panel | The panel binds readable workspace files by ID and revision. Its save planner handles break operations and source changes. |
 | `xlsx-cross-window-pick` | `unsupported` | 7 | T09 | None in first release | Picking a range in another open workbook relies on shell-managed sibling tabs. |
 | `slides-presenter` | `browser-native` | 10 | T10 | Second window + BroadcastChannel (Presentation API where available) | Presenter/audience windows are coordinated through main today; same-origin windows can coordinate directly. |
 | `slides-deck-session` | `browser-native` | 126 | T10 | Deck session in a browser worker reusing pptx-ops; open/save through T06 | The deck model and journaled ops live in the Electron main process today. @genoffice/pptx-ops has no Node imports in src; @genoffice/pptx-engine has 3 Node-importing files that must be isolated before relocation. |
@@ -238,8 +240,8 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.readWorkbookRange` | request | invoke `$IPC_CHANNELS.readWorkbookRange` | 11 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.readWorkbookFormulas` | request | invoke `$IPC_CHANNELS.readWorkbookFormulas` | 4 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.findWorkbookCells` | request | invoke `$IPC_CHANNELS.findWorkbookCells` | 2 | `isolated-worker` | `xlsx-sidecar` |
-| `desktopApi.listWorkbookConnections` | request | invoke `$IPC_CHANNELS.listWorkbookConnections` | 1 | `unsupported` | `xlsx-external-data` |
-| `desktopApi.refreshWorkbookConnection` | request | invoke `$IPC_CHANNELS.refreshWorkbookConnection` | 1 | `unsupported` | `xlsx-external-data` |
+| `desktopApi.listWorkbookConnections` | request | invoke `$IPC_CHANNELS.listWorkbookConnections` | 1 | `isolated-worker` | `xlsx-workbook-query-list` |
+| `desktopApi.refreshWorkbookConnection` | request | invoke `$IPC_CHANNELS.refreshWorkbookConnection` | 1 | `server-api` | `xlsx-workbook-query-refresh` |
 | `desktopApi.readWorkbookRowOutline` | request | invoke `$IPC_CHANNELS.readWorkbookRowOutline` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.recalcWorkbook` | request | invoke `$IPC_CHANNELS.recalcWorkbook` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.listExternalLinks` | request | invoke `$IPC_CHANNELS.listExternalLinks` | 3 | `isolated-worker` | `xlsx-external-link-list` |
