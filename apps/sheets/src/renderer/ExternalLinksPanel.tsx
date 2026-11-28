@@ -18,6 +18,7 @@ export function ExternalLinksPanel({
   busy,
   sourceActions = true,
   workspaceActions = false,
+  canRevealWorkspaceSource = false,
   workspacePicker,
   canBreak = true,
   notice,
@@ -33,6 +34,7 @@ export function ExternalLinksPanel({
   readonly busy: boolean
   readonly sourceActions?: boolean
   readonly workspaceActions?: boolean
+  readonly canRevealWorkspaceSource?: boolean
   readonly workspacePicker?: readonly {id:string;name:string}[] | undefined
   readonly canBreak?: boolean
   /** why the listing is empty when it is not simply "no links" */
@@ -50,6 +52,7 @@ export function ExternalLinksPanel({
   const [confirming, setConfirming] = useState<number | null>(null)
   const [sourceId, setSourceId] = useState('')
   const canUpdate = sourceActions || workspaceActions
+  const hasActions = canUpdate || canBreak || canRevealWorkspaceSource
   return (
     <section className="watch-window" role="dialog" aria-label={t('appLinksPanel')}>
       <header>
@@ -90,7 +93,7 @@ export function ExternalLinksPanel({
               <th>{t('appLinksSource')}</th>
               {canUpdate && <th>{t('appLinksStatus')}</th>}
               <th>{t('appLinksSheets')}</th>
-              {(canUpdate || canBreak) && <th />}
+              {hasActions && <th />}
             </tr>
           </thead>
           <tbody>
@@ -112,12 +115,15 @@ export function ExternalLinksPanel({
                   </td>
                 )}
                 <td>{link.sheetNames.join(', ')}</td>
-                {(canUpdate || canBreak) && (
+                {hasActions && (
                   <td>
-                    {sourceActions && link.reachable === true && link.source !== null ? (
+                    {link.source !== null && ((sourceActions && link.reachable === true) ||
+                      (canRevealWorkspaceSource && !!link.displayName)) ? (
                       <button
                         className="watch-remove"
                         data-tip={t('appLinksLocate')}
+                        aria-label={t('appLinksLocate')}
+                        disabled={busy}
                         onClick={() => onReveal(link.index)}
                       >
                         📂

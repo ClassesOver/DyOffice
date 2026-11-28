@@ -17,6 +17,7 @@ import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 
 const sheetsDirectory = process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/',import.meta.url))
@@ -71,7 +72,7 @@ async function fixture(t,{nodeEngine=false,sheetsQueryFetcher,workspaceShell=fal
   return { ...f, original, opened, browser, context, page, origin, errors, planner }
 }
 
-test('workspace picks a linked workbook range in another tab and returns to the formula',{timeout:120000},async t=>{
+test('workspace locates a linked workbook and picks a source range across tabs',{timeout:120000},async t=>{
  const f=await fixture(t,{nodeEngine:true,workspaceShell:true}),{page}=f
  const source=f.opened.file
  const archive=await JSZip.loadAsync(f.original)
@@ -79,29 +80,54 @@ test('workspace picks a linked workbook range in another tab and returns to the 
  const relation='http://schemas.openxmlformats.org/officeDocument/2006/relationships'
  const link='xl/externalLinks/externalLink1.xml'
  const append=async(path,closing,xml)=>archive.file(path,(await archive.file(path).async('string')).replace(closing,xml+closing))
- await append('xl/workbook.xml','</workbook>','<externalReferences><externalReference r:id="rId99"/></externalReferences>')
- await append('xl/_rels/workbook.xml.rels','</Relationships>',`<Relationship Id="rId99" Type="${relation}/externalLink" Target="externalLinks/externalLink1.xml"/>`)
- await append('[Content_Types].xml','</Types>',`<Override PartName="/${link}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/>`)
- archive.file(link,`<externalLink xmlns="${sheet}" xmlns:r="${relation}"><externalBook r:id="rId1"><sheetNames><sheetName val="Acceptance"/></sheetNames></externalBook></externalLink>`)
  const targetUrl=`${f.origin}/api/v1/files/${source.fileId}/content?revision=${source.revision}`
- archive.file('xl/externalLinks/_rels/externalLink1.xml.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${relation}/externalLinkPath" Target="${targetUrl}" TargetMode="External"/></Relationships>`)
+ const externalUrl='https://outside.invalid/calendar.xlsx'
+ const externalRequests=[]
+ page.on('request',request=>{if(request.url()===externalUrl)externalRequests.push(request.url())})
+ await append('xl/workbook.xml','</workbook>','<externalReferences><externalReference r:id="rId99"/><externalReference r:id="rId100"/></externalReferences>')
+ for(const [number,target] of [[1,targetUrl],[2,externalUrl]]){
+  const link=`xl/externalLinks/externalLink${number}.xml`
+  await append('xl/_rels/workbook.xml.rels','</Relationships>',`<Relationship Id="rId${98+number}" Type="${relation}/externalLink" Target="externalLinks/externalLink${number}.xml"/>`)
+  await append('[Content_Types].xml','</Types>',`<Override PartName="/${link}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/>`)
+  archive.file(link,`<externalLink xmlns="${sheet}" xmlns:r="${relation}"><externalBook r:id="rId1"><sheetNames><sheetName val="Acceptance"/></sheetNames></externalBook></externalLink>`)
+  archive.file(`xl/externalLinks/_rels/externalLink${number}.xml.rels`,`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${relation}/externalLinkPath" Target="${target}" TargetMode="External"/></Relationships>`)
+ }
  const {file:formula}=await importFile(f,f.alice.token,await archive.generateAsync({type:'nodebuffer'}),'Linked workbook.xlsx')
+ const workspace=createWorkspaceService(f.transactions)
+ const sourcesFolder=await workspace.createFolder(f.alice.token,{name:'Workbook sources',parentId:null})
+ await workspace.moveFile(f.alice.token,source.fileId,{folderId:sourcesFolder.id})
  await page.goto(f.origin)
  await expect(page.locator('.home')).toBeVisible({timeout:30000})
  const open=async fileId=>page.evaluate(id=>window.aiOffice.openPath(id),fileId)
  const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
  const sourceFrame=frame(source.fileId),editor=frame(formula.fileId)
+ await open(formula.fileId)
+ await expect(editor.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:40000})
+ await editor.getByRole('button',{name:'Formulas',exact:true}).click()
+ await editor.getByRole('button',{name:'External Links',exact:true}).click()
+ const links=editor.getByRole('dialog',{name:'External Links',exact:true})
+ const externalRow=links.getByRole('row').filter({hasText:externalUrl})
+ await expect(externalRow).toBeVisible()
+ await expect(externalRow.getByRole('button',{name:'Locate source file',exact:true})).toHaveCount(0)
+ await links.getByRole('row').filter({hasText:'acceptance.xlsx'})
+  .getByRole('button',{name:'Locate source file',exact:true}).click({timeout:10000})
+ const activeTab=()=>page.evaluate(async()=> (await window.aiOfficeTabs.list()).find(tab=>tab.active)?.id)
+ await expect.poll(activeTab).toBe('home')
+ const home=page.locator('.home')
+ await expect(home).toContainText('Workbook sources')
+ await expect(home.getByRole('checkbox',{name:'Select acceptance.xlsx',exact:true})).toBeChecked({timeout:15000})
+ assert.equal(await page.locator(`iframe[data-document-id="${source.fileId}"]`).count(),0)
  await open(source.fileId)
  await expect(sourceFrame.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:40000})
  await open(formula.fileId)
- await expect(editor.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:40000})
+ await links.locator('.watch-close').click()
  const canvas=editor.locator('canvas[id^="univer-sheet-main-canvas"]')
  await expect(canvas).toBeVisible()
  await canvas.evaluate(()=>{
   const workbook=window.__genofficeDebug.univerAPI.getActiveWorkbook()
   workbook.setActiveRange(workbook.getActiveSheet().getRange('H3'))
  })
- await editor.getByRole('button',{name:'Formulas',exact:true}).click()
+ if(!await editor.getByRole('button',{name:/Insert Function/}).isVisible())await editor.getByRole('button',{name:'Formulas',exact:true}).click()
  await editor.getByRole('button',{name:/Insert Function/}).click()
  const catalog=editor.getByRole('dialog',{name:'Insert Function',exact:true})
  await catalog.getByPlaceholder('Search functions…').fill('SUM')
@@ -109,9 +135,9 @@ test('workspace picks a linked workbook range in another tab and returns to the 
  await catalog.getByRole('button',{name:'OK',exact:true}).click()
  const args=editor.getByRole('dialog',{name:'Function Arguments',exact:true})
  await args.locator('.fn-args-external-row').filter({hasText:'acceptance.xlsx'}).getByRole('button',{name:/pick/i}).click({timeout:15000})
- await expect.poll(()=>page.evaluate(async()=> (await window.aiOfficeTabs.list()).find(tab=>tab.active)?.id)).toBe(source.fileId)
+ await expect.poll(activeTab).toBe(source.fileId)
  await sourceFrame.locator('canvas[id^="univer-sheet-main-canvas"]').click({position:{x:130,y:50}})
- await expect.poll(()=>page.evaluate(async()=> (await window.aiOfficeTabs.list()).find(tab=>tab.active)?.id)).toBe(formula.fileId)
+ await expect.poll(activeTab).toBe(formula.fileId)
  const first=args.locator('#fn-arg-0')
  await expect(first).toHaveValue(/^\[1\]Acceptance!\$?[A-Z]+\$?\d+$/)
  const reference=await first.inputValue()
@@ -119,6 +145,7 @@ test('workspace picks a linked workbook range in another tab and returns to the 
  await expect(args).toBeHidden()
  await expect.poll(()=>canvas.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('H3').getFormula())).toBe('=SUM('+reference+')')
  assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)
+ assert.deepEqual(externalRequests,[])
 })
 
 test('workspace imports and opens a local encrypted XLSX after one correct password',{timeout:150000},async t=>{

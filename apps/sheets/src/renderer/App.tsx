@@ -687,6 +687,7 @@ export interface SheetsEditorHost {
   workspaceLinks?: {
     listSources(): Promise<readonly {id:string;name:string;revision:string}[]>
     sourceTarget(id: string, revision: string): string
+    revealSource?(sessionId: string, index: number): Promise<void>
     refresh(sessionId: string): Promise<{links:ExternalLinkRow[];cells:import('../shared/desktop-api').ExternalLinksUpdateResult['cells']}>
   }
   readOnly: boolean
@@ -7020,6 +7021,7 @@ export function App({
           busy={linksBusy}
           sourceActions={!host?.inPlaceSave}
           workspaceActions={Boolean(host?.workspaceLinks&&workspaceLinksAvailable&&!host.readOnly)}
+          canRevealWorkspaceSource={!!host?.workspaceLinks?.revealSource}
           workspacePicker={host?.readOnly?undefined:workspaceLinkPicker?.files}
           canBreak={!host?.readOnly}
           notice={linksNotice}
@@ -7162,7 +7164,14 @@ export function App({
           }}
           onReveal={(index) => {
             const file = lazyWorkbookRef.current?.file
-            if (file) window.desktopApi.revealLinkSource({ sessionId: file.sessionId, index })
+            if (!file || file.needsSaveAs || linksBusy) return
+            const workspace = hostRef.current?.workspaceLinks
+            if (workspace?.revealSource) {
+              setLinksBusy(true)
+              void workspace.revealSource(file.sessionId,index)
+                .catch(error=>setMessage(error instanceof Error?error.message:t('appOpenFailed')))
+                .finally(()=>setLinksBusy(false))
+            } else window.desktopApi.revealLinkSource({ sessionId: file.sessionId, index })
           }}
           onSaveWorkspaceSource={(id)=>void saveWorkspaceExternalLink(id)}
           onCancelWorkspaceSource={()=>setWorkspaceLinkPicker(null)}

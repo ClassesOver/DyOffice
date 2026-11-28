@@ -5,7 +5,9 @@ import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
 import {printInBrowser} from './browser-print.ts'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
+import {draftCopyParentActive} from './draft-copy-authority'
 import type {RegisterWorkbookPicker} from './workbook-tab-picker'
+import type {HomeApi} from '../../../shell/src/shared/home-api'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
   workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,externalLinksUpdateResultSchema,
@@ -21,6 +23,7 @@ import {
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
 type ParentAiWindow = Window & {
+  aiOffice?: Pick<HomeApi,'revealPath'>
   dyofficeRegisterWorkbookPicker?:RegisterWorkbookPicker
   dyofficeCreateAiXlsx?: (request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
   dyofficeCreateAiDoc?: (request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<void>
@@ -308,9 +311,28 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     url.searchParams.set('revision',revision)
     return url.href
   }
+  const workspaceHome = (() => {
+    if (typeof window === 'undefined' || window.parent === window || !draftCopyParentActive(window)) return
+    try { return (window.parent as ParentAiWindow).aiOffice }
+    catch { return undefined }
+  })()
   const workspaceLinks = {
     listSources:listWorkspaceWorkbooks,
     sourceTarget:workspaceSourceTarget,
+    ...(workspaceHome?.revealPath ? {async revealSource(sessionId:string,index:number){
+      const current=session(sessionId), revision=current.revision
+      if(current.attachment)throw hostError('INVALID_REVISION','workspace source')
+      const listing=await workspaceLinkMetadata(current)
+      const link=listing.links.find(link=>link.index===index)
+      const id=link&&workspaceSourceId(link.rawTarget)
+      if(!id||!(await listWorkspaceWorkbooks()).some(file=>file.id===id))throw hostError('UNAVAILABLE','workspace source')
+      if(disposed||sessions.get(sessionId)!==current||current.revision!==revision||
+        host.getState(fileId).revision.revision!==revision||!draftCopyParentActive(window))throw hostError('CONFLICT','workspace source')
+      const controller=new AbortController()
+      controllers.add(controller)
+      try{await workspaceHome.revealPath(id,controller.signal)}
+      finally{controllers.delete(controller)}
+    }} : {}),
     async refresh(sessionId:string){
       const current=session(sessionId)
       if(current.attachment||current.revision!==host.getState(fileId).revision.revision)throw hostError('CONFLICT','external links')
@@ -326,8 +348,8 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       const savedLinks=report.links.map(link=>{
         const id=workspaceSourceId(link.rawTarget)
         const source=id?workbooks.get(id):undefined
-        if(!source||!link.reachable)return link
-        return {...link,displayName:source.name}
+        if(!source)return link
+        return {...link,source:link.rawTarget,displayName:source.name}
       })
       return {...report,links:savedLinks}
     },
