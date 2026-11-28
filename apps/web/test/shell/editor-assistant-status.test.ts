@@ -7,27 +7,27 @@ function http(entries:unknown[]=[]){vi.stubGlobal('fetch',vi.fn(async(path:strin
  throw Error('Unexpected request: '+path)
 }))}
 test('real factory empty authorized catalog produces explicit no-model notice without enabling AI',async()=>{
- http();const result=await loadEditorAssistant();try{expect(result.assistant?.available).toBe(false);expect(editorAssistantNotice(result,true,'zh')).toContain('没有可用模型');expect(editorAssistantNotice(result,true,'en')).toContain('No model')}finally{result.assistant?.dispose()}
+ http();const result=await loadEditorAssistant();try{expect(result.assistant?.available).toBe(false);expect(editorAssistantNotice(result,'zh')).toContain('没有可用模型');expect(editorAssistantNotice(result,'en')).toContain('No model')}finally{result.assistant?.dispose()}
 })
 test.each([401,403])('real denied session %s is visible and does not enable assistant',async(status)=>{
  vi.stubGlobal('fetch',vi.fn(async()=>new Response('{}',{status})));const result=await loadEditorAssistant()
- expect(result.assistant).toBeUndefined();expect(editorAssistantNotice(result,true,'zh')).toContain('登录状态');expect(editorAssistantNotice(result,true,'en')).toContain('session')
+ expect(result.assistant).toBeUndefined();expect(editorAssistantNotice(result,'zh')).toContain('登录状态');expect(editorAssistantNotice(result,'en')).toContain('session')
 })
 test('network init failure is explicit but does not echo secret exception data',async()=>{
  vi.stubGlobal('fetch',vi.fn(async()=>{throw Error('SECRET:token')}));const result=await loadEditorAssistant()
- expect(result.assistant).toBeUndefined();expect(editorAssistantNotice(result,true,'zh')).toContain('加载失败');expect(editorAssistantNotice(result,true,'zh')).not.toContain('SECRET')
+ expect(result.assistant).toBeUndefined();expect(editorAssistantNotice(result,'zh')).toContain('加载失败');expect(editorAssistantNotice(result,'zh')).not.toContain('SECRET')
 })
-test('available assistant remains available; hidden preference is explained without overriding it',async()=>{
+test('available assistant has no capability warning',async()=>{
  http([{id:'model',label:'Model'}]);const result=await loadEditorAssistant()
- try{expect(result.assistant?.available).toBe(true);expect(editorAssistantNotice(result,true,'zh')).toBe('');expect(editorAssistantNotice(result,false,'zh')).toContain('个人设置');expect(editorAssistantNotice(result,false,'en')).toContain('preferences')}finally{result.assistant?.dispose()}
+ try{expect(result.assistant?.available).toBe(true);expect(editorAssistantNotice(result,'zh')).toBe('');expect(editorAssistantNotice(result,'en')).toBe('')}finally{result.assistant?.dispose()}
 })
 test('DOCX, XLSX and PPTX use the safe loader and render its notice',async()=>{
  const {readFileSync}=await import('node:fs')
- for(const file of ['native-docs.tsx','sheets-entry.tsx']){const source=readFileSync('src/editors/'+file,'utf8');expect(source).toContain('await loadEditorAssistant(');expect(source).toContain('editorAssistantNotice(assistantResult,prefs.showAssistant,locale)');expect(source).toContain("id:'assistant'");expect(source).not.toContain('{assistantNotice && <span');expect(source).toContain('Boolean(assistant?.available && prefs.showAssistant !== false)');expect(source).not.toContain('.catch(() => undefined)')}
+ for(const file of ['native-docs.tsx','sheets-entry.tsx']){const source=readFileSync('src/editors/'+file,'utf8');expect(source).toContain('await loadEditorAssistant(');expect(source).toContain('editorAssistantNotice(assistantResult,locale)');expect(source).toContain("id:'assistant'");expect(source).not.toContain('{assistantNotice && <span');expect(source).toContain('Boolean(assistant?.available)');expect(source).not.toContain('.catch(() => undefined)')}
  const slides=readFileSync('src/editors/slides-entry.tsx','utf8')
  expect(slides).toContain('void loadEditorAssistant(')
- expect(slides).toContain('editorAssistantNotice(assistantResult,showAssistant,locale)')
+ expect(slides).toContain('editorAssistantNotice(assistantResult,locale)')
  expect(slides).toContain("id:'assistant'")
- expect(slides).toMatch(/assistantAvailable:Boolean\(sharedAssistant\?\.available&&\(prefs\.showAssistant!==false\|\|handoffOpen\)\)/)
+ expect(slides).toMatch(/assistantAvailable:Boolean\(sharedAssistant\?\.available\)/)
  expect(slides).toMatch(/mountEditorRealtime\(host, fileId, \(\) => changed\(\),\s*channels\s*=>\s*sharedAssistant\?\.channel\?\.observe\(channels\)\)/)
 })

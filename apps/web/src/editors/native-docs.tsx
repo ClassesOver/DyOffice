@@ -217,8 +217,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     }
     changed()
   }
-  const assistantNotice = guest||initiallyProtected?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
-  const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
+  const assistantNotice = guest||initiallyProtected?'':editorAssistantNotice(assistantResult,locale)
+  const assistantAvailable = Boolean(assistant?.available)
   const copyLifetime = new AbortController()
   let copying = false, copyNotice: {message:string;failed:boolean} | undefined
   let pendingCopy: {upload:string;name:string}|undefined
@@ -608,7 +608,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         ...(signed ? [{id:'office-signature',level:'info' as const,...officeSignatureNotice[locale]}] : []),
         ...(needsEditUnlock ? [{id:'document-edit-locked',level:'warning' as const,title:en?'Editing is locked':'编辑已锁定',message:en?'Enter the document password to resume editing and save your draft.':'重新输入文档密码后即可继续编辑并保存草稿。',actions:<button type="button" onClick={promptForPassword}>{en?'Unlock editing':'解锁编辑'}</button>}] : []),
         ...(encrypted && !needsEditUnlock ? [{id:'document-unlocked',level:'info' as const,title:en?'Password-protected document':'受密码保护的文档',message:en?'Saved revisions and DOCX downloads retain password protection.':'保存的修订和下载的 DOCX 原件仍受密码保护。'}] : []),
-        ...(assistantNotice && !noAssistant ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
+        ...(assistantNotice && !noAssistant ? [{id:'assistant',level:'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
         {canEdit() && !state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}

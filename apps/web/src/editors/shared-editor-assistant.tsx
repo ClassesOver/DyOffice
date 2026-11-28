@@ -2,7 +2,7 @@ import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT
 import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
 import type {AiPanelPrefs,AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
-import {AiComposer,AiPanelSideButton,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAssistantFileHistory,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
+import {AiComposer,AiPanelSideButton,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAiPanelPrefs,useAssistantFileHistory,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
 import {GensparkMark,IconNewChat} from '../../../docs/src/renderer/components/icons'
 import {ToolChipList,type ToolActivity} from '../../../pdf/src/renderer/ai/AiPanel'
 import type {createEditorAssistant} from './assistant'
@@ -32,6 +32,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  const clearActiveAttachments=()=>{activeFiles.current=[];activeImages.current=undefined}
  const [localCollapsed,setLocalCollapsed]=useState(false)
  const collapsed=dock?.collapsed??localCollapsed
+ const railEnabled=useAiPanelPrefs().showAiSidebar
  const {width,resizing,handle}=useAiPanelResize(widthKey,lang,!collapsed)
  const focusRoot=useAssistantFocusRoot<HTMLDivElement>()
  const inputRef=useRef<HTMLTextAreaElement>(null),railRef=useRef<HTMLButtonElement>(null)
@@ -318,8 +319,8 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   </div>)}
   {error&&<p role="alert">{error}</p>}
  </>
- return <div ref={focusRoot} className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>
-  <button ref={railRef} type="button" className="ai-rail" hidden={!collapsed} aria-label={lang==='zh'?'展开 AI 助手':'Expand AI assistant'} onClick={()=>changeCollapsed(false)}><GensparkMark size={22}/></button>
+ return <div ref={focusRoot} className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${collapsed&&!railEnabled?' ai-dock-off':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>
+  <button ref={railRef} type="button" className="ai-rail" hidden={!collapsed||!railEnabled} aria-label={lang==='zh'?'展开 AI 助手':'Expand AI assistant'} onClick={()=>changeCollapsed(false)}><GensparkMark size={22}/></button>
   <section hidden={collapsed} className="shared-editor-assistant ai-panel" aria-label={lang==='zh'?'Office 助手':'Office assistant'}>
   <header className="shared-editor-assistant-head ai-panel-header"><span className="ai-panel-title"><GensparkMark size={22}/>{lang==='zh'?'AI 助手':'AI Assistant'}</span><div className="ai-panel-header-actions">
    {onMovePanel&&<AiPanelSideButton lang={lang} onMove={onMovePanel}/>}

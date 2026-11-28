@@ -871,10 +871,10 @@ async function mount(){
   catch{/* Keep the dirty draft available for manual save if authority changed. */}
  }
  let notice=''
- let handoffOpen=false,assistantLoadFinished=false
+ let assistantLoadFinished=false
  const closeHandoff=mountDocumentHandoff({fileId,format:'pdf',assistant:()=>assistant??(assistantLoadFinished?null:undefined),
   pdfTools:skill.tools.map(tool=>tool.name),
-  activate:()=>{handoffOpen=true;render()},ready:()=>!disposed&&editor?.status==='ready'&&!redacting&&!ribbonBusy,
+  ready:()=>!disposed&&editor?.status==='ready'&&!redacting&&!ribbonBusy,
   clean:isClean,revision:()=>grant.current().revision,save:async check=>{
    if(!editor||!check()||!await editor.save())return false
    // Saving reloads the PDF. React publishes the clean lifecycle after the commit.
@@ -933,7 +933,7 @@ async function mount(){
   }finally{ribbonBusy=false;if(!disposed)render()}
  }
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
-  <App hostAssistantOpenState hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
+  <App hostAssistantOpenState hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available?value=><Dock value={value}/>:undefined}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">
@@ -994,7 +994,7 @@ async function mount(){
   if(disposed){result.assistant?.dispose();return}
   assistantLoadFinished=true;assistant=result.assistant
   assistant?.documents.register(target)
-  notice=editorAssistantNotice(result,prefs?.showAssistant,prefs?.language??'zh')
+  notice=editorAssistantNotice(result,prefs?.language??'zh')
   const channel=assistant?.channel
   if(channel)realtime=createEditorBridge({origin:location.origin,fileId,editorId,onEvent:event=>{
    if(event.type==='assistant-channels')channel.observe(event.channels)

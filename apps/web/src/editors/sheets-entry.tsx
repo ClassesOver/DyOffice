@@ -52,7 +52,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   container.textContent = messages.zh.opening
   let changed = () => {}, editor: SheetsEditorHandle | null = null, disposed = false, closing=false
   let downloading = false, exportingCsv = false, takingOver = false, unlocking = false, confirming = false, actionError = ''
-  let handoffOpen=false,documentLoaded=false
+  let documentLoaded=false
   const continuationRevision = () => {
     if (!documentLoaded || disposed || closing || takingOver || !editor || dirty() || bridge.needsConfirmation()) return
     const state = host.getState(fileId), sessionId = editor.getWorkbookSessionId()
@@ -78,8 +78,8 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const importUnlock=passwordProtected&&!guest?takeOfficeImportUnlock(revision):undefined
   const initiallyUnlocked=!passwordProtected||!!importUnlock&&await bridge.adoptWorkbookImportUnlock(revision,importUnlock)
   const documentApi=createWebWorkbookDocumentApi(bridge.api,async input=>downloadWebCsv(input),{language:locale})
-  const assistantNotice = guest||passwordProtected?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
-  const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
+  const assistantNotice = guest||passwordProtected?'':editorAssistantNotice(assistantResult,locale)
+  const assistantAvailable = Boolean(assistant?.available)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   const appearance=await installBrowserAssistantPreferences(prefs,panelPrefs)
   Object.defineProperty(window,'desktopApi',{value:{...documentApi,...assistant?.api,...(workbookImages?{generateImage:workbookImages.generateImage,fetchImage:workbookImages.fetchImage}:{}),getAiPanelPrefs:async()=>appearance.withAppearance(),
@@ -103,7 +103,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     hasModel:(modelId:string)=>assistant.catalog.entries.some(entry=>entry.id===modelId),
   } : undefined
   const closeHandoff=mountDocumentHandoff({fileId,format:'xlsx',assistant:()=>assistant??null,prepare:()=>editor!.prepareHandoff(),
-    activate:()=>{handoffOpen=true;changed()},ready:()=>documentLoaded&&!disposed&&!closing&&!!editor&&!!host.getState(fileId).lease&&!takingOver&&!['unauthorized','conflict','unknown'].includes(host.getState(fileId).status),
+    ready:()=>documentLoaded&&!disposed&&!closing&&!!editor&&!!host.getState(fileId).lease&&!takingOver&&!['unauthorized','conflict','unknown'].includes(host.getState(fileId).status),
     clean:()=>!dirty()&&!bridge.isDirty(),revision:()=>host.getState(fileId).revision.revision,
     save:check=>bridge.guardedSave(check,async()=>!!editor&&await editor.saveAndWait()&&!editor.isDirty()&&!bridge.needsConfirmation()),
   })
@@ -271,7 +271,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       <DocumentNotifications locale={locale} items={[
         ...(signed ? [{id:'office-signature',level:'info' as const,...officeSignatureNotice[locale]}] : []),
         ...(passwordProtected ? [{id:'workbook-unlocked',level:'info' as const,title:locale==='en'?'Workbook unlocked':'工作簿已解锁',message:locale==='en'?'Saved revisions keep password protection.':'保存的版本会继续受密码保护。'}] : []),
-        ...(assistantNotice ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
+        ...(assistantNotice ? [{id:'assistant',level:'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!lockedToViewing && !state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}{historical && <a href={originalDownload} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}</>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
@@ -279,7 +279,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       <App queuedWorkbookAtBoot host={{readOnly,saveDownload,fileMenu,
         ...(passwordProtected?{workbookPasswordLimit:255}:{}),
         ...(passwordProtected&&bridge.needsConfirmation()?{confirmWorkbookPasswordSave:{label:text.retry,busy:confirming,...(actionError?{error:actionError}:{}),run:()=>{void confirmSave()}}}:{}),
-        getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,...(workbookImages?{setImageAttachments:workbookImages.setImageAttachments}:{}),supportedMergeExtensions:bridge.supportedMergeExtensions,workspaceCopy:loaded&&!copying&&canCopy()?workspaceCopy:undefined,inPlaceSave:true,workspaceLinks:bridge.workspaceLinks,assistantAvailable:assistantAvailable||!!(handoffOpen&&assistant?.available),...(assistant?{assistant}:{}),...(harnessRecovery?{harnessRecovery}:{}),onWorkbookOpened:()=>{documentLoaded=true;setLoaded(true)},onOpenFailed:()=>{documentLoaded=false;setFailed(true);reportDocumentLoading('error')},onEditorReady:handle=>{editor=handle}}} />
+        getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,...(workbookImages?{setImageAttachments:workbookImages.setImageAttachments}:{}),supportedMergeExtensions:bridge.supportedMergeExtensions,workspaceCopy:loaded&&!copying&&canCopy()?workspaceCopy:undefined,inPlaceSave:true,workspaceLinks:bridge.workspaceLinks,assistantAvailable,...(assistant?{assistant}:{}),...(harnessRecovery?{harnessRecovery}:{}),onWorkbookOpened:()=>{documentLoaded=true;setLoaded(true)},onOpenFailed:()=>{documentLoaded=false;setFailed(true);reportDocumentLoading('error')},onEditorReady:handle=>{editor=handle}}} />
     </div>
   }
   reportDocumentLoading(initiallyUnlocked?'rendering':'ready')

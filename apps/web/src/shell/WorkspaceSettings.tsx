@@ -67,7 +67,10 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
    <h3 className="personal-page-group-title personal-page-group-divider">编辑偏好</h3>
    <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-author`}>文档作者</label><div><input id={`${preferenceId}-author`} aria-label="文档作者" aria-describedby={`${preferenceId}-author-hint`} value={draft?.authorName??''} maxLength={100} onChange={event=>edit({authorName:event.target.value})}/><p id={`${preferenceId}-author-hint`} className="personal-page-field-hint">作为文档批注与修订的作者名称。</p></div></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-autosave`}>自动保存</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-autosave`} aria-label="自动保存" aria-checked={!!draft?.autoSave} checked={!!draft?.autoSave} onChange={event=>edit({autoSave:event.target.checked})}/></div>
-   <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" aria-checked={!!draft?.showAssistant} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/></div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><p id={`${preferenceId}-assistant-hint`} className="personal-page-field-hint">关闭时会收起侧栏并隐藏入口栏。仍可从功能区打开助手。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-describedby={`${preferenceId}-assistant-hint`} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/>
+   </div>
    <div className="personal-page-preference-row">
     <label htmlFor={`${preferenceId}-assistant-side`}>AI 助手位置</label>
     <select id={`${preferenceId}-assistant-side`} value={draft?.aiPanelSide??DEFAULT_AI_PANEL_PREFS.side} onChange={event=>edit({aiPanelSide:event.target.value==='right'?'right':'left'})}>

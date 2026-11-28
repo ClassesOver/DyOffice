@@ -163,7 +163,7 @@ async function saveWorkspaceAssistantSide(side:AiPanelSide,proof:string){
 async function saveWorkspacePreferences(patch:Parameters<typeof preferences.updatePreferences>[0]){
  const saved=await preferences.updatePreferences(patch)
  const updateTheme=patch.documentTheme!==undefined||patch.theme!==undefined
- const updateAssistantPreferences=ASSISTANT_PREFERENCES_FIELDS.some(field=>patch[field]!==undefined)
+ const updateAssistantPreferences=patch.showAssistant!==undefined||ASSISTANT_PREFERENCES_FIELDS.some(field=>patch[field]!==undefined)
  if(updateTheme){
   for(const tab of documentTabs.renderedDocuments()){
    const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement

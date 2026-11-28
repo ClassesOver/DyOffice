@@ -1,7 +1,6 @@
 import {subscribeBrowserDocumentCommands,workspaceOpenAction} from './browser-document-command'
 import {createDraftCopyAuthority,draftCopyParentActive} from './draft-copy-authority'
 import { officeSignatureNotice } from './office-signature-notice'
-import {documentHandoffPeer} from './document-handoff-peer'
 import {mountDocumentHandoff} from './document-handoff'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import {reportDocumentOpenError,reportDocumentLoading,registerDisplayedRevision} from './document-loading-state'
@@ -27,7 +26,7 @@ import {installCanvasKerning} from '../../../slides/src/renderer/canvas-kerning'
 import type {SlidesApi} from '../../../slides/src/shared/ipc'
 import {WEB_SLIDE_MEDIA_MAX_BYTES} from '../../../slides/src/shared/media-kinds'
 import {WEB_NOTES_TEXT_LIMIT} from '../../../slides/src/shared/notes-draft'
-import {installScreenTips} from '@genoffice/ui'
+import {installScreenTips,useAiPanelPrefs} from '@genoffice/ui'
 import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -97,7 +96,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       skillText: name => sharedAssistant?.api.skillText(name) ?? Promise.reject(new Error(text.unavailable)),
     },
   })
-  const appearance=await installBrowserAssistantPreferences(prefs,{...await bridge.api.getAiPanelPrefs(),showAiSidebar:!guest&&prefs.showAssistant!==false})
+  const appearance=await installBrowserAssistantPreferences(prefs,{...await bridge.api.getAiPanelPrefs(),showAiSidebar:!guest})
   Object.defineProperty(window, 'slidesApi', {value: {...bridge.api,...audience.api,...fullscreen,
     getAiPanelPrefs:async()=>appearance.withAppearance(),
     setAiPanelPrefs:async(patch:Parameters<SlidesApi['setAiPanelPrefs']>[0])=>
@@ -276,8 +275,8 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     }
     const status = !editorMounted ? (takingOver ? text.takingOver : actionError || text.readOnly) : failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status === 'conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
     const notice = realtime.notice(locale)
-    const showAssistant=prefs.showAssistant!==false||handoffOpen
-    const assistantNotice=!guest&&(assistantLoadFinished||!showAssistant)?editorAssistantNotice(assistantResult,showAssistant,locale):''
+    const showAssistant=useAiPanelPrefs().showAiSidebar||handoffOpen
+    const assistantNotice=!guest&&assistantLoadFinished?editorAssistantNotice(assistantResult,locale):''
     const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!signed && !state.lease && (loaded || !editorMounted) && !takingOver) || state.status === 'conflict' ? status : actionError
     const lostDraft=loaded&&!failed&&!signed&&!state.lease&&state.status!=='unauthorized'&&state.status!=='unknown'&&!bridge.needsConfirmation()&&(dirty()||bridge.isDirty())
     const recoveryHint=recoveryDownload==='failed'
@@ -292,7 +291,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       {loaded && !failed && state.status !== 'unauthorized' && <a className="dyoffice-slides-download-saved"
         href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.download}</a>}
     </>
-    const hostProps: SlidesAppHost = {openWorkspaceFile,saveDownload,hasGeneratedName:bridge.hasGeneratedName,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, presenterAudienceAvailable:false, documentStorageScope:`workspace:${fileId}`, assistantAvailable:Boolean(sharedAssistant?.available&&(prefs.showAssistant!==false||handoffOpen)),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
+    const hostProps: SlidesAppHost = {openWorkspaceFile,saveDownload,hasGeneratedName:bridge.hasGeneratedName,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, presenterAudienceAvailable:false, documentStorageScope:`workspace:${fileId}`, assistantAvailable:Boolean(sharedAssistant?.available),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
     const audienceWindow=audience.current()
     hostProps.presenterBrowserAudience={
       active:!!audienceWindow,
@@ -341,7 +340,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
           {recoveryDownload==='sent'&&<button type="button" onClick={()=>{if(stage.confirm(locale==='zh'?'已核对下载的草稿并保留未提交的输入？重新打开会替换当前页面。':'Have you checked the downloaded draft and preserved unsubmitted input? Reopening will replace this view.'))stage.location.reload()}}>{locale==='zh'?'重新打开最新版本':'Reopen latest version'}</button>}
         </>}{!lostDraft&&!signed && !state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
-        ...(assistantNotice ? [{id:'assistant',level:showAssistant?'warning' as const:'info' as const,title:locale==='zh'?'AI 助手':'AI Assistant',message:assistantNotice}] : []),
+        ...(assistantNotice ? [{id:'assistant',level:'warning' as const,title:locale==='zh'?'AI 助手':'AI Assistant',message:assistantNotice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
       ]} />
       {audienceWindow&&createPortal(<>
@@ -359,7 +358,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   reportDocumentLoading('rendering')
   const root = ReactDOM.createRoot(container)
   root.render(<LocaleProvider initial={locale}><NativeSlides /></LocaleProvider>)
-  if(!guest&&(prefs.showAssistant!==false||documentHandoffPeer()))void loadEditorAssistant({fileId,editorId:host.getEditorId(),generation:()=>1,continuationRevision},false,'pptx',ASSISTANT_FORMAT_TOOLS.pptx).then(async result=>{
+  if(!guest)void loadEditorAssistant({fileId,editorId:host.getEditorId(),generation:()=>1,continuationRevision},false,'pptx',ASSISTANT_FORMAT_TOOLS.pptx).then(async result=>{
     const value=result.assistant
     if(disposed){value?.dispose();return}
     assistantResult=result

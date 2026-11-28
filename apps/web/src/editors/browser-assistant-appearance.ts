@@ -1,15 +1,19 @@
 import {applyAiPanelPrefs,setAiPanelOpenStorage} from '@genoffice/ui'
 import {DEFAULT_AI_PANEL_PREFS, isAiFontSize, type AiPanelPrefs, type AiPanelSide} from '@genoffice/ui/ai-panel-prefs'
 import type {AssistantPreferences} from '../../../../packages/web-contracts/src/preferences'
+import type {PublicSettings} from '../../../../packages/web-contracts/src/api'
 import {createLocalShellClient} from '../shell/local-client'
 import {createLocalPreferencesSession} from '../shell/local-preferences-session'
 import type {WorkspaceOpenFrame} from './browser-document-command'
 import {createAssistantPreferenceSync} from './assistant-preference-sync'
 
-const attributes = ['data-web-ai-panel-side', 'data-web-ai-font-size', 'data-web-ai-custom-font-size', 'data-web-ai-spellcheck', 'data-web-ai-open-in-new-docs', 'data-web-ai-show-ask-trigger']
+type BrowserAssistantPreferences = AssistantPreferences & Pick<PublicSettings,'showAssistant'>
+
+const attributes = ['data-web-ai-show-sidebar', 'data-web-ai-panel-side', 'data-web-ai-font-size', 'data-web-ai-custom-font-size', 'data-web-ai-spellcheck', 'data-web-ai-open-in-new-docs', 'data-web-ai-show-ask-trigger']
 
 /** Publish saved account preferences to a mounted workspace document. */
-export function publishBrowserAssistantPreferences(root: HTMLElement, prefs: AssistantPreferences): void {
+export function publishBrowserAssistantPreferences(root: HTMLElement, prefs: BrowserAssistantPreferences): void {
+  root.dataset.webAiShowSidebar = String(prefs.showAssistant !== false)
   root.dataset.webAiPanelSide = prefs.aiPanelSide ?? DEFAULT_AI_PANEL_PREFS.side
   root.dataset.webAiFontSize = prefs.aiFontSize ?? DEFAULT_AI_PANEL_PREFS.fontSize
   root.dataset.webAiCustomFontSize = String(prefs.aiCustomFontSize ?? DEFAULT_AI_PANEL_PREFS.customFontSize)
@@ -19,13 +23,13 @@ export function publishBrowserAssistantPreferences(root: HTMLElement, prefs: Ass
 }
 
 /** Apply account appearance on top of the editor's own dock state. */
-export async function installBrowserAssistantPreferences(prefs: AssistantPreferences = {}, initial: AiPanelPrefs = DEFAULT_AI_PANEL_PREFS) {
+export async function installBrowserAssistantPreferences(prefs: BrowserAssistantPreferences = {}, initial: AiPanelPrefs = DEFAULT_AI_PANEL_PREFS) {
   const root = document.documentElement
   const accountWindow = window.parent === window && new URLSearchParams(window.location.search).get('guest') !== '1'
   const client = createLocalShellClient()
   let panelPrefs = initial
   let standalone: ReturnType<typeof createLocalPreferencesSession> | undefined
-  let sync: ReturnType<typeof createAssistantPreferenceSync<AssistantPreferences>>
+  let sync: ReturnType<typeof createAssistantPreferenceSync<BrowserAssistantPreferences>>
   let scope: string | undefined
   let pendingScope: Promise<void> | undefined
   const loadScope = () => pendingScope ??= (async () => {
@@ -55,9 +59,10 @@ export async function installBrowserAssistantPreferences(prefs: AssistantPrefere
     },
   })
   const withAppearance = (base = panelPrefs): AiPanelPrefs => {
-    const {webAiPanelSide, webAiFontSize, webAiCustomFontSize, webAiSpellcheck, webAiOpenInNewDocs, webAiShowAskTrigger} = root.dataset
+    const {webAiShowSidebar, webAiPanelSide, webAiFontSize, webAiCustomFontSize, webAiSpellcheck, webAiOpenInNewDocs, webAiShowAskTrigger} = root.dataset
     return {
       ...base,
+      showAiSidebar: base.showAiSidebar && (webAiShowSidebar === undefined ? prefs.showAssistant !== false : webAiShowSidebar === 'true'),
       side: webAiPanelSide === 'left' || webAiPanelSide === 'right' ? webAiPanelSide : prefs.aiPanelSide ?? base.side,
       fontSize: isAiFontSize(webAiFontSize) ? webAiFontSize : prefs.aiFontSize ?? base.fontSize,
       customFontSize: webAiCustomFontSize === undefined ? prefs.aiCustomFontSize ?? base.customFontSize : Number(webAiCustomFontSize),
@@ -81,7 +86,7 @@ export async function installBrowserAssistantPreferences(prefs: AssistantPrefere
     withAppearance,
     async movePanel(side: AiPanelSide, proof: string | undefined): Promise<AiPanelPrefs> {
       if (!proof) throw new Error('Assistant session unavailable')
-      let saved: AssistantPreferences
+      let saved: BrowserAssistantPreferences
       if (window.parent !== window) {
         const frame = window.frameElement as WorkspaceOpenFrame | null
         if (!frame?.isConnected || frame.ownerDocument.defaultView !== window.parent || !frame.dyofficeSaveAssistantSide) throw new Error('Workspace session unavailable')
