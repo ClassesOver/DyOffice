@@ -35,7 +35,7 @@ import {createNativePdfPageCopies} from './native-pdf-page-copies'
 import type {PdfRedactionReview} from './pdf-redactions'
 import {browserFileName,decodeBrowserBase64,downloadBrowserFile} from './browser-download'
 import {confirmWorkspaceCopy} from './web-ai-naming'
-import {MAX_WORKSPACE_COPY_BYTES} from './pdf-extraction'
+import {MAX_WORKSPACE_COPY_BYTES,type PdfCopyDestination} from './pdf-extraction'
 import {printInBrowser} from './browser-print'
 import {subscribeBrowserDocumentCommands,workspaceOpenAction} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
@@ -229,7 +229,8 @@ async function mount(){
   },
   setDirty(){},
   extractPages:({path,pages,suggestedName}:Parameters<PdfApi['extractPages']>[0])=>
-   ribbonCopy(path,client=>client.extract(pages.map(page=>page+1),browserActions.signal,copyName(suggestedName,'pages'))),
+   ribbonSingleCopy(path,suggestedName,'pages',(client,destination,signal)=>
+    client.extract(pages.map(page=>page+1),signal,destination)),
   splitPdf:async({path,chunkSize,baseName}:Parameters<PdfApi['splitPdf']>[0])=>{
    const signal=browserActions.signal,base=grant.current()
    const locale=prefs?.language==='en'?'en':'zh'
@@ -244,9 +245,11 @@ async function mount(){
    return result.ok?{ok:true as const,savedDir:'',count:copies!.getReceipts().length}:result
   },
   splitPages:({path,perPage,suggestedName}:Parameters<PdfApi['splitPages']>[0])=>
-   ribbonCopy(path,client=>client.layout({kind:'split',perPage},browserActions.signal,copyName(suggestedName,'split-pages'))),
+   ribbonSingleCopy(path,suggestedName,'split-pages',(client,destination,signal)=>
+    client.layout({kind:'split',perPage},signal,destination)),
   mergePages:({path,perSheet,direction,separator,suggestedName}:Parameters<PdfApi['mergePages']>[0])=>
-   ribbonCopy(path,client=>client.layout({kind:'merge',perSheet,direction,separator},browserActions.signal,copyName(suggestedName,'merged-pages'))),
+   ribbonSingleCopy(path,suggestedName,'merged-pages',(client,destination,signal)=>
+    client.layout({kind:'merge',perSheet,direction,separator},signal,destination)),
  } satisfies Partial<PdfApi>
  const unavailable=async()=>{throw Error('PDF action is unavailable in this Web preview')}
  window.pdfApi=new Proxy<Partial<PdfApi>>(api,{get(target,key,receiver){
@@ -273,6 +276,20 @@ async function mount(){
  })()
  const workspaceCopies=params.has('sourceRevision')||params.get('guest')==='1'?undefined:copies
  let ribbonBusy=false,ribbonPending=false,ribbonError=''
+ async function ribbonSingleCopy(path:string,suggestedName:string,fallback:string,
+  publish:(client:NonNullable<typeof copies>,destination:PdfCopyDestination,signal:AbortSignal)=>Promise<boolean>){
+  const signal=browserActions.signal,base=grant.current(),locale=prefs?.language==='en'?'en':'zh'
+  const name=copyName(suggestedName,fallback)
+  let canceled=false
+  const result=await ribbonCopy(path,async client=>{
+   if(!workspaceCopies)return publish(client,{name},signal)
+   const chosen=await confirmWorkspaceCopy(name,{locale,signal,request:grant.workspaceRequest,fileId})
+   if(!chosen){canceled=true;return false}
+   if(disposed||base!==grant.current())throw Error(locale==='en'?'The PDF changed while choosing a destination. Try again.':'选择保存位置时 PDF 已发生变化，请重试。')
+   return publish(client,{name:copyName(chosen.name,fallback),folderId:chosen.folderId},signal)
+  })
+  return canceled?{ok:true as const,canceled:true as const}:result
+ }
  async function ribbonCopy(path:string,run?:(client:NonNullable<typeof copies>)=>Promise<boolean>){
   const fail=(error:string)=>({ok:false as const,error})
   if(path!==grant.path||disposed||!copies||ribbonBusy||redacting)return fail('当前不能生成 PDF 副本。')

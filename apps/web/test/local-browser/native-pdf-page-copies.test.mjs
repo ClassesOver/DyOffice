@@ -44,6 +44,10 @@ test('native PDF ribbon names extracted pages and saves numbered PDF parts to a 
  const entry={id:'second-text',kind:'text',pageIndex:1,rect:[45,75,145,99],text:'Second page entry',fontSize:14,color:'#111111',align:'left'}
  await addStaticFills(doc,[{...entry,id:'first-text',pageIndex:0,text:'Omitted page entry'},entry])
  const original=Buffer.from(await doc.save()),{file}=await importFile(f,f.alice.token,original,'fillable.pdf')
+ const workspace=createWorkspaceService(f.transactions)
+ const sourceFolder=await workspace.createFolder(f.alice.token,{name:'PDF originals',parentId:null})
+ const extractFolder=await workspace.createFolder(f.alice.token,{name:'Extracted pages',parentId:null})
+ await workspace.moveFile(f.alice.token,file.fileId,{folderId:sourceFolder.id})
  app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory,
   localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),
@@ -59,15 +63,29 @@ test('native PDF ribbon names extracted pages and saves numbered PDF parts to a 
  const source=frame(file.fileId)
  await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
  await source.getByRole('button',{name:'页面',exact:true}).click()
- await source.getByRole('button',{name:'抽取本页',exact:true}).click()
+ const extractButton=source.getByRole('button',{name:'抽取本页',exact:true})
  const range=source.getByPlaceholder(/页码或范围/)
+ const extract=async()=>{
+  await extractButton.click()
+  await range.fill('2');await range.press('Enter')
+ }
+ const singleDestination=source.getByRole('dialog',{name:'保存副本到工作区'})
+ await extract()
+ await expect(singleDestination.getByRole('textbox',{name:'文件名'})).toHaveValue('fillable-p2.pdf',{timeout:5000})
+ await expect(singleDestination.getByRole('combobox',{name:'保存位置'})).toHaveValue(sourceFolder.id)
+ await singleDestination.getByRole('button',{name:'取消',exact:true}).click()
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ await extract()
+ await singleDestination.getByRole('textbox',{name:'文件名'}).fill('Customer copy')
+ await singleDestination.getByRole('combobox',{name:'保存位置'}).selectOption(extractFolder.id)
  const prepared=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${file.fileId}/pdf/extract-pages/uploads`)
- await range.fill('2');await range.press('Enter')
+ await singleDestination.getByRole('button',{name:'保存副本',exact:true}).click()
  const response=await prepared
  assert.ok(response.ok(),await response.text())
  const {fileId:copyId}=await response.json()
  await expect(page).toHaveURL(origin+'/#/file/'+copyId)
- assert.ok((await f.files.listFiles(f.alice.token)).files.some(file=>file.id===copyId&&file.name==='fillable-p2.pdf'))
+ assert.ok((await workspace.listFiles(f.alice.token,{folderId:extractFolder.id})).files.some(file=>file.id===copyId&&file.name==='Customer copy.pdf'))
  const copy=frame(copyId)
  await expect(copy.locator('html')).toHaveAttribute('data-document-loading','ready')
  const field=copy.locator('.pdf-form-layer input[title="customer"]')
@@ -100,7 +118,6 @@ test('native PDF ribbon names extracted pages and saves numbered PDF parts to a 
  const savedDelivery=saved.getForm().getRadioGroup('delivery')
  assert.deepEqual(savedDelivery.getOptions(),['Courier'])
  assert.equal(savedDelivery.getSelected(),'Courier')
- const workspace=createWorkspaceService(f.transactions)
  const folder=await workspace.createFolder(f.alice.token,{name:'PDF batches',parentId:null})
  await page.getByRole('tab',{name:'fillable.pdf',exact:true}).click()
  const splitButton=source.getByRole('button',{name:'拆分 PDF',exact:true})
@@ -289,6 +306,7 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
   }finally{await route.abort('failed')}
  },{times:1})
  await frame.getByPlaceholder(/页码或范围/).press('Enter')
+ await frame.getByRole('dialog',{name:'保存副本到工作区'}).getByRole('button',{name:'保存副本',exact:true}).click()
  const confirm=frame.getByRole('button',{name:'确认副本保存结果'})
  await expect(confirm).toBeVisible({timeout:20000})
  assert.ok(ribbonFile)
@@ -301,6 +319,8 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
  const {file:actual}=await f.files.openFile(f.alice.token,last)
  assert.equal((await PDFDocument.load(await f.files.readFile(f.alice.token,last,actual.revision))).getPageCount(),1)
 
+ const workspace=createWorkspaceService(f.transactions)
+ const layoutFolder=await workspace.createFolder(f.alice.token,{name:'Printed layouts',parentId:null})
  const casesFromRibbon=[
   ['拆分 PDF',[1,2],async modal=>{
    await modal.getByPlaceholder(/每 N 页/).fill('2')
@@ -326,6 +346,14 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
   const previous=new Set((await f.files.listFiles(f.alice.token)).files.map(item=>item.id))
   await frame.getByRole('button',{name:label,exact:true}).click()
   await submit(frame.locator('.pdf-modal'))
+  if(label!=='拆分 PDF'){
+   const destination=frame.getByRole('dialog',{name:'保存副本到工作区'})
+   const expectedName=label==='拆分页面'?'source-split.pdf':'source-3in1.pdf'
+   await expect(destination.getByRole('textbox',{name:'文件名'})).toHaveValue(expectedName)
+   await destination.getByRole('textbox',{name:'文件名'}).fill(label+'.pdf')
+   await destination.getByRole('combobox',{name:'保存位置'}).selectOption(layoutFolder.id)
+   await destination.getByRole('button',{name:'保存副本',exact:true}).click()
+  }
   const added=async()=>(await f.files.listFiles(f.alice.token)).files.filter(item=>!previous.has(item.id))
   try{
    await expect.poll(async()=>(await added()).length,{timeout:15000,message:label}).toBe(expected.length)
@@ -335,6 +363,7 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
    throw error
   }
   const newFiles=await added()
+  if(label!=='拆分 PDF')assert.ok((await workspace.listFiles(f.alice.token,{folderId:layoutFolder.id})).files.some(file=>file.id===newFiles[0].id&&file.name===label+'.pdf'))
   const pageCounts=[]
   for(const item of newFiles){
    const {file:saved}=await f.files.openFile(f.alice.token,item.id)

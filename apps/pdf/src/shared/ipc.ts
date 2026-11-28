@@ -894,7 +894,8 @@ export interface ExtractPagesRequest {
   suggestedName: string
 }
 
-export type ExtractPagesResult = { ok: true; savedPath: string } | { ok: false; error: string }
+export type ExtractPagesResult =
+  { ok: true; savedPath: string } | { ok: true; canceled: true } | { ok: false; error: string }
 
 /** Insert (merge) another PDF after a page of the current file: main process shows a picker and writes back immediately */
 export interface InsertPdfRequest {
@@ -991,7 +992,8 @@ export interface SplitPagesRequest {
   suggestedName: string
 }
 
-export type SplitPagesResult = { ok: true; savedPath: string } | { ok: false; error: string }
+export type SplitPagesResult =
+  { ok: true; savedPath: string } | { ok: true; canceled: true } | { ok: false; error: string }
 
 /** Shrink the CropBox of the given pages to a fractional rect of the displayed page; in place */
 export interface CropPagesRequest {

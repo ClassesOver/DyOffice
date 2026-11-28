@@ -116,9 +116,10 @@ export interface PdfPageOpsUploadInput extends Omit<PdfUploadInput,'operations'>
 export interface PdfExtractPagesInput extends Omit<PdfUploadInput,'operations'|'idempotencyKey'> {
   pages:readonly number[]
   name?:string
+  folderId?:string
 }
 
-export interface PdfSplitInput extends Omit<PdfExtractPagesInput,'pages'> {pagesPerFile:number;folderId?:string}
+export interface PdfSplitInput extends Omit<PdfExtractPagesInput,'pages'> {pagesPerFile:number}
 
 export interface PdfPageLayoutInput extends Omit<PdfExtractPagesInput,'pages'> {operation:PdfPageLayoutOperation}
 
@@ -283,7 +284,7 @@ export function createPdfService({
         const after=await authorize()
         if(after.file.sha256!==inputSha256)throw authError(409)
         const name=input.name??appendPdfCopySuffix(source.name,operation.kind==='split'?'-split-pages.pdf':'-merged-pages.pdf')
-        upload=await files.stageUpload(token,{name,size:result.size});check()
+        upload=await files.stageUpload(token,{name,size:result.size,...(input.folderId===undefined?{}:{folderId:input.folderId})});check()
         await files.receiveUpload(token,upload.uploadId,result.bytes);check()
         const final=await authorize()
         if(final.file.sha256!==inputSha256)throw authError(409)
@@ -325,7 +326,7 @@ export function createPdfService({
         const after=await authorize()
         if(after.file.sha256!==inputSha256)throw authError(409)
         const name=input.name??appendPdfCopySuffix(source.name,'-pages.pdf')
-        upload=await files.stageUpload(token,{name,size:result.size});check()
+        upload=await files.stageUpload(token,{name,size:result.size,...(input.folderId===undefined?{}:{folderId:input.folderId})});check()
         await files.receiveUpload(token,upload.uploadId,result.bytes);check()
         const final=await authorize()
         if(final.file.sha256!==inputSha256)throw authError(409)

@@ -6,7 +6,7 @@ export type PdfRedactedCopy={patterns:readonly string[];ids:readonly string[]}|{
 export type PdfPageLayout={kind:'split';perPage:2|4|9}|{kind:'merge';perSheet:number;direction:'horizontal'|'vertical';separator:boolean}
 
 export const MAX_WORKSPACE_COPY_BYTES=32*1024*1024
-type PdfCopyDestination={name:string;folderId?:string}
+export type PdfCopyDestination={name:string;folderId?:string}
 type PublicationDestination=PdfCopyDestination&{format?:OfficeFormat}
 type Prepared={uploadId:string;fileId:string;sha256:string;size:number;receipt?:RevisionRef;delivered?:boolean;expired?:boolean}
 type PresentCopy=(receipt:RevisionRef,signal?:AbortSignal)=>Promise<void>
@@ -140,8 +140,8 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated,o
    }finally{busy=false}
   },
   redact:(input:PdfRedactedCopy,signal?:AbortSignal)=>prepare('redact',input,signal),
-  extract:(pages:readonly number[],signal?:AbortSignal,name?:string)=>prepare('extract',pages,signal,name?{name}:undefined),
+  extract:(pages:readonly number[],signal?:AbortSignal,destination?:PdfCopyDestination)=>prepare('extract',pages,signal,destination),
   split:(pagesPerFile:number,signal?:AbortSignal,destination?:PdfCopyDestination)=>prepare('split',pagesPerFile,signal,destination),
-  layout:(operation:PdfPageLayout,signal?:AbortSignal,name?:string)=>prepare('layout',operation,signal,name?{name}:undefined),
+  layout:(operation:PdfPageLayout,signal?:AbortSignal,destination?:PdfCopyDestination)=>prepare('layout',operation,signal,destination),
  }
 }

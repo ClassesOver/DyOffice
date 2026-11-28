@@ -190,7 +190,7 @@ export function registerPdfRoutes(
       bodyLimit:4096,
       schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
         type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','operation'],properties:{
-          name:pdfCopyName,
+          name:pdfCopyName,folderId:uuidSchema,
           baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER},
           operation:{oneOf:[
             {type:'object',additionalProperties:false,required:['kind','perPage'],properties:{kind:{const:'split'},perPage:{enum:[2,4,9]}}},
@@ -217,7 +217,7 @@ export function registerPdfRoutes(
         type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','pages'],properties:{
           baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER},
           pages:{type:'array',minItems:1,maxItems:100,uniqueItems:true,items:{type:'integer',minimum:1,maximum:100}},
-          name:pdfCopyName,
+          name:pdfCopyName,folderId:uuidSchema,
         },
       }},
     },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageExtractPages(editorFileToken(request),(request.params as {id:string}).id,request.body as PdfExtractPagesInput,signal)))
