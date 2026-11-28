@@ -479,6 +479,12 @@ export type PdfHostLifecycle = {
 
 export type PdfHostSaveCopy = (draft: SavePdfRequest, pageCount: number, modified: boolean, stamps: StampConfig | null, imageBakes: PdfHostImageBake[]) => Promise<SavePdfResult | null>
 export type PdfHostConversionDraft = { draft: SavePdfRequest; pageCount: number; stamps: StampConfig | null; imageBakes: PdfHostImageBake[] }
+export type PdfHostProtectedCopy = {
+  title: string
+  description: string
+  action: string
+  save(path: string, protection: PdfEncryptionInput, flushDraft: () => Promise<boolean>): Promise<{ close?: true; error?: string } | null>
+}
 type WritePageRewrite = () => Promise<SavePdfResult>
 type PreparePageRewrite = () => WritePageRewrite | Promise<WritePageRewrite | null>
 type PageRewriteRun = { write: WritePageRewrite; afterReload?: () => void; restore?: boolean }
@@ -502,7 +508,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   hostRedactionPending?: string
   hostImageBakePreview?: (operations: readonly PdfHostImageBake[], signal: AbortSignal) => Promise<Uint8Array>
   hostOcr?: (png: string, signal?: AbortSignal) => Promise<PdfOcrLine[] | null>
-  hostProtectCopy?: (path: string, protection: PdfEncryptionInput, flushDraft: () => Promise<boolean>) => Promise<string | null>
+  hostProtectCopy?: PdfHostProtectedCopy
   hostCertificateWorkspaceIntro?: string
   hostMergePdf?: (request: MergePdfRequest, flushDraft: () => Promise<boolean>) => Promise<MergePdfResult>
   hostConvertOffice?: (format: PdfConvertFormat, password: string | undefined, snapshot?: PdfHostConversionDraft) => Promise<void>
@@ -12030,15 +12036,11 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
                 }
                 onApply={applyProtection}
                 {...(hostProtectCopy ? { protectedCopy: {
-                  title: lang === 'zh' ? '下载受保护副本' : 'Download a protected copy',
-                  description: lang === 'zh'
-                    ? '继续后会先保存工作区原件中的待保存编辑，再下载加密 PDF。密码仅用于下载的副本。'
-                    : 'Continue to save pending edits to the workspace document and download an encrypted PDF. The password applies to the download.',
-                  action: lang === 'zh' ? '下载受保护副本' : 'Download protected copy',
+                  ...hostProtectCopy,
                   save: async (protection) => {
-                    const error = await hostProtectCopy(filePath, protection, async () => (await flushThen(async () => true)) === true)
-                    if (error === null) setProtectionDlg(false)
-                    return error
+                    const result = await hostProtectCopy.save(filePath, protection, async () => (await flushThen(async () => true)) === true)
+                    if (result?.close) setProtectionDlg(false)
+                    return result?.error ?? null
                   },
                 } } : {})}
                 onRemove={removeProtection}

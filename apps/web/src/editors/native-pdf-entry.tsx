@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client'
 import {useLayoutEffect} from 'react'
 import {installScreenTips} from '@genoffice/ui'
 import type {AgentSkill} from '@genoffice/agent-core'
-import App,{type PdfAssistantView,type PdfHostConversionDraft,type PdfHostLifecycle,type PdfHostSaveCopy} from '../../../pdf/src/renderer/App'
+import App,{type PdfAssistantView,type PdfHostConversionDraft,type PdfHostLifecycle,type PdfHostProtectedCopy,type PdfHostSaveCopy} from '../../../pdf/src/renderer/App'
 import {PDF_NAV_SCHEME,parsePdfNavHref} from '../../../pdf/src/renderer/ai/pdf-nav'
 import {AGENT_TOOLS,deleteInsertedTextTool,editBlock,editInsertedTextTool,editText,insertTextTool,listInsertedTextTool,markupText,moveInsertedTextTool,moveTextBlockTool,searchText} from '../../../pdf/src/renderer/ai/tools'
 import {addNoteTool,deleteMarkupTool,deleteNoteTool,editNoteTool,readAnnotations,replyNoteTool} from '../../../pdf/src/renderer/ai/tools'
@@ -475,45 +475,77 @@ async function mount(){
     ()=>canRewritePages()&&grant.current().revision===baseRevision,browserActions.signal),
   },
  }
- async function exportProtectedCopy(
-  path:string,
-  protection:import('../../../pdf/src/shared/ipc').PdfEncryptionInput,
-  flushDraft:()=>Promise<boolean>,
- ):Promise<string|null>{
-  const zh=prefs?.language==='zh'
+ const exportProtectedCopy:PdfHostProtectedCopy['save']=async(path,protection,flushDraft)=>{
+  const locale=prefs?.language==='en'?'en':'zh',zh=locale==='zh'
   const unavailable=zh?'当前无法生成受保护副本。':'The protected copy is unavailable.'
-  if(path!==grant.path||disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length) return unavailable
-  const signal=browserActions.signal
-  const initial=grant.current()
-  ribbonBusy=true
+  const publisher=workspaceCopies,signal=browserActions.signal
+  if(path!==grant.path||disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher?.hasPending())return {error:unavailable}
+  const initial=grant.current(),close={close:true} as const
+  const suggested=copyName((path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-protected','protected')
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
   try{
    const {createProtectedPdfCopy,isCopyPasswordValid,needsDistinctOwnerPassword}=await import('./pdf-protected-copy')
    signal.throwIfAborted()
    if(!isCopyPasswordValid(protection.userPassword)||!isCopyPasswordValid(protection.ownerPassword)){
-    return zh?'密码须为 1 至 127 个 UTF-8 字节，且不得包含空字符。':'Use 1 to 127 UTF-8 bytes for each password and omit NUL characters.'
+    return {error:zh?'密码须为 1 至 127 个 UTF-8 字节，且不得包含空字符。':'Use 1 to 127 UTF-8 bytes for each password and omit NUL characters.'}
    }
    if(needsDistinctOwnerPassword(protection)){
-    return zh?'限制操作权限时，请使用不同的所有者密码。':'Use a distinct owner password to restrict permissions.'
+    return {error:zh?'限制操作权限时，请使用不同的所有者密码。':'Use a distinct owner password to restrict permissions.'}
    }
-   if(grant.current()!==initial)return unavailable
-   if(!await flushDraft())return zh?'待保存的编辑无法保存。':'Pending edits could not be saved.'
+   const chosen=publisher?await confirmWorkspaceCopy(suggested,{
+    locale,signal,request:grant.workspaceRequest,fileId,
+    downloadLabel:zh?'下载受保护副本':'Download protected copy',
+   }):undefined
+   if(publisher&&!chosen)return null
+   if(signal.aborted||grant.current()!==initial)return {error:unavailable}
+   if(!await flushDraft())return {error:zh?'待保存的编辑无法保存。':'Pending edits could not be saved.'}
    const revision=grant.current()
    // The save returns before React necessarily publishes the cleared draft.
    // Check the revision and ready state after retrieving the committed bytes.
    const bytes=new Uint8Array(await grant.api.readFile(path))
-   const unchanged=()=>grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
-   if(!unchanged())return unavailable
+   const unchanged=()=>!signal.aborted&&grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
+   if(!unchanged())return {error:unavailable}
    const encrypted=await createProtectedPdfCopy(bytes,protection,signal)
-   if(!unchanged())return unavailable
-   const suggested=path.slice(path.lastIndexOf('/')+1).replace(/\.pdf$/i,'')+'-protected'
-   downloadBrowserFile(new Blob([encrypted],{type:'application/pdf'}),browserFileName(suggested,'protected')+'.pdf')
-   return null
+   if(!unchanged())return {error:unavailable}
+   const name=copyName(chosen?.name??suggested,'protected')
+   if(publisher&&chosen&&!chosen.download){
+    if(encrypted.byteLength<=MAX_WORKSPACE_COPY_BYTES){
+     return await publisher.publish(encrypted,{name,folderId:chosen.folderId},unchanged,signal)?close:{error:unavailable}
+    }
+    const prompt=zh?'加密副本超过工作区 32 MiB 上限。要改为下载吗？':'The encrypted copy exceeds the 32 MiB workspace limit. Download it instead?'
+    if(!window.confirm(prompt))return null
+    if(!unchanged())return {error:unavailable}
+   }
+   downloadBrowserFile(new Blob([encrypted],{type:'application/pdf'}),name)
+   return close
   }catch{
-   return unavailable
+   ribbonPending=!!publisher?.hasPending()
+   if(ribbonPending){
+    ribbonError=zh?'请确认加密副本的保存结果。':'Confirm the encrypted copy’s save result.'
+    return close
+   }
+   return signal.aborted?null:{error:unavailable}
   }finally{
    ribbonBusy=false
+   if(!disposed)render()
   }
  }
+ const protectedCopyHost:PdfHostProtectedCopy|undefined=globalThis.crypto?.subtle?{
+  title:workspaceCopies
+   ?(prefs?.language==='en'?'Save a protected copy':'保存受保护副本')
+   :(prefs?.language==='en'?'Download a protected copy':'下载受保护副本'),
+  description:workspaceCopies
+   ?(prefs?.language==='en'
+    ?'Choose a destination for the encrypted copy. Pending edits will be saved to the original first. The passwords apply only to the copy.'
+    :'请选择加密副本的位置。待保存的编辑会先保存到原件。密码仅用于副本。')
+   :(prefs?.language==='en'
+    ?'Continue to save pending edits to the workspace document and download an encrypted PDF. The passwords apply only to the copy.'
+    :'继续后会先保存工作区原件中的待保存编辑，再下载加密 PDF。密码仅用于副本。'),
+  action:workspaceCopies
+   ?(prefs?.language==='en'?'Choose where to save':'选择保存位置')
+   :(prefs?.language==='en'?'Download protected copy':'下载受保护副本'),
+  save:exportProtectedCopy,
+ }:undefined
  registerDisplayedRevision(()=>isClean()?grant.current().revision:undefined)
  const savedPageCount=()=>isClean()&&view?.canAppendReport()?view.doc?.numPages:undefined
  let review:PdfRedactionReview|undefined,selected=new Set<string>(),querySequence=0
@@ -1184,7 +1216,7 @@ async function mount(){
   }finally{ribbonBusy=false;if(!disposed)render()}
  }
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
-  <App hostAssistantOpenState hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available?value=><Dock value={value}/>:undefined}
+  <App hostAssistantOpenState hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} hostProtectCopy={protectedCopyHost} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available?value=><Dock value={value}/>:undefined}
    hostCertificateWorkspaceIntro={workspaceCopies?(prefs?.language==='en'
     ?'Sign the saved PDF and choose where to save the copy. The certificate file and password stay in this browser.'
     :'为已保存的 PDF 签名并选择副本的保存位置。证书文件和密码仅在当前浏览器中处理。'):undefined}
