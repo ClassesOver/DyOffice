@@ -237,9 +237,9 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       const {password,bytes}=encryptedOfficeBody(request.body,true)
       return saves.revisions.prepareDocxPasswordChange(credential,fileId,{baseRevision,editorId,leaseEpoch},password,unlockId,bytes,signal)
     })))
-    if(saves)api.post<{Params:{id:string};Querystring:{name:string;baseRevision:string;editorId:string;leaseEpoch:string}}>('/api/v1/files/:id/docx/copy/uploads',{bodyLimit:MAX_OBJECT_BYTES+passwordPrefixBytes+maxPasswordBytes,schema:{params,querystring:{
+    if(saves)api.post<{Params:{id:string};Querystring:{name:string;folderId?:string;baseRevision:string;editorId:string;leaseEpoch:string}}>('/api/v1/files/:id/docx/copy/uploads',{bodyLimit:MAX_OBJECT_BYTES+passwordPrefixBytes+maxPasswordBytes,schema:{params,querystring:{
       type:'object',additionalProperties:false,required:['name','baseRevision','editorId','leaseEpoch'],properties:{
-        name:{type:'string',minLength:1,maxLength:255},baseRevision:id,editorId:id,leaseEpoch:{type:'string',pattern:'^[1-9][0-9]{0,15}$'},
+        name:{type:'string',minLength:1,maxLength:255},folderId:id,baseRevision:id,editorId:id,leaseEpoch:{type:'string',pattern:'^[1-9][0-9]{0,15}$'},
       },
     }}},(request,reply)=>withDisconnect(request,reply,signal=>transfer(request,reply,async()=>{
       const unlockId=request.headers['x-dyoffice-docx-unlock']
@@ -249,9 +249,9 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       if(!Buffer.isBuffer(request.body)||!request.body.length)throw authError(400)
       const {password,bytes}=mime===documentPasswordChangeMime?encryptedOfficeBody(request.body,true):{password:undefined,bytes:request.body}
       if(bytes.length>MAX_OBJECT_BYTES)throw authError(413)
-      const {name,baseRevision,editorId}=request.query,leaseEpoch=Number(request.query.leaseEpoch),credential=token(request),fileId=request.params.id
+      const {name,folderId,baseRevision,editorId}=request.query,leaseEpoch=Number(request.query.leaseEpoch),credential=token(request),fileId=request.params.id
       await saves.leases.renewLease(credential,fileId,{editorId,leaseEpoch,docxUnlockId:unlockId})
-      const result=await files.prepareDocumentDraftCopy(credential,fileId,{name,baseRevision,editorId,leaseEpoch},unlockId,bytes,password,signal)
+      const result=await files.prepareDocumentDraftCopy(credential,fileId,{name,folderId,baseRevision,editorId,leaseEpoch},unlockId,bytes,password,signal)
       return reply.code(201).send(result)
     })))
 

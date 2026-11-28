@@ -435,6 +435,8 @@ for(const encrypted of [false,true])test(`Web XLSX refreshes a web query and sav
 for(const encrypted of [false,true])test(`Web XLSX Save As copies unsaved cells from a ${encrypted?'protected':'plain'} workbook`,{timeout:120000},async t=>{
  const f=await fixture(t,{nodeEngine:true}), {page}=f
  const password='Protected workbook copy fixture'
+ const workspace=createWorkspaceService(f.transactions)
+ const reportFolder=await workspace.createFolder(f.alice.token,{name:'Reports',parentId:null})
  const originalBytes=encrypted?Buffer.from(officeCrypto.encrypt(f.original,{password})):f.original
  let original=f.opened.file
  if(encrypted){
@@ -466,9 +468,10 @@ for(const encrypted of [false,true])test(`Web XLSX Save As copies unsaved cells 
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,encrypted?2:1)
  await page.keyboard.press('ControlOrMeta+Shift+s')
  await input.fill('Manual workbook copy')
+ await dialog.getByRole('combobox',{name:'Folder',exact:true}).selectOption(reportFolder.id)
  await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
  await expect(page.getByText('Saved copy: Manual workbook copy.xlsx',{exact:true})).toBeVisible({timeout:30000})
- const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Manual workbook copy.xlsx')
+ const copy=(await workspace.listFiles(f.alice.token,{folderId:reportFolder.id})).files.find(item=>item.name==='Manual workbook copy.xlsx')
  assert.ok(copy)
  const stored=await f.files.readFile(f.alice.token,copy.id,copy.revision)
  const copyHead=await f.files.openFile(f.alice.token,copy.id)

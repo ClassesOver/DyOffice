@@ -78,7 +78,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   const noEvent = () => () => {}
   const unavailable = async (): Promise<never> => { throw new Error(text.unavailable) }
   const session = (id: string) => { const current = sessions.get(id); if (disposed || !current) throw hostError('INVALID_REVISION','workbook session'); return current }
-  async function prepareDraftCopy(id: string, phases: WorkbookSaveRequest[], name: string, proof: string, signal: AbortSignal):
+  async function prepareDraftCopy(id: string, phases: WorkbookSaveRequest[], name: string, proof: string, signal: AbortSignal, folderId?: string):
     Promise<{blob:Blob}|{uploadId:string;check:()=>void}> {
     const current = session(id), { lease } = host.getState(fileId)
     const grant = unlockGrant
@@ -96,7 +96,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     const {editorId, leaseEpoch} = check()
     const protectedCopy = current.file.passwordProtected && grant
     const body = JSON.stringify({baseRevision:revision, editorId, leaseEpoch, phases:phases.map(phase=>workbookSaveRequestSchema.parse(phase)),
-      ...(protectedCopy?{name}:{})})
+      ...(protectedCopy?{name,folderId}:{})})
     if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','workbook draft copy')
     const endpoint = protectedCopy ? 'copy/uploads' : 'export'
     const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${endpoint}`,{method:'POST',credentials:'same-origin',redirect:'error',signal,

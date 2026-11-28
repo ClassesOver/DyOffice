@@ -300,7 +300,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     }
     return bytes
   }
-  async function uploadDocxDraft(id:string,ctx:Context,lease:Lease,endpoint:'uploads'|'copy/uploads'|'password/uploads',bytes:Uint8Array<ArrayBuffer>,name?:string,change?:DocxPasswordChange){
+  async function uploadDocxDraft(id:string,ctx:Context,lease:Lease,endpoint:'uploads'|'copy/uploads'|'password/uploads',bytes:Uint8Array<ArrayBuffer>,name?:string,change?:DocxPasswordChange,folderId?:string){
     if(!ctx.docxUnlockProof||(ctx.docxPasswordProtected&&!ctx.docxUnlockId))throw hostError('CONFLICT','document unlock')
     let body:BodyInit=bytes,mime='application/octet-stream'
     if(change){
@@ -313,6 +313,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     }
     const query=new URLSearchParams({baseRevision:ctx.revision.revision,editorId:editor,leaseEpoch:String(lease.leaseEpoch)})
     if(name!==undefined)query.set('name',name)
+    if(folderId!==undefined)query.set('folderId',folderId)
     return readJson(await request(`/api/v1/files/${id}/docx/${endpoint}?${query}`,{
       method:'POST',headers:{'content-type':mime,'x-csrf-token':ctx.docxUnlockProof,...(ctx.docxUnlockId&&{'x-dyoffice-docx-unlock':ctx.docxUnlockId})},body,
     }))
@@ -418,12 +419,12 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     async claimDocxImportUnlock(fileId:string,unlockId:string,edit=true){
       return readUnlockedDocx(fileId,'import-unlock',{unlockId:uuid(unlockId)},edit)
     },
-    async stageDocxDraftCopy(fileId:string,name:string,bytes:Uint8Array){
+    async stageDocxDraftCopy(fileId:string,name:string,bytes:Uint8Array,folderId?:string){
       const id=uuid(fileId),ctx=liveContext(id),lease=ctx.lease
       if(!lease||ctx.status!=='idle'||(!ctx.docxPasswordProtected&&!ctx.docxPasswordChange))throw hostError('CONFLICT','document copy')
       const unlockId=ctx.docxUnlockId
       try{
-        const draft=await uploadDocxDraft(id,ctx,lease,'copy/uploads',bytes.slice(),name,ctx.docxPasswordChange)
+        const draft=await uploadDocxDraft(id,ctx,lease,'copy/uploads',bytes.slice(),name,ctx.docxPasswordChange,folderId)
         return {uploadId:uuid(draft?.uploadId)}
       }catch(error){
         if((error as {status?:number}).status===423&&ctx.docxUnlockId===unlockId){

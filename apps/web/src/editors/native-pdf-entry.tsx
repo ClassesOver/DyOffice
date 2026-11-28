@@ -34,7 +34,7 @@ import {createPdfCreateDocumentSkill,createPdfDocumentCreator,type PreparedAiDoc
 import {createNativePdfPageCopies} from './native-pdf-page-copies'
 import type {PdfRedactionReview} from './pdf-redactions'
 import {browserFileName,decodeBrowserBase64,downloadBrowserFile} from './browser-download'
-import {confirmWebFileName} from './web-ai-naming'
+import {confirmWorkspaceCopy} from './web-ai-naming'
 import {printInBrowser} from './browser-print'
 import {subscribeBrowserDocumentCommands,workspaceOpenAction} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
@@ -923,11 +923,11 @@ async function mount(){
   const base=grant.current()
   ribbonBusy=true;saveCopyNotice=''
   try{
-   const chosen=await confirmWebFileName(grant.path.split('/').pop()??'document.pdf',{locale,signal})
+   const chosen=await confirmWorkspaceCopy(grant.path.split('/').pop()??'document.pdf',{locale,signal,request:grant.workspaceRequest})
    if(!chosen)return null
    if(disposed||base!==grant.current())throw Error('PDF copy authorization changed.')
-   const name=browserFileName(chosen.replace(/\.pdf$/i,''),'document')+'.pdf'
-   const result=await grant.writer.saveCopy(draft,count,name,modified,stamps,imageBakes,signal)
+   const name=browserFileName(chosen.name.replace(/\.pdf$/i,''),'document')+'.pdf'
+   const result=await grant.writer.saveCopy(draft,count,name,modified,stamps,imageBakes,signal,chosen.folderId)
    if(result.ok)saveCopyNotice=locale==='zh'?`已保存副本：${name}`:`Saved copy: ${name}`
    return result
   }finally{ribbonBusy=false;if(!disposed)render()}

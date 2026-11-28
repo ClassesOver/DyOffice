@@ -6,6 +6,7 @@ import {hancomConversionTargets,importPromptField,odfConversionTargets,skipsImpo
 import type {WorkspaceFolder} from '../../../../packages/web-contracts/src/workspace'
 import {IncorrectOfficeUploadPassword} from './local-client'
 import {isWorkspaceFileName,type WorkspaceImportFormat,workspaceFileAccept} from './workspace-file-formats'
+import {folderChoices} from '../workspace-folder-options'
 import './workspace-upload.css'
 type UploadItem={id:number;file:File;state:'queued'|'processing'|'success'|'password-required'|'skipped'|'error'|'rejected';error?:string;destination?:ConvertedCopyDestination}
 type RecentDocument=Pick<RecentEntry,'path'|'name'|'locationLabel'>
@@ -30,19 +31,6 @@ const conversionDetails={
  pptx:'幻灯片、文本和图片会转换，部分版式、对象和动画可能丢失。',
 }
 const compoundFileHeader=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]
-function folderChoices(folders:WorkspaceFolder[]){
- const byId=new Map(folders.map(folder=>[folder.id,folder]))
- return folders.flatMap(folder=>{
-  const names:string[]=[],seen=new Set<string>()
-  let current:WorkspaceFolder|undefined=folder
-  while(current&&!seen.has(current.id)){
-   names.unshift(current.name);seen.add(current.id)
-   if(current.parentId===null)return [{id:folder.id,name:names.join(' / ')}]
-   current=byId.get(current.parentId)
-  }
-  return []
- }).sort((a,b)=>a.name.localeCompare(b.name))
-}
 async function needsOfficePassword(file:File){
  if(!/\.(docx|xlsx|xlsm)$/i.test(file.name)||file.size<compoundFileHeader.length)return false
  const header=new Uint8Array(await file.slice(0,compoundFileHeader.length).arrayBuffer())

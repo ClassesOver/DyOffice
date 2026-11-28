@@ -11,6 +11,7 @@ import JSZip from 'jszip'
 import officeCrypto from 'officecrypto-tool'
 import { PDFDocument } from 'pdf-lib'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import { password } from '../helpers/identity.mjs'
 import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
@@ -113,6 +114,8 @@ test('native Word Save As keeps the original password on a protected draft copy'
  await f.files.receiveUpload(f.alice.token,stage.uploadId,ciphertext,{password:secret,format:'docx'})
  const {file}=await f.files.finishUpload(f.alice.token,stage.uploadId)
  const openUrl=id=>f.origin+'/native-docx/?fileId='+id
+ const workspace=createWorkspaceService(f.transactions)
+ const archiveFolder=await workspace.createFolder(f.alice.token,{name:'Archive',parentId:null})
  await page.goto(openUrl(file.fileId))
  const passwordDialog=page.getByRole('dialog').filter({hasText:'Open password-protected document'})
  const unlock=async value=>{
@@ -134,6 +137,7 @@ test('native Word Save As keeps the original password on a protected draft copy'
  await saveAs.click()
  const confirm=page.getByRole('dialog',{name:'Save a copy to your workspace'})
  await confirm.getByRole('textbox',{name:'File name'}).fill('Protected draft copy')
+ await confirm.getByRole('combobox',{name:'Folder',exact:true}).selectOption(archiveFolder.id)
  const finishes=[]
  await page.route('**/uploads/*/finish',async route=>{
   finishes.push(route.request().url())
@@ -153,7 +157,7 @@ test('native Word Save As keeps the original password on a protected draft copy'
  assert.equal(finishes.length,2)
  assert.equal(finishes[0],finishes[1])
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,3)
- const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Protected draft copy.docx')
+ const copy=(await workspace.listFiles(f.alice.token,{folderId:archiveFolder.id})).files.find(item=>item.name==='Protected draft copy.docx')
  assert.ok(copy)
  const opened=await f.files.openFile(f.alice.token,copy.id)
  assert.equal(opened.documentPasswordProtected,true)

@@ -45,7 +45,7 @@ import './ai-dock-theme.css'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import {createWorkbookImageApi} from './web-ai-media-api'
 import {confirmWebCsvSave,createWebWorkbookDocumentApi,downloadWebCsv} from './web-ai-document-api'
-import {confirmWebFileName,suggestWebFileName} from './web-ai-naming'
+import {confirmWorkspaceCopy,suggestWebFileName} from './web-ai-naming'
 
 export async function mountSheetsEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
   const openWorkspaceFile = workspaceOpenAction()
@@ -161,9 +161,9 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       const signal = copyLifetime.signal
       copying = true; changed()
       let upload: string | undefined, finishStarted = false
-      const uploadBlob = async (name:string,blob:Blob) => {
+      const uploadBlob = async (name:string,blob:Blob,folderId?:string) => {
         if (!canCopy()) throw Error('Draft session ended')
-        const {uploadId} = await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
+        const {uploadId} = await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size,folderId},signal)
         upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
         if (!canCopy()) throw Error('Draft session ended')
         await request(upload+'/content','PUT',blob,signal)
@@ -181,10 +181,10 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         const csvNotice = locale === 'en'
           ? 'CSV saves the current sheet as displayed values. Formulas, formatting, and other sheets are omitted.'+(passwordProtected?' The CSV copy is unencrypted.':'')
           : 'CSV 只保存当前工作表的显示值。公式、格式和其他工作表会丢失。'+(passwordProtected?' CSV 副本未加密。':'')
-        const chosen = await confirmWebFileName(stem+copyExtension,{locale,signal,...(csv?{csvNotice}:{})})
+        const chosen = await confirmWorkspaceCopy(stem+copyExtension,{locale,signal,request,...(csv?{csvNotice}:{})})
         if (!chosen || !canCopy()) return
-        const csvCopy = csv && /\.csv$/i.test(chosen) ? csv : undefined
-        const base = chosen.replace(csvCopy?/\.csv$/i:/\.(xlsx|xlsm)$/i,'').trim()
+        const csvCopy = csv && /\.csv$/i.test(chosen.name) ? csv : undefined
+        const base = chosen.name.replace(csvCopy?/\.csv$/i:/\.(xlsx|xlsm)$/i,'').trim()
         if (!base) return
         const name = base+(csvCopy?'.csv':copyExtension)
         copyNotice = ''; actionError = ''; changed()
@@ -192,16 +192,16 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
           const content = await csvCopy()
           if (content === null) return
           if (!await copyAuthority?.verify() || !canCopy()) throw Error('Draft session ended')
-          await uploadBlob(name,new Blob(['\ufeff',content]))
+          await uploadBlob(name,new Blob(['\ufeff',content]),chosen.folderId)
           await finishCopy()
         } else {
           const result = await capture(async (sessionId,phases) => {
             if (!await copyAuthority?.verify() || !canCopy()) throw Error('Draft session ended')
-            const draft = await bridge.prepareDraftCopy(sessionId,phases,name,proof,signal)
+            const draft = await bridge.prepareDraftCopy(sessionId,phases,name,proof,signal,chosen.folderId)
             if ('uploadId' in draft) {
               upload = '/api/v1/uploads/'+encodeURIComponent(draft.uploadId)
               draft.check()
-            } else await uploadBlob(name,draft.blob)
+            } else await uploadBlob(name,draft.blob,chosen.folderId)
             await finishCopy()
           })
           if (!result.ok) throw new Error('Copy failed')

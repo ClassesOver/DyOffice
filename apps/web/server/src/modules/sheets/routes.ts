@@ -66,8 +66,8 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       route<SheetsExportInput>('/api/v1/files/:id/sheets/export',draftInput,
         (token,id,body,signal)=>saves.exportDraft(token,id,body,signal),4*1024*1024)
       route<SheetsCopyInput>('/api/v1/files/:id/sheets/copy/uploads',{
-        ...draftInput,name:{type:'string',minLength:1,maxLength:255},
-      },(token,id,body,signal,unlockId)=>saves.prepareProtectedCopy(token,id,{...body,...(unlockId?{unlockId}:{})},signal),4*1024*1024)
+        ...draftInput,name:{type:'string',minLength:1,maxLength:255},folderId:uuidSchema,
+      },(token,id,body,signal,unlockId)=>saves.prepareProtectedCopy(token,id,{...body,...(unlockId?{unlockId}:{})},signal),4*1024*1024,['folderId'])
     }
     route<{revision:string;visualId:string}>('/api/v1/files/:id/sheets/media',{...revisionBody,visualId:{type:'string',minLength:1,maxLength:512,pattern:'^[^/\\\\]+$'}},(token,id,body,signal,unlockId)=>sheets.readMedia(token,id,body.revision,body.visualId,signal,unlockId))
     const sheetName={type:'string',minLength:1,maxLength:255}

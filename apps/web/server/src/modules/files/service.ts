@@ -477,7 +477,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         if(grant)documentEdits.remember(grant,sha256,true)
       }}
     },
-    async prepareDocumentDraftCopy(token:string,fileId:string,input:{name:string;baseRevision:string;editorId:string;leaseEpoch:number},unlockId:string|undefined,bytes:Buffer,password:string|undefined,signal?:AbortSignal){
+    async prepareDocumentDraftCopy(token:string,fileId:string,input:{name:string;folderId?:string;baseRevision:string;editorId:string;leaseEpoch:number},unlockId:string|undefined,bytes:Buffer,password:string|undefined,signal?:AbortSignal){
       if(validateFileName(input.name)!=='docx')throw authError(415)
       const id=uuid(fileId),editor=uuid(input.editorId)
       const authorize=()=>personal(token,'files:write',async(connection,principal)=>{
@@ -491,7 +491,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       const grant=await authorize()
       const copyPassword=password??grant?.password
       const sealed=copyPassword?await workbookPasswords.seal(bytes,copyPassword,signal,'docx'):undefined
-      const {uploadId}=await service.stageUpload(token,{name:input.name,size:sealed?.bytes.length??bytes.length})
+      const {uploadId}=await service.stageUpload(token,{name:input.name,size:sealed?.bytes.length??bytes.length,folderId:input.folderId})
       try{
         await service.receiveUpload(token,uploadId,sealed?.bytes??bytes,sealed?{[verifiedOfficeCopy]:sealed.file}:undefined)
         if(await authorize()!==grant)throw authError(423)

@@ -8,6 +8,7 @@ import JSZip from 'jszip'
 import {PDFArray,PDFDict,PDFDocument,PDFHexString,PDFName,PDFRawStream,PDFString,concatTransformationMatrix,degrees,drawObject,popGraphicsState,pushGraphicsState,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {password} from '../helpers/identity.mjs'
 import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
@@ -680,6 +681,8 @@ test('native Web PDF Save As creates a workspace copy of unsaved page changes',{
  pdf.addPage([240,300]).drawText('Source page')
  const original=Buffer.from(await pdf.save())
  const {file}=await importFile(f,f.alice.token,original,'manual-save-as.pdf')
+ const workspace=createWorkspaceService(f.transactions)
+ const pdfFolder=await workspace.createFolder(f.alice.token,{name:'Review',parentId:null})
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
  f.cleanup.unshift(()=>app.close())
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
@@ -714,9 +717,10 @@ test('native Web PDF Save As creates a workspace copy of unsaved page changes',{
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
  await page.keyboard.press('ControlOrMeta+Shift+s')
  await name.fill('Rotated copy')
+ await dialog.getByRole('combobox',{name:'Folder',exact:true}).selectOption(pdfFolder.id)
  await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
  await expect.poll(async()=>(await f.files.listFiles(f.alice.token)).files.length).toBe(3)
- const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Rotated copy.pdf')
+ const copy=(await workspace.listFiles(f.alice.token,{folderId:pdfFolder.id})).files.find(item=>item.name==='Rotated copy.pdf')
  assert.ok(copy)
  const stored=await PDFDocument.load(await f.files.readFile(f.alice.token,copy.id,copy.revision))
  assert.equal(stored.getPage(0).getRotation().angle,90)

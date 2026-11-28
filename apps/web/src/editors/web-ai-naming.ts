@@ -1,11 +1,16 @@
 import {createSseAgentTransport} from '../../../../packages/browser-host/src/ai-transport.ts'
 import type {AssistantDocumentFormat} from '../../../../packages/web-contracts/src/assistant.ts'
 import {buildNamingInstruction,excerptForNaming,sanitizeFileStem} from '../../../shell/src/main/ai-naming.ts'
+import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences.ts'
+import type {WorkspaceFolderList} from '../../../../packages/web-contracts/src/workspace.ts'
+import {folderChoices} from '../workspace-folder-options'
 import './web-ai-naming.css'
 
-export function confirmWebFileName(proposed:string,{locale,signal,document:doc=window.document,csvNotice}:{
- locale:'zh'|'en';signal:AbortSignal;document?:Document;csvNotice?:string
-}):Promise<string|null>{
+export type WorkspaceCopyDestination = { name: string; folderId?: string }
+
+export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,document:doc=window.document,csvNotice}:{
+ locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;document?:Document;csvNotice?:string
+}):Promise<WorkspaceCopyDestination|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
  dialog.className='web-ai-naming-dialog'
@@ -41,9 +46,22 @@ export function confirmWebFileName(proposed:string,{locale,signal,document:doc=w
   }
   formatLabel.append(select);form.append(formatLabel,notice)
  }
- actions.append(cancel,save);form.append(actions);dialog.append(form)
+ const folderLabel=doc.createElement('label'),folder=doc.createElement('select')
+ const rootOption=doc.createElement('option'),folderStatus=doc.createElement('p')
+ folderLabel.className='web-ai-naming-field'
+ folderLabel.textContent=en?'Folder':'保存位置'
+ rootOption.value='';rootOption.textContent=en?'My files':'个人文件'
+ folderStatus.setAttribute('role','status')
+ folderStatus.hidden=true
+ folder.append(rootOption);folderLabel.append(folder)
+ actions.append(cancel,save);form.append(folderLabel,folderStatus,actions);dialog.append(form)
  return new Promise((resolve,reject)=>{
-  const finish=(name:string|null)=>{signal.removeEventListener('abort',abort);dialog.close();dialog.remove();resolve(name)}
+  const folders=new AbortController()
+  const finish=(destination:WorkspaceCopyDestination|null)=>{
+   folders.abort()
+   signal.removeEventListener('abort',abort)
+   dialog.close();dialog.remove();resolve(destination)
+  }
   const abort=()=>finish(null)
   cancel.onclick=abort
   dialog.oncancel=event=>{event.preventDefault();abort()}
@@ -51,13 +69,24 @@ export function confirmWebFileName(proposed:string,{locale,signal,document:doc=w
    event.preventDefault()
    const name=input.value.trim()
    const stem=format?name.replace(/\.(xlsx|csv)$/i,'').trim():name
-   if(stem)finish(format?stem+'.'+format.value:stem)
+   if(stem)finish({name:format?stem+'.'+format.value:stem,...(folder.value?{folderId:folder.value}:{})})
   }
   doc.body.append(dialog)
   try{dialog.showModal();input.focus();input.select()}
   catch(error){dialog.remove();reject(error);return}
   signal.addEventListener('abort',abort,{once:true})
-  if(signal.aborted)abort()
+  if(signal.aborted){abort();return}
+  void request<WorkspaceFolderList>('/api/v1/workspace/folders','GET',undefined,folders.signal).then(({folders:entries})=>{
+   if(folders.signal.aborted)return
+   for(const {id,name} of folderChoices(entries)){
+    const option=doc.createElement('option')
+    option.value=id;option.textContent=name;folder.append(option)
+   }
+  }).catch(()=>{
+   if(folders.signal.aborted)return
+   folderStatus.textContent=en?'Could not load workspace folders.':'无法读取工作区文件夹。'
+   folderStatus.hidden=false
+  })
  })
 }
 

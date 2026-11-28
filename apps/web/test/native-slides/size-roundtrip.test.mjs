@@ -12,6 +12,7 @@ import {PNG} from 'pngjs'
 import UTIF from 'utif2'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
@@ -77,6 +78,8 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  assert.ok(printed.widths[0]>0)
  assert.equal((await f.files.openFile(f.alice.token,id)).file.revision,file.file.revision)
  const draftNotes='Manual Save As speaker notes'
+ const workspace=createWorkspaceService(f.transactions)
+ const presentationFolder=await workspace.createFolder(f.alice.token,{name:'Presentations',parentId:null})
  assert.equal(await page.evaluate(text=>window.slidesApi.setNotes({slideIndex:0,text}),draftNotes),true)
  await page.getByRole('button',{name:'File',exact:true}).click()
  const saveAs=page.getByRole('group',{name:'File',exact:true}).getByRole('button',{name:/^Save As/})
@@ -90,9 +93,10 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
  await page.keyboard.press('ControlOrMeta+Shift+s')
  await copyName.fill('Manual presentation copy')
+ await confirmation.getByRole('combobox',{name:'Folder',exact:true}).selectOption(presentationFolder.id)
  await confirmation.getByRole('button',{name:'Save copy',exact:true}).click()
  await expect(page.getByText('Saved copy: Manual presentation copy.pptx',{exact:true})).toBeVisible({timeout:30000})
- const manualCopy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Manual presentation copy.pptx')
+ const manualCopy=(await workspace.listFiles(f.alice.token,{folderId:presentationFolder.id})).files.find(item=>item.name==='Manual presentation copy.pptx')
  assert.ok(manualCopy)
  const manualZip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,manualCopy.id,manualCopy.revision))
  const notesXml=await Promise.all(manualZip.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(part=>part.async('string')))

@@ -250,12 +250,12 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
    },signal)
    assertActive()
    if(current!==base)throw Error('The PDF revision changed during validation')
-  },writer:{
+  },workspaceRequest:session.request,writer:{
    save(draft:Parameters<typeof writer.save>[0],count:number,check?:()=>boolean,stamps?:Parameters<typeof writer.save>[2],imageBakes?:Parameters<typeof writer.save>[3]){
     pageCount=count
     return writer.save(draft,check,stamps,imageBakes)
    },
-   async saveCopy(draft:Parameters<typeof writer.save>[0],count:number,name:string,modified:boolean,stamps:Parameters<typeof writer.save>[2],imageBakes:Parameters<typeof writer.save>[3],signal:AbortSignal){
+   async saveCopy(draft:Parameters<typeof writer.save>[0],count:number,name:string,modified:boolean,stamps:Parameters<typeof writer.save>[2],imageBakes:Parameters<typeof writer.save>[3],signal:AbortSignal,folderId?:string){
     const base=current
     const check=()=>{
      assertActive()
@@ -272,7 +272,7 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
      const blob=new Blob([bytes.slice().buffer as ArrayBuffer],{type:'application/pdf'})
      let upload:string|undefined,finishStarted=false
      try{
-      const {uploadId}=await session.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
+      const {uploadId}=await session.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size,folderId},signal)
       upload='/api/v1/uploads/'+encodeURIComponent(uploadId)
       check()
       await session.request(upload+'/content','PUT',blob,signal)

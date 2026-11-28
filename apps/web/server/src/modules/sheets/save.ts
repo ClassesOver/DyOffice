@@ -23,7 +23,7 @@ export type CsvSaveInput = Omit<SheetsRevisionInput,'unlockId'>
 export interface SheetsSaveInput extends SheetsRevisionInput { request: unknown }
 export interface SheetsPasswordInput extends SheetsRevisionInput { unlockId: string; newPassword: string }
 export type SheetsExportInput = Omit<SheetsSaveInput, 'request'> & { phases: unknown[] }
-export type SheetsCopyInput = SheetsExportInput & { name: string }
+export type SheetsCopyInput = SheetsExportInput & { name: string; folderId?: string }
 type PreparedWorkbook = Awaited<ReturnType<ReturnType<typeof createWorkbookPasswordCodec>['seal']>> & {rememberSave():void}
 
 /** Prepare the normal T06 upload. The browser then commits it using the same
@@ -128,7 +128,7 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
         const sealed = await protection.seal(bytes)
         await assertSource(token,fileId,input)
         protection.check()
-        const {uploadId}=await files.stageUpload(token,{name:input.name,size:sealed.bytes.length})
+        const {uploadId}=await files.stageUpload(token,{name:input.name,size:sealed.bytes.length,folderId:input.folderId})
         try {
           await files.receiveProtectedOfficeRevision(token,uploadId,sealed)
           await assertSource(token,fileId,input)

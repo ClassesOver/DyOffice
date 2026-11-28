@@ -28,7 +28,7 @@ import {AGENT_TOOLS as DOCS_AGENT_TOOLS} from '../../../docs/src/renderer/ai/too
 import { messages } from './messages.ts'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import { mountEditorRealtime } from './editor-realtime.ts'
-import { confirmWebFileName, suggestWebFileName } from './web-ai-naming'
+import { confirmWorkspaceCopy, suggestWebFileName, type WorkspaceCopyDestination } from './web-ai-naming'
 import { createImageAttachmentReferences } from './web-ai-media-api'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -226,7 +226,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     !disposed && !!draftEditor && !!draftAuthority.request && draftAuthority.current() &&
     !!host.getState(fileId).lease && host.getState(fileId).status === 'idle' &&
     (!host.hasDocxPasswordChange(fileId)||!bridge.waitForSave())
-  async function saveCopy(selectName?: (signal: AbortSignal) => Promise<string | null>): Promise<boolean> {
+  async function saveCopy(selectDestination?: (request: NonNullable<DraftCopyAuthority['request']>, signal: AbortSignal) => Promise<WorkspaceCopyDestination | null>): Promise<boolean> {
     const editor = draftEditor, request = draftAuthority.request, signal = copyLifetime.signal
     let source: ReturnType<typeof host.getState> | undefined
     const active = () => {
@@ -236,8 +236,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       return current.revision.revision===source.revision.revision&&current.lease?.leaseEpoch===source.lease?.leaseEpoch
     }
     // Confirming an earlier upload is separate from choosing settings for a new copy.
-    const retry = selectName?undefined:pendingCopy
-    if(selectName?!!pendingCopy:!retry)return false
+    const retry = selectDestination?undefined:pendingCopy
+    if(selectDestination?!!pendingCopy:!retry)return false
     if (!request || copying || signal.aborted || !draftAuthority.current() || (!retry && (!editor || !active()))) return false
     copying = true
     copyNotice = undefined
@@ -253,17 +253,17 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         ({name,upload}=retry)
       }else{
         if(!editor||!active())return false
-        const chosen = await selectName?.(signal)
+        const chosen = await selectDestination?.(request,signal)
         if (!chosen) return false
-        name = chosen.replace(/\.docx$/i,'')+'.docx'
+        name = chosen.name.replace(/\.docx$/i,'')+'.docx'
         if (!await draftAuthority.verify() || !active()) throw Error('Draft session ended')
         const managedCopy=passwordProtected()||host.hasDocxPasswordChange(fileId)
         if(managedCopy)source=host.getState(fileId)
         const bytes = await editor.serialize()
         if (!bytes?.byteLength || bytes.byteLength > 32*1024*1024 || !await draftAuthority.verify() || !active()) throw Error('Draft snapshot unavailable')
         const {uploadId} = managedCopy
-          ? await host.stageDocxDraftCopy(fileId,name,bytes)
-          : await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:bytes.byteLength},signal)
+          ? await host.stageDocxDraftCopy(fileId,name,bytes,chosen.folderId)
+          : await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:bytes.byteLength,folderId:chosen.folderId},signal)
         upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
         if (!active()) throw Error('Draft session ended')
         if(!managedCopy)await request(upload+'/content','PUT',new Blob([bytes.slice().buffer as ArrayBuffer]),signal)
@@ -290,13 +290,13 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   const canCopyLocalDraft=()=>!signed&&(passwordProtected()? !guest&&!citationMode : !host.hasDocxPasswordChange(fileId))
   const sealRecoveryDraft=(bytes:Uint8Array)=>host.sealDocxRecovery(fileId,bytes)
-  const saveAsCopy = () => saveCopy(signal => confirmWebFileName(host.getState(fileId).name,{locale,signal}))
+  const saveAsCopy = () => saveCopy((request,signal) => confirmWorkspaceCopy(host.getState(fileId).name,{locale,signal,request}))
   const nameCopy: DocsNamedCopy = async propose => {
     const modelId = assistant?.selected()
     if (!assistant?.available || !modelId || pendingCopy || protectedView()) return
-    await saveCopy(async signal => {
+    await saveCopy(async (request,signal) => {
       const proposed = await propose(({content}) => protectedView()?Promise.resolve(''):suggestWebFileName(content,{modelId,proof:assistant.sessionProof,format:'docx',locale,signal}))
-      return proposed && !protectedView() && canSaveCopy() ? confirmWebFileName(proposed,{locale,signal}) : null
+      return proposed && !protectedView() && canSaveCopy() ? confirmWorkspaceCopy(proposed,{locale,signal,request}) : null
     })
   }
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}

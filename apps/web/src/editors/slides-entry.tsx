@@ -17,7 +17,7 @@ import {createBrowserSlideFullscreen} from './slides-browser-fullscreen'
 import {messages} from './messages.ts'
 import {mountEditorRealtime} from './editor-realtime.ts'
 import {editorAssistantNotice,loadEditorAssistant} from './editor-assistant-status'
-import {confirmWebFileName,suggestWebFileName} from './web-ai-naming'
+import {confirmWorkspaceCopy,suggestWebFileName} from './web-ai-naming'
 import {ASSISTANT_FORMAT_TOOLS} from '../../../../packages/web-contracts/src/assistant.ts'
 import {App, type SlidesAppHost, type SlidesEditorHandle} from '../../../slides/src/renderer/App'
 import {AudienceView} from '../../../slides/src/renderer/components/AudienceView'
@@ -214,13 +214,13 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     let upload:string|undefined,finishStarted=false
     try{
       if(!await copyAuthority?.verify()||!canCopy())throw Error('Draft session ended')
-      const chosen=await confirmWebFileName(stem+'.pptx',{locale,signal,document:stage.document})
+      const chosen=await confirmWorkspaceCopy(stem+'.pptx',{locale,signal,request,document:stage.document})
       if(!chosen||signal.aborted)return
-      const name=chosen.replace(/\.pptx$/i,'')+'.pptx'
+      const name=chosen.name.replace(/\.pptx$/i,'')+'.pptx'
       if(!await copyAuthority?.verify()||!canCopy())throw Error('Draft session ended')
       const blob=await bridge.exportDraftCopy(proof,signal)
       if(!canCopy())throw Error('Draft session ended')
-      const {uploadId}=await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
+      const {uploadId}=await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size,folderId:chosen.folderId},signal)
       upload='/api/v1/uploads/'+encodeURIComponent(uploadId)
       if(!canCopy())throw Error('Draft session ended')
       await request(upload+'/content','PUT',blob,signal)
