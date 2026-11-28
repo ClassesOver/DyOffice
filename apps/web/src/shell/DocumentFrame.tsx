@@ -5,11 +5,11 @@ import {dispatchBrowserDocumentCommand,type BrowserDocumentCommand,type Workspac
 import {Alert,Button} from 'antd'
 import {useEffect,useRef,useState} from 'react'
 import type {DocumentTab,DocumentCloseGuard} from './document-tabs'
-import {isWorkspaceFileName,type WorkbookImportFormat} from './workspace-file-formats'
+import {isWorkspaceFileName,type WorkspaceImportFormat} from './workspace-file-formats'
 
 type EditorWindow=Omit<Window,'dyofficeEditorCanClose'>&{dyofficeEditorCanClose?:()=>boolean|Promise<boolean>;dyofficeEditorDispose?:()=>boolean|Promise<boolean>;dyofficeEditorCanSleep?:()=>boolean}
 export type DocumentMenuCommand={id:string;command:BrowserDocumentCommand;claim:()=>boolean;complete:(handled:boolean)=>void}
-export function DocumentFrame({file,registerGuard,registerSleepGuard,sessionActive=()=>false,onAutoFileName,documentShortcutsActive=false,onOpenShortcut,onOpenWorkspaceFile,onSaveAssistantSide,takeOfficeImportUnlock,menuCommand,onPaneInteraction,onDropWorkspaceFiles,workbookImports=[]}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void;registerSleepGuard?:(id:string,guard:DocumentCloseGuard|null)=>void;sessionActive?:()=>boolean;onAutoFileName?:(id:string,previous:string,name:string)=>void;documentShortcutsActive?:boolean;onOpenShortcut?:(event:KeyboardEvent)=>void;onOpenWorkspaceFile?:()=>boolean;onSaveAssistantSide?:WorkspaceOpenFrame['dyofficeSaveAssistantSide'];takeOfficeImportUnlock?:(fileId:string,revision:string)=>string|undefined;menuCommand?:DocumentMenuCommand|null;onPaneInteraction?:()=>void;onDropWorkspaceFiles?:(files:File[])=>void;workbookImports?:readonly WorkbookImportFormat[]}){
+export function DocumentFrame({file,registerGuard,registerSleepGuard,sessionActive=()=>false,onAutoFileName,documentShortcutsActive=false,onOpenShortcut,onOpenWorkspaceFile,onSaveAssistantSide,takeOfficeImportUnlock,menuCommand,onPaneInteraction,onDropWorkspaceFiles,fileImports=[]}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void;registerSleepGuard?:(id:string,guard:DocumentCloseGuard|null)=>void;sessionActive?:()=>boolean;onAutoFileName?:(id:string,previous:string,name:string)=>void;documentShortcutsActive?:boolean;onOpenShortcut?:(event:KeyboardEvent)=>void;onOpenWorkspaceFile?:()=>boolean;onSaveAssistantSide?:WorkspaceOpenFrame['dyofficeSaveAssistantSide'];takeOfficeImportUnlock?:(fileId:string,revision:string)=>string|undefined;menuCommand?:DocumentMenuCommand|null;onPaneInteraction?:()=>void;onDropWorkspaceFiles?:(files:File[])=>void;fileImports?:readonly WorkspaceImportFormat[]}){
  const embedded=window.parent!==window&&new URLSearchParams(location.search).get('dshEmbed')==='1'
  const source=embedded?file.src+'&dshEmbed=1':file.src
  const frame=useRef<HTMLIFrameElement>(null)
@@ -88,7 +88,7 @@ export function DocumentFrame({file,registerGuard,registerSleepGuard,sessionActi
    const files=Array.from(event.dataTransfer?.files??[])
    if(event.defaultPrevented||!files.length)return
    event.preventDefault()
-   if(session.current()&&files.some(file=>isWorkspaceFileName(file.name,workbookImports)))onDropWorkspaceFiles(files)
+   if(session.current()&&files.some(file=>isWorkspaceFileName(file.name,fileImports)))onDropWorkspaceFiles(files)
   }
   editor.addEventListener('dragover',dragOver)
   editor.addEventListener('drop',drop)
@@ -96,7 +96,7 @@ export function DocumentFrame({file,registerGuard,registerSleepGuard,sessionActi
    editor.removeEventListener('dragover',dragOver)
    editor.removeEventListener('drop',drop)
   }
- },[workbookImports,documentShortcutsActive,failed,loadingState,onDropWorkspaceFiles,onPaneInteraction])
+ },[fileImports,documentShortcutsActive,failed,loadingState,onDropWorkspaceFiles,onPaneInteraction])
  const consumedMenuCommand=useRef<DocumentMenuCommand|null>(null)
  useEffect(()=>{
   if(!menuCommand||menuCommand.id!==file.id||consumedMenuCommand.current===menuCommand||

@@ -15,6 +15,8 @@ import type { LeaseService } from '../leases/service.ts'
 import { createAiCsvDocument, createAiXlsxDocument, type AiXlsxInput } from '../sheets/create-document.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type { EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
+import { workspaceConversionTargets, type WorkspaceConversionFormat } from '../../../../../../packages/web-contracts/src/file-imports.ts'
+import { convertOpenDocument } from './odf-import.ts'
 
 const encryptedWorkbookMime = 'application/vnd.dyoffice.encrypted-xlsx'
 const encryptedMacroWorkbookMime = 'application/vnd.dyoffice.encrypted-xlsm'
@@ -47,12 +49,19 @@ const sheetSizes = (maxIndex:number) => ({type:'array',maxItems:maxIndex,items:{
 const sheetLayout = {type:'object',additionalProperties:false,required:['defaultRowHeight','defaultColumnWidth','rows','columns'],properties:{
   defaultRowHeight:{type:'number',exclusiveMinimum:0},defaultColumnWidth:{type:'number',exclusiveMinimum:0},rows:sheetSizes(1048576),columns:sheetSizes(16384),
 }}
-const workbookImportFormats = ['tsv','xls','ods','ots'] as const
-type WorkbookConverters = Partial<Record<(typeof workbookImportFormats)[number], (bytes: Buffer, signal: AbortSignal) => Promise<Buffer>>>
+const conversionFormats = Object.keys(workspaceConversionTargets) as WorkspaceConversionFormat[]
+type FileConverter = (bytes: Buffer, signal: AbortSignal) => Promise<Buffer>
+type WorkbookConverters = Partial<Record<'tsv'|'xls'|'ods'|'ots', FileConverter>>
 export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }, workbookConverters: WorkbookConverters = {}, editableCsv = false) {
   const admission = objectTransferAdmission(app)
   const { transfer } = admission
-  const converters = files.capabilities?.xlsx === 'editable' ? workbookConverters : {}
+  const convertDoc: FileConverter = (bytes, signal) => convertOpenDocument(bytes, 'docx', signal)
+  const convertSlides: FileConverter = (bytes, signal) => convertOpenDocument(bytes, 'pptx', signal)
+  const converters: Partial<Record<WorkspaceConversionFormat, FileConverter>> = {
+    ...(files.capabilities?.xlsx === 'editable' && workbookConverters),
+    ...(files.capabilities?.docx === 'editable' && { odt: convertDoc, ott: convertDoc }),
+    ...(files.capabilities?.pptx === 'editable' && { odp: convertSlides, otp: convertSlides }),
+  }
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
@@ -61,8 +70,8 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       // Hold admission through processing AND response completion. A client
       // disconnect cannot free capacity while object work still owns buffers.
       const path = request.routeOptions.url
-      const convertingWorkbook = workbookImportFormats.some(format => path === `/api/v1/files/convert-${format}`)
-      if ((['PUT','GET','HEAD'].includes(request.method) && path?.endsWith('/content')) || (request.method === 'POST' && (path?.endsWith('/uploads') || path?.endsWith('/purge') || path?.endsWith('/finish') || path?.endsWith('/commits') || path?.endsWith('/restoration-uploads') || path?.endsWith('/ai/xlsx-documents') || path?.endsWith('/ai/csv-documents') || path?.endsWith('/docx/unlock') || path?.endsWith('/docx/import-unlock') || path?.endsWith('/docx/recovery-draft') || path?.endsWith('/files/new-pdf') || convertingWorkbook))) {
+      const convertingFile = conversionFormats.some(format => path === `/api/v1/files/convert-${format}`)
+      if ((['PUT','GET','HEAD'].includes(request.method) && path?.endsWith('/content')) || (request.method === 'POST' && (path?.endsWith('/uploads') || path?.endsWith('/purge') || path?.endsWith('/finish') || path?.endsWith('/commits') || path?.endsWith('/restoration-uploads') || path?.endsWith('/ai/xlsx-documents') || path?.endsWith('/ai/csv-documents') || path?.endsWith('/docx/unlock') || path?.endsWith('/docx/import-unlock') || path?.endsWith('/docx/recovery-draft') || path?.endsWith('/files/new-pdf') || convertingFile))) {
         if (request.method === 'PUT') {
           const format = encryptedFormat(contentType(request.headers['content-type']))
           const upload = await files.preflightUpload(credential, (request.params as { id: string }).id, format)
@@ -91,9 +100,9 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => ({
       ...files.capabilities,
       ...(editableCsv && {csvImport:'editable'}),
-      ...Object.fromEntries(workbookImportFormats.filter(format=>converters[format]).map(format=>[`${format}Import`,'editable'])),
+      ...Object.fromEntries(conversionFormats.filter(format=>converters[format]).map(format=>[`${format}Import`,'editable'])),
     }))
-    for (const format of workbookImportFormats) {
+    for (const format of conversionFormats) {
       const convert = converters[format]
       if (!convert) continue
       api.post(`/api/v1/files/convert-${format}`, {bodyLimit:MAX_OBJECT_BYTES,schema:{querystring:emptyQuery}}, (request,reply)=>withDisconnect(request,reply,signal=>transfer(request,reply,async()=>{

@@ -13,6 +13,7 @@ import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
 import {password} from '../helpers/identity.mjs'
 import {officeBrowserAsset} from '../helpers/office-browser-assets.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
+import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
 import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
@@ -436,6 +437,79 @@ test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} upload
  }
  await page.reload()
  await expect.poll(values,{timeout:30000}).toEqual(['Name','A, B, C, D, E',51,'=1+2'])
+})
+
+test('workspace converts OpenDocument documents and presentations into editable copies',{skip:!built,timeout:180000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+13
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false})
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+  nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ const workspaceFiles=async()=>(await f.files.listFiles(f.alice.token)).files
+ const docs=[
+  ['Memo','odt','docx','text','Memo heading','word/document.xml'],
+  ['Template','ott','docx','text','Template heading','word/document.xml'],
+  ['Briefing','odp','pptx','presentation','Briefing title','ppt/slides/slide1.xml'],
+  ['Theme','otp','pptx','presentation','Theme title','ppt/slides/slide1.xml'],
+ ]
+ const sources=[]
+ for(const [name,ext,,kind,content] of docs){
+  const zip=new JSZip()
+  zip.file('mimetype',`application/vnd.oasis.opendocument.${kind}${ext==='ott'||ext==='otp'?'-template':''}`)
+  const body=kind==='text'?`<text:h text:outline-level="1">${content}</text:h>`:
+   `<draw:page draw:name="1"><draw:frame svg:x="1cm" svg:y="1cm" svg:width="10cm" svg:height="2cm"><draw:text-box><text:p>${content}</text:p></draw:text-box></draw:frame></draw:page>`
+  zip.file('content.xml',`<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`)
+  sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer:await zip.generateAsync({type:'nodebuffer'})})
+ }
+ const token=f.alice.token,csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
+ const convert=(buffer,headers={})=>app.inject({method:'POST',url:'/api/v1/files/convert-odt',payload:buffer,
+  headers:{origin,'content-type':'application/octet-stream',...headers}})
+ assert.equal((await convert(sources[0].buffer)).statusCode,401)
+ const auth={cookie:`${SESSION_COOKIE}=${token}`,'x-csrf-token':csrf.sessionToken(token)}
+ assert.equal((await convert(sources[2].buffer,auth)).statusCode,400)
+ const malformed=new JSZip()
+ malformed.file('content.xml','<!DOCTYPE doc [<!ENTITY value "test">]><doc>&value;</doc>')
+ assert.equal((await convert(await malformed.generateAsync({type:'nodebuffer'}),auth)).statusCode,400)
+ // Selecting a file for conversion must not publish or store its source bytes.
+ await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+ const dialog=page.getByRole('dialog',{name:'上传文件',exact:true}),picker=dialog.locator('input[type=file]')
+ const accept=(await picker.getAttribute('accept')).split(',')
+ for(const [,ext] of docs)assert.ok(accept.includes('.'+ext))
+ await picker.setInputFiles(sources)
+ await dialog.getByRole('button',{name:'开始上传（4）',exact:true}).click()
+ const prompt=dialog.getByRole('group',{name:'OpenDocument 转换',exact:true})
+ for(const [index,[name,ext,format]] of docs.entries()){
+  await expect(prompt).toContainText(`${name}.${ext}`,{timeout:30000})
+  await expect(prompt).toContainText(format.toUpperCase()+' 副本')
+  if(index===0)assert.deepEqual(await workspaceFiles(),[])
+  await prompt.getByRole('button',{name:'转换并打开',exact:true}).click()
+ }
+ await expect(dialog).toContainText('已完成 4',{timeout:60000})
+ await dialog.getByRole('button',{name:'完成',exact:true}).click()
+ const stored=await workspaceFiles()
+ assert.deepEqual(stored.map(item=>item.name).sort(),docs.map(([name,,format])=>`${name}.${format}`).sort())
+ for(const [name,,format,,content,part] of docs){
+  const file=stored.find(item=>item.name===`${name}.${format}`)
+  assert.equal(file.format,format)
+  await page.getByRole('tab',{name:file.name,exact:true}).click()
+  const native=page.frameLocator(`iframe[data-document-id="${file.id}"]`)
+  await expect(native.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+  const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.id,file.revision))
+  assert.ok((await zip.file(part).async('string')).includes(content),file.name)
+ }
 })
 
 test('workspace document theme updates the open Word and Excel canvases without saving either file',{skip:!built,timeout:120000},async t=>{

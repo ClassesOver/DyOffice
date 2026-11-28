@@ -122,7 +122,7 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-sleep`} aria-describedby={`${preferenceId}-sleep-hint`} checked={draft?.sleepInactiveTabs!==false} onChange={event=>edit({sleepInactiveTabs:event.target.checked})}/>
    </div>
    <div className="personal-page-preference-row personal-page-switch-row">
-    <div><label htmlFor={`${preferenceId}-odf-import`}>确认 OpenDocument 转换</label><p id={`${preferenceId}-odf-import-hint`} className="personal-page-field-hint">导入 ODS 或 OTS 并创建 XLSX 副本前询问。</p></div>
+    <div><label htmlFor={`${preferenceId}-odf-import`}>确认 OpenDocument 转换</label><p id={`${preferenceId}-odf-import-hint`} className="personal-page-field-hint">导入 OpenDocument 文件并创建可编辑副本前询问。</p></div>
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-odf-import`} aria-describedby={`${preferenceId}-odf-import-hint`} checked={draft?.skipOdfImportPrompt!==true} onChange={event=>edit({skipOdfImportPrompt:!event.target.checked})}/>
    </div>
    <div className="personal-page-preference-row">

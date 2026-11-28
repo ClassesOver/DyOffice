@@ -125,7 +125,7 @@ test('ODF conversion waits for consent, skips a declined file and remembers a co
  const rememberOdfPrompt=vi.fn(async()=>{})
  ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
  document.body.innerHTML='<div id="upload"></div>';root=createRoot(document.getElementById('upload')!)
- await act(async()=>root.render(h(WorkspaceUploadDialog,{open:true,initialFiles:files,workbookImports:['ods','ots'],rememberOdfPrompt,upload,onClose:vi.fn()})))
+ await act(async()=>root.render(h(WorkspaceUploadDialog,{open:true,initialFiles:files,fileImports:['ods','ots'],rememberOdfPrompt,upload,onClose:vi.fn()})))
  await click('开始上传（3）')
  expect(upload).not.toHaveBeenCalled()
  expect(document.querySelector('[aria-label="OpenDocument 转换"]')?.textContent).toContain('decline.ods')
@@ -137,7 +137,10 @@ test('ODF conversion waits for consent, skips a declined file and remembers a co
  expect(rememberOdfPrompt).toHaveBeenCalledOnce()
 })
 
-test.each(['TSV','XLS','ODS','OTS'] as const)('%s uploads convert within the bound session and stage the XLSX copy',async format=>{
+test.each([
+ ['TSV','xlsx'],['XLS','xlsx'],['ODS','xlsx'],['OTS','xlsx'],
+ ['ODT','docx'],['OTT','docx'],['ODP','pptx'],['OTP','pptx'],
+] as const)('%s uploads convert within the bound session and stage the %s copy',async (format,target)=>{
  const proof='p'.repeat(43),staged:string[]=[]
  const input=new File(['Workbook source'],`Report.${format}`)
  const converted=new Blob(['converted workbook'],{type:'application/octet-stream'})
@@ -158,11 +161,11 @@ test.each(['TSV','XLS','ODS','OTS'] as const)('%s uploads convert within the bou
    expect(await (options?.body as Blob).text()).toBe(await converted.text())
    return Response.json({})
   }
-  if(path.endsWith('/finish'))return Response.json({file:{fileId:'file'},format:'xlsx'})
+  if(path.endsWith('/finish'))return Response.json({file:{fileId:'file'},format:target})
   throw new Error('Unexpected request '+path)
  })
  await client.upload(input,proof)
- expect(staged).toEqual(['Report.xlsx'])
+ expect(staged).toEqual([`Report.${target}`])
 })
 
 test('the multi-file picker appends queued files and rejects oversized files before sending',async()=>{

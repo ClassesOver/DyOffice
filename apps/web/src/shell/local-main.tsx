@@ -17,7 +17,7 @@ import {NativeSettingsDialog} from './NativeSettingsDialog'
 import {WorkspaceUploadDialog} from './WorkspaceUploadDialog'
 import {WorkspaceSplitDivider} from './WorkspaceSplitDivider'
 import {listenForWindowReturn,requestWindowReturn,setWindowReturnTarget,windowReturnTarget,workspaceWindowId} from './workspace-window-return'
-import {isWorkspaceFileName,workspaceWorkbookImports} from './workspace-file-formats'
+import {isWorkspaceFileName,workspaceFileImports} from './workspace-file-formats'
 import {AppFrame} from '../../../shell/src/renderer/src/AppFrame'
 
 import {LocaleProvider} from '../../../shell/src/renderer/src/locale'
@@ -213,7 +213,7 @@ function takeOfficeImportUnlock(fileId:string,revision:string){
 }
 async function upload(file:File,expectedProof:string|undefined,autoName=false,password?:string){
  if(busy)throw new Error('正在导入，请稍候')
- const imports=workspaceWorkbookImports(capabilities)
+ const imports=workspaceFileImports(capabilities)
  if(!isWorkspaceFileName(file.name,imports))throw new Error(`请选择 ${['DOCX','XLSX','PPTX','PDF',...imports.map(format=>format.toUpperCase())].join('、')} 文件。`)
  if(!expectedProof)throw new Error('登录状态未核验，请重新加载当前工作区。')
  busy=true
@@ -508,7 +508,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const [uploadFiles,setUploadFiles]=useState<File[]|null>(null)
  const uploadSession=sourceWorkspace?.bound
  const uploadProof=uploadSession?.proof
- const workbookImports=useMemo(()=>workspaceWorkbookImports(capabilities),[capabilities])
+ const fileImports=useMemo(()=>workspaceFileImports(capabilities),[capabilities])
  showUpload=files=>setUploadFiles(files??[])
  const [chromeMenu,setChromeMenu]=useState<{kind:'app'|'new'|'tabs'|'tab';x:number;y:number;id?:string}|null>(null)
  showChromeMenu=(kind,x,y,id)=>setChromeMenu({kind,x,y,id})
@@ -833,7 +833,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
  }
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList allowHomeTabMenu renameTabFile={renameTabFile} closeTabWithKeyboard={closeTabWithKeyboard} detachTabOnDrop={moveTabToWindow} homeBeside={split?.left==='home'?'left':split?.right==='home'?'right':undefined} initialOnboardingSeen={true} homeProps={{copyWorkspaceFileLink,renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf',...workbookImports],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=>{
+  <AppFrame hideAppMenu hideSingleTabList allowHomeTabMenu renameTabFile={renameTabFile} closeTabWithKeyboard={closeTabWithKeyboard} detachTabOnDrop={moveTabToWindow} homeBeside={split?.left==='home'?'left':split?.right==='home'?'right':undefined} initialOnboardingSeen={true} homeProps={{copyWorkspaceFileLink,renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf',...fileImports],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=>{
    const active=tabs.some(tab=>tab.id===file.id&&tab.active)
    const pane=split?.left===file.id?'left':split?.right===file.id?'right':undefined
    const selectPane=pane&&!active&&workspaceShortcutsActive?()=>{
@@ -844,13 +844,13 @@ function Shell({recovery=false}:{recovery?:boolean}){
      data-workspace-pane={pane} onPointerDown={selectPane} onFocusCapture={selectPane}>
     {file.format==='pdf'||file.src.startsWith('/native-')
      ?<DocumentFrame key={`${file.src}:${documentTabs.renderGeneration(file.id)}`} file={file} documentShortcutsActive={workspaceShortcutsActive&&active} menuCommand={menuCommand?.id===file.id?menuCommand:null}
-       onOpenShortcut={openShortcut} onOpenWorkspaceFile={openWorkspaceFile} onSaveAssistantSide={saveWorkspaceAssistantSide} takeOfficeImportUnlock={takeOfficeImportUnlock} onPaneInteraction={selectPane} onDropWorkspaceFiles={openWorkspaceFile} workbookImports={workbookImports}
+       onOpenShortcut={openShortcut} onOpenWorkspaceFile={openWorkspaceFile} onSaveAssistantSide={saveWorkspaceAssistantSide} takeOfficeImportUnlock={takeOfficeImportUnlock} onPaneInteraction={selectPane} onDropWorkspaceFiles={openWorkspaceFile} fileImports={fileImports}
        registerGuard={documentTabs.setGuard} registerSleepGuard={documentTabs.setSleepGuard} onAutoFileName={updateAutoFileTab} sessionActive={()=>!recoveryBlocked.current}/>
      :<DocumentPreview key={file.src} fileId={file.id} name={file.name} format={file.format} sourceRevision={file.sourceRevision} request={sourceWorkspace?.bound.request??client.request}/>}
    </div>
   })}{split&&<WorkspaceSplitDivider key={JSON.stringify([split.left,split.right])} disabled={!workspaceShortcutsActive||recovery} initialWidth={split.width} onResize={documentTabs.resizeSplit}/>}</>}/>
   {page&&<NativeSettingsDialog title={page==='documentResults'?workspacePages[page]+' · '+(tabs.find(tab=>tab.id===resultFileId)?.title??''):workspacePages[page]} onClose={close}><WorkspacePageContent key={page} documentId={page==='documentResults'?resultFileId:undefined} page={page} channelId={channelId} onOpenChannel={id=>{setChannelId(id);setPage('channels')}} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/></NativeSettingsDialog>}
-  {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} workbookImports={workbookImports}
+  {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} fileImports={fileImports}
     readSkipOdfPrompt={uploadSession&&(async()=>(await uploadSession.request<{skipOdfImportPrompt?:boolean}>('/api/v1/preferences')).skipOdfImportPrompt===true)}
     rememberOdfPrompt={uploadSession&&(async()=>{await uploadSession.request('/api/v1/preferences','PUT',{skipOdfImportPrompt:true})})}
     upload={(file,password)=>upload(file,uploadProof,false,password)} loadRecent={loadRecentWorkspaceFiles} openRecent={open} onClose={()=>setUploadFiles(null)}/>}

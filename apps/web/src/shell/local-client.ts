@@ -1,5 +1,6 @@
 import type {WebFile} from './web-home-bridge'
 import {isEncryptedOfficeFormat,type EncryptedOfficeFormat} from '../../../../packages/web-contracts/src/api'
+import {workspaceConversionTarget} from '../../../../packages/web-contracts/src/file-imports'
 export type SessionEndReason='expired'|'logout_failed'
 export class IncorrectOfficeUploadPassword extends Error {}
 /** Local mode only: HttpOnly session cookies, ephemeral CSRF, no bearer/JSON fallback. */
@@ -135,15 +136,16 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
   async upload(file:File,expectedProof:string,autoName=false,password?:string){
    if(!expectedProof)throw stale()
    if(file.size>32*1024*1024)throw new Error('文件超过 32 MiB 限制')
-   const extension=file.name.split('.').pop()?.toLowerCase()
+   const dot=file.name.lastIndexOf('.')
+   const extension=dot<0?'':file.name.slice(dot+1).toLowerCase()
    const encryptedFormat=password!==undefined&&extension&&isEncryptedOfficeFormat(extension)?extension:undefined
    if(password!==undefined&&(!encryptedFormat||!password.length||password.length>255))throw new Error('请输入有效的打开密码。')
    const bound=await bindSession(expectedProof)
    // Files dragged onto a native editor are created in the iframe's realm.
    let content=file instanceof Blob?file:new Blob([file])
-   const needsConversion=extension==='tsv'||extension==='xls'||extension==='ods'||extension==='ots'
-   if(needsConversion)content=await bound.download(`/api/v1/files/convert-${extension}`,{body:content})
-   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:needsConversion?file.name.slice(0,-4)+'.xlsx':file.name,size:needsConversion?content.size:file.size,...(autoName?{autoName:true}:{})})
+   const target=workspaceConversionTarget(extension)
+   if(target)content=await bound.download(`/api/v1/files/convert-${extension}`,{body:content})
+   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:target?file.name.slice(0,dot+1)+target:file.name,size:target?content.size:file.size,...(autoName?{autoName:true}:{})})
    const path=`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}`
    if(password!==undefined){
     const encoded=new TextEncoder().encode(password)

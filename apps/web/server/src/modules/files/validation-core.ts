@@ -65,8 +65,7 @@ function signatureAttribute(value: unknown) {
   })
 }
 
-async function validateOffice(bytes: Buffer, format: keyof typeof definitions, limits: Limits) {
-  const definition = definitions[format]
+async function readBoundedZip(bytes: Buffer, limits: Limits, structuralParts: readonly string[], allowVba = false) {
   // Reject ZIP64, split archives and trailing junk before opening any entries.
   let end = -1
   for (let at = bytes.length - 22; at >= Math.max(0, bytes.length - 22 - 65535); at--) {
@@ -83,12 +82,12 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
     for await (const entry of zip.eachEntry()) {
       if (++count > limits.maxEntries || entry.uncompressedSize > limits.maxPartBytes || total + entry.uncompressedSize > limits.maxInflatedBytes) throw storageError(413)
       const name = entry.fileName
-      if (names.has(name.toLowerCase()) || name.includes('\\') || name.includes('\0') || name.split('/').some(segment => segment === '..' || segment === '.') || name.startsWith('/') || (format !== 'xlsm' && /vbaProject/i.test(name)) || entry.isEncrypted() || ![0,8].includes(entry.compressionMethod) || entry.versionNeededToExtract >= 45 || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw storageError(400)
+      if (names.has(name.toLowerCase()) || name.includes('\\') || name.includes('\0') || name.split('/').some(segment => segment === '..' || segment === '.') || name.startsWith('/') || (!allowVba && /vbaProject/i.test(name)) || entry.isEncrypted() || ![0,8].includes(entry.compressionMethod) || entry.versionNeededToExtract >= 45 || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw storageError(400)
       names.add(name.toLowerCase())
       const header = await zip.readLocalFileHeaderPromise(entry)
       if (!header.fileName.equals(entry.fileNameRaw) || header.generalPurposeBitFlag !== entry.generalPurposeBitFlag || header.compressionMethod !== entry.compressionMethod || header.fileDataStart + entry.compressedSize > directory) throw storageError(400)
       if (!(entry.generalPurposeBitFlag & 8) && (header.crc32 !== entry.crc32 || header.compressedSize !== entry.compressedSize || header.uncompressedSize !== entry.uncompressedSize)) throw storageError(400)
-      const structural = ['[Content_Types].xml','_rels/.rels',definition.path].includes(name)
+      const structural = structuralParts.includes(name)
       if (structural && entry.uncompressedSize > limits.maxXmlBytes) throw storageError(413)
       const chunks: Buffer[] = [], stream = await zip.openReadStreamPromise(entry)
       let size = 0, crc = 0
@@ -104,7 +103,23 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
       if (structural) parts.set(name, Buffer.concat(chunks, size))
     }
   } finally { zip.close() }
-  if (!['[Content_Types].xml','_rels/.rels',definition.path].every(name => parts.has(name))) throw storageError(400)
+  return parts
+}
+
+export async function validateOdfInput(bytes: Buffer) {
+  const parts = await readBoundedZip(bytes, uploadLimits, ['content.xml', 'styles.xml'])
+  if (!parts.has('content.xml')) throw storageError(400)
+  for (const xml of parts.values()) {
+    const source = new TextDecoder('utf-8', { fatal: true }).decode(xml)
+    if (/<!\s*(?:DOCTYPE|ENTITY)/i.test(source) || XMLValidator.validate(source) !== true) throw storageError(400)
+  }
+}
+
+async function validateOffice(bytes: Buffer, format: keyof typeof definitions, limits: Limits) {
+  const definition = definitions[format]
+  const required = ['[Content_Types].xml','_rels/.rels',definition.path]
+  const parts = await readBoundedZip(bytes, limits, required, format === 'xlsm')
+  if (!required.every(name => parts.has(name))) throw storageError(400)
   const types = xmlRoot(parts.get('[Content_Types].xml')!, 'Types', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const overrides = children(types, 'Override', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const contentTypes = [...children(types,'Default', 'http://schemas.openxmlformats.org/package/2006/content-types'),...overrides].map(item => String(item['@_ContentType']))
