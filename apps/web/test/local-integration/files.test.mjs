@@ -14,6 +14,39 @@ import { password } from '../helpers/identity.mjs'
 const credential = token => ({ kind: 'session', token })
 const own = (f, callback) => f.transactions.withPrincipalTransaction(credential(f.alice.token), callback)
 
+test('encrypted PDF imports and duplicates preserve ciphertext and cannot acquire a replacement revision', async t => {
+  const f=await fileFixture(t,{buildApp:false}),token=f.alice.token
+  const bytes=await readFile(new URL('../../../pdf/tests/fixtures/enc256.pdf',import.meta.url))
+  const original=(await importFile(f,token,bytes,'Encrypted.pdf')).file
+  const prepared=await f.files.prepareDuplicate(token,original.fileId)
+  const duplicate=(await f.files.finishDuplicate(token,original.fileId,prepared.uploadId,prepared.revision,'en')).file
+  const {createLeaseService}=await import('../../server/src/modules/leases/service.ts')
+  const {createRevisionService}=await import('../../server/src/modules/revisions/service.ts')
+  const leases=createLeaseService({transactions:f.transactions})
+  const guardedLeases=createLeaseService({transactions:f.transactions,assertOfficeWritable:f.files.assertOfficeLeaseAllowed})
+  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
+  const plaintext=await PDFDocument.create()
+  plaintext.addPage()
+  const replacement=Buffer.from(await plaintext.save())
+  for(const file of [original,duplicate]){
+    const editorId=randomUUID()
+    await assert.rejects(guardedLeases.acquireLease(token,file.fileId,{editorId}),{statusCode:423})
+    const {leaseEpoch}=await leases.acquireLease(token,file.fileId,{editorId})
+    await assert.rejects(revisions.stageUpload(token,file.fileId,{
+      size:replacement.length,baseRevision:file.revision,leaseEpoch,editorId,
+    }),{statusCode:423})
+    assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),bytes)
+    assert.equal((await f.files.openFile(token,file.fileId)).file.revision,file.revision)
+    await assert.rejects(f.files.readFile(f.bob.token,file.fileId,file.revision),{statusCode:404})
+  }
+  const editable=(await importFile(f,token,replacement,'Editable.pdf')).file
+  const editorId=randomUUID(),{leaseEpoch}=await leases.acquireLease(token,editable.fileId,{editorId})
+  const upload=await revisions.stageUpload(token,editable.fileId,{
+    size:bytes.length,baseRevision:editable.revision,leaseEpoch,editorId,
+  })
+  await assert.rejects(f.files.receiveUpload(token,upload.uploadId,bytes),{statusCode:400})
+})
+
 test('upload publication files a copy in the selected folder without overwriting an existing file', async t => {
   const f=await fileFixture(t),bytes=await docxBytes(),token=f.alice.token
   const {createWorkspaceService}=await import('../../server/src/modules/workspace/service.ts')

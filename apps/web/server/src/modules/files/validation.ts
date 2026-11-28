@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
-import { validateFileName, validateUploadInternal, type FileValidationPolicy } from './validation-core.ts'
+import { validateFileName, validateUploadInternal, type FileValidationOptions } from './validation-core.ts'
 export { validateFileName, uploadLimits } from './validation-core.ts'
 
 // Workers bound parser CPU/wall time and JS heap; this is not the future OS
@@ -8,8 +8,10 @@ export { validateFileName, uploadLimits } from './validation-core.ts'
 export function createFileValidator({ timeoutMs = 5000, maxConcurrent = 2 }: { timeoutMs?: number; maxConcurrent?: number } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw storageError(400)
   let active = 0
-  return async function validate(bytes: Buffer, name: string, policy: Partial<FileValidationPolicy> = {}): ReturnType<typeof validateUploadInternal> {
+  return async function validate(bytes: Buffer, name: string, policy: FileValidationOptions = {}): ReturnType<typeof validateUploadInternal> {
     const format = validateFileName(name)
+    const { allowEncryptedPdf, ...limits } = policy
+    if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw storageError(400)
     if (!Buffer.isBuffer(bytes) || (bytes.length === 0 && format !== 'csv')) throw storageError(400)
     if (bytes.length > MAX_OBJECT_BYTES || bytes.length > (policy.maxBytes ?? MAX_OBJECT_BYTES)) throw storageError(413)
     // A validated empty CSV has no untrusted contents to parse in a worker.
@@ -20,7 +22,12 @@ export function createFileValidator({ timeoutMs = 5000, maxConcurrent = 2 }: { t
     try {
       const snapshot = new Uint8Array(bytes.length)
       snapshot.set(bytes)
-      worker = new Worker(new URL('./validation-worker.ts', import.meta.url), {
+      const protectedPdfImport = format === 'pdf' && allowEncryptedPdf === true
+      const parser = protectedPdfImport
+        ? new URL('./pdf-validation-worker.mjs', import.meta.url)
+        : new URL('./validation-worker.ts', import.meta.url)
+      worker = new Worker(parser, {
+        ...(protectedPdfImport ? { execArgv: [] } : {}),
         workerData: { bytes: snapshot, name, policy }, transferList: [snapshot.buffer],
         resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 }, stdout: true, stderr: true,
       })

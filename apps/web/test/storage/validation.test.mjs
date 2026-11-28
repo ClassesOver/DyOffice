@@ -103,7 +103,7 @@ test('bounded validation concurrency rejects excess work without an unbounded wa
   assert.equal(results.find(result => result.status === 'rejected').reason.statusCode, 503)
 })
 
-test('upstream Office/PDF fixtures are accepted unchanged and encrypted PDF is refused', async () => {
+test('upstream Office and plaintext PDF fixtures are accepted unchanged', async () => {
   const { readFile } = await import('node:fs/promises'), validate = await validator()
   for (const [path, name, expected] of [
     ['packages/docx-engine/tests/fixtures/truths/render-sectafter-no-blank/probe.docx','probe.docx','docx'],
@@ -114,8 +114,21 @@ test('upstream Office/PDF fixtures are accepted unchanged and encrypted PDF is r
     const bytes = await readFile(new URL('../../../../' + path, import.meta.url))
     assert.equal((await validate(bytes, name)).format, expected)
   }
-  const encrypted = await readFile(new URL('../../../../apps/pdf/tests/fixtures/enc128.pdf', import.meta.url))
-  await assert.rejects(() => validate(encrypted, 'encrypted.pdf'), { statusCode: 400 })
+})
+
+test('first imports accept standard encrypted PDFs without a password and verify the ciphertext digest', async () => {
+  const { readFile } = await import('node:fs/promises'), validate = await validator()
+  for (const name of ['enc-r3-rc4.pdf','enc-r4-aes128.pdf','enc-r5-aes256.pdf','enc-r5-owneronly.pdf','enc256.pdf']) {
+    const bytes = await readFile(new URL('../../../../apps/pdf/tests/fixtures/' + name, import.meta.url))
+    const result = await validate(bytes, name, { allowEncryptedPdf: true })
+    assert.equal(result.format, 'pdf', name)
+    assert.equal(result.pdfEncrypted, true, name)
+    assert.equal(result.size, bytes.length, name)
+    assert.equal(result.sha256, createHash('sha256').update(bytes).digest('hex'), name)
+    await assert.rejects(() => validate(bytes, name), { statusCode: 400 })
+  }
+  const malformed = Buffer.from('%PDF-1.7\ntrailer << /Encrypt 9 0 R >>\nstartxref\n9\n%%EOF')
+  await assert.rejects(() => validate(malformed, 'fake-encrypted.pdf', { allowEncryptedPdf: true }), { statusCode: 400 })
 })
 
 test('OPC metadata children must resolve to the package namespace, including local overrides', async () => {

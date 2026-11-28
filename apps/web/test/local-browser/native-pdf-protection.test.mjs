@@ -1,7 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {PDFDocument,PDFName} from 'pdf-lib'
-import {randomUUID} from 'node:crypto'
 import {readFile} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
@@ -11,10 +10,10 @@ import {isHomeHeroRequest,stubHomeHero} from '../helpers/home-hero.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 
 const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
-test('native PDF protected structures stay readable without offering edit drafts',{skip:!directory,timeout:60000},async t=>{
+test('native PDF imports encrypted files and reads protected structures without offering edit drafts',{skip:!directory,timeout:90000},async t=>{
  const origin='http://localhost:4276',f=await fileFixture(t,{origin,buildApp:false})
  const records=[]
- for(const [kind,label] of [['signature','包含签名结构'],['signed','包含签名结构'],['xfa','包含 XFA 表单'],['encrypted','加密 PDF'],['plain','']]){
+ for(const [kind,label] of [['signature','包含签名结构'],['signed','包含签名结构'],['xfa','包含 XFA 表单'],['plain',''],['encrypted','加密 PDF']]){
   const pdf=await PDFDocument.create()
   pdf.addPage([320,240]).drawText('Readable original '+kind,{x:24,y:180})
   if(kind==='signature')pdf.catalog.set(PDFName.of('Perms'),pdf.context.obj({}))
@@ -22,22 +21,8 @@ test('native PDF protected structures stay readable without offering edit drafts
   const bytes=kind==='encrypted'?await readFile(new URL('../../../pdf/tests/fixtures/enc256.pdf',import.meta.url))
    :kind==='signed'?await readFile(new URL('../fixtures/signed-approval.pdf',import.meta.url))
    :Buffer.from(await pdf.save({updateFieldAppearances:false}))
-  if(kind==='encrypted'){
-   await assert.rejects(importFile(f,f.alice.token,bytes,kind+'.pdf'),{statusCode:400})
-   // Exercise an existing encrypted revision without changing upload policy.
-   const fileId=randomUUID(),revision=randomUUID(),owner=f.alice.user.id
-   const ref=await f.objects.putImmutable(`${f.deploymentId}/${owner}/objects/${revision}`,bytes)
-   await f.ownerDb.transaction(async c=>{
-    await c.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,owner])
-    const {rows:[workspace]}=await c.query('SELECT id FROM workspaces WHERE deployment_id=$1 AND owner_id=$2',[f.deploymentId,owner])
-    await c.query("INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision) VALUES($1,$2,$3,$4,'encrypted.pdf','pdf',$5)",[fileId,f.deploymentId,owner,workspace.id,revision])
-    await c.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size) VALUES($1,$2,$3,$4,$5,$6,$7)',[revision,f.deploymentId,owner,fileId,ref.key,ref.sha256,ref.size])
-   })
-   records.push({kind,label,bytes,file:{fileId,revision}})
-  }else{
-   const {file}=await importFile(f,f.alice.token,bytes,kind+'.pdf')
-   records.push({kind,label,bytes,file})
-  }
+  const file=kind==='encrypted'?undefined:(await importFile(f,f.alice.token,bytes,kind+'.pdf')).file
+  records.push({kind,label,bytes,file})
  }
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
   nativePdfDirectory:directory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY})
@@ -61,11 +46,26 @@ test('native PDF protected structures stay readable without offering edit drafts
  await page.getByLabel('密码',{exact:true}).fill(password)
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
- for(const {kind,label,bytes,file} of records){
-  turns.length=0
-  await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ const secretRequests=[]
+ page.on('request',request=>{
+  if(request.url().includes('user123')||request.postDataBuffer()?.includes('user123'))secretRequests.push(request.method())
+ })
+ for(const record of records){
+  const {kind,label,bytes}=record
+  let {file}=record
+  let editor=page
   if(kind==='encrypted'){
-   const prompt=page.getByRole('dialog')
+   await page.goto(origin)
+   await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
+   const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+   await upload.locator('input[type=file]').setInputFiles({name:'encrypted.pdf',mimeType:'application/pdf',buffer:bytes})
+   const finished=page.waitForResponse(response=>/\/api\/v1\/uploads\/[^/]+\/finish$/.test(response.url())&&response.ok())
+   await upload.getByRole('button',{name:'开始上传（1）',exact:true}).click()
+   await expect(upload).toContainText('已完成 1',{timeout:25000})
+   file=(await(await finished).json()).file
+   await upload.getByRole('button',{name:'完成',exact:true}).click()
+   editor=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+   const prompt=editor.getByRole('dialog')
    const input=prompt.locator('input[type=password]')
    await expect(prompt).toBeVisible()
    await input.fill('wrong-password')
@@ -73,8 +73,11 @@ test('native PDF protected structures stay readable without offering edit drafts
    await expect(prompt.getByRole('alert')).toContainText('密码错误')
    await input.fill('user123')
    await input.press('Enter')
+  }else{
+   await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
   }
-  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+  turns.length=0
+  await expect(editor.locator('html')).toHaveAttribute('data-document-loading','ready')
   if(kind==='signed'){
    const banner=page.locator('.pdf-sig-banner')
    await expect(banner).toContainText('签名完整，但签名人不受信任')
@@ -93,8 +96,8 @@ test('native PDF protected structures stay readable without offering edit drafts
    assert.equal(await download.failure(),null)
    assert.deepEqual(await readFile(await download.path()),bytes)
   }
-  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
-  const assistant=page.locator('.shared-editor-assistant')
+  await editor.getByRole('button',{name:'AI 助手',exact:true}).click()
+  const assistant=editor.locator('.shared-editor-assistant')
   const composer=assistant.getByRole('textbox',{name:'消息'})
   try{
    await composer.fill('Read the first page.')
@@ -112,11 +115,11 @@ test('native PDF protected structures stay readable without offering edit drafts
    throw error
   }
   const tools=turns[0].tools.map(tool=>tool.name)
-  await page.getByRole('button',{name:'页面',exact:true}).click()
-  const rotate=page.getByRole('button',{name:'向右旋转',exact:true})
-  const save=page.getByRole('button',{name:'保存',exact:true})
+  await editor.getByRole('button',{name:'页面',exact:true}).click()
+  const rotate=editor.getByRole('button',{name:'向右旋转',exact:true})
+  const save=editor.getByRole('button',{name:'保存',exact:true})
   if(label){
-   await expect(page.locator('.tb-readonly')).toContainText(label)
+   await expect(editor.locator('.tb-readonly')).toContainText(label)
    await expect(rotate).toBeDisabled()
    assert.ok(!tools.includes('edit_text')&&!tools.includes('add_note')&&!tools.includes('apply_ops'))
    await expect(save).toBeDisabled()
@@ -130,4 +133,5 @@ test('native PDF protected structures stay readable without offering edit drafts
    await expect(save).toBeEnabled()
   }
  }
+ assert.deepEqual(secretRequests,[])
 })

@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto'
 import { crc32 } from 'node:zlib'
 import { fromBufferPromise } from 'yauzl'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
-import { PDFDocument } from 'pdf-lib'
 import { decodeCsvBuffer } from '@genoffice/xlsx-gateway/gateway/csv-import'
 import type { WorkspaceFileFormat } from '../../../../../../packages/web-contracts/src/api.ts'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
+import { validatePdf } from './pdf-validation.mjs'
 
 export const uploadLimits = Object.freeze({ maxBytes: MAX_OBJECT_BYTES, maxEntries: 4096, maxPartBytes: 32 * 1024 * 1024, maxInflatedBytes: 128 * 1024 * 1024, maxXmlBytes: 4 * 1024 * 1024 })
 export interface FileValidationPolicy { maxBytes: number; maxEntries: number; maxPartBytes: number; maxInflatedBytes: number; maxXmlBytes: number }
+export type FileValidationOptions = Partial<FileValidationPolicy> & { allowEncryptedPdf?: boolean }
 type Limits = FileValidationPolicy
 const opcSignatureOrigin = 'http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/origin'
 const opcSignatureTypes = new Set([
@@ -149,7 +150,7 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
     contentTypes.some(type => opcSignatureTypes.has(signatureAttribute(type).toLowerCase()))
 }
 
-export async function validateUploadInternal(bytes: Buffer, name: string, policy: Partial<Limits> = {}) {
+export async function validateUploadInternal(bytes: Buffer, name: string, { allowEncryptedPdf = false, ...policy }: FileValidationOptions = {}) {
   const format = validateFileName(name), limits = { ...uploadLimits,...policy }
   if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw storageError(400)
   if (!Buffer.isBuffer(bytes) || (bytes.length === 0 && format !== 'csv')) throw storageError(400)
@@ -161,14 +162,11 @@ export async function validateUploadInternal(bytes: Buffer, name: string, policy
       // Tab and line breaks are valid CSV data. Binary office packages are not.
       if (bytes.subarray(0,5).toString('ascii') === '%PDF-' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text) ||
           bytes.subarray(0,4).toString('hex') === '504b0304' || bytes.subarray(0,8).toString('hex') === 'd0cf11e0a1b11ae1') throw storageError(400)
-    } else if (format === 'pdf') {
-      if (!/^%PDF-(?:1\.[0-9]|2\.0)/.test(bytes.subarray(0, 9).toString('ascii')) || !/%%EOF\s*$/.test(bytes.subarray(-1024).toString('latin1'))) throw storageError(400)
-      const document = await PDFDocument.load(bytes, { ignoreEncryption: false, throwOnInvalidObject: true, updateMetadata: false })
-      if (document.getPageCount() < 1) throw storageError(400)
-    } else officeSignatureProtected = await validateOffice(bytes, format, limits)
+    } else if (format === 'pdf') return Object.freeze(await validatePdf(bytes, allowEncryptedPdf))
+    else officeSignatureProtected = await validateOffice(bytes, format, limits)
   } catch (error) {
     if ((error as { statusCode?: number }).statusCode === 413) throw error
     throw storageError(400)
   }
-  return Object.freeze({ format, mime: format === 'csv' ? 'text/csv' : format === 'pdf' ? 'application/pdf' : definitions[format].mime, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), officeSignatureProtected })
+  return Object.freeze({ format, mime: format === 'csv' ? 'text/csv' : definitions[format].mime, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), officeSignatureProtected })
 }
