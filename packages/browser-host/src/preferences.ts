@@ -31,10 +31,10 @@ export function createPreferencesClient(request: SettingsRequest) {
   let uncertain = false
   let writeVersion = 0
   return {
-    async getPreferences(): Promise<PersonalPreferences> {
+    async getPreferences(signal?: AbortSignal): Promise<PersonalPreferences> {
       if (inFlight) return inFlight
       const version = writeVersion
-      const prefs = project(await request('/api/v1/preferences'))
+      const prefs = project(await request('/api/v1/preferences', 'GET', undefined, signal))
       if (version === writeVersion) uncertain = false
       return prefs
     },

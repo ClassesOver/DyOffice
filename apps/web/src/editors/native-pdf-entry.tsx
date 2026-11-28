@@ -460,9 +460,16 @@ async function mount(){
    ribbonBusy=false
   }
  }
+ const allowAutosave=()=>canChooseWorkspaceFile&&canRewritePages()&&!recoverRedaction&&!recoverManual
  const hostSave={
   ...grant.writer,
-  allowAutosave:()=>prefs?.autoSave===true&&canChooseWorkspaceFile&&canRewritePages()&&!recoverRedaction&&!recoverManual,
+  allowAutosave,
+  async confirmAutosave(){
+   const base=grant.current()
+   const signal=AbortSignal.any([browserActions.signal,AbortSignal.timeout(10000)])
+   const current=await grant.getPreferences(signal)
+   return current.autoSave&&allowAutosave()&&grant.current()===base
+  },
   savePageGeometry(operation:PdfPageGeometryOperation){
    const revision=grant.current()
    const check=()=>canRewritePages()&&grant.current()===revision

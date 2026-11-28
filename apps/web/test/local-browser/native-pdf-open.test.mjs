@@ -743,7 +743,7 @@ test('native Web PDF opens an internal link at its explicit destination',{skip:!
  ))).toBeLessThan(60)
 })
 
-test('native Web PDF autosaves after a manual save when the workspace preference is on',{skip:!directory,timeout:90000},async t=>{
+test('native Web PDF autosaves after a manual save and follows live workspace preferences',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -789,9 +789,19 @@ test('native Web PDF autosaves after a manual save when the workspace preference
  assert.equal(await rotation(manual),90)
 
  await rotate()
- await page.keyboard.press('ControlOrMeta+Shift+s')
+ const preferenceRead=request=>request.method()==='GET'&&new URL(request.url()).pathname==='/api/v1/preferences'
+ let releasePreference
+ const heldPreference=new Promise(resolve=>{releasePreference=resolve})
+ await page.route('**/api/v1/preferences',async route=>{await heldPreference;await route.continue()},{times:1})
  const copy=page.getByRole('dialog',{name:'Save a copy to your workspace'})
- await expect(copy).toBeVisible()
+ try{
+  await Promise.all([page.waitForRequest(preferenceRead),blur()])
+  await page.keyboard.press('ControlOrMeta+Shift+s')
+  await expect(copy).toBeVisible()
+  const read=page.waitForResponse(response=>preferenceRead(response.request())&&response.ok())
+  releasePreference()
+  await read
+ }finally{releasePreference()}
  await blurWithoutSave(manual)
  await copy.getByRole('button',{name:'Cancel',exact:true}).click()
  await expect(copy).toHaveCount(0)
@@ -803,14 +813,13 @@ test('native Web PDF autosaves after a manual save when the workspace preference
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 
  await f.preferences.update(f.alice.token,{autoSave:false})
- await page.reload()
- await ready()
- await button('Pages').click()
  await rotate()
- const disabled=await saveManually(auto)
- assert.equal(await rotation(disabled),270)
- await rotate()
- await blurWithoutSave(disabled)
+ await blurWithoutSave(auto)
+ await f.preferences.update(f.alice.token,{autoSave:true})
+ await Promise.all([page.waitForRequest(prepare,{timeout:10000}),blur()])
+ await expect.poll(head,{timeout:12000}).not.toBe(auto)
+ await uiDirty(false)
+ assert.equal(await rotation(await head()),270)
 })
 
 test('native Web PDF Save As creates a workspace copy of unsaved page changes',{skip:!directory,timeout:60000},async t=>{

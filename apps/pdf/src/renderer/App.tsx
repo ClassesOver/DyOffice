@@ -520,6 +520,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   hostSaveCopy?: PdfHostSaveCopy
   hostSave?: {
     allowAutosave?(): boolean
+    confirmAutosave?(): Promise<boolean>
     save(draft: SavePdfRequest, pageCount: number, check?: () => boolean, stamps?: StampConfig | null, imageBakes?: PdfHostImageBake[]): Promise<SavePdfResult>
     confirm(): Promise<SavePdfResult>
     savePageGeometry?(operation: PdfPageGeometryOperation): Promise<SavePdfResult>
@@ -5339,6 +5340,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
       !saveAsFlowRef.current &&
       !redactionRequestInFlightRef.current,
     () => void save(true, false, hostSave?.allowAutosave),
+    hostSave?.confirmAutosave,
   )
 
   // Done in the field popover persists the field; runs after the render that folded in

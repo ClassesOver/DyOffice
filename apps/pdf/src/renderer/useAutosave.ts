@@ -25,15 +25,31 @@ export function startAutosave(
 }
 
 /** React binding: installs the scheduler once and reads the latest callbacks through a ref */
-export function useAutosave(shouldSave: () => boolean, save: () => void): void {
-  const latest = useRef({ shouldSave, save })
-  latest.current = { shouldSave, save }
-  useEffect(
-    () =>
-      startAutosave(
-        () => latest.current.shouldSave(),
-        () => latest.current.save(),
-      ),
-    [],
-  )
+export function useAutosave(shouldSave: () => boolean, save: () => void, confirm?: () => Promise<boolean>): void {
+  const latest = useRef({ shouldSave, save, confirm })
+  latest.current = { shouldSave, save, confirm }
+  useEffect(() => {
+    let active = true
+    let checking = false
+    const stop = startAutosave(() => !checking && latest.current.shouldSave(), () => {
+      const authorize = latest.current.confirm
+      if (!authorize) {
+        latest.current.save()
+        return
+      }
+      checking = true
+      void (async () => {
+        try {
+          if (await authorize() && active && latest.current.confirm === authorize && latest.current.shouldSave()) {
+            latest.current.save()
+          }
+        } catch { /* A failed preference read leaves the draft pending. */ }
+        finally { checking = false }
+      })()
+    })
+    return () => {
+      active = false
+      stop()
+    }
+  }, [])
 }
