@@ -117,6 +117,32 @@ test('native Word Save As creates a workspace copy of the unsaved draft without 
   await expect(persistence).toHaveAttribute('data-dirty','true')
 })
 
+test('native Word Save As downloads named HTML and Markdown from the unsaved draft',{timeout:90000},async t=>{
+ const f=await fixture(t),{page}=f,file=f.opened.file,marker='Text only present in the unsaved draft'
+ await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+ const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+ await expect(editor).toBeVisible({timeout:30000})
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(marker)
+ await page.keyboard.press('Enter')
+ const dialog=page.getByRole('dialog',{name:/^(Save a copy to your workspace|Download a copy)$/})
+ for(const [format,name] of [['html','Web preview'],['md','Editorial notes']]){
+  await page.keyboard.press('ControlOrMeta+Shift+s')
+  await dialog.getByRole('combobox',{name:'File format',exact:true}).selectOption(format,{timeout:5000})
+  await expect(dialog.getByRole('combobox',{name:'Folder',exact:true})).toBeHidden()
+  await dialog.getByRole('textbox',{name:'File name'}).fill(name)
+  const entry=page.waitForEvent('download')
+  await dialog.getByRole('button',{name:'Download copy',exact:true}).click()
+  const download=await entry
+  assert.equal(download.suggestedFilename(),name+'.'+format)
+  assert.match(await readFile(await download.path(),'utf8'),new RegExp(marker))
+ }
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
+})
+
 test('native Word Save As keeps the original password on a protected draft copy',{timeout:90000},async t=>{
  const f=await fixture(t),{page}=f,secret='文档复制 password',ciphertext=Buffer.from(officeCrypto.encrypt(f.original,{password:secret}))
  const stage=await f.files.stageUpload(f.alice.token,{name:'locked-source.docx',size:ciphertext.length})
@@ -145,6 +171,7 @@ test('native Word Save As keeps the original password on a protected draft copy'
  await expect(saveAs).toBeEnabled()
  await saveAs.click()
  const confirm=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(confirm.getByRole('combobox',{name:'File format',exact:true})).toHaveCount(0)
  await confirm.getByRole('textbox',{name:'File name'}).fill('Protected draft copy')
  await confirm.getByRole('combobox',{name:'Folder',exact:true}).selectOption(archiveFolder.id)
  const finishes=[]

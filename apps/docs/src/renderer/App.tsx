@@ -6256,6 +6256,12 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
         const { from,to } = current.state.selection
         return { from,to,text: current.state.doc.textBetween(from,to,'\n') }
       },
+      async exportCopy(format, name, active) {
+        await waitForFullContent()
+        if (!active() || editor.isDestroyed || editorRef.current !== editor || hasDocumentWriterDraft(editor)) return false
+        const exportTo = format === 'html' ? exportHtmlImpl : exportMarkdownImpl
+        return exportTo(fileCtxRef.current, name)
+      },
       async serialize() {
         await waitForFullContent()
         window.dispatchEvent(new Event('ai-docs-commit-tables'))

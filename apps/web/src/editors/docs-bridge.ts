@@ -17,6 +17,7 @@ import { prepareMarkdownDownload } from './docs-markdown-export.ts'
 import { copyDocsImageToClipboard, fetchDocsClipboardImage, readDocsImage, type ClipboardImageFetcher } from './docs-image-clipboard.ts'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
+import {browserFileName} from './browser-download'
 
 function browserPrintPaperCss(
   doc: Document,
@@ -311,12 +312,19 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
         pageStyle?.remove()
       }
     },
-    async exportHtml(name:string,html:string){download(new Blob([html],{type:'text/html;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.html');return {ok:true}},
+    async exportHtml(name:string,html:string,outputName?:string){
+      if(disposed)return {ok:false,error:text.unavailable}
+      const base=outputName?.replace(/\.html?$/i,'')??name.replace(/\.docx$/i,'')
+      const filename=browserFileName(base,'Document')+'.html'
+      download(new Blob([html],{type:'text/html;charset=utf-8'}),filename)
+      return {ok:true,path:filename}
+    },
     exportPdf: unavailable,
-    async exportMarkdown(name:string,md:string,images?:Parameters<DesktopApi['exportMarkdown']>[2]){
+    async exportMarkdown(name:string,md:string,images?:Parameters<DesktopApi['exportMarkdown']>[2],outputName?:string){
       if(disposed)return {ok:false,error:text.unavailable}
       try{
-        const file=await prepareMarkdownDownload(name,md,images ?? [],window.location.origin)
+        const base=outputName?.replace(/\.md$/i,'')??name.replace(/\.docx$/i,'')
+        const file=await prepareMarkdownDownload(base,md,images ?? [],window.location.origin)
         if(disposed)return {ok:false,error:text.unavailable}
         download(file.blob,file.name)
         return images === undefined ? {ok:true} : {ok:true,path:file.name,imagesDropped:file.imagesDropped}

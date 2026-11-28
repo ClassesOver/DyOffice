@@ -6,43 +6,56 @@ import type {WorkspaceFileList,WorkspaceFolderList} from '../../../../packages/w
 import {folderChoices} from '../workspace-folder-options'
 import './web-ai-naming.css'
 
-export type WorkspaceCopyDestination = { name: string; folderId?: string }
+export type WorkspaceCopyDestination = { name: string; folderId?: string; downloadFormat?: 'html' | 'md' }
 
-export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice}:{
- locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string
+export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports}:{
+ locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean
 }):Promise<WorkspaceCopyDestination|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
  dialog.className='web-ai-naming-dialog'
  const title=doc.createElement('h2'),label=doc.createElement('label'),input=doc.createElement('input')
  const actions=doc.createElement('div'),cancel=doc.createElement('button'),save=doc.createElement('button')
- title.textContent=en?'Save a copy to your workspace':'保存副本到工作区'
- dialog.setAttribute('aria-label',title.textContent)
+ const workspaceTitle=en?'Save a copy to your workspace':'保存副本到工作区'
  label.textContent=en?'File name':'文件名';input.value=proposed;input.required=true;label.append(input)
  actions.className='web-ai-naming-actions'
  cancel.type='button';cancel.textContent=en?'Cancel':'取消'
- save.type='submit';save.textContent=en?'Save copy':'保存副本'
+ save.type='submit'
  form.append(title,label)
  let format:HTMLSelectElement|undefined
- if(csvNotice){
+ const downloadFormat=()=>{
+  const value=format?.value
+  return value==='html'||value==='md'?value:undefined
+ }
+ const suffix=documentExports?/\.(docx|html?|md)$/i:/\.(xlsx|csv)$/i
+ if(csvNotice||documentExports){
   const select=doc.createElement('select'),formatLabel=doc.createElement('label'),notice=doc.createElement('p')
   format=select
   formatLabel.className='web-ai-naming-format'
   formatLabel.textContent=en?'File format':'文件格式'
   select.setAttribute('aria-label',formatLabel.textContent)
-  for(const [value,text] of [['xlsx',en?'Excel workbook (.xlsx)':'Excel 工作簿（.xlsx）'],['csv',en?'CSV (.csv)':'CSV（.csv）']] as const){
+  const options=documentExports
+   ? [['docx',en?'Word document (.docx)':'Word 文档（.docx）'],['html','HTML (.html)'],['md','Markdown (.md)']]
+   : [['xlsx',en?'Excel workbook (.xlsx)':'Excel 工作簿（.xlsx）'],['csv',en?'CSV (.csv)':'CSV（.csv）']]
+  for(const [value,text] of options){
    const option=doc.createElement('option');option.value=value;option.textContent=text;select.append(option)
   }
-  notice.hidden=true;notice.textContent=csvNotice
+  notice.hidden=true
+  const renderFormat=()=>{
+   notice.textContent=select.value==='csv'?(csvNotice??''):select.value==='md'
+    ?(en?'Markdown with images downloads as a ZIP.':'含图片的 Markdown 会打包为 ZIP 下载。'):''
+   notice.hidden=!notice.textContent
+   renderDestination()
+  }
   select.onchange=()=>{
-   const stem=input.value.trim().replace(/\.(xlsx|csv)$/i,'')
+   const stem=input.value.trim().replace(suffix,'')
    input.value=stem?stem+'.'+select.value:''
-   notice.hidden=select.value!=='csv'
+   renderFormat()
   }
   input.oninput=()=>{
-   const extension=/\.(xlsx|csv)$/i.exec(input.value.trim())?.[1]?.toLowerCase()
-   if(extension)select.value=extension
-   notice.hidden=select.value!=='csv'
+   const extension=suffix.exec(input.value.trim())?.[1]?.toLowerCase()
+   if(extension)select.value=extension==='htm'?'html':extension
+   renderFormat()
   }
   formatLabel.append(select);form.append(formatLabel,notice)
  }
@@ -53,9 +66,20 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
  rootOption.value='';rootOption.textContent=en?'My files':'个人文件'
  folderStatus.setAttribute('role','status')
  folderStatus.textContent=en?'Loading workspace folders…':'正在读取工作区文件夹…'
- folder.disabled=true;save.disabled=true
+ let loading=true
+ const renderDestination=()=>{
+  const external=!!downloadFormat()
+  folderLabel.hidden=external
+  folderStatus.hidden=external||!folderStatus.textContent
+  folder.disabled=external||loading
+  save.disabled=!external&&loading
+  title.textContent=external?(en?'Download a copy':'下载副本'):workspaceTitle
+  dialog.setAttribute('aria-label',title.textContent)
+  save.textContent=external?(en?'Download copy':'下载副本'):(en?'Save copy':'保存副本')
+ }
  folder.append(rootOption);folderLabel.append(folder)
  actions.append(cancel,save);form.append(folderLabel,folderStatus,actions);dialog.append(form)
+ renderDestination()
  return new Promise((resolve,reject)=>{
   const folders=new AbortController()
   const finish=(destination:WorkspaceCopyDestination|null)=>{
@@ -70,8 +94,13 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
    event.preventDefault()
    if(save.disabled)return
    const name=input.value.trim()
-   const stem=format?name.replace(/\.(xlsx|csv)$/i,'').trim():name
-   if(stem)finish({name:format?stem+'.'+format.value:stem,...(folder.value?{folderId:folder.value}:{})})
+   const stem=format?name.replace(suffix,'').trim():name
+   if(!stem)return
+   const targetFormat=downloadFormat()
+   finish({
+    name:format?stem+'.'+format.value:stem,
+    ...(targetFormat?{downloadFormat:targetFormat}:folder.value?{folderId:folder.value}:{}),
+   })
   }
   doc.body.append(dialog)
   try{dialog.showModal();input.focus();input.select()}
@@ -93,8 +122,8 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
    const warning=directoryList.status==='rejected'?(en?'Could not load workspace folders.':'无法读取工作区文件夹。')
     :source.status==='rejected'?(en?'Could not find the original file’s folder.':'无法读取原文件所在的文件夹。'):''
    folderStatus.textContent=warning
-   folderStatus.hidden=!warning
-   folder.disabled=false;save.disabled=false
+   loading=false
+   renderDestination()
   })
  })
 }

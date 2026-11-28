@@ -85,8 +85,11 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   // Every registration gets a fresh local-copy identity, including detach/rebind
   // of the same renderer handle. Keep the readiness callback semantics unchanged.
-  let draftEditor:Pick<DocsEditorHandle,'serialize'>|null=null
-  const registerDraftEditor=(handle:DocsEditorHandle|null)=>{draftEditor=handle?{serialize:()=>handle.serialize()}:null;registerEditor(handle)}
+  let draftEditor:Pick<DocsEditorHandle,'serialize'|'exportCopy'>|null=null
+  const registerDraftEditor=(handle:DocsEditorHandle|null)=>{
+    draftEditor=handle?{serialize:()=>handle.serialize(),exportCopy:handle.exportCopy}:null
+    registerEditor(handle)
+  }
   let onHostState=()=>changed()
   const unsubscribe = host.subscribe(() => onHostState())
   let continuationRevision:()=>string|undefined=()=>undefined
@@ -255,8 +258,12 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         if(!editor||!active())return false
         const chosen = await selectDestination?.(request,signal)
         if (!chosen) return false
-        name = chosen.name.replace(/\.docx$/i,'')+'.docx'
         if (!await draftAuthority.verify() || !active()) throw Error('Draft session ended')
+        if (chosen.downloadFormat) {
+          if(protectedView()||!editor.exportCopy)throw Error('Draft export unavailable')
+          return await editor.exportCopy(chosen.downloadFormat,chosen.name,()=>active()&&!protectedView())
+        }
+        name = chosen.name.replace(/\.docx$/i,'')+'.docx'
         const managedCopy=passwordProtected()||host.hasDocxPasswordChange(fileId)
         if(managedCopy)source=host.getState(fileId)
         const bytes = await editor.serialize()
@@ -290,7 +297,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   const canCopyLocalDraft=()=>!signed&&(passwordProtected()? !guest&&!citationMode : !host.hasDocxPasswordChange(fileId))
   const sealRecoveryDraft=(bytes:Uint8Array)=>host.sealDocxRecovery(fileId,bytes)
-  const saveAsCopy = () => saveCopy((request,signal) => confirmWorkspaceCopy(host.getState(fileId).name,{locale,signal,request,fileId}))
+  const saveAsCopy = () => saveCopy((request,signal) => confirmWorkspaceCopy(host.getState(fileId).name,{locale,signal,request,fileId,documentExports:!protectedView()&&!!draftEditor?.exportCopy}))
   const nameCopy: DocsNamedCopy = async propose => {
     const modelId = assistant?.selected()
     if (!assistant?.available || !modelId || pendingCopy || protectedView()) return

@@ -20,7 +20,7 @@ function markdownSections(markdown: string): { text: string; fenced: boolean }[]
 }
 
 function safeBaseName(name: string): string {
-  const cleaned = browserFileName(name.replace(/\.docx$/i, ''), 'Document').replace(/\p{Cs}/gu, '_')
+  const cleaned = browserFileName(name, 'Document').replace(/\p{Cs}/gu, '_')
   // Leave room for the media directory suffix under extraction tools' 255-byte name limit.
   const base = Array.from(cleaned).slice(0, 60).join('').replace(/[.\s]+$/g, '') || 'Document'
   return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(base) ? `_${base}` : base

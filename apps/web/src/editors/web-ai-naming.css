@@ -5,7 +5,7 @@
 }
 .web-ai-naming-dialog::backdrop { background: rgb(0 0 0 / 27%); }
 .web-ai-naming-dialog h2 { margin: 0 0 16px; font-size: 17px; }
-.web-ai-naming-dialog label { display: grid; gap: 6px; }
+.web-ai-naming-dialog label:not([hidden]) { display: grid; gap: 6px; }
 .web-ai-naming-format, .web-ai-naming-field { margin-top: 12px; }
 .web-ai-naming-dialog p { margin: 8px 0 0; font-size: 13px; }
 .web-ai-naming-dialog input, .web-ai-naming-dialog select, .web-ai-naming-actions button {

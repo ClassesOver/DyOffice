@@ -140,6 +140,7 @@ export interface DocsEditorHandle {
   readDraftText?(includeSaved?: boolean, includeWriterDraft?: boolean): { text: string; truncated: boolean } | null
   beginExternalWrite?(): boolean
   getSelection(): { from: number; to: number; text: string } | null
+  exportCopy?(format: 'html' | 'md', name: string, active: () => boolean): Promise<boolean>
   serialize(): Promise<Uint8Array | null>
   save(): Promise<boolean>
   isDirty(): boolean
