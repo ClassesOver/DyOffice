@@ -166,9 +166,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       }
     },
     knowledgeRequest:assistant?.request,
-    ...(!guest&&!citationMode&&draftAuthority.request?{async pickMergeFile(signal:AbortSignal){
-      const {pickDocsMailMergeFile}=await import('./docs-mail-merge-workspace')
-      return pickDocsMailMergeFile(host,draftAuthority,prefs.language,signal)
+    ...(!guest&&!citationMode&&draftAuthority.request?{workspaceSources:{
+      request:draftAuthority.request,verify:()=>draftAuthority.verify(),readBytes:(id,revision)=>host.readBytes(id,revision),
     }}:{}),
     fetchClipboardRemoteImage:assistant?.mediaApi?.fetchImage,
     wordCheckpoint:async()=>wordSync?.checkpoint(),

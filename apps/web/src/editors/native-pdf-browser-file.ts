@@ -138,7 +138,10 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
     }
    },
   }
-  return {path,revision,api,current:()=>current,async accountIdentity(signal:AbortSignal){
+  return {path,revision,api,current:()=>current,workspaceSources:{
+   request:session.request,async verify(){await assertSession();return true},
+   readBytes:(id:string,revision:string)=>host.readBytes(id,revision),
+  },async accountIdentity(signal:AbortSignal){
    assertActive()
    if(!account){
     const {deploymentId,user}=await session.request<{deploymentId:string;user:{id:string}}>('/api/v1/auth/me','GET',undefined,signal)

@@ -17,6 +17,7 @@ import { prepareMarkdownDownload } from './docs-markdown-export.ts'
 import { copyDocsImageToClipboard, fetchDocsClipboardImage, readDocsImage, type ClipboardImageFetcher } from './docs-image-clipboard.ts'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
+import type {WorkspaceSourceAccess} from './workspace-source-picker'
 import {browserFileName} from './browser-download'
 
 function browserPrintPaperCss(
@@ -62,12 +63,12 @@ type ParentTabsWindow = Window & {
 
 /** A narrow compatibility bridge for the existing renderer. Opaque paths are
  * aliases only; they never become filesystem paths or server authorization. */
-export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;fetchClipboardRemoteImage?:ClipboardImageFetcher;wordCheckpoint?:()=>Promise<number|undefined>;onSourceOpenFailed?:()=>void;takeUnlockedBytes?:()=>Uint8Array|undefined;setOpenPassword?:(password:string|null)=>boolean;pickMergeFile?:(signal:AbortSignal)=>Promise<File|null>}={}) {
+export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;fetchClipboardRemoteImage?:ClipboardImageFetcher;wordCheckpoint?:()=>Promise<number|undefined>;onSourceOpenFailed?:()=>void;takeUnlockedBytes?:()=>Uint8Array|undefined;setOpenPassword?:(password:string|null)=>boolean;workspaceSources?:WorkspaceSourceAccess}={}) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
   const lifetime = new AbortController()
   let disposed = false, downloading = false, takingOver = false
-  let pickingMergeFile = false
+  let pickingSourceFile = false
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(disposed||takingOver||saveFence||!check())return false
@@ -238,15 +239,23 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     confirmDocumentReplace: async () => window.confirm(text.conflict),
     openDocx: unavailable,openDocxPath: unavailable,openDocxDecrypt: unavailable,
     async pickComparisonDocx(){
-      if (disposed || host.getState(fileId).status === 'unauthorized') return null
-      const [file] = await pickLocalFiles('.docx', lifetime.signal)
-      if (!file || disposed) return null
-      if (!/\.docx$/i.test(file.name) || !file.size || file.size > 32 * 1024 * 1024) {
-        throw new Error(locale === 'en' ? 'Choose a nonempty DOCX up to 32 MiB.' : '请选择不超过 32 MiB 的非空 DOCX。')
-      }
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      if (disposed || host.getState(fileId).status === 'unauthorized') return null
-      return { name: file.name, bytes }
+      if (disposed || pickingSourceFile || host.getState(fileId).status === 'unauthorized') return null
+      pickingSourceFile = true
+      try {
+        const maxBytes = 32 * 1024 * 1024
+        const file = options.workspaceSources
+          ? await (await import('./workspace-source-picker')).pickWorkspaceSourceFile(options.workspaceSources, {
+            title:locale==='en'?'Select a document to compare':'选择要比较的文档',formats:['docx'],language:locale,maxBytes,
+          },lifetime.signal)
+          : (await pickLocalFiles('.docx', lifetime.signal))[0]
+        if (!file || disposed) return null
+        if (!/\.docx$/i.test(file.name) || !file.size || file.size > maxBytes) {
+          throw new Error(locale === 'en' ? 'Choose a nonempty DOCX up to 32 MiB.' : '请选择不超过 32 MiB 的非空 DOCX。')
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        if (disposed || host.getState(fileId).status === 'unauthorized') return null
+        return { name: file.name, bytes }
+      } finally { pickingSourceFile = false }
     },
     async saveDocxAs(_currentPath: string | null, data: ArrayBuffer) {
       const name = host.getState(fileId).name
@@ -337,11 +346,14 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     },
     pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
     async pickMergeDataSource(){
-      if(disposed||pickingMergeFile)return null
-      pickingMergeFile=true
+      if(disposed||pickingSourceFile)return null
+      pickingSourceFile=true
       try{
-        const file=options.pickMergeFile
-          ? await options.pickMergeFile(lifetime.signal)
+        const file=options.workspaceSources
+          ? await (await import('./workspace-source-picker')).pickWorkspaceSourceFile(options.workspaceSources,{
+            title:locale==='en'?'Select a recipient list':'选择收件人列表',formats:['xlsx','csv'],language:locale,
+            maxBytes:(await import('./docs-mail-merge')).MAIL_MERGE_SOURCE_MAX_BYTES,
+          },lifetime.signal)
           : (await pickLocalFiles('.csv,.xlsx',lifetime.signal))[0]
         if(!file)return null
         const {readMailMergeSource}=await import('./docs-mail-merge')
@@ -349,7 +361,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       }catch(error){
         if(disposed)return null
         return {ok:false,error:error instanceof Error?error.message:text.unavailable}
-      }finally{pickingMergeFile=false}
+      }finally{pickingSourceFile=false}
     },
     async writeMergeOutput(request){
       if(disposed||!host.getState(fileId).lease)return {ok:false,canceled:true}

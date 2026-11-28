@@ -1,30 +1,41 @@
-import type { SessionFileHost } from '../../../../packages/browser-host/src/files'
+import type { SettingsRequest } from '../../../../packages/browser-host/src/preferences'
 import { isRevisionRef, type OpenFileResult } from '../../../../packages/web-contracts/src/api'
 import type { WorkspaceFileList, WorkspaceFolderList } from '../../../../packages/web-contracts/src/workspace'
 import { folderChoices } from '../workspace-folder-options'
-import type { DraftCopyAuthority } from './draft-copy-authority'
-import { MAIL_MERGE_SOURCE_MAX_BYTES } from './docs-mail-merge'
 import { pickLocalFiles } from './pick-local-files'
 import './web-ai-naming.css'
 
-type RecipientFormat = 'xlsx' | 'csv'
-type Choice = 'local' | { id: string; format: RecipientFormat }
+const formatLabels = { xlsx: 'Excel (.xlsx)', csv: 'CSV (.csv)', docx: 'Word (.docx)', pdf: 'PDF (.pdf)' }
+type SourceFormat = keyof typeof formatLabels
+type Choice = 'local' | { id: string; format: SourceFormat }
 const PAGE_SIZE = 50
+export type WorkspaceSourceAccess = {
+  request: SettingsRequest
+  verify(): Promise<boolean>
+  readBytes(id: string, revision: string): Promise<Uint8Array>
+}
+type PickerOptions = {
+  title: string
+  formats: readonly SourceFormat[]
+  language: string
+  maxBytes: number
+  localAccept?: string
+}
 
-function selectSource(request: NonNullable<DraftCopyAuthority['request']>, en: boolean, signal: AbortSignal): Promise<Choice | null> {
+function selectSource(request: SettingsRequest, { title: heading, formats, language }: PickerOptions, signal: AbortSignal): Promise<Choice | null> {
   signal.throwIfAborted()
+  const en = language === 'en'
   const dialog = document.createElement('dialog')
   dialog.className = 'web-ai-naming-dialog'
   const title = document.createElement('h2')
-  title.textContent = en ? 'Select a recipient list' : '选择收件人列表'
+  title.textContent = heading
   dialog.setAttribute('aria-label', title.textContent)
   const form = document.createElement('form')
   const search = document.createElement('input')
   search.type = 'search'
   search.maxLength = 200
   const format = document.createElement('select')
-  format.add(new Option('Excel (.xlsx)', 'xlsx'))
-  format.add(new Option('CSV (.csv)', 'csv'))
+  for (const value of formats) format.add(new Option(formatLabels[value], value))
   const files = document.createElement('select')
   files.size = 6
   const status = document.createElement('p')
@@ -91,8 +102,9 @@ function selectSource(request: NonNullable<DraftCopyAuthority['request']>, en: b
   navigation.append(back, next)
   const actions = document.createElement('div')
   actions.className = 'web-ai-naming-actions'
-  form.append(title, field(en ? 'Search files' : '搜索文件', search), field(en ? 'File type' : '文件类型', format),
-    field(en ? 'Workspace files' : '工作区文件', files), status, navigation, actions)
+  form.append(title, field(en ? 'Search files' : '搜索文件', search))
+  if (formats.length > 1) form.append(field(en ? 'File type' : '文件类型', format))
+  form.append(field(en ? 'Workspace files' : '工作区文件', files), status, navigation, actions)
   dialog.append(form)
   return new Promise((resolve, reject) => {
     const finish = (choice: Choice | null) => {
@@ -109,7 +121,7 @@ function selectSource(request: NonNullable<DraftCopyAuthority['request']>, en: b
       button(en ? 'Cancel' : '取消', cancel), use)
     form.onsubmit = event => {
       event.preventDefault()
-      if (files.value && !use.disabled) finish({ id: files.value, format: format.value as RecipientFormat })
+      if (files.value && !use.disabled) finish({ id: files.value, format: format.value as SourceFormat })
     }
     dialog.addEventListener('keydown', event => event.stopPropagation())
     dialog.oncancel = event => { event.preventDefault(); cancel() }
@@ -122,33 +134,34 @@ function selectSource(request: NonNullable<DraftCopyAuthority['request']>, en: b
   })
 }
 
-export async function pickDocsMailMergeFile(
-  host: SessionFileHost, authority: DraftCopyAuthority, language: string, signal: AbortSignal,
+export async function pickWorkspaceSourceFile(
+  access: WorkspaceSourceAccess, options: PickerOptions, signal: AbortSignal,
 ): Promise<File | null> {
-  const en = language === 'en'
-  const { request } = authority
+  const en = options.language === 'en'
   const check = async () => {
     signal.throwIfAborted()
-    if (!await authority.verify()) throw new Error(en ? 'The workspace session changed.' : '工作区会话已变更。')
+    if (!await access.verify()) throw new Error(en ? 'The workspace session changed.' : '工作区会话已变更。')
     signal.throwIfAborted()
   }
-  if (!request) return null
-  await check()
-  const choice = await selectSource(request, en, signal)
+  const choice = await selectSource(access.request, options, signal)
   if (!choice) return null
-  if (choice === 'local') return (await pickLocalFiles('.csv,.xlsx', signal))[0] ?? null
+  if (choice === 'local') {
+    const accept = options.localAccept ?? options.formats.map(format => '.' + format).join(',')
+    return (await pickLocalFiles(accept, signal))[0] ?? null
+  }
   await check()
-  const source = await request<OpenFileResult>('/api/v1/files/' + encodeURIComponent(choice.id), 'GET', undefined, signal)
+  const source = await access.request<OpenFileResult>('/api/v1/files/' + encodeURIComponent(choice.id), 'GET', undefined, signal)
   if (source.format !== choice.format || !isRevisionRef(source.file) || source.file.fileId !== choice.id || !source.name) {
-    throw new Error(en ? 'The selected recipient list is unavailable.' : '所选收件人列表不可用。')
+    throw new Error(en ? 'The selected file is unavailable.' : '所选文件不可用。')
   }
-  if (source.workbookPasswordProtected) {
-    throw new Error(en ? 'Choose a recipient list without an open password.' : '请选择未设置打开密码的收件人列表。')
+  if (source.workbookPasswordProtected || source.documentPasswordProtected) {
+    throw new Error(en ? 'Choose a file without an open password.' : '请选择未设置打开密码的文件。')
   }
-  if (!source.file.size || source.file.size > MAIL_MERGE_SOURCE_MAX_BYTES) {
-    throw new Error(en ? 'Choose a nonempty recipient list up to 16 MiB.' : '请选择不超过 16 MiB 的非空收件人列表。')
+  if (!source.file.size || source.file.size > options.maxBytes) {
+    const limit = options.maxBytes / (1024 * 1024)
+    throw new Error(en ? `Choose a nonempty file up to ${limit} MiB.` : `请选择不超过 ${limit} MiB 的非空文件。`)
   }
-  const bytes = await host.readBytes(choice.id, source.file.revision)
+  const bytes = await access.readBytes(choice.id, source.file.revision)
   await check()
   return new File([new Uint8Array(bytes)], source.name)
 }

@@ -118,7 +118,14 @@ async function mount(){
   },
   async compareReadPdf(){
    try{
-    const [file]=await pickLocalFiles('application/pdf,.pdf',browserActions.signal)
+    const language=prefs?.language??'zh'
+    const accept='application/pdf,.pdf'
+    const file=params.has('sourceRevision')||params.get('guest')==='1'
+     ? (await pickLocalFiles(accept,browserActions.signal))[0]
+     : await (await import('./workspace-source-picker')).pickWorkspaceSourceFile(grant.workspaceSources,{
+      title:language==='en'?'Select a PDF to compare':'选择要比较的 PDF',
+      formats:['pdf'],language,maxBytes:MAX_WORKSPACE_COPY_BYTES,localAccept:accept,
+     },browserActions.signal)
     if(!file)return {ok:false as const,canceled:true as const}
     if(!file.size||file.size>64*1024*1024)throw Error('PDF exceeds the comparison size limit.')
     const {readPdfComparisonPages}=await import('./pdf-browser-actions')
