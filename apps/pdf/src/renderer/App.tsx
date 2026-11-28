@@ -489,7 +489,7 @@ type WritePageRewrite = () => Promise<SavePdfResult>
 type PreparePageRewrite = () => WritePageRewrite | Promise<WritePageRewrite | null>
 type PageRewriteRun = { write: WritePageRewrite; afterReload?: () => void; restore?: boolean }
 
-export default function App({ hostReadOnly = false, hostInspectDocument, hostLastZoomStorage, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostAssistantOpenState, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize, hostCertificateWorkspaceIntro }: {
+export default function App({ hostReadOnly = false, hostInspectDocument, hostLastZoomStorage, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostAssistantOpenState, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize, hostCertificateWorkspaceIntro, hostSavePrintSelection }: {
   hostReadOnly?: boolean
   hostInspectDocument?: (bytes: Uint8Array, encrypted: boolean) => Promise<{
     restriction: string | null
@@ -509,6 +509,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   hostImageBakePreview?: (operations: readonly PdfHostImageBake[], signal: AbortSignal) => Promise<Uint8Array>
   hostOcr?: (png: string, signal?: AbortSignal) => Promise<PdfOcrLine[] | null>
   hostProtectCopy?: PdfHostProtectedCopy
+  hostSavePrintSelection?: boolean
   hostCertificateWorkspaceIntro?: string
   hostMergePdf?: (request: MergePdfRequest, flushDraft: () => Promise<boolean>) => Promise<MergePdfResult>
   hostConvertOffice?: (format: PdfConvertFormat, password: string | undefined, snapshot?: PdfHostConversionDraft) => Promise<void>
@@ -7261,6 +7262,9 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
     pageCount,
     currentPage,
     flushThen,
+    savePdfCopy: hostSavePrintSelection && !readOnly
+      ? pages => extractPagesToFile(pages.map(page => page - 1))
+      : undefined,
     opFailed,
     diskPasswordRef,
   })

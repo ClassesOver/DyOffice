@@ -18,7 +18,7 @@ export function PrintDialog({
   print: PrintJobApi
   printCurrentPage: number
 }) {
-  const { t } = useI18n()
+  const { lang, t } = useI18n()
   // The mask covers the whole app, so the dialog must mount only when open
   // (the inline JSX this component replaced was `{printDlg && (...)}`).
   if (!print.printDlg) return null
@@ -199,6 +199,11 @@ export function PrintDialog({
           <button className="pdf-modal-btn" onClick={() => print.setPrintDlg(false)}>
             {t('cancel')}
           </button>
+          {print.confirmSavePdfCopy && (
+            <button className="pdf-modal-btn" onClick={print.confirmSavePdfCopy}>
+              {lang === 'zh' ? '将所选页面另存为 PDF' : 'Save selected pages as PDF'}
+            </button>
+          )}
           <button className="pdf-modal-btn primary" onClick={print.confirmPrint}>
             {t('print')}
           </button>

@@ -26,13 +26,14 @@ export interface PrintJobInput {
   currentPage: number
   /** Saves pending edits first; undefined = the save failed and the job is off */
   flushThen: (job: () => Promise<void>) => Promise<void | undefined>
+  savePdfCopy?: (pages: number[]) => Promise<unknown>
   opFailed: (error: string) => void
   /** The on-disk file's password; CUPS cannot open encrypted files, so those raster */
   diskPasswordRef: { current: string | null }
 }
 
 export function usePrintJob(input: PrintJobInput) {
-  const { filePath, pageCount, currentPage, flushThen, opFailed, diskPasswordRef } = input
+  const { filePath, pageCount, currentPage, flushThen, savePdfCopy, opFailed, diskPasswordRef } = input
   const browserPrintDialog = typeof window.pdfApi.printBrowserPages === 'function'
   const [printDlg, setPrintDlg] = useState(false)
   const [printMode, setPrintMode] = useState<'all' | 'current' | 'custom'>('all')
@@ -125,8 +126,9 @@ export function usePrintJob(input: PrintJobInput) {
     }
   }
 
-  /** Print dialog confirm: visible page numbers → 1-based file pages */
-  const confirmPrint = () => {
+  /** Resolve the same visible page range for printing and saving a copy. */
+  const confirmSelection = (run: (pages: number[]) => void) => {
+    if (printBusyRef.current) return
     const pages =
       printMode === 'all'
         ? Array.from({ length: pageCount }, (_x, i) => i + 1)
@@ -139,8 +141,17 @@ export function usePrintJob(input: PrintJobInput) {
       return
     }
     setPrintDlg(false)
-    void printDoc(printMode === 'all' && printParity === 'all' ? undefined : subset)
+    run(subset)
   }
+  const confirmPrint = () => confirmSelection(pages => {
+    void printDoc(printMode === 'all' && printParity === 'all' ? undefined : pages)
+  })
+  const confirmSavePdfCopy = savePdfCopy ? () => confirmSelection(pages => {
+    printBusyRef.current = true
+    void savePdfCopy(pages)
+      .catch(error => opFailed(error instanceof Error ? error.message : String(error)))
+      .finally(() => { printBusyRef.current = false })
+  }) : undefined
 
   return {
     browserPrintDialog,
@@ -172,6 +183,7 @@ export function usePrintJob(input: PrintJobInput) {
     printCurrentPage,
     openPrintDlg,
     confirmPrint,
+    confirmSavePdfCopy,
   }
 }
 

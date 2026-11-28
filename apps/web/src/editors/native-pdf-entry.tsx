@@ -1220,6 +1220,7 @@ async function mount(){
    hostCertificateWorkspaceIntro={workspaceCopies?(prefs?.language==='en'
     ?'Sign the saved PDF and choose where to save the copy. The certificate file and password stay in this browser.'
     :'为已保存的 PDF 签名并选择副本的保存位置。证书文件和密码仅在当前浏览器中处理。'):undefined}
+   hostSavePrintSelection={!!workspaceCopies}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">
