@@ -9,16 +9,17 @@ export const MAX_WORKSPACE_PDF_COPY_BYTES=32*1024*1024
 type PdfCopyDestination={name:string;folderId?:string}
 type Prepared={uploadId:string;fileId:string;sha256:string;size:number;receipt?:RevisionRef;delivered?:boolean;expired?:boolean}
 type PresentCopy=(receipt:RevisionRef,signal?:AbortSignal)=>Promise<void>
-type PendingCopies={files:Prepared[];revealBatch?:PresentCopy}
+type PendingCopies={files:Prepared[];revealBatch?:PresentCopy;delivery?:'open'|'save'}
 /** Recovery resumes the same ordered uploads without regenerating the PDFs. */
-export function createPdfExtraction({fileId,name,request,getRevision,onCreated,onBatchPublished}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated:PresentCopy;onBatchPublished?:PresentCopy}){
+export function createPdfExtraction({fileId,name,request,getRevision,onCreated,onSaved,onBatchPublished}:{fileId:string;name:string;request:SettingsRequest;getRevision:()=>string;onCreated:PresentCopy;onSaved?:PresentCopy;onBatchPublished?:PresentCopy}){
  let busy=false,stageUnknown=false,pending:PendingCopies|undefined
  let progress={created:0,total:0}
  let receipts:RevisionRef[]=[]
  const remove=async(uploadId:string)=>{await request(`/api/v1/uploads/${encodeURIComponent(uploadId)}`,'DELETE').catch(()=>{})}
  const updateProgress=()=>{if(pending)progress={created:pending.files.filter(item=>!!item.receipt).length,total:pending.files.length}}
  async function finish(signal?:AbortSignal){
-  const {files:queue,revealBatch}=pending!
+  const {files:queue,revealBatch,delivery}=pending!
+  const present=delivery==='save'?onSaved:onCreated
   for(const current of queue){
    signal?.throwIfAborted()
    if(current.delivered||current.expired)continue
@@ -41,8 +42,12 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated,o
    const confirmed=await request<RevisionRef>(`/api/v1/files/${encodeURIComponent(receipt.fileId)}/revisions/${encodeURIComponent(receipt.revision)}`,undefined,undefined,signal)
    if(!isRevisionRef(confirmed)||confirmed.fileId!==receipt.fileId||confirmed.revision!==receipt.revision||confirmed.sha256!==receipt.sha256||confirmed.size!==receipt.size)throw Error('无法核对新 PDF 的保存回执，请保留页面确认结果，不要重复生成。')
    signal?.throwIfAborted()
-   if(!revealBatch){
-    try{await onCreated(receipt,signal)}catch{throw Error('PDF 已创建，但打开失败。请从文件列表打开，或确认结果重试打开，不要重复生成。')}
+   if(!revealBatch&&present){
+    try{await present(receipt,signal)}catch{
+     throw Error(delivery==='save'
+      ?'PDF 副本已保存，但文件列表刷新失败。请确认结果以重试刷新。'
+      :'PDF 已创建，但打开失败。请从文件列表打开，或确认结果重试打开，不要重复生成。')
+    }
    }
    current.delivered=true
    receipts.push({...receipt})
@@ -103,7 +108,7 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated,o
    busy=true
    try{return await finish(signal)}finally{busy=false}
   },
-  async publish(bytes:Uint8Array<ArrayBuffer>,destination:PdfCopyDestination,active:()=>boolean,signal?:AbortSignal){
+  async publish(bytes:Uint8Array<ArrayBuffer>,destination:PdfCopyDestination,active:()=>boolean,signal?:AbortSignal,delivery:'open'|'save'='open'){
    const check=()=>{
     signal?.throwIfAborted()
     if(!active())throw Error('PDF copy authorization changed.')
@@ -125,7 +130,7 @@ export function createPdfExtraction({fileId,name,request,getRevision,onCreated,o
     check()
     await request(`/api/v1/uploads/${encodeURIComponent(uploadId)}/content`,'PUT',new Blob([bytes],{type:'application/pdf'}),signal)
     check()
-    pending={files:[{uploadId,fileId:stage.fileId,sha256,size:bytes.byteLength}]};updateProgress()
+    pending={files:[{uploadId,fileId:stage.fileId,sha256,size:bytes.byteLength}],delivery};updateProgress()
     finishStarted=true
     return await finish(signal)
    }catch(error){

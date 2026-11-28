@@ -180,7 +180,7 @@ async function mount(){
     return fail('A PDF merge is unavailable while another page operation is pending.')
    }
    const initial=grant.current()
-   const publisher=params.has('sourceRevision')||params.get('guest')==='1'?undefined:copies
+   const publisher=workspaceCopies
    const locale=prefs?.language==='en'?'en':'zh'
    if(publisher?.hasPending())return fail(locale==='en'?'Confirm the pending PDF copy before merging.':'请先确认待保存的 PDF 副本。')
    ribbonBusy=true;ribbonError=''
@@ -261,13 +261,15 @@ async function mount(){
  let realtime:ReturnType<typeof createEditorBridge>|undefined
  const copies=(()=>{
   try{
-   const {dyofficeOpenPdfCopy:open,dyofficeRevealPdfCopy:reveal}=window.parent as Window&{
+   const {dyofficeOpenPdfCopy:open,dyofficeRevealPdfCopy:reveal,dyofficePdfCopySaved:saved}=window.parent as Window&{
     dyofficeOpenPdfCopy?:PresentWorkspaceCopy
     dyofficeRevealPdfCopy?:PresentWorkspaceCopy
+    dyofficePdfCopySaved?:PresentWorkspaceCopy
    }
-   return open?grant.pageCopies(open,reveal):undefined
+   return open?grant.pageCopies(open,reveal,saved):undefined
   }catch{return undefined}
  })()
+ const workspaceCopies=params.has('sourceRevision')||params.get('guest')==='1'?undefined:copies
  let ribbonBusy=false,ribbonPending=false,ribbonError=''
  async function ribbonCopy(path:string,run?:(client:NonNullable<typeof copies>)=>Promise<boolean>){
   const fail=(error:string)=>({ok:false as const,error})
@@ -279,6 +281,7 @@ async function mount(){
    const ok=run?await run(copies):await copies.confirm(browserActions.signal)
    if(!ok)return fail('当前不能生成 PDF 副本。')
    ribbonPending=false
+   if(!run)saveCopyNotice=prefs?.language==='en'?'PDF copy saved.':'PDF 副本已保存。'
    return {ok:true as const,savedPath:copies.getReceipts().at(-1)!.fileId}
   }catch(error){
    ribbonError=error instanceof Error?error.message:'无法确认 PDF 副本。'
@@ -931,15 +934,40 @@ async function mount(){
  })
  let saveCopyNotice=''
  const reduceFileSize=async()=>{
+  const publisher=workspaceCopies,signal=browserActions.signal
+  const locale=prefs?.language==='en'?'en':'zh'
+  const failure=locale==='en'?'Could not reduce this PDF.':'无法减小此 PDF 的大小。'
+  if(disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher?.hasPending())throw Error(failure)
+  const base=grant.current()
+  const active=()=>!disposed&&grant.current()===base
+  const suggested=pageCopyName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-small','document-small')
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
   try{
-   const {blob,bytesBefore}=await grant.reduceSize(browserActions.signal)
-   if(blob.size){
-    const name=browserFileName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,''),'document')
-    downloadBrowserFile(new Blob([blob],{type:'application/pdf'}),`${name}-small.pdf`)
-   }
-   return {bytesBefore,bytesAfter:blob.size||bytesBefore}
-  }catch{
-   throw Error(prefs?.language==='en'?'Could not reduce this PDF.':'无法减小此 PDF 的大小。')
+   const destination=publisher
+    ?await confirmWorkspaceCopy(suggested,{locale,signal,request:grant.workspaceRequest,fileId})
+    :null
+   if(publisher&&!destination)return null
+   if(!active())throw Error(failure)
+   const {blob,bytesBefore}=await grant.reduceSize(signal)
+   if(!blob.size)return {bytesBefore,bytesAfter:bytesBefore}
+   if(publisher&&destination){
+    const bytes=new Uint8Array(await blob.arrayBuffer())
+    const ok=await publisher.publish(bytes,{
+     name:pageCopyName(destination.name,'document-small'),folderId:destination.folderId,
+    },active,signal,'save')
+    if(!ok)throw Error(failure)
+   }else downloadBrowserFile(new Blob([blob],{type:'application/pdf'}),suggested)
+   return {bytesBefore,bytesAfter:blob.size}
+  }catch(error){
+   if(signal.aborted)return null
+   ribbonPending=!!publisher?.hasPending()
+   ribbonError=error instanceof Error?error.message:failure
+   throw Error(ribbonPending
+    ?(locale==='en'?'Confirm the compressed PDF copy’s save result.':'请确认压缩副本的保存结果。')
+    :failure)
+  }finally{
+   ribbonBusy=false
+   if(!disposed)render()
   }
  }
  const convertOffice=async(format:PdfConvertFormat,pdfPassword:string|undefined,draft?:PdfHostConversionDraft)=>{

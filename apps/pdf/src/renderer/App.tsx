@@ -505,7 +505,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   hostProtectCopy?: (path: string, protection: PdfEncryptionInput, flushDraft: () => Promise<boolean>) => Promise<string | null>
   hostMergePdf?: (request: MergePdfRequest, flushDraft: () => Promise<boolean>) => Promise<MergePdfResult>
   hostConvertOffice?: (format: PdfConvertFormat, password: string | undefined, snapshot?: PdfHostConversionDraft) => Promise<void>
-  hostReduceFileSize?: () => Promise<{ bytesBefore: number; bytesAfter: number }>
+  hostReduceFileSize?: () => Promise<{ bytesBefore: number; bytesAfter: number } | null>
   hostPageLimits?: { maxPages: number; maxBlankPagesPerSave: number }
   hostSaveCopy?: PdfHostSaveCopy
   hostSave?: {
@@ -7065,8 +7065,10 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
     if (!filePath || reducingFileSize) return
     setReducingFileSize(true)
     try {
-      const outcome = hostReduceFileSize
-        ? { ok: true as const, ...await hostReduceFileSize() }
+      const reduced = await hostReduceFileSize?.()
+      if (hostReduceFileSize && !reduced) return
+      const outcome = reduced
+        ? { ok: true as const, ...reduced }
         : await window.pdfApi.reduceFileSize(filePath)
       if (!outcome.ok) {
         if (!('canceled' in outcome)) showNotice(outcome.reason)

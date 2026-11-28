@@ -96,7 +96,7 @@ test('workspace PDF zoom follows personal settings and keeps the last zoom withi
  assert.equal((await f.preferences.get(f.alice.token)).pdfDefaultZoom,'width')
 })
 
-test('native Web PDF reduces a saved file into a smaller copy',{skip:!directory,timeout:65000},async t=>{
+test('native Web PDF saves a reduced PDF to the selected folder without leaving the source',{skip:!directory,timeout:65000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -104,6 +104,8 @@ test('native Web PDF reduces a saved file into a smaller copy',{skip:!directory,
  const origin='http://localhost:'+server.address().port
  const f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const workspace=createWorkspaceService(f.transactions)
+ const folder=await workspace.createFolder(f.alice.token,{name:'Compressed scans',parentId:null})
  const pdf=await PDFDocument.create(),sheet=pdf.addPage([400,300])
  sheet.drawText('Keep selectable source text',{x:30,y:260})
  const uncompressed=deflateSync(Buffer.from('q Q\n'.repeat(25000)),{level:0})
@@ -111,45 +113,91 @@ test('native Web PDF reduces a saved file into a smaller copy',{skip:!directory,
  const scan=new PNG({width:3000,height:100});scan.data.fill(180)
  const image=await pdf.embedPng(PNG.sync.write(scan));sheet.drawImage(image,{x:30,y:100,width:300,height:10})
  const original=Buffer.from(await pdf.save()),{file}=await importFile(f,f.alice.token,original,'Scan draft.pdf')
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
  f.cleanup.unshift(()=>app.close())
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
  const context=await browser.newContext({viewport:{width:1420,height:900},acceptDownloads:true})
  const page=await context.newPage()
+ await stubHomeHero(page)
  const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
  assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
- await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
- await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
- await page.getByRole('button',{name:'Pages',exact:true}).click()
- await page.getByRole('button',{name:'Rotate right',exact:true}).click()
- const dirty=page.locator('.dyoffice-pdf-persistence-state')
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const source=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await source.getByRole('button',{name:'Pages',exact:true}).click()
+ await source.getByRole('button',{name:'Rotate right',exact:true}).click()
+ const dirty=source.locator('.dyoffice-pdf-persistence-state')
  await expect(dirty).toHaveAttribute('data-dirty','true')
- const reduce=page.getByRole('button',{name:'Reduce file size',exact:true})
+ const reduce=source.getByRole('button',{name:'Reduce file size',exact:true})
  await expect(reduce).toBeEnabled({timeout:2500})
- const [download]=await Promise.all([page.waitForEvent('download',{timeout:22000}),reduce.click()])
- assert.equal(download.suggestedFilename(),'Scan draft-small.pdf')
- const bytes=await readFile(await download.path()),copy=await PDFDocument.load(bytes)
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ const reductions=[]
+ page.on('request',request=>{if(request.url().endsWith('/pdf/reduce-size'))reductions.push(request.url())})
+ await reduce.click()
+ await expect(destination.getByRole('textbox',{name:'File name'})).toHaveValue('Scan draft-small.pdf',{timeout:5000})
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal(reductions.length,0)
+
+ await reduce.click()
+ await destination.getByRole('textbox',{name:'File name'}).fill('Compact scan')
+ await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
+ const finishes=[]
+ let published
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(finishes.length!==1)return route.continue()
+  const committed=await route.fetch()
+  assert.equal(committed.status(),200)
+  published=(await committed.json()).file
+  await route.abort()
+ })
+ await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=source.getByRole('button',{name:'确认副本保存结果',exact:true})
+ await expect(confirm).toBeVisible({timeout:20000})
+ await confirm.click()
+ await expect(confirm).toHaveCount(0)
+ await expect(source.getByText('PDF copy saved.',{exact:true})).toBeVisible()
+ assert.ok(published)
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ assert.equal(reductions.length,1)
+ await expect(page.getByRole('tab',{name:'Scan draft.pdf',exact:true})).toHaveAttribute('aria-selected','true')
+ await expect(page.getByRole('tab',{name:'Compact scan.pdf',exact:true})).toHaveCount(0)
+ const copies=(await workspace.listFiles(f.alice.token,{folderId:folder.id})).files
+ assert.deepEqual(copies.map(entry=>[entry.id,entry.name]),[[published.fileId,'Compact scan.pdf']])
+ const bytes=await f.files.readFile(f.alice.token,published.fileId,published.revision),copy=await PDFDocument.load(bytes)
  assert.ok(bytes.length<original.length/3)
  assert.equal(copy.getPageCount(),1)
  assert.equal(copy.getPage(0).getRotation().angle,0)
  assert.ok((await readPdfLeafObjects(bytes)).some(item=>item.type===1&&item.text.includes('Keep selectable source text')))
  assert.ok(copy.context.enumerateIndirectObjects().some(([,obj])=>obj instanceof PDFRawStream&&String(obj.dict.get(PDFName.of('Subtype')))==='/Image'&&String(obj.dict.get(PDFName.of('Width')))==='2480'))
- await expect(page.getByText(/Reduced by about \d+%/)).toBeVisible()
  await expect(dirty).toHaveAttribute('data-dirty','true')
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 
- const compact=(await importFile(f,f.alice.token,bytes,'compact.pdf')).file
+ const compact=published
  const fresh=await context.newPage()
- await fresh.goto(origin+'/native-pdf/?fileId='+compact.fileId)
- await expect(fresh.locator('html')).toHaveAttribute('data-document-loading','ready')
- await fresh.getByRole('button',{name:'Pages',exact:true}).click()
- const downloads=[]
- fresh.on('download',value=>downloads.push(value))
- await fresh.getByRole('button',{name:'Reduce file size',exact:true}).click()
- await expect(fresh.getByText('This file is already small; nothing to squeeze')).toBeVisible({timeout:18000})
- assert.deepEqual(downloads,[])
+ await stubHomeHero(fresh)
+ await fresh.goto(origin+'/#/file/'+compact.fileId)
+ const compactEditor=fresh.frameLocator(`iframe[data-document-id="${compact.fileId}"]`)
+ await expect(compactEditor.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await compactEditor.getByRole('button',{name:'Pages',exact:true}).click()
+ await compactEditor.getByRole('button',{name:'Reduce file size',exact:true}).click()
+ await compactEditor.getByRole('dialog',{name:'Save a copy to your workspace'}).getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(compactEditor.getByText('This file is already small; nothing to squeeze')).toBeVisible({timeout:18000})
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
  assert.equal((await f.files.openFile(f.alice.token,compact.fileId)).file.revision,compact.revision)
+
+ const standalone=await context.newPage()
+ await standalone.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(standalone.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await standalone.getByRole('button',{name:'Pages',exact:true}).click()
+ const [download]=await Promise.all([
+  standalone.waitForEvent('download',{timeout:18000}),
+  standalone.getByRole('button',{name:'Reduce file size',exact:true}).click(),
+ ])
+ assert.equal(download.suggestedFilename(),'Scan draft-small.pdf')
+ assert.ok((await readFile(await download.path())).length<original.length/3)
 
  const currentCsrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
  const postReduction=(fileId,revision)=>page.request.post(origin+'/api/v1/files/'+fileId+'/pdf/reduce-size',{

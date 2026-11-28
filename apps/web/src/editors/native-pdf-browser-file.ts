@@ -192,7 +192,7 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
    if(!autoNamePending)return false
    const details=await refreshAutoName()
    return autoNamePending&&details.file.revision===current.revision
-  },pageCopies(open:PresentWorkspaceCopy,reveal?:PresentWorkspaceCopy){
+  },pageCopies(open:PresentWorkspaceCopy,reveal?:PresentWorkspaceCopy,saved?:PresentWorkspaceCopy){
    const present=(deliver:PresentWorkspaceCopy)=>async(receipt:RevisionRef,signal?:AbortSignal)=>{
     assertActive()
     await deliver(receipt,session.proof,signal)
@@ -200,6 +200,7 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
    return createPdfExtraction({
     fileId,name,request:session.request,getRevision:()=>current.revision,
     onCreated:present(open),
+    onSaved:saved&&present(saved),
     onBatchPublished:reveal&&present(reveal),
    })
   },async queryRedactions(patterns:readonly string[],signal?:AbortSignal){
