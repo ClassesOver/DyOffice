@@ -7,7 +7,8 @@ import './web-ai-naming.css'
 
 const formatLabels = { xlsx: 'Excel (.xlsx)', xlsm: 'Excel (.xlsm)', csv: 'CSV (.csv)', docx: 'Word (.docx)', pptx: 'PowerPoint (.pptx)', pdf: 'PDF (.pdf)' } satisfies Record<WorkspaceFileFormat,string>
 type WorkspaceChoice = { id: string; format: WorkspaceFileFormat }
-type Choice = 'local' | WorkspaceChoice[]
+type SelectedFile = WorkspaceChoice | File
+type Choice = 'local' | SelectedFile[]
 const PAGE_SIZE = 50
 export type WorkspaceSourceAccess = {
   request: SettingsRequest
@@ -25,9 +26,9 @@ type PickerOptions = {
   readAsAttachment?: boolean
   excludeFileId?: string
 }
-type SourceListOptions = Pick<PickerOptions, 'title' | 'formats' | 'language' | 'allowLocal' | 'excludeFileId'>
+type SourceListOptions = Pick<PickerOptions, 'title' | 'formats' | 'language' | 'allowLocal' | 'excludeFileId' | 'localAccept'>
 
-function selectSource(request: SettingsRequest, { title: heading, formats, language, allowLocal = true, excludeFileId }: SourceListOptions, signal: AbortSignal, maxFiles: number): Promise<Choice | null> {
+function selectSource(request: SettingsRequest, { title: heading, formats, language, allowLocal = true, excludeFileId, localAccept }: SourceListOptions, signal: AbortSignal, maxFiles: number): Promise<Choice | null> {
   signal.throwIfAborted()
   const en = language === 'en'
   const multiple = maxFiles > 1
@@ -64,24 +65,27 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
   const back = button(en ? 'Previous page' : '上一页', () => { page--; load() })
   const next = button(en ? 'Next page' : '下一页', () => { page++; load() })
   const use = button(en ? (multiple ? 'Use selected files' : 'Use selected file') : '使用所选文件')
-  const selected = new Map<string, WorkspaceChoice>()
+  const selected = new Map<string | File, SelectedFile>()
   const order = document.createElement('ol')
   const orderLabel = en ? 'Merge order' : '合并顺序'
   order.className = 'workspace-source-order'
   order.setAttribute('aria-label', orderLabel)
+  const selectionStatus = document.createElement('p')
+  selectionStatus.setAttribute('role', 'status')
   const localLabel = en ? (multiple ? 'Choose local files…' : 'Choose local file…') : '选择本机文件…'
   let chooseLocal: HTMLButtonElement | undefined
-  const add = button(en ? 'Add selected file' : '添加所选文件', () => {
-    const option = files.selectedOptions[0]
-    if (!option || add.disabled) return
-    const id = option.value
-    selected.set(id, {id, format: format.value as WorkspaceFileFormat})
+  let pickingLocal = false
+  function appendFile(file: SelectedFile, label: string) {
+    const key = file instanceof File ? file : file.id
+    selected.set(key, file)
+    selectionStatus.textContent = ''
     const item = document.createElement('li')
     const name = document.createElement('span')
-    name.textContent = option.textContent
+    name.textContent = label
     const remove = button(en ? 'Remove' : '移除', () => {
-      selected.delete(id)
+      selected.delete(key)
       item.remove()
+      selectionStatus.textContent = ''
       updateButtons()
       const focusTarget = files.disabled ? search : files
       focusTarget.focus()
@@ -89,13 +93,39 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
     remove.setAttribute('aria-label', en ? 'Remove ' + name.textContent : '移除 ' + name.textContent)
     item.append(name, remove)
     order.append(item)
+  }
+  const add = button(en ? 'Add selected file' : '添加所选文件', () => {
+    const option = files.selectedOptions[0]
+    if (!option || add.disabled) return
+    appendFile({id: option.value, format: format.value as WorkspaceFileFormat}, option.textContent ?? '')
     updateButtons()
     files.focus()
   })
   function updateButtons() {
-    add.disabled = !files.value || selected.has(files.value) || selected.size >= maxFiles
-    use.disabled = multiple ? !selected.size : !files.value
-    if (chooseLocal) chooseLocal.disabled = !!selected.size
+    add.disabled = pickingLocal || !files.value || selected.has(files.value) || selected.size >= maxFiles
+    use.disabled = multiple ? pickingLocal || !selected.size : !files.value
+    if (chooseLocal) chooseLocal.disabled = pickingLocal || selected.size >= maxFiles
+  }
+  async function addLocalFiles() {
+    pickingLocal = true
+    updateButtons()
+    try {
+      const accept = localAccept ?? formats.map(value => '.' + value).join(',')
+      const added = await pickLocalFiles(accept, lifetime.signal, true, dialog)
+      if (lifetime.signal.aborted) return
+      if (added.length + selected.size > maxFiles) {
+        selectionStatus.textContent = en ? `Choose up to ${maxFiles} files.` : `最多选择 ${maxFiles} 个文件。`
+        return
+      }
+      for (const file of added) appendFile(file, (en ? 'Local / ' : '本机 / ') + file.name)
+    } finally {
+      pickingLocal = false
+      if (!lifetime.signal.aborted) {
+        updateButtons()
+        if (chooseLocal?.disabled) use.focus()
+        else chooseLocal?.focus()
+      }
+    }
   }
   const folders = request<WorkspaceFolderList>('/api/v1/workspace/folders', 'GET', undefined, lifetime.signal)
     .then(result => new Map(folderChoices(result.folders).map(folder => [folder.id, folder.name])))
@@ -149,7 +179,7 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
   if (multiple) {
     const selection = document.createElement('div')
     selection.className = 'web-ai-naming-field'
-    selection.append(orderLabel, order)
+    selection.append(orderLabel, order, selectionStatus)
     form.append(selection)
   }
   form.append(actions)
@@ -166,7 +196,10 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
     }
     const cancel = () => finish(null)
     if (allowLocal) {
-      chooseLocal = button(localLabel, () => finish('local'))
+      chooseLocal = button(localLabel, () => {
+        if (multiple) void addLocalFiles()
+        else finish('local')
+      })
       actions.append(chooseLocal)
     }
     actions.append(button(en ? 'Cancel' : '取消', cancel), use)
@@ -198,9 +231,9 @@ export async function pickWorkspaceSourceRevision(
   access: Pick<WorkspaceSourceAccess, 'request' | 'verify'>, options: Omit<SourceListOptions, 'allowLocal'>, signal: AbortSignal,
 ) {
   const choice = await selectSource(access.request, {...options, allowLocal: false}, signal, 1)
-  if (!choice || choice === 'local') return null
+  if (!choice || choice === 'local' || !choice[0] || choice[0] instanceof File) return null
   const en = options.language === 'en'
-  const source = await readSourceMetadata(access.request, choice[0]!, en, signal)
+  const source = await readSourceMetadata(access.request, choice[0], en, signal)
   if (!await access.verify()) throw new Error(en ? 'The workspace session changed.' : '工作区会话已变更。')
   signal.throwIfAborted()
   return source.file
@@ -231,10 +264,20 @@ export async function pickWorkspaceSourceFiles(
     const accept = options.localAccept ?? options.formats.map(format => '.' + format).join(',')
     return pickLocalFiles(accept, signal, maxFiles > 1)
   }
-  await check()
-  const sources: {file: OpenFileResult['file']; name: string}[] = []
-  let total = 0
+  if (choice.some(file => !(file instanceof File))) await check()
+  const sources: (File | {file: OpenFileResult['file']; name: string})[] = []
+  let total = choice.reduce((bytes, file) => bytes + (file instanceof File ? file.size : 0), 0)
+  const checkTotal = () => {
+    if (options.maxTotalBytes !== undefined && total > options.maxTotalBytes) {
+      throw new Error(en ? 'The selected files exceed the combined size limit.' : '所选文件超过合计大小上限。')
+    }
+  }
+  checkTotal()
   for (const selectedFile of choice) {
+    if (selectedFile instanceof File) {
+      sources.push(selectedFile)
+      continue
+    }
     const source = await readSourceMetadata(access.request, selectedFile, en, signal)
     if (!options.readAsAttachment && (source.workbookPasswordProtected || source.documentPasswordProtected)) {
       throw new Error(en ? 'Choose a file without an open password.' : '请选择未设置打开密码的文件。')
@@ -245,14 +288,17 @@ export async function pickWorkspaceSourceFiles(
       throw new Error(en ? `Choose a nonempty file up to ${limit} MiB.` : `请选择不超过 ${limit} MiB 的非空文件。`)
     }
     total += source.file.size
-    if (options.maxTotalBytes !== undefined && total > options.maxTotalBytes) {
-      throw new Error(en ? 'The selected files exceed the combined size limit.' : '所选文件超过合计大小上限。')
-    }
+    checkTotal()
     sources.push({file: source.file, name: source.name})
   }
   const files: File[] = []
-  for (const {file, name} of sources) {
+  for (const source of sources) {
     signal.throwIfAborted()
+    if (source instanceof File) {
+      files.push(source)
+      continue
+    }
+    const {file, name} = source
     const bytes = await access.readBytes(file.fileId, file.revision)
     await check()
     files.push(new File([new Uint8Array(bytes)], name))

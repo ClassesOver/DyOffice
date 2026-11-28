@@ -1,7 +1,7 @@
-export async function pickLocalFiles(accept: string, signal: AbortSignal, multiple = false): Promise<File[]> {
+export async function pickLocalFiles(accept: string, signal: AbortSignal, multiple = false, parent: HTMLElement = document.body): Promise<File[]> {
   signal.throwIfAborted()
   return new Promise(resolve => {
-    const input = document.createElement('input')
+    const input = parent.ownerDocument.createElement('input')
     input.type = 'file'
     input.accept = accept
     input.multiple = multiple
@@ -15,7 +15,7 @@ export async function pickLocalFiles(accept: string, signal: AbortSignal, multip
     input.onchange = () => finish(Array.from(input.files ?? []))
     input.oncancel = cancel
     signal.addEventListener('abort', cancel, {once:true})
-    document.body.append(input)
+    parent.append(input)
     try { input.click() } catch { cancel() }
   })
 }

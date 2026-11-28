@@ -176,27 +176,32 @@ test('browser Data ribbon merges local and workspace workbooks and reopens their
  const picker=page.getByRole('dialog',{name:'Select workbooks to merge',exact:true})
  await merge.click()
  await expect(picker).toBeVisible({timeout:5000})
- const [chooser]=await Promise.all([page.waitForEvent('filechooser'),picker.getByRole('button',{name:'Choose local files…',exact:true}).click()])
- assert.equal(chooser.isMultiple(),true)
- const opened=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/sheets/merge-sources/open'))
- await chooser.setFiles({name:'local.csv',mimeType:'text/csv',buffer:Buffer.from('Label,Total\nParity,42\n')})
- const response=await opened
- assert.equal(response.status(),200,await response.text())
- const save=page.locator('.ribbon-tabs .qa-btn').first()
- try { await expect(save).toBeEnabled({timeout:15000}) }
- catch(error) { t.diagnostic(await page.locator('.workbook-status').innerText()); throw error }
- await expect(page.locator('.workbook-status')).toContainText(/merged.*from 1 file/i)
- await merge.click()
  const files=picker.getByRole('listbox',{name:'Workspace files',exact:true})
- for(const source of sources){
+ const chosenFiles=picker.getByRole('list',{name:'Merge order',exact:true}).getByRole('listitem')
+ const pickLocal=async()=> (await Promise.all([
+  page.waitForEvent('filechooser'),
+  picker.getByRole('button',{name:'Choose local files…',exact:true}).click(),
+ ]))[0]
+ for(const [index,source] of sources.entries()){
   await picker.getByRole('combobox',{name:'File type',exact:true}).selectOption(source.format)
   await picker.getByRole('searchbox',{name:'Search files',exact:true}).fill(source.name)
   await expect(files.getByRole('option',{name:source.name,exact:true})).toHaveCount(1)
   await files.selectOption(source.file.fileId)
   await picker.getByRole('button',{name:'Add selected file',exact:true}).click()
+  if(index===0){
+   const overflow=await pickLocal()
+   await overflow.setFiles(Array.from({length:8},(_,i)=>({name:`overflow-${i}.csv`,mimeType:'text/csv',buffer:Buffer.from('Name\nExtra\n')})))
+   await expect(picker.getByText('Choose up to 8 files.',{exact:true})).toBeVisible()
+   await expect(chosenFiles).toHaveCount(1)
+   const chooser=await pickLocal()
+   assert.equal(chooser.isMultiple(),true)
+   await chooser.setFiles({name:'local.csv',mimeType:'text/csv',buffer:Buffer.from('Label,Total\nParity,42\n')})
+  }
  }
+ await expect(chosenFiles).toHaveText([/^z-ledger\.xlsm/, /^Local \/ local\.csv/, /^a-workspace\.csv/])
  await picker.getByRole('button',{name:'Use selected files',exact:true}).click()
- await expect(page.locator('.workbook-status')).toContainText(/merged.*from 2 files/i,{timeout:25000})
+ await expect(page.locator('.workbook-status')).toContainText(/merged.*from 3 files/i,{timeout:25000})
+ const save=page.locator('.ribbon-tabs .qa-btn').first()
  const head=async()=>(await f.files.openFile(f.alice.token,initial.fileId)).file.revision
  assert.equal(await head(),initial.revision)
  await save.click()
@@ -206,7 +211,7 @@ test('browser Data ribbon merges local and workspace workbooks and reopens their
  const before=await runtime.sheetsNative.inspect(base),after=await runtime.sheetsNative.inspect(saved)
  const imported=after.sheets.filter(sheet=>!before.sheets.some(old=>old.name===sheet.name))
  assert.equal(imported.length,3)
- for (const [index,values] of [['Parity',42],['Macro source',43],['Workspace source',44]].entries()){
+ for (const [index,values] of [['Macro source',43],['Parity',42],['Workspace source',44]].entries()){
   const range=await runtime.sheetsNative.readRange(saved,imported[index].name,{startRow:1,endRow:1,startColumn:0,endColumn:1})
   assert.deepEqual(range.cells.map(cell=>cell.value),values)
   assert.ok(range.cells.every(cell=>!cell.formula))

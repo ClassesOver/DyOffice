@@ -2284,7 +2284,7 @@ test('native Web PDF saves exported attachments to a workspace folder and recove
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 })
 
-test('native Web PDF publishes and opens merged workspace PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{
+test('native Web PDF publishes and opens mixed workspace and local PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -2336,19 +2336,21 @@ test('native Web PDF publishes and opens merged workspace PDFs as one workspace 
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  const merge=source.getByRole('button',{name:'Merge PDF',exact:true})
  const sources=source.getByRole('dialog',{name:'Select PDFs to merge',exact:true})
- const pick=async()=>{
-  await merge.click()
+ const pickLocal=async()=>{
   await expect(sources).toBeVisible({timeout:5000})
   return (await Promise.all([
    page.waitForEvent('filechooser',{timeout:5000}),
    sources.getByRole('button',{name:'Choose local files…',exact:true}).click(),
   ]))[0]
  }
- const canceled=await pick()
+ await merge.click()
+ const canceled=await pickLocal()
  await canceled.setFiles([])
+ await sources.getByRole('button',{name:'Cancel',exact:true}).click()
  await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
  assert.equal(await head(),file.revision)
- const selected=await pick()
+ await merge.click()
+ const selected=await pickLocal()
  assert.equal(selected.isMultiple(),true)
  const {createPdfStampsJob}=await import('../../server/src/pdf/stamps-job.mjs')
  const donor=await createPdfStampsJob({allowAcroForm:true}).execute(await makePdf([250,260]),JSON.stringify({
@@ -2359,6 +2361,8 @@ test('native Web PDF publishes and opens merged workspace PDFs as one workspace 
   {name:'a-second.pdf',mimeType:'application/pdf',buffer:await makePdf([270])},
  ]
  await selected.setFiles(inputs)
+ const use=sources.getByRole('button',{name:'Use selected files',exact:true})
+ await use.click()
  const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
  await expect(destination.getByRole('textbox',{name:'File name'})).toHaveValue('merge-source-merged.pdf',{timeout:5000})
  await destination.getByRole('button',{name:'Cancel',exact:true}).click()
@@ -2371,7 +2375,6 @@ test('native Web PDF publishes and opens merged workspace PDFs as one workspace 
  await merge.click()
  const search=sources.getByRole('searchbox',{name:'Search files',exact:true})
  const list=sources.getByRole('listbox',{name:'Workspace files',exact:true})
- const use=sources.getByRole('button',{name:'Use selected files',exact:true})
  const add=sources.getByRole('button',{name:'Add selected file',exact:true})
  await expect(use).toBeDisabled()
  for(const [index,input] of inputs.entries()){
@@ -2384,8 +2387,9 @@ test('native Web PDF publishes and opens merged workspace PDFs as one workspace 
  const order=sources.getByRole('list',{name:'Merge order',exact:true}).getByRole('listitem')
  await sources.getByRole('button',{name:'Remove a-second.pdf',exact:true}).click()
  await expect(order).toHaveCount(1)
- await add.click()
- await expect(order).toHaveText([/^z-first\.pdf/, /^a-second\.pdf/])
+ const mixedLocal=await pickLocal()
+ await mixedLocal.setFiles([inputs[1]])
+ await expect(order).toHaveText([/^z-first\.pdf/, /^Local \/ a-second\.pdf/])
  await use.click()
  await destination.getByRole('textbox',{name:'File name'}).fill('Client packet')
  await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
