@@ -1,5 +1,6 @@
 import {takeOfficeImportUnlock,workspaceOpenAction} from './browser-document-command'
 import {applyBrowserEditorTheme} from './browser-editor-theme'
+import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
 import { officeSignatureNotice } from './office-signature-notice'
 import {createDraftCopyAuthority,draftCopyParentActive} from './draft-copy-authority'
 import {mountDocumentHandoff} from './document-handoff'
@@ -22,7 +23,7 @@ import {LocaleProvider,setModuleLang,tFor} from '../../../sheets/src/renderer/i1
 import {installCanvasFontFallback,registerTextDingbatsFace,untilCellFontsLoaded} from '../../../sheets/src/renderer/cell-font-fallback'
 import type {DesktopApi} from '../../../sheets/src/shared/desktop-api'
 import {WORKBOOK_TOOLS} from '../../../sheets/src/renderer/ai/tools'
-import {installScreenTips,applyAiPanelPrefs,useDismissablePopover} from '@genoffice/ui'
+import {installScreenTips,useDismissablePopover} from '@genoffice/ui'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
 import '@genoffice/ui/ai-model-picker.css'
@@ -80,8 +81,9 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const assistantNotice = guest||passwordProtected?'':editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
-  Object.defineProperty(window,'desktopApi',{value:{...documentApi,...assistant?.api,...(workbookImages?{generateImage:workbookImages.generateImage,fetchImage:workbookImages.fetchImage}:{}),getAiPanelPrefs:async()=>panelPrefs} as unknown as DesktopApi,configurable:true})
-  applyAiPanelPrefs(panelPrefs); installScreenTips(); installCanvasFontFallback()
+  const appearance=installBrowserAssistantAppearance(prefs,panelPrefs)
+  Object.defineProperty(window,'desktopApi',{value:{...documentApi,...assistant?.api,...(workbookImages?{generateImage:workbookImages.generateImage,fetchImage:workbookImages.fetchImage}:{}),getAiPanelPrefs:async()=>appearance.withAppearance(panelPrefs)} as unknown as DesktopApi,configurable:true})
+  installScreenTips(); installCanvasFontFallback()
   const loads: Promise<unknown>[] = [registerTextDingbatsFace()]
   for (const variant of ['', 'bold ', 'italic ', 'italic bold ']) for (const family of ['Calibri','Aptos',"'Aptos Narrow'",'Carlito']) loads.push(document.fonts.load(`${variant}16px ${family}`).catch(()=>{}))
   await untilCellFontsLoaded(Promise.all(loads))

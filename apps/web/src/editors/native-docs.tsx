@@ -1,6 +1,7 @@
 import {BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES} from '../../../docs/src/shared/merge-data'
 import {takeOfficeImportUnlock,workspaceOpenAction} from './browser-document-command'
 import {applyBrowserEditorTheme} from './browser-editor-theme'
+import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
 import { officeSignatureNotice } from './office-signature-notice'
 import {readHandoffSkill} from './document-handoff-spec'
 import {joinWordCollab,type WordSyncState} from './word-collab'
@@ -18,7 +19,7 @@ import { App, type DocsNamedCopy } from '../../../docs/src/renderer/App'
 import { PasswordDialog } from '../../../docs/src/renderer/components/PasswordDialog'
 import { LocaleProvider, setModuleLang } from '../../../docs/src/renderer/i18n/locale'
 import { setAuthorName } from '../../../docs/src/renderer/author-name'
-import { applyAiPanelPrefs, AssistantAvatar, installScreenTips } from '@genoffice/ui'
+import { AssistantAvatar, installScreenTips } from '@genoffice/ui'
 import type { SessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { createDocsBridge } from './docs-bridge.ts'
 import type { DocsEditorHandle, OfficeHandoffRunner } from '../../../docs/src/renderer/file-actions'
@@ -328,8 +329,9 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       try { return await normalizeWebp(image.base64) } catch { return null }
     },
   } : {}
-  window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => ({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
-  applyAiPanelPrefs(panelPrefs); installScreenTips()
+  const appearance=installBrowserAssistantAppearance(prefs,panelPrefs)
+  window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => appearance.withAppearance({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
+  installScreenTips()
   let initialLease = canEdit()
   if(initialLease)try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId)

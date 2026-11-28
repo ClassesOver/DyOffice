@@ -12,6 +12,7 @@ import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
+import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
@@ -23,7 +24,7 @@ import {createGlobalConfigService} from '../../server/src/modules/admin/service.
 import {createSkillService} from '../../server/src/modules/skills/service.ts'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
-test('four real Office editors share assistant chrome and retain drafts across collapse and an early stream failure',{timeout:180000},async t=>{
+test('four real Office editors share assistant chrome and retain drafts across collapse and an early stream failure',{timeout:240000},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-dock-'))
  let app,browser,server
  t.after(async()=>{
@@ -87,6 +88,59 @@ test('four real Office editors share assistant chrome and retain drafts across c
    return route.fulfill({contentType:'text/event-stream',body:'event: delta\ndata: {"text":"Partial model reply"}\n\nevent: error\ndata: {"reason":"AI_TURN_TIMED_OUT","message":"The model response timed out."}\n\nevent: done\ndata: {}\n\n'})
   }
   return route.continue()
+ })
+ await t.test('account assistant appearance updates all mounted editors and survives reopen',async()=>{
+  await f.preferences.update(f.alice.token,{aiFontSize:'large',aiSpellcheck:false})
+  await page.goto(origin)
+  await expect(page.locator('.home')).toBeVisible()
+  const frame=file=>page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+  const editorHtml=file=>frame(file).locator('html')
+  const composer=file=>frame(file).locator('.ai-composer textarea').first()
+  for(const [format,file] of Object.entries(files)){
+   await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
+   await expect(editorHtml(file)).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','large')
+   const rail=frame(file).locator(format==='xlsx'?'.expand-copilot':'.ai-rail').first()
+   await expect.poll(async()=>await rail.isVisible()||await composer(file).isVisible(),{timeout:15000}).toBe(true)
+   if(await rail.isVisible())await rail.click()
+   await expect(composer(file)).toHaveJSProperty('spellcheck',false)
+   if(format==='pptx'){
+    await frame(file).locator('.ai-panel-side-button').click()
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-panel-side','right')
+    await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','large')
+    await expect(composer(file)).toHaveJSProperty('spellcheck',false)
+   }
+  }
+  await composer(files.pdf).fill('Draft before preference change')
+  await page.getByRole('tab',{name:'首页',exact:true}).click()
+  async function saveAppearance(font,spellcheck,custom){
+   await accountAction(page,'个人设置')
+   const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+   await settingsTab(settings,'通用偏好')
+   await settings.getByLabel('AI 助手字号',{exact:true}).selectOption(font)
+   if(custom!==undefined)await settings.getByLabel('自定义助手字号',{exact:true}).selectOption(String(custom))
+   await settings.getByRole('switch',{name:'AI 助手拼写检查',exact:true}).setChecked(spellcheck)
+   await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+   await expect(settings).toContainText('个人偏好已保存')
+   await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
+  }
+  await saveAppearance('custom',true,21)
+  for(const file of Object.values(files)){
+   await expect(editorHtml(file)).toHaveAttribute('data-ai-font-size','custom')
+   await expect(frame(file).locator('.ai-composer').first()).toHaveCSS('zoom','1.5')
+   await expect(composer(file)).toHaveJSProperty('spellcheck',true)
+   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  }
+  await expect(editorHtml(files.pptx)).toHaveAttribute('data-ai-panel-side','right')
+  await expect(composer(files.pdf)).toHaveValue('Draft before preference change')
+  const reopened=await page.context().newPage()
+  try{
+   await reopened.goto(origin+'/native-pdf/?fileId='+files.pdf.fileId,{waitUntil:'commit'})
+   await expect(reopened.locator('html')).toHaveAttribute('data-ai-font-size','custom',{timeout:45000})
+   await expect(reopened.locator('html')).toHaveAttribute('data-document-loading','ready')
+  }finally{await reopened.close()}
+  await saveAppearance('default',true)
+  for(const file of Object.values(files))await expect(editorHtml(file)).not.toHaveAttribute('data-ai-font-size',/./)
  })
  for(const format of ['docx','xlsx','pptx','pdf']){
   if(format==='pdf')await f.preferences.update(f.alice.token,{theme:'dark'})

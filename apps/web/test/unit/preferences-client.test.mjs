@@ -103,3 +103,18 @@ test('document appearance is independent of the workspace theme',async()=>{
  value={...value,documentTheme:'system'}
  await assert.rejects(client.getPreferences(),/无法确认/)
 })
+
+test('assistant appearance round trips and rejects malformed receipts',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ const appearance={aiFontSize:'custom',aiCustomFontSize:21,aiSpellcheck:false}
+ assert.deepEqual(await client.updatePreferences(appearance),{...initial,...appearance})
+ assert.deepEqual(await client.getPreferences(),{...initial,...appearance})
+ for(const invalid of [{aiFontSize:'huge'},{aiCustomFontSize:33},{aiCustomFontSize:12.5},{aiSpellcheck:'false'}]){
+  value={...initial,...appearance,...invalid}
+  await assert.rejects(client.getPreferences(),/无法确认/)
+ }
+})

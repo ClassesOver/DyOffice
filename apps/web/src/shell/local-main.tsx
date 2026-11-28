@@ -1,5 +1,7 @@
 import {WorkspaceLoading} from './WorkspaceLoading'
 import {applyBrowserEditorTheme} from '../editors/browser-editor-theme'
+import {publishBrowserAssistantAppearance} from '../editors/browser-assistant-appearance'
+import {ASSISTANT_APPEARANCE_FIELDS} from '../../../../packages/web-contracts/src/preferences'
 import {HomeHero} from './HomeHero'
 import type {PreparedAiDocumentCreator} from './pdf-create-document-skill'
 import {createAiDocCreationQueue,type AiDocCreationResult} from './ai-doc-creation'
@@ -145,11 +147,14 @@ function saveWorkspaceEntries(tabs:ReturnType<typeof documentTabs.list>){
 }
 async function saveWorkspacePreferences(patch:Parameters<typeof preferences.updatePreferences>[0]){
  const saved=await preferences.updatePreferences(patch)
- if(patch.documentTheme!==undefined||patch.theme!==undefined){
+ const updateTheme=patch.documentTheme!==undefined||patch.theme!==undefined
+ const updateAssistantAppearance=ASSISTANT_APPEARANCE_FIELDS.some(field=>patch[field]!==undefined)
+ if(updateTheme||updateAssistantAppearance){
   for(const tab of documentTabs.renderedDocuments()){
-   if(tab.format!=='docx'&&tab.format!=='xlsx')continue
    const root=nativeFrame(surface(tab.id))?.contentDocument?.documentElement
-   if(root)applyBrowserEditorTheme(root,saved)
+   if(!root)continue
+   if(updateTheme&&(tab.format==='docx'||tab.format==='xlsx'))applyBrowserEditorTheme(root,saved)
+   if(updateAssistantAppearance)publishBrowserAssistantAppearance(root,saved)
   }
  }
  sleepInactiveTabs=saved.sleepInactiveTabs!==false

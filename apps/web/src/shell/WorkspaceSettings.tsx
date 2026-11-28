@@ -1,12 +1,14 @@
 import './personal-settings-page.css'
 import {useCallback,useEffect,useId,useRef,useState} from 'react'
 import type {PersonalPreferences} from '../../../../packages/browser-host/src/preferences'
+import {AI_CUSTOM_FONT_MAX_PX,AI_CUSTOM_FONT_MIN_PX,DEFAULT_AI_PANEL_PREFS,aiPanelFontPx,type AiFontSize} from '@genoffice/ui/ai-panel-prefs'
 import {LocalPasswordForm} from './LocalPasswordForm'
 import {LocalSessionsPanel} from './LocalSessionsPanel'
 import type {LocalSessionsClient} from './local-sessions-client'
 import type {LoginHistoryClient} from './local-login-history-client'
 import {LoginHistoryPanel} from './LoginHistoryPanel'
 import type {KeyboardEvent,ReactNode} from 'react'
+const customAssistantSizes=Array.from({length:AI_CUSTOM_FONT_MAX_PX-AI_CUSTOM_FONT_MIN_PX+1},(_,index)=>AI_CUSTOM_FONT_MIN_PX+index)
 export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClose,onCloseGuardChange,sessionsClient,historyClient,activeTab,onTabChange}:{
  user:{username:string;displayName:string;roles:string[]};load:()=>Promise<PersonalPreferences>;save:(patch:Partial<PersonalPreferences>)=>Promise<PersonalPreferences>
  activeTab?:string;onTabChange?:(tab:string)=>void
@@ -50,6 +52,7 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
   <section className="personal-page-panel personal-page-sessions" aria-labelledby={`${preferenceId}-sessions`}><h3 id={`${preferenceId}-sessions`}>登录会话</h3><LocalSessionsPanel client={sessionsClient} refreshVersion={sessionVersion} onCloseGuardChange={sessionsGuard} onCurrentRevoked={security.onCurrentRevoked}/></section>
   <section className="personal-page-panel personal-page-history" aria-labelledby={`${preferenceId}-history`}><h3 id={`${preferenceId}-history`}>登录记录</h3><LoginHistoryPanel client={historyClient}/></section>
  </div>
+ const assistantFontSize=draft?.aiFontSize??DEFAULT_AI_PANEL_PREFS.fontSize
  const general=<form className="personal-page-general" onSubmit={event=>{event.preventDefault();void commit()}} aria-busy={busy}>
   <fieldset disabled={busy||!draft}>
    <h3 className="personal-page-group-title">外观与语言</h3>
@@ -66,6 +69,27 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-autosave`}>自动保存</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-autosave`} aria-label="自动保存" aria-checked={!!draft?.autoSave} checked={!!draft?.autoSave} onChange={event=>edit({autoSave:event.target.checked})}/></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" aria-checked={!!draft?.showAssistant} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/></div>
    <div className="personal-page-preference-row">
+    <label htmlFor={`${preferenceId}-assistant-font`}>AI 助手字号</label>
+    <select id={`${preferenceId}-assistant-font`} value={assistantFontSize} onChange={event=>{
+     const aiFontSize=event.target.value as AiFontSize
+     edit(aiFontSize==='custom'
+      ? {aiFontSize,aiCustomFontSize:aiPanelFontPx({...DEFAULT_AI_PANEL_PREFS,fontSize:assistantFontSize})}
+      : {aiFontSize})
+    }}>
+     <option value="default">默认</option><option value="large">大</option><option value="xlarge">特大</option><option value="custom">自定义</option>
+    </select>
+   </div>
+   {assistantFontSize==='custom'&&<div className="personal-page-preference-row">
+    <label htmlFor={`${preferenceId}-assistant-custom-font`}>自定义助手字号</label>
+    <select id={`${preferenceId}-assistant-custom-font`} value={draft?.aiCustomFontSize??DEFAULT_AI_PANEL_PREFS.customFontSize} onChange={event=>edit({aiCustomFontSize:Number(event.target.value)})}>
+     {customAssistantSizes.map(size=><option key={size} value={size}>{size} px</option>)}
+    </select>
+   </div>}
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-assistant-spellcheck`}>AI 助手拼写检查</label><p id={`${preferenceId}-assistant-spellcheck-hint`} className="personal-page-field-hint">检查助手输入框中的拼写。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant-spellcheck`} aria-describedby={`${preferenceId}-assistant-spellcheck-hint`} checked={draft?.aiSpellcheck!==false} onChange={event=>edit({aiSpellcheck:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row">
     <div><label htmlFor={`${preferenceId}-pdf-zoom`}>PDF 默认缩放</label><p id={`${preferenceId}-pdf-zoom-hint`} className="personal-page-field-hint">打开没有阅读记录的 PDF 时使用的缩放。</p></div>
     <select id={`${preferenceId}-pdf-zoom`} aria-describedby={`${preferenceId}-pdf-zoom-hint`} value={draft?.pdfDefaultZoom??'width'} onChange={event=>edit({pdfDefaultZoom:event.target.value as NonNullable<PersonalPreferences['pdfDefaultZoom']>})}>
      <option value="width">适应宽度</option><option value="page">适应页面</option><option value="last">上次使用的缩放</option>
@@ -79,7 +103,7 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
     <div><label htmlFor={`${preferenceId}-sleep`}>休眠不活跃的标签页</label><p id={`${preferenceId}-sleep-hint`} className="personal-page-field-hint">打开较多文档时，释放长时间未查看的后台编辑器。点击页签即可重新打开。</p></div>
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-sleep`} aria-describedby={`${preferenceId}-sleep-hint`} checked={draft?.sleepInactiveTabs!==false} onChange={event=>edit({sleepInactiveTabs:event.target.checked})}/>
    </div>
-   <p className="personal-page-field-hint">语言与编辑器偏好保存后，在刷新页面或重新打开文档时生效。</p>
+   <p className="personal-page-field-hint">更改语言后，请刷新页面或重新打开文档。</p>
   </fieldset>
  </form>
  const content={account,activity,general,skills:<div className="personal-page-skills">{typeof skills==='function'?skills(skillsGuard):skills}</div>}

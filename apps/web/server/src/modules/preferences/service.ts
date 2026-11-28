@@ -2,9 +2,9 @@ import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
 import { authorize } from '../policy/authorize.ts'
 import { authError } from '../auth/sessions.ts'
-import { DOCUMENT_THEME_MODES, PDF_DEFAULT_ZOOM_MODES, type DocumentTheme, type PdfDefaultZoom } from '../../../../../../packages/web-contracts/src/preferences.ts'
+import { DEFAULT_ASSISTANT_APPEARANCE, DOCUMENT_THEME_MODES, PDF_DEFAULT_ZOOM_MODES, isAssistantAppearance, type DocumentTheme, type PdfDefaultZoom } from '../../../../../../packages/web-contracts/src/preferences.ts'
 
-export const preferenceDefaults = Object.freeze({ theme: 'system', documentTheme: 'follow', language: 'zh', authorName: '', autoSave: true, showAssistant: true, restoreSession: true, sleepInactiveTabs: true, pdfDefaultZoom: 'width' })
+export const preferenceDefaults = Object.freeze({ theme: 'system', documentTheme: 'follow', language: 'zh', authorName: '', autoSave: true, showAssistant: true, restoreSession: true, sleepInactiveTabs: true, pdfDefaultZoom: 'width', ...DEFAULT_ASSISTANT_APPEARANCE })
 const fields = Object.keys(preferenceDefaults)
 export function createPreferenceService(transactions: PrincipalTransactions) {
   async function access<T>(token: string, action: 'preferences:read' | 'preferences:write', operation: (connection: PoolClient, principal: BusinessPrincipal, workspaceId: string) => Promise<T>): Promise<T> {
@@ -24,7 +24,7 @@ export function createPreferenceService(transactions: PrincipalTransactions) {
     async update(token: string, patch: unknown) {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !fields.includes(key))) throw authError(400)
       const value = patch as Record<string, unknown>
-      if (value.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(value.documentTheme as DocumentTheme)) throw authError(400)
+      if (!isAssistantAppearance(value) || (value.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(value.documentTheme as DocumentTheme))) throw authError(400)
       if ((value.theme !== undefined && !['light','dark','system'].includes(value.theme as string)) || (value.language !== undefined && !['zh','en'].includes(value.language as string)) || (value.authorName !== undefined && (typeof value.authorName !== 'string' || [...value.authorName].length > 100)) || ['autoSave','showAssistant','restoreSession','sleepInactiveTabs'].some(key => value[key] !== undefined && typeof value[key] !== 'boolean') || (value.pdfDefaultZoom !== undefined && !PDF_DEFAULT_ZOOM_MODES.includes(value.pdfDefaultZoom as PdfDefaultZoom))) throw authError(400)
       return access<Record<string, unknown>>(token, 'preferences:write', async (connection, principal, workspaceId) => {
         const result = await connection.query('INSERT INTO personal_preferences(deployment_id,owner_id,workspace_id,data) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(deployment_id,owner_id) DO UPDATE SET data=personal_preferences.data||$5::jsonb,revision=personal_preferences.revision+1 RETURNING data', [principal.deploymentId, principal.userId, workspaceId, JSON.stringify({ ...preferenceDefaults,...value }), JSON.stringify(value)])

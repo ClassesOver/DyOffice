@@ -49,6 +49,7 @@ import '@genoffice/ui/screentip.css'
 import '@genoffice/ui/ribbon-collapse.css'
 import '../../../pdf/src/renderer/styles.css'
 import '@genoffice/ui/ai-panel-prefs.css'
+import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
 import './native-pdf-assistant.css'
 
 const element=document.getElementById('root')!
@@ -63,6 +64,7 @@ async function mount(){
   grant.getPreferences().catch(()=>undefined),
   params.get('guest')==='1'?undefined:grant.accountIdentity(browserActions.signal).catch(()=>undefined),
  ])
+ installBrowserAssistantAppearance(prefs)
  const lastZoomStorage={
   getItem:(key:string)=>account?localStorage.getItem(`${key}:${account.join(':')}`):null,
   setItem(key:string,value:string){

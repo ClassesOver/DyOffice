@@ -27,7 +27,8 @@ import {installCanvasKerning} from '../../../slides/src/renderer/canvas-kerning'
 import type {SlidesApi} from '../../../slides/src/shared/ipc'
 import {WEB_SLIDE_MEDIA_MAX_BYTES} from '../../../slides/src/shared/media-kinds'
 import {WEB_NOTES_TEXT_LIMIT} from '../../../slides/src/shared/notes-draft'
-import {applyAiPanelPrefs, installScreenTips} from '@genoffice/ui'
+import {installScreenTips} from '@genoffice/ui'
+import {installBrowserAssistantAppearance} from './browser-assistant-appearance'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
 import '@genoffice/ui/ai-model-picker.css'
@@ -96,8 +97,12 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       skillText: name => sharedAssistant?.api.skillText(name) ?? Promise.reject(new Error(text.unavailable)),
     },
   })
-  Object.defineProperty(window, 'slidesApi', {value: {...bridge.api,...audience.api,...fullscreen} as unknown as SlidesApi, configurable: true})
-  applyAiPanelPrefs(await bridge.api.getAiPanelPrefs()); installScreenTips(); installCanvasKerning()
+  const appearance=installBrowserAssistantAppearance(prefs,await bridge.api.getAiPanelPrefs())
+  Object.defineProperty(window, 'slidesApi', {value: {...bridge.api,...audience.api,...fullscreen,
+    getAiPanelPrefs:async()=>appearance.withAppearance(),
+    setAiPanelPrefs:async(patch:Parameters<SlidesApi['setAiPanelPrefs']>[0])=>appearance.updatePanelPrefs(patch),
+  } as unknown as SlidesApi, configurable: true})
+  installScreenTips(); installCanvasKerning()
   // Canvas fillText never triggers @font-face downloads: the bundled document fonts
   // (Carlito <-> Calibri) must be requested explicitly or Konva draws the fallback face.
   for (const variant of ['', 'bold ', 'italic ', 'italic bold ']) for (const family of ['Carlito', "'Carlito GO'"]) document.fonts?.load?.(`${variant}16px ${family}`).catch(() => {})
@@ -364,9 +369,8 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const desktop={...(stage.desktop??{}),...value.api} as typeof stage.desktop
     Object.defineProperty(stage,'desktop',{value:desktop,configurable:true,writable:true})
     installedDesktop=desktop
-    const panelPrefs=await bridge.api.getAiPanelPrefs()
     if(!disposed){
-      applyAiPanelPrefs({...panelPrefs,showAiSidebar:value.available})
+      appearance.updatePanelPrefs({showAiSidebar:value.available})
     }
   }).catch(()=>{}).finally(()=>{assistantLoadFinished=true;if(!disposed)changed()})
   const closeState=()=>({dirty:dirty()||bridge.isDirty(),blocked:copying||downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})

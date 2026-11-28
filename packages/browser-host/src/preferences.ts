@@ -1,7 +1,7 @@
-import {DOCUMENT_THEME_MODES,PDF_DEFAULT_ZOOM_MODES,type DocumentTheme,type PdfDefaultZoom} from '../../web-contracts/src/preferences.ts'
+import {ASSISTANT_APPEARANCE_FIELDS,DOCUMENT_THEME_MODES,PDF_DEFAULT_ZOOM_MODES,isAssistantAppearance,type AssistantAppearance,type DocumentTheme,type PdfDefaultZoom} from '../../web-contracts/src/preferences.ts'
 import type {PublicGlobalSettings} from '../../web-contracts/src/settings.ts'
 
-export interface PersonalPreferences {
+export interface PersonalPreferences extends AssistantAppearance {
   theme: 'light' | 'dark' | 'system'
   documentTheme?: DocumentTheme
   language: 'zh' | 'en'
@@ -13,13 +13,13 @@ export interface PersonalPreferences {
   pdfDefaultZoom?: PdfDefaultZoom
 }
 export type SettingsRequest = <T = unknown>(path: string, method?: string, body?: unknown, signal?: AbortSignal) => Promise<T>
-const fields = ['theme', 'documentTheme', 'language', 'authorName', 'autoSave', 'showAssistant', 'restoreSession', 'sleepInactiveTabs', 'pdfDefaultZoom'] as const
+const fields = ['theme', 'documentTheme', 'language', 'authorName', 'autoSave', 'showAssistant', 'restoreSession', 'sleepInactiveTabs', 'pdfDefaultZoom', ...ASSISTANT_APPEARANCE_FIELDS] as const
 
 function project(value: unknown): PersonalPreferences {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无法确认偏好保存结果，请重新加载。')
   const v = value as PersonalPreferences
-  if (!['light', 'dark', 'system'].includes(v.theme) || !['zh', 'en'].includes(v.language) || typeof v.authorName !== 'string' || typeof v.autoSave !== 'boolean' || typeof v.showAssistant !== 'boolean' || [v.restoreSession,v.sleepInactiveTabs].some(value=>value!==undefined&&typeof value!=='boolean') || (v.pdfDefaultZoom !== undefined && !PDF_DEFAULT_ZOOM_MODES.includes(v.pdfDefaultZoom)) || (v.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(v.documentTheme))) throw new Error('无法确认偏好保存结果，请重新加载。')
-  return {theme: v.theme, language: v.language, authorName: v.authorName, autoSave: v.autoSave, showAssistant: v.showAssistant, ...(v.restoreSession === undefined ? {} : {restoreSession: v.restoreSession}), ...(v.sleepInactiveTabs === undefined ? {} : {sleepInactiveTabs: v.sleepInactiveTabs}), ...(v.pdfDefaultZoom === undefined ? {} : {pdfDefaultZoom: v.pdfDefaultZoom}), ...(v.documentTheme === undefined ? {} : {documentTheme: v.documentTheme})}
+  if (!['light', 'dark', 'system'].includes(v.theme) || !['zh', 'en'].includes(v.language) || typeof v.authorName !== 'string' || typeof v.autoSave !== 'boolean' || typeof v.showAssistant !== 'boolean' || [v.restoreSession,v.sleepInactiveTabs].some(value=>value!==undefined&&typeof value!=='boolean') || (v.pdfDefaultZoom !== undefined && !PDF_DEFAULT_ZOOM_MODES.includes(v.pdfDefaultZoom)) || (v.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(v.documentTheme)) || !isAssistantAppearance(v)) throw new Error('无法确认偏好保存结果，请重新加载。')
+  return Object.fromEntries(fields.filter(key => v[key] !== undefined).map(key => [key, v[key]])) as unknown as PersonalPreferences
 }
 
 /** Keep one client for a session so replacing a settings panel cannot duplicate a write. */
