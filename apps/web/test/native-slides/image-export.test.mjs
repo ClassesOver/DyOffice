@@ -542,6 +542,45 @@ test('PPTX keeps the section of a middle slide cut and pasted back at its origin
   assert.deepEqual(await actual(),sections)
 })
 
+test('Web PowerPoint keeps the AutoSave override with its original deck and account',{timeout:120000},async t=>{
+  const f=await fixture(t),{page,origin}=f
+  await f.preferences.update(f.alice.token,{theme:'light',autoSave:false})
+  await f.preferences.update(f.bob.token,{language:'en',theme:'light',autoSave:false})
+  const bytes=await readFile(deckFixture)
+  const first=(await importFile(f,f.alice.token,bytes,'First deck.pptx')).file
+  const second=(await importFile(f,f.alice.token,bytes,'Second deck.pptx')).file
+  const other=(await importFile(f,f.bob.token,bytes,'Other account.pptx')).file
+  const toggle=page.locator('.autosave-toggle input')
+  await openDeck(f,first.fileId,'light')
+  await expect(toggle).not.toBeChecked()
+  await page.locator('.autosave-toggle').click()
+  await expect(toggle).toBeChecked()
+  await openDeck(f,second.fileId,'light')
+  await expect(toggle).not.toBeChecked()
+  await openDeck(f,first.fileId,'light')
+  await expect(toggle).toBeChecked()
+
+  const notes='Persisted with the deck AutoSave override'
+  await page.locator('.notes-pane textarea').fill(notes)
+  await page.locator('.thumb').first().click()
+  await page.evaluate(()=>window.dispatchEvent(new Event('blur')))
+  const revision=async()=> (await f.files.openFile(f.alice.token,first.fileId)).file.revision
+  await expect.poll(revision,{timeout:15000}).not.toBe(first.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,first.fileId,await revision()))
+  const noteParts=await Promise.all(saved.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(part=>part.async('string')))
+  assert.ok(noteParts.some(xml=>xml.includes(notes)))
+  await expect.poll(()=>page.evaluate(()=>window.slidesApi.isDirty())).toBe(false)
+  await openDeck(f,first.fileId,'light')
+  await expect(page.locator('.notes-pane textarea')).toHaveValue(notes)
+
+  const request=page.context().request
+  const csrf=async()=> (await(await request.get(origin+'/api/v1/auth/csrf')).json()).csrfToken
+  assert.equal((await request.post(origin+'/api/v1/auth/logout',{headers:{origin,'x-csrf-token':await csrf()}})).status(),204)
+  assert.equal((await request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':await csrf()},data:{username:'bob',password}})).status(),200)
+  await openDeck(f,other.fileId,'light')
+  await expect(toggle).not.toBeChecked()
+})
+
 test('Web PowerPoint AI Beautify attaches only eligible slide screenshots for the selected model',{timeout:120000},async t=>{
   const f=await fixture(t),{page}=f
   await f.preferences.update(f.alice.token,{theme:'light',showAssistant:true,autoSave:false})

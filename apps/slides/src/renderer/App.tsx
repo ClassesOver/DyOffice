@@ -583,7 +583,8 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
-  const [autoSave, setAutoSave] = useAutoSavePref('ai-slides-auto-save', window.slidesApi)
+  const autoSaveKey = host?.documentStorageScope ? `ai-slides-auto-save:${host.documentStorageScope}` : 'ai-slides-auto-save'
+  const [autoSave, setAutoSave] = useAutoSavePref(autoSaveKey, window.slidesApi)
   useEffect(() => {
     window.slidesApi.setAutoSavePref?.(autoSave)
   }, [autoSave])

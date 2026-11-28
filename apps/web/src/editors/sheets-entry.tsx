@@ -319,7 +319,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
       ]} />
-      <App queuedWorkbookAtBoot host={{readOnly,saveDownload,fileMenu,
+      <App queuedWorkbookAtBoot host={{readOnly,saveDownload,fileMenu,documentStorageScope:`workspace:${fileId}`,
         ...(fetchClipboardPicture?{fetchClipboardPicture}:{}),
         ...(passwordProtected?{workbookPasswordLimit:255}:{}),
         ...(passwordProtected&&bridge.needsConfirmation()?{confirmWorkbookPasswordSave:{label:text.retry,busy:confirming,...(actionError?{error:actionError}:{}),run:()=>{void confirmSave()}}}:{}),

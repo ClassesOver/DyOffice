@@ -74,6 +74,42 @@ async function fixture(t,{nodeEngine=false,sheetsQueryFetcher,workspaceShell=fal
   return { ...f, original, opened, browser, context, page, origin, errors, planner }
 }
 
+test('native Sheets keeps the AutoSave override with its original workbook and account',{timeout:120000},async t=>{
+ const f=await fixture(t,{nodeEngine:true}),{page,context}=f
+ const first=f.opened.file
+ const second=(await importFile(f,f.alice.token,f.original,'Second workbook.xlsx')).file
+ await f.preferences.update(f.bob.token,{language:'en',autoSave:false,showAssistant:false})
+ const other=(await importFile(f,f.bob.token,f.original,'Other account.xlsx')).file
+ const toggle=page.locator('.autosave-toggle input')
+ const open=async file=>{
+  await page.goto(f.origin+'/native-xlsx/?fileId='+file.fileId)
+  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+  await expect.poll(()=>page.evaluate(()=>!!window.__genofficeDebug?.univerAPI.getActiveWorkbook()),{timeout:30000}).toBe(true)
+  await expect(toggle).toBeAttached()
+ }
+ await open(first)
+ await expect(toggle).not.toBeChecked()
+ await page.locator('.autosave-toggle').click()
+ await expect(toggle).toBeChecked()
+ await open(second)
+ await expect(toggle).not.toBeChecked()
+ await open(first)
+ await expect(toggle).toBeChecked()
+
+ await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(31))
+ await page.evaluate(()=>window.dispatchEvent(new Event('blur')))
+ const revision=async()=> (await f.files.openFile(f.alice.token,first.fileId)).file.revision
+ await expect.poll(revision,{timeout:15000}).not.toBe(first.revision)
+ const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,first.fileId,await revision()))
+ assert.match(await saved.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="A2"[^>]*>\s*<v>31<\/v>/)
+ await expect(page.locator('.qa-btn').first()).toBeDisabled()
+ const csrf=async()=> (await(await context.request.get(f.origin+'/api/v1/auth/csrf')).json()).csrfToken
+ assert.equal((await context.request.post(f.origin+'/api/v1/auth/logout',{headers:{origin:f.origin,'x-csrf-token':await csrf()}})).status(),204)
+ assert.equal((await context.request.post(f.origin+'/api/v1/auth/login',{headers:{origin:f.origin,'x-csrf-token':await csrf()},data:{username:'bob',password}})).status(),200)
+ await open(other)
+ await expect(toggle).not.toBeChecked()
+})
+
 test('native Sheets pastes a website picture into the originally selected cell',{timeout:120000},async t=>{
  const f=await fixture(t,{nodeEngine:true}),{page}=f,file=f.opened.file
  const url='https://clipboard-images.example/sheet-picture.png'

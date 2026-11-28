@@ -660,6 +660,8 @@ export interface SheetsEditorHandle {
   getWorkbookSessionId(): string | undefined
 }
 export interface SheetsEditorHost {
+  /** Stable browser storage identity for this workspace workbook. */
+  documentStorageScope?: string
   getSupportedCreateDocumentTypes?: () => readonly import('../shared/desktop-api').WorkbookCreateDocumentRequest['type'][]
   setImageAttachments?: (files: readonly { name: string; image: AgentImage }[]) => string
   supportedMergeExtensions?: readonly string[]
@@ -929,7 +931,8 @@ export function App({
       pendingEditsForClose(pendingEdits, editingCellRef.current),
     )
   }, [pendingEdits])
-  const [autoSave, setAutoSave] = useAutoSavePref('ai-sheets-auto-save', window.desktopApi)
+  const autoSaveKey = host?.documentStorageScope ? `ai-sheets-auto-save:${host.documentStorageScope}` : 'ai-sheets-auto-save'
+  const [autoSave, setAutoSave] = useAutoSavePref(autoSaveKey, window.desktopApi)
   // Ref mirror for callbacks captured when an AI run starts
   const autoSaveRef = useRef(autoSave)
   autoSaveRef.current = autoSave
