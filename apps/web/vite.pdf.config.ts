@@ -10,7 +10,7 @@ const web=fileURLToPath(new URL('.',import.meta.url))
 const pdfjs=dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'))
 export default defineConfig({
  root:join(web,'pdf'),base:'/native-pdf/',publicDir:false,
- resolve:{alias:workspaceAliases(),dedupe:['react','react-dom']},
+ resolve:{alias:workspaceAliases(),dedupe:['react','react-dom','pdf-lib']},
  plugins:[react(),{name:'native-pdf-assets',generateBundle:{order:'post',handler(_options,bundle){
   const inventory=Object.keys(bundle).filter(name=>name.startsWith('assets/'))
   for(const directory of ['cmaps','standard_fonts','wasm']){

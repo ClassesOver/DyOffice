@@ -59,10 +59,10 @@ async function mount(){
  const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
  const grant=await openNativePdfBrowserFile({fileId,editorId:params.get('guest')==='1'?params.get('editorId')??undefined:undefined,expectedRevision:params.get('sourceRevision')??undefined})
  const prefs=await grant.getPreferences().catch(()=>undefined)
- const editRestriction=async(bytes:Uint8Array,encrypted:boolean)=>{
+ const inspectDocument=async(bytes:Uint8Array,encrypted:boolean)=>{
   grant.inspectSignatureMarker(bytes,encrypted)
-  const {nativePdfEditRestriction}=await import('./native-pdf-edit-restriction')
-  return nativePdfEditRestriction(bytes,encrypted,prefs?.language??'zh')
+  const {inspectNativePdf}=await import('./native-pdf-edit-restriction')
+  return inspectNativePdf(bytes,encrypted,prefs?.language??'zh')
  }
  if(prefs){
   document.documentElement.lang=prefs.language
@@ -80,7 +80,7 @@ async function mount(){
  const api={
   ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.signatureGalleryAccount,browserActions.signal),
   getUsername:grant.username,getDefaultZoom:async()=>'width' as const,
-  listEditFonts:empty,listStaticFormFills:empty,listPrinters:empty,
+  listEditFonts:empty,listPrinters:empty,
   onLanguageChanged:unsubscribe,onUsernameChanged:unsubscribe,onFileRenamed:unsubscribe,onSaveAsFlow:unsubscribe,
   onCloseSaveRequest:unsubscribe,onSaveAsRequest:unsubscribe,onChromePressed:unsubscribe,
   onPrintRequest:(listener:()=>void)=>subscribeBrowserDocumentCommands({print:listener},()=>!disposed),
@@ -922,7 +922,7 @@ async function mount(){
   }finally{ribbonBusy=false;if(!disposed)render()}
  }
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
-  <App hostOpenFile={openWorkspaceFile} hostEditRestriction={editRestriction} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
+  <App hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">

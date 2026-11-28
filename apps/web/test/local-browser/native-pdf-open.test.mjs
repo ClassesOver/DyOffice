@@ -1007,7 +1007,7 @@ test('native PDF OCR reads a real scan and saves a searchable layer without chan
  assert.equal(await head(),savedRevision)
 })
 
-test('native PDF form marks address visible pages after an unsaved reorder',{skip:!directory,timeout:60000},async t=>{
+test('native PDF form marks and editable static fills follow an unsaved reorder',{skip:!directory,timeout:90000},async t=>{
  const origin='http://localhost:4251',f=await fileFixture(t,{origin,buildApp:false})
  const seed=await PDFDocument.create(),form=seed.getForm()
  for(const name of ['OriginalFirst','OriginalSecond']){
@@ -1030,6 +1030,7 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
   ['goto_page',{page:2}],
   ['apply_ops',{ops:[{op:'setPageOrder',order:[2,1]}]}],
   ['add_form_mark',{page:1,kind:'check',x:40,y:84}],
+  ['add_form_mark',{page:2,kind:'cross',x:205,y:155}],
  ]
  let modelTurns=0
  const results=[]
@@ -1064,15 +1065,32 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  assert.match(results[1].output,/Navigated to page 2/)
  recordVerifiedOfficeEffect('pdf','goto_page')
  assert.match(results[3].output,/OriginalSecond/)
+ assert.match(results[4].output,/Placed a cross/)
+ const fillTab=page.getByRole('button',{name:'填写表单',exact:true})
+ const fillText=page.getByPlaceholder('输入要放置的文字',{exact:true})
+ const confirmFill=page.locator('.pdf-modal').getByRole('button',{name:'确定',exact:true})
+ const targetPage=page.locator('.pdf-page[data-page="1"]')
+ await fillTab.click()
+ await page.getByRole('button',{name:'添加文字',exact:true}).click()
+ await fillText.fill('Editable on reopen')
+ await confirmFill.click()
+ await targetPage.click({position:{x:150,y:140}})
+ await expect(targetPage.locator('.pdf-imgedit-img')).toBeVisible()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  await page.getByRole('button',{name:'保存',exact:true}).click()
  await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
  const revision=await head()
  const saved=await f.files.readFile(f.alice.token,file.fileId,revision)
- const result=(await PDFDocument.load(saved)).getForm()
+ const output=await PDFDocument.load(saved),result=output.getForm()
  assert.equal(result.getCheckBox('OriginalFirst').isChecked(),false)
  assert.equal(result.getCheckBox('OriginalSecond').isChecked(),true)
+ const fills=doc=>JSON.parse(doc.catalog.lookup(PDFName.of('GenOfficeStaticFormFills')).decodeText())
+ const [cross,firstFill]=fills(output)
+ assert.equal(cross.kind,'cross')
+ assert.equal(cross.pageIndex,1)
+ assert.equal(firstFill.pageIndex,0)
+ assert.equal(firstFill.text,'Editable on reopen')
  const leaves=await readPdfLeafObjects(saved)
  assert.deepEqual(leaves.filter(item=>/^Original(First|Second)$/.test(item.text??'')).map(item=>[item.page,item.text]),[
   [0,'OriginalSecond'],[1,'OriginalFirst'],
@@ -1082,6 +1100,16 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await page.reload()
  await reopened
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await fillTab.click()
+ await page.locator('.pdf-page[data-page="0"] .pdf-imgedit-hit').click({timeout:10000})
+ await page.locator('.pdf-del-popup').getByRole('button',{name:'编辑文字',exact:true}).click()
+ await expect(fillText).toHaveValue('Editable on reopen')
+ await fillText.fill('Edited after reopening')
+ await confirmFill.click()
+ await page.getByRole('button',{name:'保存',exact:true}).click()
+ await expect.poll(head,{timeout:15000}).not.toBe(revision)
+ const edited=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,await head()))
+ assert.deepEqual(fills(edited),[cross,{...firstFill,text:'Edited after reopening'}])
  recordVerifiedOfficeEffect('pdf','apply_ops.setPageOrder')
  recordVerifiedOfficeEffect('pdf','add_form_mark')
 })

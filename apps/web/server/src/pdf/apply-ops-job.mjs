@@ -6,6 +6,7 @@ import {createPdfAppearanceFontSelector,preparePdfFormValues,pdfFormValueFields,
 import {cleanupDeletedPageForms} from './deleted-page-forms.mjs'
 import {validatePdfApplySnapshot} from './apply-snapshot.mjs'
 import {MAX_PDF_EDIT_PAGES} from '../../../shared/pdf-edit-structure.mjs'
+import {staticFormFillsFromCatalog} from '../../../../pdf/src/shared/static-form-fills.ts'
 import {decodePdfImage} from './image-content-job.mjs'
 import {applyExistingImages,pdfDraftInsertsSafetyCodes} from './draft-inserts-job.mjs'
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,preservePdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
@@ -222,6 +223,8 @@ export function createPdfApplyOpsJob(){
   try{
    const before=await open(original),originalCount=before.getPageCount(),blanks=s.blankPages??[]
    if(originalCount+blanks.length>MAX_PDF_EDIT_PAGES||blanks.some((page,index)=>page.pageIndex!==originalCount+index))fail('INVALID_PDF_APPLY_SNAPSHOT')
+   const staticFormFills=s.staticFormFills??staticFormFillsFromCatalog(before)
+   if(s.staticFormFills?.some(fill=>fill.pageIndex>=originalCount+blanks.length))fail('INVALID_PDF_APPLY_SNAPSHOT')
    const {applySaveRequest,applyFormFields}=await import('../../../../pdf/src/main/save-pdf.ts'),{readPdfLeafObjects,readUneditedPdfLeaves,applyTextEdits,verifyTextBlockMoves,verifyTextEdits,validateTextEdits}=await import('../../../../pdf/src/main/text-edit.ts')
    const savedImages=s.savedImageEdits??[]
    if(savedImages.some(op=>op.page>before.getPageCount()))fail('INVALID_PDF_APPLY_SNAPSHOT')
@@ -266,6 +269,7 @@ export function createPdfApplyOpsJob(){
    const planned=plan(before,s)
    let expectedForm,currentPageRefs,originalAnnots,survivingFields,resolvedWidgetEdits;const widgetEdits=[]
    const request={blankPages:blanks,markups:s.markups.map(({id,...m})=>m),drawings:[...planned.notes,...planned.drawings],outline:planned.outline,formWidgetEdits:widgetEdits,formValues:[],formFields:[],textInserts:s.textInserts.map(e=>e.input),imageEdits:s.imageEdits.map(e=>e.input),rotations:Object.entries(s.rotations).map(([p,delta])=>({pageIndex:Number(p),delta})),deletedPages:s.deleted,pageOrder:planned.order,metadata:s.metadata,annotationAuthor:s.annotationAuthor??'AI Assistant',...(s.attachments?{attachments:s.attachments}:{})}
+   if(s.staticFormFills||staticFormFills.length)request.staticFormFills=staticFormFills
    let selectMeasureFont
    const result=await applySaveRequest(working,request,{
     measureFont:async(doc,label)=>{
@@ -319,8 +323,14 @@ export function createPdfApplyOpsJob(){
     try{bytes=await reapplyPdfManagedStamps(bytes,[operation],{allowAcroForm:true,signal})}
     catch(error){if(error?.code!=='PDF_STAMP_NOT_FOUND')throw error}
    }
-   if(captured||s.stampOperations?.length){
-    if(normalizedForm(await open(bytes))!==expectedForm)fail('PDF_APPLY_OPS_VERIFY_FAILED')
+   const finalDoc=captured||s.stampOperations?.length?await open(bytes):after
+   if(finalDoc!==after&&normalizedForm(finalDoc)!==expectedForm)fail('PDF_APPLY_OPS_VERIFY_FAILED')
+   if(request.staticFormFills){
+    const expected=staticFormFills.flatMap(fill=>{
+     const pageIndex=planned.order.indexOf(fill.pageIndex)
+     return pageIndex<0?[]:[{...fill,pageIndex}]
+    })
+    if(JSON.stringify(staticFormFillsFromCatalog(finalDoc))!==JSON.stringify(expected))fail('PDF_APPLY_OPS_VERIFY_FAILED')
    }
    check(signal)
    return {bytes,inputSha256:hash(original),sha256:hash(bytes),size:bytes.length}

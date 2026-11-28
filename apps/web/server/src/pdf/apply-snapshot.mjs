@@ -148,11 +148,25 @@ function validateFormWidgetEdits(edits){
   ids.add(edit.widgetId)
  }
 }
+function validateStaticFormFills(fills){
+ const ids=new Set()
+ for(const fill of array(fills,1000)){
+  obj(fill,['id','kind','pageIndex','rect','text','fontSize','color','align'],['id','kind','pageIndex','rect'])
+  if(!text(fill.id,201)||!fill.id||ids.has(fill.id)||!page(fill.pageIndex)||!['text','check','cross'].includes(fill.kind))fail()
+  ids.add(fill.id)
+  rect(fill.rect)
+  optional(fill,'text',v=>text(v))
+  optional(fill,'fontSize',v=>num(v,0.01,1000))
+  optional(fill,'color',v=>typeof v==='string'&&/^#[0-9a-f]{6}$/i.test(v))
+  optional(fill,'align',v=>['left','center','right'].includes(v))
+ }
+}
 export function validatePdfApplySnapshot(input){
- const s=clone(input),required=['fileId','baseRevision','generation','markups','notes','textInserts','imageEdits','formEdits','formFields','rotations','deleted','order','metadata'];obj(s,[...required,'savedImageEdits','annotationAuthor','blankPages','textEdits','annotDeletes','noteEdits','stampOperations','attachments','drawings','outline','formWidgetEdits'],required)
+ const s=clone(input),required=['fileId','baseRevision','generation','markups','notes','textInserts','imageEdits','formEdits','formFields','rotations','deleted','order','metadata'];obj(s,[...required,'savedImageEdits','annotationAuthor','blankPages','textEdits','annotDeletes','noteEdits','stampOperations','attachments','drawings','outline','formWidgetEdits','staticFormFills'],required)
  if('drawings'in s)validateDrawings(s.drawings)
  if('outline'in s)validateOutline(s.outline)
  if('formWidgetEdits'in s)validateFormWidgetEdits(s.formWidgetEdits)
+ if('staticFormFills'in s)validateStaticFormFills(s.staticFormFills)
  if('attachments'in s){
   const edits=obj(s.attachments,['add','remove'],[]),added=new Set(),removed=new Set()
   let bytes=0

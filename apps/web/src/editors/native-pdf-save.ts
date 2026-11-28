@@ -1,5 +1,5 @@
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
-import type {DrawingInput,FormWidgetEditInput,OutlineEntryInput,PdfAttachmentOps,PdfHostImageBake,PdfPageGeometryOperation,SavePdfRequest,SavePdfResult} from '../../../pdf/src/shared/ipc'
+import type {DrawingInput,FormWidgetEditInput,OutlineEntryInput,PdfAttachmentOps,PdfHostImageBake,PdfPageGeometryOperation,SavePdfRequest,SavePdfResult,StaticFormFillRecord} from '../../../pdf/src/shared/ipc'
 import type {PdfPendingSnapshot} from './pdf-pending-ops'
 import {createPdfMutations} from './pdf-mutations'
 import type {RevisionRef} from '../../../../packages/web-contracts/src/api'
@@ -32,9 +32,7 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
   async save(draft:SavePdfRequest,check?:()=>boolean,stamps?:StampConfig|null,imageBakes:readonly PdfHostImageBake[]=[],publishCopy?:(snapshot:PdfPendingSnapshot)=>Promise<void>):Promise<SavePdfResult>{
    if(mutations.hasPending())return unknown
    if(draft.path!==path||draft.targetPath!==undefined||draft.protectionDirty||draft.encryption||draft.decryption||
-    [draft.stamps,draft.redactions].some(items=>items?.length)||
-    // Check and cross artwork is already in imageEdits. Web does not store the desktop form-fill metadata.
-    draft.staticFormFills?.some(fill=>fill.kind!=='check'&&fill.kind!=='cross'))return refused
+    [draft.stamps,draft.redactions].some(items=>items?.length))return refused
    const originalCount=getPageCount(),baseRevision=getRevision(),blankPages=draft.blankPages??[],count=originalCount+blankPages.length
    if(!baseRevision||!Number.isSafeInteger(originalCount)||originalCount<1||count>MAX_PDF_EDIT_PAGES||blankPages.length>MAX_PDF_DRAFT_BLANK_PAGES)return refused
    const pages=Array.from({length:count},(_,page)=>page),valid=(page:number)=>Number.isInteger(page)&&page>=0&&page<count
@@ -63,7 +61,7 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
     input.kind!=='note'&&!removed.has(input.pageIndex)&&!(input.kind==='link'&&input.destPage!==undefined&&removed.has(input.destPage-1)))
    const snapshot:PdfPendingSnapshot&{
     stampOperations?:readonly PdfStampOperation[];attachments?:PdfAttachmentOps
-    drawings?:readonly Exclude<DrawingInput,{kind:'note'}>[];outline?:readonly OutlineEntryInput[];formWidgetEdits?:readonly FormWidgetEditInput[]
+    drawings?:readonly Exclude<DrawingInput,{kind:'note'}>[];outline?:readonly OutlineEntryInput[];formWidgetEdits?:readonly FormWidgetEditInput[];staticFormFills?:readonly StaticFormFillRecord[]
    }={
     fileId,baseRevision,generation:0,
     ...(blankPages.length?{blankPages}:{}),
@@ -73,6 +71,7 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
     ...(drawings.length?{drawings}:{}),
     ...(draft.outline!==undefined?{outline:draft.outline}:{}),
     ...(draft.formWidgetEdits?.length?{formWidgetEdits:draft.formWidgetEdits}:{}),
+    ...(draft.staticFormFills!==undefined?{staticFormFills:draft.staticFormFills}:{}),
     ...(draft.annotationAuthor?{annotationAuthor:draft.annotationAuthor}:{}),
     ...(draft.attachments?{attachments:draft.attachments}:{}),
     ...(stampOperations.length?{stampOperations}:{}),

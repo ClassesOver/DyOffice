@@ -43,6 +43,7 @@ const applyOpsSnapshotSchema={type:'object',additionalProperties:false,required:
             textInserts:{type:'array',maxItems:MAX_PDF_OCR_INSERTS+MAX_PDF_TEXT_INSERTS,items:{type:'object'}},
             stampOperations:{type:'array',maxItems:2,items:{type:'object'}},
             savedImageEdits:{type:'array',maxItems:20,items:{type:'object'}},
+            staticFormFills:{type:'array',maxItems:1000,items:{type:'object'}},
             attachments:{type:'object',additionalProperties:false,properties:{
               add:{type:'array',maxItems:MAX_PDF_ATTACHMENT_ADDITIONS,items:{type:'object',additionalProperties:false,required:['name','bytesBase64'],properties:{
                 name:{type:'string',minLength:1,maxLength:255},bytesBase64:{type:'string',maxLength:MAX_PDF_ATTACHMENT_BASE64},

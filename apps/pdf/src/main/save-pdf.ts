@@ -29,6 +29,7 @@ import {
 import { applyAttachments } from './pdf-attachments'
 import { copyImportedPages } from '../shared/copy-imported-pages'
 import { readPageLabels, writePageLabels } from '../shared/page-labels'
+import { STATIC_FORM_FILLS_KEY, staticFormFillsFromCatalog } from '../shared/static-form-fills'
 import { retargetPageDestinations } from './retarget-page-destinations'
 import type {
   BlankPageInput,
@@ -51,7 +52,7 @@ import { writePdfAtomically } from './atomic-write'
 import { redactPdf } from './redaction'
 
 const num = (v: number) => Math.round(v * 100) / 100
-const STATIC_FORM_FILLS_KEY = PDFName.of('GenOfficeStaticFormFills')
+export { readStaticFormFills } from '../shared/static-form-fills'
 /** /T of a new annotation when the request names no author */
 const DEFAULT_ANNOT_AUTHOR = 'DyOffice'
 
@@ -61,36 +62,17 @@ const rectsIntersect = (a: readonly number[], b: readonly number[]): boolean =>
   Math.min(a[1]!, a[3]!) < Math.max(b[1]!, b[3]!) &&
   Math.max(a[1]!, a[3]!) > Math.min(b[1]!, b[3]!)
 
-function validStaticFormFill(value: unknown): value is StaticFormFillRecord {
-  if (!value || typeof value !== 'object') return false
-  const record = value as Partial<StaticFormFillRecord>
-  return (
-    typeof record.id === 'string' &&
-    (record.kind === 'text' || record.kind === 'check' || record.kind === 'cross') &&
-    Number.isInteger(record.pageIndex) &&
-    Array.isArray(record.rect) &&
-    record.rect.length === 4 &&
-    record.rect.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
-  )
-}
-
-export async function readStaticFormFills(bytes: Uint8Array): Promise<StaticFormFillRecord[]> {
-  const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false })
-  const value = pdfDoc.catalog.get(STATIC_FORM_FILLS_KEY)
-  if (!(value instanceof PDFHexString)) return []
-  try {
-    const parsed: unknown = JSON.parse(value.decodeText())
-    return Array.isArray(parsed) ? parsed.filter(validStaticFormFill) : []
-  } catch {
-    return []
-  }
-}
-
 function resultingStaticFormFills(
   request: SavePdfRequest,
   pageCount: number,
+  pdfDoc: PDFDocument,
 ): StaticFormFillRecord[] | undefined {
-  if (request.staticFormFills === undefined) return undefined
+  const records = request.staticFormFills ?? (
+    request.pageOrder || request.deletedPages?.length || request.redactions?.length
+      ? staticFormFillsFromCatalog(pdfDoc)
+      : undefined
+  )
+  if (!records || (request.staticFormFills === undefined && records.length === 0)) return undefined
   const deleted = new Set(request.deletedPages ?? [])
   const remaining =
     request.pageOrder?.filter((pageIndex) => !deleted.has(pageIndex)) ??
@@ -98,7 +80,7 @@ function resultingStaticFormFills(
       (pageIndex) => !deleted.has(pageIndex),
     )
   const newPageIndex = new Map(remaining.map((oldPageIndex, index) => [oldPageIndex, index]))
-  return request.staticFormFills.flatMap((record) => {
+  return records.flatMap((record) => {
     // This private JSON cache can contain form text even after its painted image is
     // removed. Drop cache records that native area redaction covers.
     if (
@@ -1795,7 +1777,7 @@ export async function applySaveRequest(
     while (pdfDoc.getPageCount() > 0) pdfDoc.removePage(0)
     for (const page of pageOrder) pdfDoc.addPage(page)
   }
-  const staticFormFills = resultingStaticFormFills(request, pages.length)
+  const staticFormFills = resultingStaticFormFills(request, pages.length, pdfDoc)
   if (staticFormFills !== undefined) {
     if (staticFormFills.length === 0) pdfDoc.catalog.delete(STATIC_FORM_FILLS_KEY)
     else

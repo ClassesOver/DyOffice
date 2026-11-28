@@ -483,9 +483,12 @@ type WritePageRewrite = () => Promise<SavePdfResult>
 type PreparePageRewrite = () => WritePageRewrite | Promise<WritePageRewrite | null>
 type PageRewriteRun = { write: WritePageRewrite; afterReload?: () => void; restore?: boolean }
 
-export default function App({ hostReadOnly = false, hostEditRestriction, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize }: {
+export default function App({ hostReadOnly = false, hostInspectDocument, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize }: {
   hostReadOnly?: boolean
-  hostEditRestriction?: (bytes: Uint8Array, encrypted: boolean) => Promise<string | null>
+  hostInspectDocument?: (bytes: Uint8Array, encrypted: boolean) => Promise<{
+    restriction: string | null
+    staticFormFills: StaticFormFillRecord[]
+  }>
   hostLifecycle?: (editor: PdfHostLifecycle | null) => void
   hostAssistant?: (view: PdfAssistantView) => ReactNode
   hostOpenFile?: () => boolean
@@ -1453,6 +1456,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
       const rots: number[] = []
       const origins: [number, number][] = []
       const userUnits: number[] = []
+      let inspectedFills: StaticFormFillRecord[] | undefined
       try {
         const metadata = await loaded.getMetadata()
         const documentInfo = metadata.info as {
@@ -1472,7 +1476,9 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
         const formFeatures = documentFormFeatures(documentInfo, bytes)
         setFormHasXfa(formFeatures.hasXfa)
         setDocumentEncrypted(formFeatures.encrypted)
-        const restriction = await hostEditRestriction?.(bytes, formFeatures.encrypted) ?? null
+        const inspection = await hostInspectDocument?.(bytes, formFeatures.encrypted)
+        const restriction = inspection?.restriction ?? null
+        inspectedFills = inspection?.staticFormFills
         setEditRestriction(restriction)
         if (formFeatures.encrypted && !restriction) {
           // pdf.js already accepted this password for rendering; the session's own
@@ -1569,7 +1575,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
         })
       }
       try {
-        setSavedStaticFormFills(await window.pdfApi.listStaticFormFills(path))
+        setSavedStaticFormFills(inspectedFills ?? await window.pdfApi.listStaticFormFills(path))
       } catch {
         setSavedStaticFormFills([])
       }
@@ -1833,7 +1839,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
       if (previous) void previous.loadingTask.destroy()
       return loaded.numPages
     },
-    [hostEditRestriction],
+    [hostInspectDocument],
   )
 
   /** A fit mode is recomputed at 'ready'; a custom zoom must be in place before it so

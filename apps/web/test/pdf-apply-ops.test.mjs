@@ -129,6 +129,11 @@ test('snapshot validator rejects arbitrary writer keys getters IDs and malformed
  for(const input of bad)assert.throws(()=>validatePdfApplySnapshot(input),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
  let read=false;const getter=empty();Object.defineProperty(getter,'metadata',{enumerable:true,get(){read=true;return null}});assert.throws(()=>validatePdfApplySnapshot(getter),{code:'INVALID_PDF_APPLY_SNAPSHOT'});assert.equal(read,false)
  assert.throws(()=>parsePdfApplyOpsRequest(JSON.stringify({version:1,action:'applyOps',snapshot:empty(),request:{}})),{code:'INVALID_REQUEST'})
+ const fill={id:'static-text',kind:'text',pageIndex:0,rect:[10,10,40,30],text:'Form entry',fontSize:12,color:'#110022',align:'left'}
+ assert.deepEqual(parsePdfApplyOpsRequest(raw({...empty(),staticFormFills:[fill]})).staticFormFills,[fill])
+ for(const staticFormFills of [[fill,fill],[{...fill,rect:[0,0,0,0]}],[{...fill,color:'red'}],[{...fill,pageIndex:-1}]]){
+  assert.throws(()=>validatePdfApplySnapshot({...empty(),staticFormFills}),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
+ }
 })
 test('one native snapshot writes mixed forms notes markup rotations deletion order metadata and preserves old AP/content',async()=>{
  const original=await fixture(),before=await PDFDocument.load(original),snapshot={...empty(),markups:[{id:'Pmark',pageIndex:0,type:'highlight',color:[1,1,0],quads:[[30,615,140,615,30,598,140,598]]}],notes:[{id:'Pnote',input:{kind:'note',pageIndex:0,color:[1,0.9,0.3],at:[200,400],contents:'Comment'}}],formEdits:{change:{name:'change',kind:'text',value:'已更新'}},formFields:[{id:'Fnew',input:{name:'newChoice',kind:'choice',pageIndex:0,rect:[230,450,400,480],options:['中文','日本語'],value:'中文'}}],rotations:{0:90},deleted:[1],order:[2,0,1],metadata:{title:'Mixed atomic'}}
