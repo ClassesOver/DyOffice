@@ -138,6 +138,32 @@ test('native Word Save As downloads named HTML and Markdown from the unsaved dra
   assert.equal(download.suggestedFilename(),name+'.'+format)
   assert.match(await readFile(await download.path(),'utf8'),new RegExp(marker))
  }
+ const originalTitle=await page.title()
+ await page.evaluate(()=>{
+  window.print=()=>{
+   document.documentElement.dataset.printTitle=document.title
+   window.dispatchEvent(new Event('beforeprint'))
+  }
+ })
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ await dialog.getByRole('combobox',{name:'File format',exact:true}).selectOption('pdf')
+ const savePdf=page.getByRole('dialog',{name:'Save as PDF',exact:true})
+ await expect(savePdf.getByRole('combobox',{name:'Folder',exact:true})).toBeHidden()
+ await savePdf.getByRole('textbox',{name:'File name'}).fill('Quarterly draft')
+ await savePdf.getByRole('button',{name:'Open print dialog',exact:true}).click()
+ await expect(page.locator('html')).toHaveAttribute('data-print-title','Quarterly draft',{timeout:25000})
+ try{
+  const bytes=await page.pdf({preferCSSPageSize:true,printBackground:true})
+  const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const task=getDocument({data:Uint8Array.from(bytes)})
+  try{
+   const pdf=await task.promise
+   assert.match((await (await pdf.getPage(1)).getTextContent()).items.map(item=>item.str??'').join(' '),new RegExp(marker))
+  }finally{await task.destroy()}
+ }finally{await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')))}
+ await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(0)
+ await expect.poll(()=>page.title()).toBe(originalTitle)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),f.original)
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
@@ -725,6 +751,14 @@ test('native Word prints mixed paper and keeps bookmark links inside the selecte
     await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')))
   }
   await expect(dialog).toBeHidden()
+  await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(0)
+  await page.getByRole('button',{name:'Convert',exact:true}).click()
+  await page.getByRole('button',{name:'Convert to PDF…',exact:true}).click()
+  await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(1,{timeout:25000})
+  try{
+    const printed=await PDFDocument.load(await page.pdf({preferCSSPageSize:true,printBackground:true}))
+    assert.deepEqual(printed.getPages().map(p=>[Math.round(p.getWidth()),Math.round(p.getHeight())]),[[612,792],[612,792],[792,612]])
+  }finally{await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')))}
   await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(0)
   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
 })

@@ -2202,7 +2202,7 @@ function RibbonInner({
       ['images', 'ribbonConvertImages'],
     ] as const
   ).map(([format, key]) => {
-    const unavailable = !desktopActionsAvailable && format !== 'html' && format !== 'md'
+    const unavailable = !desktopActionsAvailable && format === 'images'
     return (
       <button
         key={format}

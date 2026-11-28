@@ -11,11 +11,11 @@
  * preview source, so what the dialog shows is exactly what prints.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PrintDuplex, PrintPaper, PrinterInfo } from '../../shared/ipc'
+import type { PrintDuplex, PrinterInfo } from '../../shared/ipc'
 import { useI18n } from '../i18n/locale'
 import { addBrowserPrintLinks } from '../pdf-internal-links'
 import { parsePrintRange } from '../print-range'
-import { clearPrintZoom, setPrintZoom } from '../print-zoom'
+import { clearPrintZoom, paperOfPage, setPrintZoom } from '../print-zoom'
 
 type RangeMode = 'all' | 'current' | 'custom'
 
@@ -30,16 +30,6 @@ const DUPLEX_MODES: PrintDuplex[] = ['simplex', 'longEdge', 'shortEdge']
 const pvPages = (): HTMLElement[] => [
   ...document.querySelectorAll<HTMLElement>('.pagination-preview .pv-page'),
 ]
-
-/** The preview uses CSS pixels at 96 px per inch. Inline dimensions retain
- * the fractional pixels for paper sizes such as A4. */
-function paperOfPage(page: HTMLElement | undefined): PrintPaper | undefined {
-  if (!page) return undefined
-  const w = Number.parseFloat(page.style.width) || page.offsetWidth
-  const h = Number.parseFloat(page.style.height) || page.offsetHeight
-  if (!(w > 0) || !(h > 0)) return undefined
-  return { widthTwips: Math.round(w * 15), heightTwips: Math.round(h * 15) }
-}
 
 export function PrintDialog({
   browserOnly = false,

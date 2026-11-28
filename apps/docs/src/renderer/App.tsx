@@ -541,6 +541,7 @@ import {
   currentDocGeneration,
   writeRecoveryCopy as writeRecoveryCopyImpl,
   buildDocBytes,
+  type BrowserPdfExport,
   type FileActionContext,
   type PendingPdfExport,
 } from './file-actions'
@@ -3225,8 +3226,13 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
   }, [pgNumModal, sections, activeSection, editor])
 
   const exportPdf = useCallback(
-    (outPath?: string) => exportPdfImpl(fileCtxRef.current, outPath),
-    [],
+    (outPath?: string, browser?: BrowserPdfExport) => {
+      const generation = currentDocGeneration()
+      return exportPdfImpl(fileCtxRef.current, outPath, browser ?? (desktopActionsAvailable === false
+        ? { active: () => currentDocGeneration() === generation }
+        : undefined))
+    },
+    [desktopActionsAvailable],
   )
   const exportHtml = useCallback(
     (outPath?: string) => exportHtmlImpl(fileCtxRef.current, outPath),
@@ -3315,7 +3321,7 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
         return
       }
       setExportLocksPreview(true)
-      const ok = await exportPdf(pending.outPath).catch(() => false)
+      const ok = await exportPdf(pending.outPath, pending.browser).catch(() => false)
       setExportLocksPreview(false)
       // a Print the user started meanwhile owns the preview now
       if (pending.closePreview && !showPrintDialogRef.current) setShowPagePreview(false)
@@ -6259,6 +6265,9 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
       async exportCopy(format, name, active) {
         await waitForFullContent()
         if (!active() || editor.isDestroyed || editorRef.current !== editor || hasDocumentWriterDraft(editor)) return false
+        if (format === 'pdf') return exportPdf(name, {
+          active: () => active() && !editor.isDestroyed && editorRef.current === editor && !hasDocumentWriterDraft(editor),
+        })
         const exportTo = format === 'html' ? exportHtmlImpl : exportMarkdownImpl
         return exportTo(fileCtxRef.current, name)
       },
@@ -6271,7 +6280,7 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
       isDirty: () => isDocDirty(fileCtxRef.current),
     })
     return () => host.onEditorReady?.(null)
-  },[host?.onEditorReady,host?.readOnly,editor,!!doc,tornDown,save])
+  },[host?.onEditorReady,host?.readOnly,editor,!!doc,tornDown,save,exportPdf])
 
   // close guard: the main process queries dirty state before closing a tab/window; choosing "Save" runs a full save and reports back
   useEffect(() => {
@@ -9445,7 +9454,7 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
               clearFloatShifts(wrap as HTMLElement)
             }
           }}
-          onExportPdf={host?.desktopActionsAvailable === false ? undefined : () => void exportPdf()}
+          onExportPdf={() => void exportPdf()}
           onClose={() => {
             if (!exportLocksPreview) setShowPagePreview(false)
           }}

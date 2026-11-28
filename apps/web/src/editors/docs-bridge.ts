@@ -285,14 +285,17 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     },
     async copyImageToClipboard(src:string){try{await copyDocsImageToClipboard(src);return true}catch{throw Error('浏览器未允许图片剪贴板访问，请使用系统复制快捷键。')}},
     listPrinters: async () => [],
-    async print(_scale?: Parameters<DesktopApi['print']>[0], _job?: Parameters<DesktopApi['print']>[1], paper?: Parameters<DesktopApi['print']>[2]) {
+    async print(_scale?: Parameters<DesktopApi['print']>[0], _job?: Parameters<DesktopApi['print']>[1], paper?: Parameters<DesktopApi['print']>[2], pdfName?:string) {
       const geometry = validPrintPaper(paper)
       const pageStyle = geometry ? window.document.createElement('style') : undefined
+      const previousTitle = window.document.title
+      const printTitle = pdfName ? browserFileName(pdfName.replace(/\.(docx|pdf)$/i,''),'Document') : undefined
       let started = false
       const beforePrint = () => { started = true }
       let afterPrint!: () => void
       const finished = new Promise<void>(resolve => { afterPrint = resolve })
       try {
+        if (printTitle) window.document.title = printTitle
         if (pageStyle && geometry) {
           pageStyle.dataset.docsPrintPaper = ''
           pageStyle.textContent = browserPrintPaperCss(window.document, geometry)
@@ -310,6 +313,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
         window.removeEventListener('beforeprint', beforePrint)
         window.removeEventListener('afterprint', afterPrint)
         pageStyle?.remove()
+        if (printTitle && window.document.title === printTitle) window.document.title = previousTitle
       }
     },
     async exportHtml(name:string,html:string,outputName?:string){
