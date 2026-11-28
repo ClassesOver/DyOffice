@@ -281,6 +281,7 @@ test('workspace opens XLSM, writes cell edits and saves XLSM copies with the ori
  const head=async()=>(await f.files.openFile(token,file.id)).file.revision
  await tab.focus()
  await page.keyboard.press('ControlOrMeta+s')
+ await expect(editor.locator('.app-toast')).toHaveText('Saved.',{timeout:30000})
  await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
  async function verify(id,revision){
   const zip=await JSZip.loadAsync(await f.files.readFile(token,id,revision))
