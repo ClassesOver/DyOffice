@@ -156,7 +156,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
         if(authorizedUnlock(token,fileId,revision,id)!==grant)throw authError(423)
         signal?.throwIfAborted()
       }
-      return {bytes:grant.bytes,async seal(bytes:Buffer,password=grant.password){
+      return {bytes:grant.bytes,check,async seal(bytes:Buffer,password=grant.password){
         check()
         const sealed=await workbookPasswords.seal(bytes,password,signal)
         check()

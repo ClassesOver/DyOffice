@@ -332,11 +332,27 @@ for(const encrypted of [false,true])test(`Web XLSX refreshes a web query and sav
  assert.equal(await revision(),committed)
 })
 
-test('Web XLSX Save As creates a workspace copy of unsaved cells without AI',{timeout:90000},async t=>{
+for(const encrypted of [false,true])test(`Web XLSX Save As copies unsaved cells from a ${encrypted?'protected':'plain'} workbook`,{timeout:120000},async t=>{
  const f=await fixture(t,{nodeEngine:true}), {page}=f
- const original=f.opened.file
+ const password='Protected workbook copy fixture'
+ const originalBytes=encrypted?Buffer.from(officeCrypto.encrypt(f.original,{password})):f.original
+ let original=f.opened.file
+ if(encrypted){
+  const upload=await f.files.stageUpload(f.alice.token,{name:'protected.xlsx',size:originalBytes.length})
+  await f.files.receiveUpload(f.alice.token,upload.uploadId,originalBytes,{password})
+  original=(await f.files.finishUpload(f.alice.token,upload.uploadId)).file
+ }
+ const unlock=async(target=page)=>{
+  if(!encrypted)return
+  const prompt=target.getByRole('dialog',{name:'Open password-protected workbook'})
+  await prompt.getByLabel('Password').fill(password)
+  await prompt.getByRole('button',{name:'Open',exact:true}).click()
+ }
+ const cell=(target=page)=>target.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue())
  await page.goto(f.origin+'/native-xlsx/?fileId='+original.fileId)
+ await unlock()
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ await expect.poll(cell,{timeout:30000}).toBe(12.5)
  await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25))
  await page.getByRole('button',{name:'File',exact:true}).click()
  const saveAs=page.getByRole('group',{name:'File',exact:true}).getByRole('button',{name:'Save As',exact:true})
@@ -344,22 +360,30 @@ test('Web XLSX Save As creates a workspace copy of unsaved cells without AI',{ti
  await saveAs.click()
  const dialog=page.getByRole('dialog',{name:'Save a copy to your workspace'})
  const input=dialog.getByRole('textbox',{name:'File name'})
- await expect(input).toHaveValue('acceptance.xlsx')
+ await expect(input).toHaveValue(encrypted?'protected.xlsx':'acceptance.xlsx')
  await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
  await expect(dialog).toHaveCount(0)
- assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,encrypted?2:1)
  await page.keyboard.press('ControlOrMeta+Shift+s')
  await input.fill('Manual workbook copy')
  await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
  await expect(page.getByText('Saved copy: Manual workbook copy.xlsx',{exact:true})).toBeVisible({timeout:30000})
  const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Manual workbook copy.xlsx')
  assert.ok(copy)
- const archive=await JSZip.loadAsync(await f.files.readFile(f.alice.token,copy.id,copy.revision))
+ const stored=await f.files.readFile(f.alice.token,copy.id,copy.revision)
+ const copyHead=await f.files.openFile(f.alice.token,copy.id)
+ assert.equal(copyHead.workbookPasswordProtected,encrypted?true:undefined)
+ const archive=await JSZip.loadAsync(encrypted?await officeCrypto.decrypt(stored,{password}):stored)
  assert.match(await archive.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="A2"[^>]*><v>21\.25<\/v>/)
  assert.equal((await f.files.openFile(f.alice.token,original.fileId)).file.revision,original.revision)
- assert.deepEqual(await f.files.readFile(f.alice.token,original.fileId,original.revision),f.original)
- await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').getValue())).toBe(21.25)
+ assert.deepEqual(await f.files.readFile(f.alice.token,original.fileId,original.revision),originalBytes)
+ await expect.poll(cell).toBe(21.25)
  await expect(page.getByRole('button',{name:/^Save \(/})).toBeEnabled()
+ const copyPage=await f.context.newPage()
+ await copyPage.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await copyPage.goto(f.origin+'/native-xlsx/?fileId='+copy.id)
+ await unlock(copyPage)
+ await expect.poll(()=>cell(copyPage),{timeout:30000}).toBe(21.25)
 })
 
 test('Web XLSX File menu and shortcut open Print preview and print without saving',{timeout:90000},async t=>{

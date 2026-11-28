@@ -2,7 +2,7 @@ import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type {FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
-import type { createSheetsSaveService, SheetsExportInput, SheetsPasswordInput, SheetsSaveInput } from './save.ts'
+import type { createSheetsSaveService, SheetsCopyInput, SheetsExportInput, SheetsPasswordInput, SheetsSaveInput } from './save.ts'
 import type { FastifyInstance } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import { cookies, type createCsrfService } from '../auth/csrf.ts'
@@ -23,7 +23,8 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       // behind its own edit-triggered reads (503 starved chart edits, see
       // shared-object-admission evidence). Read routes keep the immediate 503.
       const path=request.routeOptions.url
-      await admission.admit(request, reply, path?.endsWith('/sheets/uploads')||path?.endsWith('/sheets/password-uploads') ? { waitMs: 10_000 } : undefined)
+      const saving = path?.endsWith('/sheets/uploads') || path?.endsWith('/sheets/password-uploads') || path?.endsWith('/sheets/copy/uploads')
+      await admission.admit(request, reply, saving ? { waitMs: 10_000 } : undefined)
     })
     api.addHook('onResponse', async request => admission.close(request))
     api.addHook('onError', async request => admission.error(request))
@@ -45,10 +46,17 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER},
       unlockId:uuidSchema,newPassword:{type:'string',minLength:1,maxLength:255},
     }, (token,id,body,signal)=>saves.preparePassword(token,id,body,signal))
-    if (saves) route<SheetsExportInput>('/api/v1/files/:id/sheets/export', {
+    const draftInput = {
       baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER},
       phases: {type: 'array', maxItems: 2, items: {type: 'object'}},
-    }, (token,id,body,signal) => saves.exportDraft(token,id,body,signal), 4 * 1024 * 1024)
+    }
+    if (saves) {
+      route<SheetsExportInput>('/api/v1/files/:id/sheets/export',draftInput,
+        (token,id,body,signal)=>saves.exportDraft(token,id,body,signal),4*1024*1024)
+      route<SheetsCopyInput>('/api/v1/files/:id/sheets/copy/uploads',{
+        ...draftInput,name:{type:'string',minLength:1,maxLength:255},
+      },(token,id,body,signal,unlockId)=>saves.prepareProtectedCopy(token,id,{...body,...(unlockId?{unlockId}:{})},signal),4*1024*1024)
+    }
     route<{revision:string;visualId:string}>('/api/v1/files/:id/sheets/media',{...revisionBody,visualId:{type:'string',minLength:1,maxLength:512,pattern:'^[^/\\\\]+$'}},(token,id,body,signal,unlockId)=>sheets.readMedia(token,id,body.revision,body.visualId,signal,unlockId))
     const sheetName={type:'string',minLength:1,maxLength:255}
     route<FindInput & {revision:string;sheetName:string}>('/api/v1/files/:id/sheets/find',{

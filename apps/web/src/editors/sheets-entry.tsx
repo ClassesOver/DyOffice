@@ -61,7 +61,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
   const signed=opened.officeSignatureProtected===true, passwordProtected=opened.workbookPasswordProtected===true
   const lockedToViewing=signed
-  const copyAuthority=guest||passwordProtected?undefined:await createDraftCopyAuthority(()=>draftCopyParentActive(window))
+  const copyAuthority=guest?undefined:await createDraftCopyAuthority(()=>draftCopyParentActive(window))
   const assistantResult = guest||passwordProtected?{assistant:undefined,failure:undefined}:await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1,continuationRevision},false,'xlsx',new Set([...WORKBOOK_TOOLS.map(tool=>tool.name),'read_attachment','merge_attached_workbooks']))
   const assistant = assistantResult.assistant
   const workbookImages = assistant && createWorkbookImageApi(assistant.mediaApi)
@@ -143,7 +143,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     host.getState(fileId).status === 'idle' && !!host.getState(fileId).lease && !bridge.needsConfirmation()
   const request=copyAuthority?.request,proof=copyAuthority?.proof
   const workspaceCopy: SheetsEditorHost['workspaceCopy'] = request && proof ? {
-    ...(assistant && assistantAvailable ? {async suggest(content: string) {
+    ...(!passwordProtected && assistant && assistantAvailable ? {async suggest(content: string) {
       const modelId = assistant.selected()
       if (!modelId || naming || copying || !canCopy()) return ''
       naming = true
@@ -164,12 +164,17 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         copyNotice = ''; actionError = ''; changed()
         const result = await capture(async (sessionId,phases) => {
           if (!await copyAuthority?.verify() || !canCopy()) throw Error('Draft session ended')
-          const blob = await bridge.exportDraftCopy(sessionId,phases,proof,signal)
-          if (!canCopy()) throw Error('Draft session ended')
-          const {uploadId} = await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
-          upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
-          if (!canCopy()) throw Error('Draft session ended')
-          await request(upload+'/content','PUT',blob,signal)
+          const draft = await bridge.prepareDraftCopy(sessionId,phases,name,proof,signal)
+          if ('uploadId' in draft) {
+            upload = '/api/v1/uploads/'+encodeURIComponent(draft.uploadId)
+            draft.check()
+          } else {
+            if (!canCopy()) throw Error('Draft session ended')
+            const {uploadId} = await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:draft.blob.size},signal)
+            upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
+            if (!canCopy()) throw Error('Draft session ended')
+            await request(upload+'/content','PUT',draft.blob,signal)
+          }
           if (!canCopy()) throw Error('Draft session ended')
           finishStarted = true
           await request(upload+'/finish','POST',undefined,signal)

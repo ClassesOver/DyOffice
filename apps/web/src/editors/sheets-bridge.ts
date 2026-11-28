@@ -62,27 +62,40 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   const noEvent = () => () => {}
   const unavailable = async (): Promise<never> => { throw new Error(text.unavailable) }
   const session = (id: string) => { const current = sessions.get(id); if (disposed || !current) throw hostError('INVALID_REVISION','workbook session'); return current }
-  async function exportDraftCopy(id: string, phases: WorkbookSaveRequest[], proof: string, signal: AbortSignal): Promise<Blob> {
+  async function prepareDraftCopy(id: string, phases: WorkbookSaveRequest[], name: string, proof: string, signal: AbortSignal):
+    Promise<{blob:Blob}|{uploadId:string;check:()=>void}> {
     const current = session(id), { lease } = host.getState(fileId)
+    const grant = unlockGrant
+    const revision = current.revision
     const check = () => {
       signal.throwIfAborted()
       const state = host.getState(fileId)
       if (session(id) !== current || current.attachment || !lease || recovery || state.status !== 'idle' ||
-          state.revision.revision !== current.revision || state.lease?.editorId !== lease.editorId || state.lease.leaseEpoch !== lease.leaseEpoch) {
+          state.revision.revision !== revision || current.revision !== revision || state.lease?.editorId !== lease.editorId ||
+          state.lease.leaseEpoch !== lease.leaseEpoch || (current.file.passwordProtected && (!grant || unlockGrant !== grant || grant.revision !== revision))) {
         throw hostError('CONFLICT','workbook draft copy')
       }
       return lease
     }
     const {editorId, leaseEpoch} = check()
-    const body = JSON.stringify({baseRevision:current.revision, editorId, leaseEpoch, phases:phases.map(phase=>workbookSaveRequestSchema.parse(phase))})
+    const protectedCopy = current.file.passwordProtected && grant
+    const body = JSON.stringify({baseRevision:revision, editorId, leaseEpoch, phases:phases.map(phase=>workbookSaveRequestSchema.parse(phase)),
+      ...(protectedCopy?{name}:{})})
     if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','workbook draft copy')
-    const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/export`,{method:'POST',credentials:'same-origin',redirect:'error',signal,
-      headers:{'content-type':'application/json','x-csrf-token':proof},body})
-    if (!response.ok || response.headers.get('content-type') !== 'application/octet-stream') throw hostError('UNAVAILABLE','workbook draft copy')
+    const endpoint = protectedCopy ? 'copy/uploads' : 'export'
+    const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${endpoint}`,{method:'POST',credentials:'same-origin',redirect:'error',signal,
+      headers:{'content-type':'application/json','x-csrf-token':proof,...(protectedCopy?{'x-dyoffice-workbook-unlock':protectedCopy.id}:{})},body})
+    if (!response.ok) throw hostError('UNAVAILABLE','workbook draft copy')
+    if (protectedCopy) {
+      const {uploadId} = await response.json()
+      if (typeof uploadId !== 'string' || !workbookId.test(uploadId)) throw hostError('INVALID_RESPONSE','workbook draft copy')
+      return {uploadId,check}
+    }
+    if (response.headers.get('content-type') !== 'application/octet-stream') throw hostError('UNAVAILABLE','workbook draft copy')
     const blob = await response.blob()
     check()
     if (!blob.size || blob.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','workbook draft copy')
-    return blob
+    return {blob}
   }
   async function request(revision: string, method: string, input: object = {}) {
     if (disposed) throw hostError('UNAVAILABLE','disposed')
@@ -620,5 +633,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     supportedMergeExtensions: mergeExtensions,
-    api,workspaceLinks,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+    api,workspaceLinks,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,prepareDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

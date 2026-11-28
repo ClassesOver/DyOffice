@@ -3,6 +3,7 @@ import type { FileService } from '../files/service.ts'
 import type { LeaseService } from '../leases/service.ts'
 import type { RevisionService } from '../revisions/service.ts'
 import { authError } from '../auth/sessions.ts'
+import { validateFileName } from '../files/validation-core.ts'
 import type { XlsxMutationPlan } from '../../../../worker/src/native/xlsx.ts'
 import type { createSheetsService } from './service.ts'
 import type { createWorkbookPasswordCodec } from '../files/workbook-password.ts'
@@ -18,6 +19,7 @@ type SheetsRevisionInput = { baseRevision: string; leaseEpoch: number; editorId:
 export interface SheetsSaveInput extends SheetsRevisionInput { request: unknown }
 export interface SheetsPasswordInput extends SheetsRevisionInput { unlockId: string; newPassword: string }
 export type SheetsExportInput = Omit<SheetsSaveInput, 'request'> & { phases: unknown[] }
+export type SheetsCopyInput = SheetsExportInput & { name: string }
 type PreparedWorkbook = Awaited<ReturnType<ReturnType<typeof createWorkbookPasswordCodec>['seal']>> & {rememberSave():void}
 
 /** Prepare the normal T06 upload. The browser then commits it using the same
@@ -41,6 +43,17 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
     if (!metadata || !Array.isArray(metadata.sheets) || metadata.sheets.some(sheet => typeof sheet?.id !== 'string' || typeof sheet.name !== 'string')) throw new Error('Invalid workbook metadata')
     return plan(bytes, metadata.sheets, request, signal)
   }
+  async function materializeDraft(bytes: Buffer, phases: unknown[], signal?: AbortSignal) {
+    if (!Array.isArray(phases) || phases.length > 2) throw authError(400)
+    for (const phase of phases) {
+      signal?.throwIfAborted()
+      const mutation = await planDraft(bytes, phase, signal)
+      signal?.throwIfAborted()
+      bytes = (await native.savePlan(bytes, mutation, signal)).bytes
+    }
+    if (bytes.length < 1 || bytes.length > 32 * 1024 * 1024) throw authError(413)
+    return bytes
+  }
   async function stageOutput(token:string,fileId:string,input:SheetsRevisionInput,output:Buffer,touchedEntries:string[],sealed?:PreparedWorkbook,signal?:AbortSignal){
     signal?.throwIfAborted()
     const draft={size:output.length,baseRevision:input.baseRevision,leaseEpoch:input.leaseEpoch,editorId:input.editorId}
@@ -63,22 +76,42 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
   return {
     async exportDraft(token: string, fileId: string, input: SheetsExportInput, signal?: AbortSignal) {
       if (active >= maxConcurrent) throw Object.assign(authError(429), { retryAfter: 1 })
-      if (!Array.isArray(input.phases) || input.phases.length > 2) throw authError(400)
       active++
       try {
         signal?.throwIfAborted()
         if((await assertSource(token, fileId, input)).workbookPasswordProtected)throw authError(423)
-        let bytes = await files.readFile(token, fileId, input.baseRevision, signal)
-        for (const phase of input.phases) {
-          signal?.throwIfAborted()
-          const mutation = await planDraft(bytes, phase, signal)
-          signal?.throwIfAborted()
-          bytes = (await native.savePlan(bytes, mutation, signal)).bytes
-        }
+        const base = await files.readFile(token, fileId, input.baseRevision, signal)
+        const bytes = await materializeDraft(base, input.phases, signal)
         await assertSource(token, fileId, input)
         signal?.throwIfAborted()
-        if (bytes.length < 1 || bytes.length > 32 * 1024 * 1024) throw authError(413)
         return bytes
+      } finally { active-- }
+    },
+    async prepareProtectedCopy(token: string, fileId: string, input: SheetsCopyInput, signal?: AbortSignal) {
+      if (token.startsWith('dsh-edit:')) throw authError(404)
+      if (!protectedWorkbooks || !input.unlockId) throw authError(423)
+      if (validateFileName(input.name) !== 'xlsx') throw authError(415)
+      if (active >= maxConcurrent) throw Object.assign(authError(429), {retryAfter:1})
+      active++
+      try {
+        signal?.throwIfAborted()
+        const head = await assertSource(token, fileId, input)
+        if (!head.workbookPasswordProtected || head.officeSignatureProtected) throw authError(423)
+        const protection = await protectedWorkbooks.openForProtectedSave(token,fileId,input.baseRevision,input.unlockId,signal)
+        const bytes = await materializeDraft(protection.bytes,input.phases,signal)
+        const sealed = await protection.seal(bytes)
+        await assertSource(token,fileId,input)
+        protection.check()
+        const {uploadId}=await files.stageUpload(token,{name:input.name,size:sealed.bytes.length})
+        try {
+          await files.receiveProtectedOfficeRevision(token,uploadId,sealed)
+          await assertSource(token,fileId,input)
+          protection.check()
+          return {uploadId}
+        } catch(error) {
+          await files.cancelUpload(token,uploadId).catch(()=>{})
+          throw error
+        }
       } finally { active-- }
     },
     async prepare(token: string, fileId: string, input: SheetsSaveInput, signal?: AbortSignal) {
