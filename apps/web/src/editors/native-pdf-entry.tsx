@@ -462,6 +462,7 @@ async function mount(){
  }
  const hostSave={
   ...grant.writer,
+  allowAutosave:()=>prefs?.autoSave===true&&canChooseWorkspaceFile&&canRewritePages()&&!recoverRedaction&&!recoverManual,
   savePageGeometry(operation:PdfPageGeometryOperation){
    const revision=grant.current()
    const check=()=>canRewritePages()&&grant.current()===revision

@@ -519,6 +519,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   hostPageLimits?: { maxPages: number; maxBlankPagesPerSave: number }
   hostSaveCopy?: PdfHostSaveCopy
   hostSave?: {
+    allowAutosave?(): boolean
     save(draft: SavePdfRequest, pageCount: number, check?: () => boolean, stamps?: StampConfig | null, imageBakes?: PdfHostImageBake[]): Promise<SavePdfResult>
     confirm(): Promise<SavePdfResult>
     savePageGeometry?(operation: PdfPageGeometryOperation): Promise<SavePdfResult>
@@ -4856,7 +4857,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
       promise would reuse the pre-reload render's closure — dirty still true, the saved
       edits still listed — and write them onto the file a second time. */
   const queuedSavesRef = useRef<
-    { autosave: boolean; flushAll: boolean; explicitOcr: boolean; resolve: (ok: boolean) => void }[]
+    { autosave: boolean; flushAll: boolean; manualSave: boolean; resolve: (ok: boolean) => void }[]
   >([])
 
   const trackSave = (run: Promise<boolean>): Promise<boolean> => {
@@ -4875,7 +4876,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
 
   // flushAll also writes the field whose card is open: callers that treat success as
   // "everything is in the file" (close-tab Save, flushThen) must not leave it behind
-  const save = (autosave = false, flushAll = false, check?: () => boolean, rewrite?: PageRewriteRun, explicitOcr = false): Promise<boolean> => {
+  const save = (autosave = false, flushAll = false, check?: () => boolean, rewrite?: PageRewriteRun, manualSave = false): Promise<boolean> => {
     if (hostSaveCopy && saveAsFlowRef.current) return Promise.resolve(false)
     if (editRestriction || redactionRequestInFlightRef.current) return Promise.resolve(false)
     if (check && (!check() || saveInFlightRef.current || confirmSaveRef.current)) return Promise.resolve(false)
@@ -4886,7 +4887,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
     // still reads 'idle' for both.
     if (saveInFlightRef.current !== null) {
       return new Promise<boolean>((resolve) =>
-        queuedSavesRef.current.push({ autosave, flushAll, explicitOcr, resolve }),
+        queuedSavesRef.current.push({ autosave, flushAll, manualSave, resolve }),
       )
     }
     if (confirmSaveRef.current) {
@@ -4903,7 +4904,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
     const pending = formFieldsRef.current
     const fields =
       flushAll || !heldFormFieldId ? pending : pending.filter((f) => f.id !== heldFormFieldId)
-    const bakeOcr = !hostOcr || (canSaveOcr && explicitOcr)
+    const bakeOcr = !hostOcr || (canSaveOcr && manualSave)
     const anythingToSave =
       (flushAll ? ordinaryDirty : savableDirty) ||
       edits !== textEdits ||
@@ -4925,8 +4926,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
       showNotice(t('pwOwnerNeeded'))
       return Promise.resolve(false)
     }
-    // An explicit save opts this file into autosave
-    if (!autosave) savedOnceRef.current = true
+    if (!hostSave && !autosave) savedOnceRef.current = true
     // What this save writes — the post-save reload subtracts exactly this, keeping
     // any edits the user makes while the write is in flight
     const snapshot: SavedSnapshot = {
@@ -4965,6 +4965,8 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
         opFailed(result.error)
         return false
       }
+      // Workspace autosave starts after a manual save has a confirmed receipt.
+      if (hostSave && manualSave) savedOnceRef.current = true
       if (result.skippedTextEdits && result.skippedTextEdits.length > 0) {
         noticeSkippedEdits(result.skippedTextEdits)
       }
@@ -5063,7 +5065,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
     // One explicit request makes the whole drained batch explicit (autosave opt-in)
     const autosaveOnly = queued.every((q) => q.autosave)
     const flushAll = queued.some((q) => q.flushAll)
-    void save(autosaveOnly, flushAll, undefined, undefined, queued.some((q) => q.explicitOcr)).then((ok) => {
+    void save(autosaveOnly, flushAll, undefined, undefined, queued.some((q) => q.manualSave)).then((ok) => {
       for (const q of queued) q.resolve(ok)
     })
   })
@@ -5328,15 +5330,15 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostLas
   // toolbar button / File ▸ Save) is what opts this file into unattended writes.
   useAutosave(
     () =>
-      !hostSave &&
+      (!hostSave || (status === 'ready' && redactions.length === 0 && hostSave.allowAutosave?.() === true)) &&
       savedOnceRef.current &&
-      ordinaryDirty &&
+      (hostSave ? savableDirty : ordinaryDirty) &&
       saveInFlightRef.current === null &&
       filePath !== '' &&
       !readOnly &&
       !saveAsFlowRef.current &&
       !redactionRequestInFlightRef.current,
-    () => void save(true),
+    () => void save(true, false, hostSave?.allowAutosave),
   )
 
   // Done in the field popover persists the field; runs after the render that folded in

@@ -743,6 +743,76 @@ test('native Web PDF opens an internal link at its explicit destination',{skip:!
  ))).toBeLessThan(60)
 })
 
+test('native Web PDF autosaves after a manual save when the workspace preference is on',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:true,showAssistant:false})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300]).drawText('Review original')
+ const original=Buffer.from(await pdf.save())
+ const {file}=await importFile(f,f.alice.token,original,'Autosave review.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ const ready=()=>expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const uiDirty=value=>expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty',String(value))
+ const button=name=>page.getByRole('button',{name,exact:true})
+ const head=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ const rotation=async revision=>(await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,revision))).getPage(0).getRotation().angle
+ const blur=()=>page.evaluate(()=>window.dispatchEvent(new FocusEvent('blur')))
+ const prepare=request=>request.method()==='POST'&&new URL(request.url()).pathname===`/api/v1/files/${file.fileId}/pdf/apply-ops/uploads`
+ const blurWithoutSave=async revision=>{
+  await assert.rejects(Promise.all([page.waitForRequest(prepare,{timeout:750}),blur()]),{name:'TimeoutError'})
+  assert.equal(await head(),revision)
+  await uiDirty(true)
+ }
+ const rotate=async()=>{await button('Rotate right').click();await uiDirty(true)}
+ const saveManually=async previous=>{
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(head,{timeout:12000}).not.toBe(previous)
+  await uiDirty(false)
+  return head()
+ }
+ await ready()
+ await button('Pages').click()
+ await rotate()
+ await blurWithoutSave(file.revision)
+ const manual=await saveManually(file.revision)
+ assert.equal(await rotation(manual),90)
+
+ await rotate()
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ const copy=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(copy).toBeVisible()
+ await blurWithoutSave(manual)
+ await copy.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(copy).toHaveCount(0)
+ await Promise.all([page.waitForRequest(prepare,{timeout:10000}),blur()])
+ await expect.poll(head,{timeout:12000}).not.toBe(manual)
+ await uiDirty(false)
+ const auto=await head()
+ assert.equal(await rotation(auto),180)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+
+ await f.preferences.update(f.alice.token,{autoSave:false})
+ await page.reload()
+ await ready()
+ await button('Pages').click()
+ await rotate()
+ const disabled=await saveManually(auto)
+ assert.equal(await rotation(disabled),270)
+ await rotate()
+ await blurWithoutSave(disabled)
+})
+
 test('native Web PDF Save As creates a workspace copy of unsaved page changes',{skip:!directory,timeout:60000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
