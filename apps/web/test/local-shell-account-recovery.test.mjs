@@ -8,9 +8,9 @@ const {code}=await transform(source.slice(source.indexOf('function WorkspacePage
 function fixture(page){
  const events=[]
  const render=runInNewContext(code+'\nWorkspacePageContent',{
-  jsx:(type,props,...children)=>({type,props:{...props,children}}),useState:()=>[0,()=>{}],
+  jsx:(type,props,...children)=>({type,props:{...props,children}}),useState:()=>[0,()=>{}],useMemo:run=>run(),sourceWorkspace:undefined,
   user:{id:'me',roles:['personal','config_admin']},WorkspaceSettings:'settings',LocalAdminPanel:'admin',
-  sessionsClient:{},historyClient:{},preferences:{},adminClient:{},userSkills:null,
+  sessionsClient:{},historyClient:{},preferences:{},saveWorkspacePreferences(){},adminClient:{},userSkills:null,
   client:{endSession:reason=>events.push(['recovery',reason]),invalidateSession:()=>events.push(['invalidate'])},
   location:{replace:path=>events.push(['navigate',path])},
  })

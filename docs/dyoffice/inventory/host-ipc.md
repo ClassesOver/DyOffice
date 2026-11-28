@@ -436,7 +436,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `slidesApi.insertMedia` | request | invoke `slides:insert-media` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.addMediaBytes` | request | invoke `slides:add-media-bytes` | 2 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getMediaData` | request | invoke `slides:media-data` | 3 | `browser-native` | `slides-deck-session` |
-| `slidesApi.releaseMediaData` | local | — | 3 | `browser-native` | `slides-browser-media-lifecycle` |
+| `slidesApi.releaseMediaData` | local | — | 4 | `browser-native` | `slides-browser-media-lifecycle` |
 | `slidesApi.pickModel3d` | request | invoke `slides:pick-model3d` | 1 | `browser-native` | `local-pickers` |
 | `slidesApi.addModel3d` | request | invoke `slides:add-model3d` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getModel3dData` | request | invoke `slides:model3d-data` | 2 | `browser-native` | `slides-deck-session` |
@@ -648,3 +648,14 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `projectApi.appendChat` | request | invoke `project:appendChat` | 1 | `server-api` | `chat-history` |
 | `projectApi.loadChat` | request | invoke `project:loadChat` | 1 | `server-api` | `chat-history` |
 | `projectApi.rebindChat` | request | invoke `project:rebindChat` | 1 | `server-api` | `chat-history` |
+
+## Browser-only renderer APIs
+
+The Web host supplies these optional members from the shared renderer interfaces.
+
+| Editor | Optional member |
+| --- | --- |
+| docs | `desktop.pickComparisonDocx` |
+| slides | `slidesApi.browserPrintDialog` |
+| slides | `slidesApi.requestShowFullScreen` |
+| pdf | `pdfApi.printBrowserPages` |

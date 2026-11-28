@@ -136,13 +136,18 @@ test('audits four apps, joins renderer calls and reports unmatched members', asy
     files[`apps/${app}/src/preload/index.ts`] = `const api = {\n  async open() { return ipcRenderer.invoke('${app}:open') },\n  save: () => 2,\n}\ncontextBridge.exposeInMainWorld('${bridge}', api)\ncontextBridge.exposeInMainWorld('projectApi', { listChats: () => ipcRenderer.invoke('project:listChats') })\n`
     files[`apps/${app}/src/renderer/App.tsx`] = `window.${bridge}.open(); window.${bridge}.open(); window.${bridge}?.missing?.(); window.projectApi.listChats()`
   }
+  files['apps/docs/src/shared/ipc.ts'] = 'export interface DesktopApi { pickComparisonDocx?(): Promise<unknown>; unrelated?(): void }'
+  files['apps/docs/src/renderer/App.tsx'] += '; window.desktop.pickComparisonDocx?.(); window.desktop.unrelated?.()'
+  files['apps/slides/src/renderer/App.tsx'] += '; window.slidesApi.requestShowFullScreen?.()'
   const report = await auditWebHost(await tree(t, files))
   assert.deepEqual(Object.keys(report), ['docs', 'sheets', 'slides', 'pdf'])
   assert.equal(report.docs.declaredCount, 3)
   const open = report.docs.bridges[0].members.find((m) => m.name === 'open')
   assert.equal(open.calls, 2)
   assert.deepEqual(open.ipc, [{ op: 'invoke', channel: 'docs:open' }])
-  assert.deepEqual(report.docs.unknownRendererMethods, ['desktop.missing'])
+  assert.deepEqual(report.docs.unknownRendererMethods, ['desktop.missing','desktop.unrelated'])
+  assert.deepEqual(report.docs.browserOnlyRendererMethods, ['desktop.pickComparisonDocx'])
+  assert.deepEqual(report.slides.unknownRendererMethods, ['slidesApi.missing','slidesApi.requestShowFullScreen'])
   const rows = inventoryRows(report)
   assert.equal(rows.length, 12)
   assert.ok(rows.some((r) => r.id === 'pdf/projectApi.listChats' && r.calls === 1))

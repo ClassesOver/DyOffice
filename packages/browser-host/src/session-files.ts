@@ -361,7 +361,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
           const uploadId=uuid(draft?.uploadId)
           if(draft.baseRevision!==base||draft.leaseEpoch!==lease.leaseEpoch||!/^([a-f0-9]{64})$/.test(draft.sha256)||!Number.isSafeInteger(draft.size)||draft.size<1||draft.size>32*1024*1024)throw hostError('INVALID_RESPONSE','protected revision')
           if(context(id)!==ctx||ctx.revision.revision!==base||ctx.lease?.leaseEpoch!==lease.leaseEpoch)throw hostError('CONFLICT','save authority changed')
-          ctx.staged.set(uploadId,{base,epoch:lease.leaseEpoch,sha256:draft.sha256,size:draft.size,sourceSha256:sha256,passwordChange})
+          ctx.staged.set(uploadId,{base,epoch:lease.leaseEpoch,sha256:draft.sha256,size:draft.size,sourceSha256:sha256,...(passwordChange?{passwordChange}:{})})
           return {uploadId}
         }
         const result = await mutation(`/api/v1/files/${id}/uploads`,'POST',{ size: snapshot.byteLength,baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor })
