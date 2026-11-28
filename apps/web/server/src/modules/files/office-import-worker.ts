@@ -1,6 +1,6 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { officeDocumentConversionTargets, type OfficeDocumentConversionFormat } from '../../../../../../packages/web-contracts/src/file-imports.ts'
-import { validateOdfInput, validateUploadInternal } from './validation-core.ts'
+import { validateHwpxInput, validateOdfInput, validateUploadInternal } from './validation-core.ts'
 
 async function convert(source: Buffer, format: OfficeDocumentConversionFormat) {
   switch (format) {
@@ -12,6 +12,11 @@ async function convert(source: Buffer, format: OfficeDocumentConversionFormat) {
     case 'ppt': {
       const { convertPptToPptx } = await import('../../../../../../packages/ppt2pptx/src/index.ts')
       return (await convertPptToPptx(source)).bytes
+    }
+    case 'hwp':
+    case 'hwpx': {
+      const { convertHwpToDocx } = await import('../../../../../../packages/hwp2docx/src/index.ts')
+      return (await convertHwpToDocx(source, validateHwpxInput)).docx
     }
     default: {
       await validateOdfInput(source)

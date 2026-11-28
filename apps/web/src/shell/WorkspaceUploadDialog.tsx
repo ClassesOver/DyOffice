@@ -2,7 +2,7 @@ import {Alert,Button,Input,Modal,Space,Tag,Typography,Upload} from 'antd'
 import {CheckCircleFilled,CloseCircleFilled,CloudUploadOutlined,DeleteOutlined,FileExcelOutlined,FileOutlined,FilePdfOutlined,FilePptOutlined,FileWordOutlined,LoadingOutlined} from '@ant-design/icons'
 import {useEffect,useRef,useState} from 'react'
 import type {RecentEntry} from '../../../shell/src/shared/home-api'
-import {legacyOfficeConversionTargets,odfConversionTargets,workspaceConversionTarget} from '../../../../packages/web-contracts/src/file-imports'
+import {hancomConversionTargets,legacyOfficeConversionTargets,odfConversionTargets,workspaceConversionTarget} from '../../../../packages/web-contracts/src/file-imports'
 import {IncorrectOfficeUploadPassword} from './local-client'
 import {isWorkspaceFileName,type WorkspaceImportFormat,workspaceFileAccept} from './workspace-file-formats'
 import './workspace-upload.css'
@@ -37,7 +37,7 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
  const sequence=useRef(0),locked=useRef(false)
  const mounted=useRef(false),answerPassword=useRef<((password:string|null)=>void)|null>(null)
  const answerConversion=useRef<((remember:boolean|null)=>void)|null>(null)
- const [conversionPrompt,setConversionPrompt]=useState<{file:File;target:keyof typeof conversionDetails;odf:boolean}|null>(null),[rememberConversion,setRememberConversion]=useState(false)
+ const [conversionPrompt,setConversionPrompt]=useState<{file:File;target:keyof typeof conversionDetails;kind:'odf'|'legacyOffice'|'hancom'}|null>(null),[rememberConversion,setRememberConversion]=useState(false)
  const [passwordPrompt,setPasswordPrompt]=useState<{file:File;incorrect:boolean}|null>(null)
  const [password,setPassword]=useState('')
  const passwordLabel=passwordPrompt?.file.name.toLowerCase().endsWith('.docx')?'文档密码':'工作簿密码'
@@ -116,12 +116,14 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
    try{
     const extension=entry.file.name.split('.').at(-1)?.toLowerCase()??''
     const odf=Object.hasOwn(odfConversionTargets,extension)
+    const hancom=Object.hasOwn(hancomConversionTargets,extension)
     const target=workspaceConversionTarget(extension)
-    if(target&&(odf||Object.hasOwn(legacyOfficeConversionTargets,extension))){
+    if(target&&(odf||hancom||Object.hasOwn(legacyOfficeConversionTargets,extension))){
      if(odf)skipOdfPrompt??=await readSkipOdfPrompt?.().catch(()=>false)??false
      if(!mounted.current)break
      if(!odf||!skipOdfPrompt){
-      const remember=await new Promise<boolean|null>(resolve=>{answerConversion.current=resolve;setConversionPrompt({file:entry.file,target,odf})})
+      const kind=odf?'odf':hancom?'hancom':'legacyOffice'
+      const remember=await new Promise<boolean|null>(resolve=>{answerConversion.current=resolve;setConversionPrompt({file:entry.file,target,kind})})
       if(!mounted.current)break
       if(remember===null){update(entry.id,'skipped');continue}
       if(odf&&remember){skipOdfPrompt=true;await rememberOdfPrompt?.().catch(()=>{})}
@@ -160,10 +162,10 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
    {passwordPrompt.incorrect&&<span className="workspace-upload-file-error" id="workspace-upload-password-error" role="alert">{passwordLabel}错误，请重试。</span>}
    <Space><Button autoInsertSpace={false} onClick={()=>submitPassword(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" htmlType="submit" disabled={!password}>确认密码</Button></Space>
   </form>}
-  {conversionPrompt&&<section className="workspace-upload-password" aria-label={conversionPrompt.odf?'OpenDocument 转换':'旧版 Office 转换'} role="group">
+  {conversionPrompt&&<section className="workspace-upload-password" aria-label={{odf:'OpenDocument 转换',legacyOffice:'旧版 Office 转换',hancom:'Hancom 转换'}[conversionPrompt.kind]} role="group">
    <Typography.Text strong>转换 {conversionPrompt.file.name}？</Typography.Text>
-   <Typography.Text>工作区会创建 {conversionPrompt.target.toUpperCase()} 副本。{conversionDetails[conversionPrompt.target]}</Typography.Text>
-   {conversionPrompt.odf&&rememberOdfPrompt&&<label><input type="checkbox" aria-label="下次直接转换" checked={rememberConversion} onChange={event=>setRememberConversion(event.target.checked)}/> 下次直接转换，不再提示</label>}
+   <Typography.Text>工作区会创建 {conversionPrompt.target.toUpperCase()} 副本。{conversionPrompt.kind==='hancom'?'正文、表格和图片会转换，公式、脚注和嵌入对象可能丢失。':conversionDetails[conversionPrompt.target]}</Typography.Text>
+   {conversionPrompt.kind==='odf'&&rememberOdfPrompt&&<label><input type="checkbox" aria-label="下次直接转换" checked={rememberConversion} onChange={event=>setRememberConversion(event.target.checked)}/> 下次直接转换，不再提示</label>}
    <Space><Button autoInsertSpace={false} onClick={()=>submitConversion(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" onClick={()=>submitConversion(rememberConversion)}>转换并打开</Button></Space>
   </section>}
   <Typography.Paragraph type="secondary" className="workspace-upload-intro">将本地文件添加到工作区，上传成功后在文档标签页中打开。</Typography.Paragraph>

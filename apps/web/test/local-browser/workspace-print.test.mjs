@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
+import {createRequire} from 'node:module'
 import {fileURLToPath} from 'node:url'
 import {join} from 'node:path'
 import {expect} from '@playwright/test'
@@ -440,10 +441,11 @@ test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} upload
  await expect.poll(values,{timeout:30000}).toEqual(['Name','A, B, C, D, E',51,'=1+2'])
 })
 
-for(const legacy of [false,true])test(`workspace converts ${legacy?'legacy Office':'OpenDocument'} documents and presentations into editable copies`,{skip:!built,timeout:180000},async t=>{
+for(const family of ['OpenDocument','legacy Office','Hancom'])test(`workspace converts ${family} files into editable copies`,{skip:!built,timeout:180000},async t=>{
+ const legacy=family==='legacy Office',hancom=family==='Hancom'
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+13
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
- await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,skipOdfImportPrompt:legacy})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,skipOdfImportPrompt:legacy||hancom})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
   origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
   nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),
@@ -460,7 +462,13 @@ for(const legacy of [false,true])test(`workspace converts ${legacy?'legacy Offic
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
  const workspaceFiles=async()=>(await f.files.listFiles(f.alice.token)).files
- const docs=legacy?[
+ const korean='한글 업무 보고서'
+ const docs=hancom?[
+  ['Report','hwp','docx','hwp',korean,'word/document.xml'],
+  ['Memo','hwpx','docx','hwpx',korean,'word/document.xml'],
+  ['Zip from portal','hwp','docx','hwpx',korean,'word/document.xml'],
+  ['Binary from portal','hwpx','docx','hwp',korean,'word/document.xml'],
+ ]:legacy?[
   ['Memo','doc','docx','word','Legacy DOC text extraction','word/document.xml'],
   ['Template','dot','docx','word','Legacy DOC text extraction','word/document.xml'],
   ['Briefing','ppt','pptx','slides','Legacy PPT title','ppt/slides/slide1.xml'],
@@ -471,7 +479,23 @@ for(const legacy of [false,true])test(`workspace converts ${legacy?'legacy Offic
   ['Theme','otp','pptx','presentation','Theme title','ppt/slides/slide1.xml'],
  ]
  const sources=[]
+ let hancomInputs
+ if(hancom){
+  const {HwpDocument,initSync}=await import('@rhwp/core')
+  const require=createRequire(import.meta.url)
+  initSync({module:await readFile(require.resolve('@rhwp/core/rhwp_bg.wasm'))})
+  const document=HwpDocument.createEmpty()
+  try {
+   document.createBlankDocument()
+   document.insertText(0,0,0,korean)
+   hancomInputs={hwp:Buffer.from(document.exportHwp()),hwpx:Buffer.from(document.exportHwpx()),encrypted:Buffer.from(document.exportHwpWithPassword('fixture-password'))}
+  } finally {document.free()}
+ }
  for(const [name,ext,,kind,content] of docs){
+  if(hancom){
+   sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer:hancomInputs[kind]})
+   continue
+  }
   if(legacy){
    const fixture=kind==='word'?'doc2docx/tests/fixtures/text-basic.doc':'file-parse/tests/fixtures/legacy-sample.ppt'
    let buffer=await readFile(new URL(`../../../../packages/${fixture}`,import.meta.url))
@@ -495,9 +519,9 @@ for(const legacy of [false,true])test(`workspace converts ${legacy?'legacy Offic
   headers:{origin,'content-type':'application/octet-stream',...headers}})
  assert.equal((await convert(sources[0].buffer)).statusCode,401)
  const auth={cookie:`${SESSION_COOKIE}=${token}`,'x-csrf-token':csrf.sessionToken(token)}
- assert.equal((await convert(sources[2].buffer,auth)).statusCode,400)
- const malformed=new JSZip()
- malformed.file('content.xml','<!DOCTYPE doc [<!ENTITY value "test">]><doc>&value;</doc>')
+ assert.equal((await convert(hancom?hancomInputs.encrypted:sources[2].buffer,auth)).statusCode,400)
+ const malformed=hancom?await JSZip.loadAsync(hancomInputs.hwpx):new JSZip()
+ malformed.file(hancom?'Contents/section0.xml':'content.xml','<!DOCTYPE doc [<!ENTITY value "test">]><doc>&value;</doc>')
  assert.equal((await convert(await malformed.generateAsync({type:'nodebuffer'}),auth)).statusCode,400)
  // Selecting a file for conversion must not publish or store its source bytes.
  await page.getByRole('button',{name:/^(打开本地文件|Open local files?)/i}).click()
@@ -506,7 +530,7 @@ for(const legacy of [false,true])test(`workspace converts ${legacy?'legacy Offic
  for(const [,ext] of docs)assert.ok(accept.includes('.'+ext))
  await picker.setInputFiles(sources)
  await dialog.getByRole('button',{name:`开始上传（${docs.length}）`,exact:true}).click()
- const prompt=dialog.getByRole('group',{name:legacy?'旧版 Office 转换':'OpenDocument 转换',exact:true})
+ const prompt=dialog.getByRole('group',{name:hancom?'Hancom 转换':legacy?'旧版 Office 转换':'OpenDocument 转换',exact:true})
  for(const [index,[name,ext,format]] of docs.entries()){
   await expect(prompt).toContainText(`${name}.${ext}`,{timeout:30000})
   await expect(prompt).toContainText(format.toUpperCase()+' 副本')

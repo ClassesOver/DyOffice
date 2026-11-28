@@ -141,6 +141,7 @@ test.each([
  ['TSV','xlsx'],['XLS','xlsx'],['ODS','xlsx'],['OTS','xlsx'],
  ['ODT','docx'],['OTT','docx'],['ODP','pptx'],['OTP','pptx'],
  ['DOC','docx'],['DOT','docx'],['PPT','pptx'],
+ ['HWP','docx'],['HWPX','docx'],
 ] as const)('%s uploads convert within the bound session and stage the %s copy',async (format,target)=>{
  const proof='p'.repeat(43),staged:string[]=[]
  const input=new File(['Office source'],`Report.${format}`)

@@ -65,7 +65,7 @@ function signatureAttribute(value: unknown) {
   })
 }
 
-async function readBoundedZip(bytes: Buffer, limits: Limits, structuralParts: readonly string[], allowVba = false) {
+async function readBoundedZip(bytes: Buffer, limits: Limits, isStructuralPart: (name: string) => boolean, allowVba = false) {
   // Reject ZIP64, split archives and trailing junk before opening any entries.
   let end = -1
   for (let at = bytes.length - 22; at >= Math.max(0, bytes.length - 22 - 65535); at--) {
@@ -87,7 +87,7 @@ async function readBoundedZip(bytes: Buffer, limits: Limits, structuralParts: re
       const header = await zip.readLocalFileHeaderPromise(entry)
       if (!header.fileName.equals(entry.fileNameRaw) || header.generalPurposeBitFlag !== entry.generalPurposeBitFlag || header.compressionMethod !== entry.compressionMethod || header.fileDataStart + entry.compressedSize > directory) throw storageError(400)
       if (!(entry.generalPurposeBitFlag & 8) && (header.crc32 !== entry.crc32 || header.compressedSize !== entry.compressedSize || header.uncompressedSize !== entry.uncompressedSize)) throw storageError(400)
-      const structural = structuralParts.includes(name)
+      const structural = isStructuralPart(name)
       if (structural && entry.uncompressedSize > limits.maxXmlBytes) throw storageError(413)
       const chunks: Buffer[] = [], stream = await zip.openReadStreamPromise(entry)
       let size = 0, crc = 0
@@ -106,19 +106,31 @@ async function readBoundedZip(bytes: Buffer, limits: Limits, structuralParts: re
   return parts
 }
 
-export async function validateOdfInput(bytes: Buffer) {
-  const parts = await readBoundedZip(bytes, uploadLimits, ['content.xml', 'styles.xml'])
-  if (!parts.has('content.xml')) throw storageError(400)
+function validateImportXml(parts: Map<string, Buffer>) {
   for (const xml of parts.values()) {
     const source = new TextDecoder('utf-8', { fatal: true }).decode(xml)
     if (/<!\s*(?:DOCTYPE|ENTITY)/i.test(source) || XMLValidator.validate(source) !== true) throw storageError(400)
   }
 }
 
+export async function validateOdfInput(bytes: Buffer) {
+  const parts = await readBoundedZip(bytes, uploadLimits, name => name === 'content.xml' || name === 'styles.xml')
+  if (!parts.has('content.xml')) throw storageError(400)
+  validateImportXml(parts)
+}
+
+export async function validateHwpxInput(bytes: Uint8Array) {
+  if (bytes.byteLength > uploadLimits.maxBytes) throw storageError(413)
+  const zip = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const parts = await readBoundedZip(zip, uploadLimits, name => /\.(xml|hpf)$/i.test(name))
+  if (!parts.has('Contents/header.xml')) throw storageError(400)
+  validateImportXml(parts)
+}
+
 async function validateOffice(bytes: Buffer, format: keyof typeof definitions, limits: Limits) {
   const definition = definitions[format]
   const required = ['[Content_Types].xml','_rels/.rels',definition.path]
-  const parts = await readBoundedZip(bytes, limits, required, format === 'xlsm')
+  const parts = await readBoundedZip(bytes, limits, name => required.includes(name), format === 'xlsm')
   if (!required.every(name => parts.has(name))) throw storageError(400)
   const types = xmlRoot(parts.get('[Content_Types].xml')!, 'Types', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const overrides = children(types, 'Override', 'http://schemas.openxmlformats.org/package/2006/content-types')
