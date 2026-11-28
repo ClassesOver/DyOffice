@@ -606,6 +606,47 @@ test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{
   const action=links.lookup(0,PDFDict).lookup(PDFName.of('A'),PDFDict)
   assert.equal(action.lookup(PDFName.of('URI'),PDFHexString).decodeText(),new URL(link).href)
   assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,initial.revision)
+  await page.evaluate(()=>{
+    const append=document.body.append
+    document.body.append=function(...children){
+      for(const frame of children){
+        if(!(frame instanceof HTMLIFrameElement)||!frame.sandbox.contains('allow-modals'))continue
+        frame.addEventListener('load',()=>{
+          const target=frame.contentWindow
+          const print=target.print.bind(target)
+          target.print=()=>{
+            window.printedSlides={title:target.document.title,html:frame.srcdoc,sandbox:frame.getAttribute('sandbox')}
+            print()
+          }
+        },{capture:true,once:true})
+      }
+      return append.apply(this,children)
+    }
+  })
+  await page.locator('.ribbon-tab-file').click()
+  const searchablePdf=page.getByRole('button',{name:'Save as searchable PDF…',exact:true})
+  await expect(searchablePdf).toBeEnabled()
+  await searchablePdf.click()
+  await expect.poll(()=>page.evaluate(()=>window.printedSlides?.title),{timeout:25000}).toBe('Web export')
+  const printed=await page.evaluate(()=>window.printedSlides)
+  assert.equal(printed.sandbox,'allow-same-origin allow-modals')
+  const pdfPage=await page.context().newPage()
+  try{
+    await pdfPage.setContent(printed.html)
+    const bytes=await pdfPage.pdf({preferCSSPageSize:true,printBackground:true})
+    const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const task=getDocument({data:Uint8Array.from(bytes)})
+    try{
+      const vector=await task.promise
+      assert.equal(vector.numPages,1)
+      const first=await vector.getPage(1)
+      assert.ok(Math.abs(first.view[2]-13.333*72)<2)
+      assert.ok(Math.abs(first.view[3]-7.5*72)<2)
+      assert.match((await first.getTextContent()).items.map(item=>item.str??'').join(' '),/Acceptance title/)
+      assert.ok((await first.getAnnotations()).some(item=>item.url===new URL(link).href))
+    }finally{await task.destroy()}
+  }finally{await pdfPage.close()}
+  assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,initial.revision)
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin})
   await page.locator('.thumb').first().click({button:'right'})
   await page.getByText('Copy Slide',{exact:true}).click()

@@ -1,5 +1,5 @@
 /** Print the already paginated document in a separate, script-free document. */
-export async function printInBrowser(html: string, fileName: string): Promise<void> {
+export async function printInBrowser(html: string, fileName: string, {decodeSvgImages=false}: {decodeSvgImages?:boolean} = {}): Promise<void> {
   const frame = document.createElement('iframe')
   frame.setAttribute('sandbox', 'allow-same-origin allow-modals')
   frame.setAttribute('aria-hidden', 'true')
@@ -21,7 +21,17 @@ export async function printInBrowser(html: string, fileName: string): Promise<vo
     const printWindow = frame.contentWindow
     if (!printWindow) throw new Error('Print document has no window.')
     printWindow.document.title = fileName.replace(/\.pdf$/i, '')
-    await printWindow.document.fonts.ready
+    const target = printWindow.document
+    if (decodeSvgImages) {
+      const images = Array.from(target.querySelectorAll('svg image')).flatMap(element => {
+        const url = element.getAttribute('href') || element.getAttribute('xlink:href')
+        if (!url) return []
+        const image = target.createElement('img')
+        image.src = url
+        return [image]
+      })
+      await Promise.all([target.fonts.ready,...Array.from(target.images).concat(images).map(image => image.decode().catch(() => {}))])
+    } else await target.fonts.ready
 
     let started = false
     printWindow.addEventListener('beforeprint', () => { started = true }, { once: true })

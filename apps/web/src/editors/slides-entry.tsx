@@ -18,6 +18,8 @@ import {messages} from './messages.ts'
 import {mountEditorRealtime} from './editor-realtime.ts'
 import {editorAssistantNotice,loadEditorAssistant} from './editor-assistant-status'
 import {confirmWorkspaceCopy,suggestWebFileName} from './web-ai-naming'
+import {printInBrowser} from './browser-print'
+import {browserFileName} from './browser-download'
 import {createPdfExtraction,MAX_WORKSPACE_COPY_BYTES} from './pdf-extraction'
 import type {RevisionRef} from '../../../../packages/web-contracts/src/api'
 import {ASSISTANT_FORMAT_TOOLS} from '../../../../packages/web-contracts/src/assistant.ts'
@@ -28,6 +30,8 @@ import {installCanvasKerning} from '../../../slides/src/renderer/canvas-kerning'
 import type {SlidesApi} from '../../../slides/src/shared/ipc'
 import {WEB_SLIDE_MEDIA_MAX_BYTES} from '../../../slides/src/shared/media-kinds'
 import {WEB_NOTES_TEXT_LIMIT} from '../../../slides/src/shared/notes-draft'
+import {buildPdfExportHtml} from '../../../slides/src/shared/pdf-export-html'
+import {printPageSizeIn} from '../../../slides/src/shared/print-html'
 import {installScreenTips,useAiPanelPrefs} from '@genoffice/ui'
 import {installBrowserAssistantPreferences} from './browser-assistant-appearance'
 import '@genoffice/ui/tokens.css'
@@ -272,6 +276,18 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     }
     finally{exportingPdf=false;if(!disposed)changed()}
   }
+  const searchablePdf:NonNullable<SlidesAppHost['searchablePdf']>={
+    label:chinese?'另存为可搜索的 PDF…':'Save as searchable PDF…',
+    async print(baseName,{pages,widthPx,heightPx,links,fontCss}){
+      if(disposed||closing||copying||exportingPdf||host.getState(fileId).status==='unauthorized')throw Error(text.unavailable)
+      exportingPdf=true;changed()
+      try{
+        const paper=printPageSizeIn('full',undefined,widthPx/heightPx)
+        const html=buildPdfExportHtml(pages,paper.width,paper.height,links,fontCss)
+        await printInBrowser(html,browserFileName(baseName,'Presentation'),{decodeSvgImages:true})
+      }finally{exportingPdf=false;if(!disposed)changed()}
+    },
+  }
   async function saveAsCopy(stem:string) {
     const signal=copyLifetime.signal
     if(!request||!proof||copying||exportingPdf||signal.aborted||!canCopy())return
@@ -366,6 +382,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       end:audience.end,
     }
     hostProps.browserPdfExport=exportPdf
+    hostProps.searchablePdf=searchablePdf
     hostProps.readBrowserPaste = bridge.readBrowserPaste
     hostProps.notesTextLimit = WEB_NOTES_TEXT_LIMIT
     hostProps.mediaFileSizeLimit = WEB_SLIDE_MEDIA_MAX_BYTES

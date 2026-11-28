@@ -1090,6 +1090,7 @@ export function Ribbon({
   printAvailable = desktopMediaAvailable,
   videoExportAvailable = desktopMediaAvailable,
   onExportPdf,
+  searchablePdf,
   onPrint,
   onExportImages,
   onExportImagesJpg,
@@ -1801,6 +1802,11 @@ export function Ribbon({
                 >
                   {t('ribbonFileExportPdf')}
                 </button>
+                {searchablePdf && (
+                  <button disabled={!hasDoc} onClick={() => { setFileOpen(false); searchablePdf.run() }}>
+                    {searchablePdf.label}
+                  </button>
+                )}
                 <button
                   disabled={!hasDoc || !printAvailable}
                   onClick={() => {

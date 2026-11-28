@@ -386,6 +386,7 @@ export interface SlidesAppHost {
   saveDownload?: React.ReactNode
   downloadImages?: fileActions.SlideImageDownload
   browserPdfExport?: fileActions.BrowserSlidePdfExport
+  searchablePdf?: {label:string; print:fileActions.BrowserSlidePdfPrint}
   namedCopy?: fileActions.SlidesNamedCopy
   saveAsCopy?: fileActions.SlidesNamedCopy['save']
   canSaveAsCopy?: boolean
@@ -1387,10 +1388,17 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     finally { exportingImages.current = false }
   }, [])
   const exportingPdf = useRef(false)
-  const exportPdf = useCallback(async () => {
+  const exportPdf = useCallback(async (searchable = false) => {
     if (exportingPdf.current) return
     exportingPdf.current = true
-    try { await fileActions.exportPdf(ctxRef.current,undefined,hostRef.current?.browserPdfExport) }
+    try {
+      const host = hostRef.current
+      if (searchable) {
+        if (host?.searchablePdf) await fileActions.printSearchablePdf(ctxRef.current,host.searchablePdf.print)
+      } else {
+        await fileActions.exportPdf(ctxRef.current,undefined,host?.browserPdfExport)
+      }
+    }
     finally { exportingPdf.current = false }
   }, [])
   const [videoDlgOpen, setVideoDlgOpen] = useState(false)
@@ -3742,6 +3750,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         screenRecordingAvailable={!host?.inPlaceSave || (!!host.mediaFileSizeLimit && !host.readOnly && !!insertActions.screenRecordingMime())}
         printAvailable={!host?.inPlaceSave || window.slidesApi.browserPrintDialog === true}
         onExportPdf={() => void exportPdf()}
+        searchablePdf={host?.searchablePdf ? {label:host.searchablePdf.label,run:() => void exportPdf(true)} : undefined}
         onPrint={() => setPrintDlgOpen(true)}
         onExportImages={() => void exportImages('png')}
         onExportImagesJpg={() => void exportImages('jpg')}

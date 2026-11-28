@@ -1,3 +1,4 @@
+import { buildPdfExportHtml } from '../src/shared/pdf-export-html'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,7 +7,6 @@ import { PNG } from 'pngjs'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
-  buildPdfExportHtml,
   exportPageWidthIn,
   exportSlidesPdf,
   type PdfExportWindow,

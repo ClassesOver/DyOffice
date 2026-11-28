@@ -306,6 +306,7 @@ export interface Props {
   printAvailable?: boolean
   videoExportAvailable?: boolean
   onExportPdf: () => void
+  searchablePdf?: {label:string;run:()=>void}
   onPrint: () => void
   /** Export as images (one PNG per page, hidden slides skipped) */
   onExportImages: () => void

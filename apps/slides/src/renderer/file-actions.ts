@@ -9,7 +9,7 @@ import { baseName } from '../shared/base-name'
 import { modelSaveAsName } from './file-naming'
 import type { ActionCtx } from './action-context'
 import { collectExportPdfLinks } from './export-links'
-import { renderSlidesToPdfPages } from './export-pages'
+import { renderSlidesToPdfPages, type PdfExportPages } from './export-pages'
 import { renderSlidesToImageBase64 } from './export-render'
 import {
   exportVideo,
@@ -323,6 +323,33 @@ async function collectPdfLinks(ctx: ActionCtx): Promise<ExportPdfLink[][]> {
 
 export type SlidePdfPages = { pages: string[]; widthPx: number; heightPx: number; links: ExportPdfLink[][] }
 export type BrowserSlidePdfExport = (baseName: string, render: () => Promise<SlidePdfPages>) => Promise<string | null>
+export type BrowserSlidePdfPrint = (baseName: string, pages: PdfExportPages & Omit<SlidePdfPages, 'pages'>) => Promise<void>
+
+function checkBrowserPdfDimensions(slides: ActionCtx['slides']): void {
+  if (slides.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
+    throw new Error('Slide dimensions exceed the PDF export limit')
+  }
+}
+
+export async function printSearchablePdf(ctx: ActionCtx, print: BrowserSlidePdfPrint): Promise<void> {
+  const visible = ctx.slides.filter(slide => !slide.hidden)
+  const first = visible[0]
+  if (!first) {
+    ctx.setStatus(t('appExportNoSlides'))
+    return
+  }
+  try {
+    checkBrowserPdfDimensions(visible)
+    ctx.setStatus(t('appPrintProgress'))
+    const pages = await renderSlidesToPdfPages(visible, ctx.images, 64 * 1024 * 1024)
+    if (pages.pages.some(page => 'png' in page && !page.png)) throw new Error('A slide could not be rendered.')
+    const links = await collectPdfLinks(ctx)
+    await print(exportBaseName(ctx), {...pages, widthPx:first.widthPx, heightPx:first.heightPx, links})
+    ctx.setStatus('')
+  } catch (error) {
+    ctx.setStatus(t('appPrintFailed', { error: String(error) }))
+  }
+}
 
 /**
  * Export as PDF: each page (skipping hidden ones) rendered to vector SVG (text
@@ -340,9 +367,7 @@ export async function exportPdf(ctx: ActionCtx, outPath?: string, browserExport?
   }
   try {
     if (browserExport) {
-      if (visible.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
-        throw new Error('Slide dimensions exceed the PDF export limit')
-      }
+      checkBrowserPdfDimensions(visible)
       const path = await browserExport(exportBaseName(ctx),async () => {
         ctx.setStatus(t('appExportPdfProgress'))
         const pages = await renderSlidesToImageBase64(visible,ctx.images,{format:'png',maxOutputChars:64 * 1024 * 1024})
