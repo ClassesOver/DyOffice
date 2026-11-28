@@ -280,7 +280,7 @@ export function createPdfApplyOpsJob(){
     },
     decodeImage:base64=>decodePdfImage({mime:Buffer.from(base64,'base64')[0]===255?'image/jpeg':'image/png',base64}),
     applyFormValues:doc=>{
-     assertPdfInsertFormPreserved(before,doc)
+     assertPdfInsertFormPreserved(before,doc,{restoreRoundedWidgetRects:s.imageEdits.length>0})
      resolvedWidgetEdits=resolvePdfWidgetEdits(doc,planned.widgetEdits)
      widgetEdits.push(...resolvedWidgetEdits.filter(edit=>!edit.remove).map(({ref,...edit})=>edit))
      currentPageRefs=doc.getPages().map(p=>String(p.ref))

@@ -1333,13 +1333,15 @@ export async function setPageSizeBytes(
   targetH: number,
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false })
-  for (const page of doc.getPages()) {
+  const scaleByPage = new Map<number, number>()
+  for (const [pageIndex, page] of doc.getPages().entries()) {
     const rot = ((page.getRotation().angle % 360) + 360) % 360
     const tw = rot === 90 || rot === 270 ? targetH : targetW
     const th = rot === 90 || rot === 270 ? targetW : targetH
     const { x, y, width: w, height: h } = page.getMediaBox()
     if (w === tw && h === th) continue
     const k = Math.min(tw / w, th / h)
+    scaleByPage.set(pageIndex, k)
     page.scaleContent(k, k)
     // pdf-lib scales annotation arrays in place. Give each annotation its
     // own rectangle before scaling, since several can share an indirect one.
@@ -1356,6 +1358,15 @@ export async function setPageSizeBytes(
     const by = y * k - (th - h * k) / 2
     page.setMediaBox(bx, by, tw, th)
     page.setCropBox(bx, by, tw, th)
+  }
+  const fills = staticFormFillsFromCatalog(doc)
+  if (fills.length && scaleByPage.size) {
+    writeStaticFormFills(doc, fills.map(fill => {
+      const k = scaleByPage.get(fill.pageIndex) ?? 1
+      if (k === 1) return fill
+      const [x1, y1, x2, y2] = fill.rect
+      return { ...fill, rect: [x1 * k, y1 * k, x2 * k, y2 * k] }
+    }))
   }
   return doc.save({ useObjectStreams: false, updateFieldAppearances: false })
 }

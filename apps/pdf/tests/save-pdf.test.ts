@@ -433,6 +433,23 @@ describe('setPageSizeBytes', () => {
     expect(out.getPage(0).getWidth()).toBe(842)
     expect(out.getPage(0).getHeight()).toBe(595)
   })
+
+  it('scales each static form fill with its page content, including rotated and already sized pages', async () => {
+    const doc = await PDFDocument.create()
+    doc.addPage([100, 200]).setMediaBox(10, 20, 100, 200)
+    doc.addPage([120, 200]).setRotation(degrees(90))
+    doc.addPage([300, 400])
+    const rect: [number, number, number, number] = [20, 30, 60, 50]
+    const fills = doc.getPageIndices().map(pageIndex => ({ id: `fill-${pageIndex}`, kind: 'text' as const, pageIndex, rect, text: 'Entry', fontSize: 14 }))
+    const input = await apply(await doc.save(), request({ staticFormFills: fills }))
+    const output = await setPageSizeBytes(input, 300, 400)
+    expect(await readStaticFormFills(output)).toEqual([
+      { ...fills[0], rect: [40, 60, 120, 100] },
+      { ...fills[1], rect: [30, 45, 90, 75] },
+      fills[2],
+    ])
+    expect(await readStaticFormFills(input)).toEqual(fills)
+  })
 })
 
 describe('splitPagesBytes', () => {

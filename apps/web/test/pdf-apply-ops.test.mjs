@@ -10,9 +10,31 @@ import {join} from 'node:path'
 import {promisify} from 'node:util'
 import {createPdfApplyOpsJob,validatePdfApplySnapshot,parsePdfApplyOpsRequest} from '../server/src/pdf/apply-ops-job.mjs'
 import {createPdfStampsJob} from '../server/src/pdf/stamps-job.mjs'
+import {assertPdfInsertFormPreserved,pdfInsertFormState} from '../server/src/pdf/insert-form-integrity.mjs'
 const n=PDFName.of,hash=b=>createHash('sha256').update(b).digest('hex')
 const empty=()=>({fileId:'11111111-1111-4111-8111-111111111111',baseRevision:'22222222-2222-4222-8222-222222222222',generation:1,markups:[],notes:[],textInserts:[],imageEdits:[],formEdits:{},formFields:[],rotations:{},deleted:[],order:null,metadata:null})
 const raw=snapshot=>JSON.stringify({version:1,action:'applyOps',snapshot})
+test('form integrity restores only widget coordinate rounding during a native image rewrite',async()=>{
+ const before=await PDFDocument.create(),page=before.addPage([595,420])
+ const field=before.getForm().createTextField('Customer')
+ field.addToPage(page,{x:195.3,y:111.3,width:211.4,height:40.6})
+ field.setText('Ada')
+ const bytes=await before.save(),rect=n('Rect')
+ const original=await PDFDocument.load(bytes)
+ const round=async delta=>{
+  const output=await PDFDocument.load(bytes)
+  const widget=output.getForm().getTextField('Customer').acroField.getWidgets()[0].dict
+  const coords=widget.lookup(rect,PDFArray).asArray().map(value=>Math.fround(value.asNumber()))
+  coords[0]+=delta
+  widget.set(rect,output.context.obj(coords))
+  return output
+ }
+ const rounded=await round(0),moved=await round(.01)
+ assert.throws(()=>assertPdfInsertFormPreserved(original,rounded),{code:'PDF_FORM_INSERT_INTEGRITY_FAILED'})
+ assert.throws(()=>assertPdfInsertFormPreserved(original,moved,{restoreRoundedWidgetRects:true}),{code:'PDF_FORM_INSERT_INTEGRITY_FAILED'})
+ assertPdfInsertFormPreserved(original,rounded,{restoreRoundedWidgetRects:true})
+ assert.equal(pdfInsertFormState(rounded),pdfInsertFormState(original))
+})
 test('saved note edits and markup deletions retain unrelated annotations in a reordered save',async()=>{
  const doc=await PDFDocument.create(),page=doc.addPage([400,500])
  doc.addPage([400,500])
