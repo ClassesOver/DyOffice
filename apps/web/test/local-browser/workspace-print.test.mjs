@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url'
 import {join} from 'node:path'
 import {expect} from '@playwright/test'
 import {PDFDocument} from 'pdf-lib'
+import * as CFB from 'cfb'
 import JSZip from 'jszip'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {docxBytes,fileFixture,importFile} from '../helpers/files.mjs'
@@ -439,10 +440,10 @@ test(`workspace opens TSV${workbookImportWasi?' and legacy workbooks':''} upload
  await expect.poll(values,{timeout:30000}).toEqual(['Name','A, B, C, D, E',51,'=1+2'])
 })
 
-test('workspace converts OpenDocument documents and presentations into editable copies',{skip:!built,timeout:180000},async t=>{
+for(const legacy of [false,true])test(`workspace converts ${legacy?'legacy Office':'OpenDocument'} documents and presentations into editable copies`,{skip:!built,timeout:180000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+13
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
- await f.preferences.update(f.alice.token,{language:'en',showAssistant:false})
+ await f.preferences.update(f.alice.token,{language:'en',showAssistant:false,skipOdfImportPrompt:legacy})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
   origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
   nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),
@@ -459,7 +460,11 @@ test('workspace converts OpenDocument documents and presentations into editable 
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
  const workspaceFiles=async()=>(await f.files.listFiles(f.alice.token)).files
- const docs=[
+ const docs=legacy?[
+  ['Memo','doc','docx','word','Legacy DOC text extraction','word/document.xml'],
+  ['Template','dot','docx','word','Legacy DOC text extraction','word/document.xml'],
+  ['Briefing','ppt','pptx','slides','Legacy PPT title','ppt/slides/slide1.xml'],
+ ]:[
   ['Memo','odt','docx','text','Memo heading','word/document.xml'],
   ['Template','ott','docx','text','Template heading','word/document.xml'],
   ['Briefing','odp','pptx','presentation','Briefing title','ppt/slides/slide1.xml'],
@@ -467,6 +472,17 @@ test('workspace converts OpenDocument documents and presentations into editable 
  ]
  const sources=[]
  for(const [name,ext,,kind,content] of docs){
+  if(legacy){
+   const fixture=kind==='word'?'doc2docx/tests/fixtures/text-basic.doc':'file-parse/tests/fixtures/legacy-sample.ppt'
+   let buffer=await readFile(new URL(`../../../../packages/${fixture}`,import.meta.url))
+   if(ext==='dot'){
+    const template=CFB.read(buffer,{type:'buffer'}),word=CFB.find(template,'/WordDocument')
+    word.content.writeUInt16LE(word.content.readUInt16LE(10)|1,10)
+    buffer=CFB.write(template,{type:'buffer'})
+   }
+   sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer})
+   continue
+  }
   const zip=new JSZip()
   zip.file('mimetype',`application/vnd.oasis.opendocument.${kind}${ext==='ott'||ext==='otp'?'-template':''}`)
   const body=kind==='text'?`<text:h text:outline-level="1">${content}</text:h>`:
@@ -475,7 +491,7 @@ test('workspace converts OpenDocument documents and presentations into editable 
   sources.push({name:`${name}.${ext}`,mimeType:'application/octet-stream',buffer:await zip.generateAsync({type:'nodebuffer'})})
  }
  const token=f.alice.token,csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
- const convert=(buffer,headers={})=>app.inject({method:'POST',url:'/api/v1/files/convert-odt',payload:buffer,
+ const convert=(buffer,headers={})=>app.inject({method:'POST',url:`/api/v1/files/convert-${docs[0][1]}`,payload:buffer,
   headers:{origin,'content-type':'application/octet-stream',...headers}})
  assert.equal((await convert(sources[0].buffer)).statusCode,401)
  const auth={cookie:`${SESSION_COOKIE}=${token}`,'x-csrf-token':csrf.sessionToken(token)}
@@ -489,15 +505,15 @@ test('workspace converts OpenDocument documents and presentations into editable 
  const accept=(await picker.getAttribute('accept')).split(',')
  for(const [,ext] of docs)assert.ok(accept.includes('.'+ext))
  await picker.setInputFiles(sources)
- await dialog.getByRole('button',{name:'开始上传（4）',exact:true}).click()
- const prompt=dialog.getByRole('group',{name:'OpenDocument 转换',exact:true})
+ await dialog.getByRole('button',{name:`开始上传（${docs.length}）`,exact:true}).click()
+ const prompt=dialog.getByRole('group',{name:legacy?'旧版 Office 转换':'OpenDocument 转换',exact:true})
  for(const [index,[name,ext,format]] of docs.entries()){
   await expect(prompt).toContainText(`${name}.${ext}`,{timeout:30000})
   await expect(prompt).toContainText(format.toUpperCase()+' 副本')
   if(index===0)assert.deepEqual(await workspaceFiles(),[])
   await prompt.getByRole('button',{name:'转换并打开',exact:true}).click()
  }
- await expect(dialog).toContainText('已完成 4',{timeout:60000})
+ await expect(dialog).toContainText(`已完成 ${docs.length}`,{timeout:60000})
  await dialog.getByRole('button',{name:'完成',exact:true}).click()
  const stored=await workspaceFiles()
  assert.deepEqual(stored.map(item=>item.name).sort(),docs.map(([name,,format])=>`${name}.${format}`).sort())

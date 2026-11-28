@@ -2,7 +2,7 @@ import {Alert,Button,Input,Modal,Space,Tag,Typography,Upload} from 'antd'
 import {CheckCircleFilled,CloseCircleFilled,CloudUploadOutlined,DeleteOutlined,FileExcelOutlined,FileOutlined,FilePdfOutlined,FilePptOutlined,FileWordOutlined,LoadingOutlined} from '@ant-design/icons'
 import {useEffect,useRef,useState} from 'react'
 import type {RecentEntry} from '../../../shell/src/shared/home-api'
-import {odfConversionTargets,workspaceConversionTarget} from '../../../../packages/web-contracts/src/file-imports'
+import {legacyOfficeConversionTargets,odfConversionTargets,workspaceConversionTarget} from '../../../../packages/web-contracts/src/file-imports'
 import {IncorrectOfficeUploadPassword} from './local-client'
 import {isWorkspaceFileName,type WorkspaceImportFormat,workspaceFileAccept} from './workspace-file-formats'
 import './workspace-upload.css'
@@ -22,7 +22,7 @@ type WorkspaceUploadDialogProps={
 const maxFileSize=32*1024*1024
 const sizeLabel=(size:number)=>size<1024?`${size} B`:size<1024*1024?`${(size/1024).toFixed(1)} KB`:`${(size/1024/1024).toFixed(1)} MB`
 const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,xlsm:FileExcelOutlined,csv:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
-const odfConversionDetails={
+const conversionDetails={
  xlsx:'数值、日期和兼容的公式会转换，部分样式和图表可能丢失。',
  docx:'正文、标题、列表、表格和图片会转换，部分脚注、批注和文本框可能丢失。',
  pptx:'幻灯片、文本和图片会转换，部分版式、对象和动画可能丢失。',
@@ -36,14 +36,14 @@ async function needsOfficePassword(file:File){
 export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readSkipOdfPrompt,rememberOdfPrompt,upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
  const sequence=useRef(0),locked=useRef(false)
  const mounted=useRef(false),answerPassword=useRef<((password:string|null)=>void)|null>(null)
- const answerOdf=useRef<((remember:boolean|null)=>void)|null>(null)
- const [odfPrompt,setOdfPrompt]=useState<{file:File;target:keyof typeof odfConversionDetails}|null>(null),[rememberOdf,setRememberOdf]=useState(false)
+ const answerConversion=useRef<((remember:boolean|null)=>void)|null>(null)
+ const [conversionPrompt,setConversionPrompt]=useState<{file:File;target:keyof typeof conversionDetails;odf:boolean}|null>(null),[rememberConversion,setRememberConversion]=useState(false)
  const [passwordPrompt,setPasswordPrompt]=useState<{file:File;incorrect:boolean}|null>(null)
  const [password,setPassword]=useState('')
  const passwordLabel=passwordPrompt?.file.name.toLowerCase().endsWith('.docx')?'文档密码':'工作簿密码'
  useEffect(()=>{
   mounted.current=true
-  return()=>{mounted.current=false;answerPassword.current?.(null);answerPassword.current=null;answerOdf.current?.(null);answerOdf.current=null}
+  return()=>{mounted.current=false;answerPassword.current?.(null);answerPassword.current=null;answerConversion.current?.(null);answerConversion.current=null}
  },[])
  useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(locked.current){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
  function item(file:File):UploadItem{const error=!isWorkspaceFileName(file.name,fileImports)?'不支持此格式':file.size>maxFileSize?'文件超过 32 MiB 限制':undefined;return {id:sequence.current++,file,state:error?'rejected':'queued',error}}
@@ -85,11 +85,11 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
   setPasswordPrompt(null)
   answer(value)
  }
- function submitOdf(value:boolean|null){
-  const answer=answerOdf.current
-  answerOdf.current=null
-  setOdfPrompt(null)
-  setRememberOdf(false)
+ function submitConversion(value:boolean|null){
+  const answer=answerConversion.current
+  answerConversion.current=null
+  setConversionPrompt(null)
+  setRememberConversion(false)
   answer?.(value)
  }
  async function uploadFile(file:File){
@@ -115,15 +115,16 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
    update(entry.id,'processing')
    try{
     const extension=entry.file.name.split('.').at(-1)?.toLowerCase()??''
-    if(Object.hasOwn(odfConversionTargets,extension)){
-     const target=odfConversionTargets[extension as keyof typeof odfConversionTargets]
-     skipOdfPrompt??=await readSkipOdfPrompt?.().catch(()=>false)??false
+    const odf=Object.hasOwn(odfConversionTargets,extension)
+    const target=workspaceConversionTarget(extension)
+    if(target&&(odf||Object.hasOwn(legacyOfficeConversionTargets,extension))){
+     if(odf)skipOdfPrompt??=await readSkipOdfPrompt?.().catch(()=>false)??false
      if(!mounted.current)break
-     if(!skipOdfPrompt){
-      const remember=await new Promise<boolean|null>(resolve=>{answerOdf.current=resolve;setOdfPrompt({file:entry.file,target})})
+     if(!odf||!skipOdfPrompt){
+      const remember=await new Promise<boolean|null>(resolve=>{answerConversion.current=resolve;setConversionPrompt({file:entry.file,target,odf})})
       if(!mounted.current)break
       if(remember===null){update(entry.id,'skipped');continue}
-      if(remember){skipOdfPrompt=true;await rememberOdfPrompt?.().catch(()=>{})}
+      if(odf&&remember){skipOdfPrompt=true;await rememberOdfPrompt?.().catch(()=>{})}
      }
     }
     const state=await uploadFile(entry.file);if(mounted.current)update(entry.id,state)
@@ -131,7 +132,7 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
    catch(error){if(mounted.current)update(entry.id,'error',error instanceof Error?error.message:'导入未完成。请核对工作区中的文件。')}
   }}finally{locked.current=false;if(mounted.current)setBusy(false)}
  }
- return <Modal className="workspace-upload-modal" title="上传文件" open={open} centered width={680} mask={{closable:false}} closable={{disabled:busy}} keyboard={!busy} onCancel={close} footer={showRecent?<Button autoInsertSpace={false} disabled={busy} onClick={close}>取消</Button>:<div className="workspace-upload-footer"><Typography.Text type="secondary">{passwordPrompt?'等待输入打开密码':odfPrompt?'等待确认格式转换':busy?'文件正在逐个上传，请稍候':items.length?`已选择 ${items.length} 个 · 已完成 ${completed}${skipped?` · 已跳过 ${skipped}`:''}${failed?` · 未完成 ${failed}`:''}`:'支持多文件，按顺序上传'}</Typography.Text><Space><Button autoInsertSpace={false} disabled={busy} onClick={close}>{completed||failed||skipped?'完成':'取消'}</Button><Button autoInsertSpace={false} type="primary" disabled={busy||!queued.length} loading={busy&&!passwordPrompt&&!odfPrompt} onClick={()=>void start()}>{passwordPrompt?'等待密码':odfPrompt?'等待确认':busy?'正在上传…':`开始上传${queued.length?`（${queued.length}）`:''}`}</Button></Space></div>}>
+ return <Modal className="workspace-upload-modal" title="上传文件" open={open} centered width={680} mask={{closable:false}} closable={{disabled:busy}} keyboard={!busy} onCancel={close} footer={showRecent?<Button autoInsertSpace={false} disabled={busy} onClick={close}>取消</Button>:<div className="workspace-upload-footer"><Typography.Text type="secondary">{passwordPrompt?'等待输入打开密码':conversionPrompt?'等待确认格式转换':busy?'文件正在逐个上传，请稍候':items.length?`已选择 ${items.length} 个 · 已完成 ${completed}${skipped?` · 已跳过 ${skipped}`:''}${failed?` · 未完成 ${failed}`:''}`:'支持多文件，按顺序上传'}</Typography.Text><Space><Button autoInsertSpace={false} disabled={busy} onClick={close}>{completed||failed||skipped?'完成':'取消'}</Button><Button autoInsertSpace={false} type="primary" disabled={busy||!queued.length} loading={busy&&!passwordPrompt&&!conversionPrompt} onClick={()=>void start()}>{passwordPrompt?'等待密码':conversionPrompt?'等待确认':busy?'正在上传…':`开始上传${queued.length?`（${queued.length}）`:''}`}</Button></Space></div>}>
   {loadRecent&&openRecent&&!items.length&&<div className="workspace-open-choices">
    <Space>
     <Button autoInsertSpace={false} type={showRecent?'default':'primary'} aria-pressed={!showRecent} disabled={busy} onClick={()=>setShowRecent(false)}>本地上传</Button>
@@ -159,11 +160,11 @@ export function WorkspaceUploadDialog({open,initialFiles=[],fileImports=[],readS
    {passwordPrompt.incorrect&&<span className="workspace-upload-file-error" id="workspace-upload-password-error" role="alert">{passwordLabel}错误，请重试。</span>}
    <Space><Button autoInsertSpace={false} onClick={()=>submitPassword(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" htmlType="submit" disabled={!password}>确认密码</Button></Space>
   </form>}
-  {odfPrompt&&<section className="workspace-upload-password" aria-label="OpenDocument 转换" role="group">
-   <Typography.Text strong>转换 {odfPrompt.file.name}？</Typography.Text>
-   <Typography.Text>工作区会创建 {odfPrompt.target.toUpperCase()} 副本。{odfConversionDetails[odfPrompt.target]}</Typography.Text>
-   {rememberOdfPrompt&&<label><input type="checkbox" aria-label="下次直接转换" checked={rememberOdf} onChange={event=>setRememberOdf(event.target.checked)}/> 下次直接转换，不再提示</label>}
-   <Space><Button autoInsertSpace={false} onClick={()=>submitOdf(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" onClick={()=>submitOdf(rememberOdf)}>转换并打开</Button></Space>
+  {conversionPrompt&&<section className="workspace-upload-password" aria-label={conversionPrompt.odf?'OpenDocument 转换':'旧版 Office 转换'} role="group">
+   <Typography.Text strong>转换 {conversionPrompt.file.name}？</Typography.Text>
+   <Typography.Text>工作区会创建 {conversionPrompt.target.toUpperCase()} 副本。{conversionDetails[conversionPrompt.target]}</Typography.Text>
+   {conversionPrompt.odf&&rememberOdfPrompt&&<label><input type="checkbox" aria-label="下次直接转换" checked={rememberConversion} onChange={event=>setRememberConversion(event.target.checked)}/> 下次直接转换，不再提示</label>}
+   <Space><Button autoInsertSpace={false} onClick={()=>submitConversion(null)}>跳过此文件</Button><Button autoInsertSpace={false} type="primary" onClick={()=>submitConversion(rememberConversion)}>转换并打开</Button></Space>
   </section>}
   <Typography.Paragraph type="secondary" className="workspace-upload-intro">将本地文件添加到工作区，上传成功后在文档标签页中打开。</Typography.Paragraph>
   <div onKeyDown={event=>{if(event.key===' '&&event.target instanceof HTMLElement&&event.target.getAttribute('role')==='button'){event.preventDefault();if(!locked.current&&!event.repeat)event.target.click()}}}>

@@ -1,9 +1,10 @@
 import { Worker } from 'node:worker_threads'
+import type { OfficeDocumentConversionFormat } from '../../../../../../packages/web-contracts/src/file-imports.ts'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
 
 let active = 0
 
-export async function convertOpenDocument(bytes: Buffer, target: 'docx' | 'pptx', signal: AbortSignal): Promise<Buffer> {
+export async function convertOfficeDocument(bytes: Buffer, format: OfficeDocumentConversionFormat, signal: AbortSignal): Promise<Buffer> {
   signal.throwIfAborted()
   if (!bytes.length) throw storageError(400)
   if (bytes.length > MAX_OBJECT_BYTES) throw storageError(413)
@@ -13,8 +14,8 @@ export async function convertOpenDocument(bytes: Buffer, target: 'docx' | 'pptx'
   let abort: (() => void) | undefined
   try {
     const input = Uint8Array.from(bytes)
-    worker = new Worker(new URL('./odf-import-worker.ts', import.meta.url), {
-      workerData: { input, target }, transferList: [input.buffer],
+    worker = new Worker(new URL('./office-import-worker.ts', import.meta.url), {
+      workerData: { input, format }, transferList: [input.buffer],
       resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
       stdout: true, stderr: true,
     })

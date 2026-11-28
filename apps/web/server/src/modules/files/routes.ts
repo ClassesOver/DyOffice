@@ -15,8 +15,8 @@ import type { LeaseService } from '../leases/service.ts'
 import { createAiCsvDocument, createAiXlsxDocument, type AiXlsxInput } from '../sheets/create-document.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type { EncryptedOfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
-import { workspaceConversionTargets, type WorkspaceConversionFormat } from '../../../../../../packages/web-contracts/src/file-imports.ts'
-import { convertOpenDocument } from './odf-import.ts'
+import { officeDocumentConversionTargets, workspaceConversionTargets, type OfficeDocumentConversionFormat, type WorkspaceConversionFormat } from '../../../../../../packages/web-contracts/src/file-imports.ts'
+import { convertOfficeDocument } from './office-import.ts'
 
 const encryptedWorkbookMime = 'application/vnd.dyoffice.encrypted-xlsx'
 const encryptedMacroWorkbookMime = 'application/vnd.dyoffice.encrypted-xlsm'
@@ -55,12 +55,13 @@ type WorkbookConverters = Partial<Record<'tsv'|'xls'|'ods'|'ots', FileConverter>
 export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }, workbookConverters: WorkbookConverters = {}, editableCsv = false) {
   const admission = objectTransferAdmission(app)
   const { transfer } = admission
-  const convertDoc: FileConverter = (bytes, signal) => convertOpenDocument(bytes, 'docx', signal)
-  const convertSlides: FileConverter = (bytes, signal) => convertOpenDocument(bytes, 'pptx', signal)
   const converters: Partial<Record<WorkspaceConversionFormat, FileConverter>> = {
     ...(files.capabilities?.xlsx === 'editable' && workbookConverters),
-    ...(files.capabilities?.docx === 'editable' && { odt: convertDoc, ott: convertDoc }),
-    ...(files.capabilities?.pptx === 'editable' && { odp: convertSlides, otp: convertSlides }),
+  }
+  for (const format of Object.keys(officeDocumentConversionTargets) as OfficeDocumentConversionFormat[]) {
+    if (files.capabilities?.[officeDocumentConversionTargets[format]] === 'editable') {
+      converters[format] = (bytes, signal) => convertOfficeDocument(bytes, format, signal)
+    }
   }
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
