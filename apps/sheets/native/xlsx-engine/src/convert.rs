@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use calamine::{Data, Dimensions, Reader, Sheets, open_workbook_auto};
+use calamine::{Data, Dimensions, Reader, Sheets, open_workbook, open_workbook_auto};
 
 use crate::SidecarError;
 use crate::escher::{self, Blip, BlipKind};
@@ -75,7 +75,30 @@ fn unreadable_container_hint(source: &Path) -> Option<String> {
 }
 
 pub fn convert_to_xlsx(source: &Path, target: &Path) -> Result<ConvertResult, SidecarError> {
-    let mut workbook = match open_workbook_auto(source) {
+    convert_workbook(source, target, false)
+}
+
+pub(crate) fn convert_legacy_xls_to_xlsx(
+    source: &Path,
+    target: &Path,
+) -> Result<ConvertResult, SidecarError> {
+    convert_workbook(source, target, true)
+}
+
+fn convert_workbook(
+    source: &Path,
+    target: &Path,
+    legacy_xls: bool,
+) -> Result<ConvertResult, SidecarError> {
+    // The Web sandbox uses a fixed input.xlsx path regardless of the uploaded extension.
+    let opened = if legacy_xls {
+        open_workbook(source)
+            .map(Sheets::Xls)
+            .map_err(calamine::Error::Xls)
+    } else {
+        open_workbook_auto(source)
+    };
+    let mut workbook = match opened {
         Ok(workbook) => workbook,
         Err(error) => {
             // Excel opens an XML spreadsheet saved under a legacy name by
@@ -644,6 +667,30 @@ mod tests {
         let types = read_entry(&target, "[Content_Types].xml");
         assert!(types.contains(r#"<Default Extension="png" ContentType="image/png"/>"#));
         assert!(types.contains(r#"<Override PartName="/xl/drawings/drawing1.xml""#));
+    }
+
+    #[test]
+    fn converts_legacy_upload_at_fixed_sandbox_path_like_the_desktop() {
+        let fixture = Path::new("tests/fixtures/merges-widths-picture.xls");
+        let dir = tempfile::tempdir().unwrap();
+        let sandbox_input = dir.path().join("input.xlsx");
+        let desktop_output = dir.path().join("desktop.xlsx");
+        let sandbox_output = dir.path().join("output.xlsx");
+        std::fs::copy(fixture, &sandbox_input).unwrap();
+        convert_to_xlsx(fixture, &desktop_output).unwrap();
+        convert_legacy_xls_to_xlsx(&sandbox_input, &sandbox_output).unwrap();
+        for entry in [
+            "xl/worksheets/sheet1.xml",
+            "xl/styles.xml",
+            "xl/drawings/drawing1.xml",
+            "xl/media/image1.png",
+        ] {
+            assert_eq!(
+                read_bytes(&desktop_output, entry),
+                read_bytes(&sandbox_output, entry),
+                "{entry}"
+            );
+        }
     }
 
     #[test]

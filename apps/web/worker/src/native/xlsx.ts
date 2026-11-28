@@ -59,6 +59,19 @@ export function createXlsxNativeWorker(process: NativeProcess, nodeEngine=false)
   const native = createNativeAdmission(process)
   let refreshing = false
   return {
+    async convertLegacyXls(input: Uint8Array, signal?: AbortSignal) {
+      if (!input.byteLength) throw Object.assign(new Error('Invalid XLS workbook'), { statusCode: 400 })
+      const result = await native.run(input, async io => {
+        const reply = await io.request('convert_legacy_xls', {path:'/work/input.xlsx',targetPath:'/work/output.xlsx'}) as Record<string,unknown>
+        if (reply?.invalidInput === true && Object.keys(reply).length === 1) return null
+        if (reply?.written !== true || Object.keys(reply).length !== 1) throw new SandboxError('INVALID_PROTOCOL')
+        const bytes = await io.readOutput()
+        if (bytes.length < 4 || bytes.readUInt32LE(0) !== 0x04034b50) throw new SandboxError('INVALID_OUTPUT')
+        return bytes
+      }, {signal})
+      if (!result) throw Object.assign(new Error('Invalid XLS workbook'), { statusCode: 400 })
+      return result
+    },
     async refreshExternalLinks(input: Uint8Array, sources: readonly BoundWorkbookSource[], signal?: AbortSignal) {
       if (!(input instanceof Uint8Array) || !Array.isArray(sources) || sources.length > 256) {
         throw new SandboxError('INPUT_LIMIT')

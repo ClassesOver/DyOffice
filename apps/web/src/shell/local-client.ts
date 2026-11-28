@@ -141,9 +141,9 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    const bound=await bindSession(expectedProof)
    // Files dragged onto a native editor are created in the iframe's realm.
    let content=file instanceof Blob?file:new Blob([file])
-   const tsv=extension==='tsv'
-   if(tsv)content=await bound.download('/api/v1/files/convert-tsv',{body:content})
-   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:tsv?file.name.slice(0,-4)+'.xlsx':file.name,size:tsv?content.size:file.size,...(autoName?{autoName:true}:{})})
+   const needsConversion=extension==='tsv'||extension==='xls'
+   if(needsConversion)content=await bound.download(`/api/v1/files/convert-${extension}`,{body:content})
+   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:needsConversion?file.name.slice(0,-4)+'.xlsx':file.name,size:needsConversion?content.size:file.size,...(autoName?{autoName:true}:{})})
    const path=`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}`
    if(password!==undefined){
     const encoded=new TextEncoder().encode(password)

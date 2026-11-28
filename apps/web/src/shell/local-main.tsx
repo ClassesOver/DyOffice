@@ -17,7 +17,7 @@ import {NativeSettingsDialog} from './NativeSettingsDialog'
 import {WorkspaceUploadDialog} from './WorkspaceUploadDialog'
 import {WorkspaceSplitDivider} from './WorkspaceSplitDivider'
 import {listenForWindowReturn,requestWindowReturn,setWindowReturnTarget,windowReturnTarget,workspaceWindowId} from './workspace-window-return'
-import {isWorkspaceFileName} from './workspace-file-formats'
+import {isWorkspaceFileName,workspaceWorkbookImports} from './workspace-file-formats'
 import {AppFrame} from '../../../shell/src/renderer/src/AppFrame'
 
 import {LocaleProvider} from '../../../shell/src/renderer/src/locale'
@@ -212,8 +212,8 @@ function takeOfficeImportUnlock(fileId:string,revision:string){
 }
 async function upload(file:File,expectedProof:string|undefined,autoName=false,password?:string){
  if(busy)throw new Error('正在导入，请稍候')
- const canImportTsv=capabilities.tsvImport==='editable'
- if(!isWorkspaceFileName(file.name,canImportTsv))throw new Error(canImportTsv?'请选择 DOCX、XLSX、PPTX、PDF 或 TSV 文件。':'请选择 DOCX、XLSX、PPTX 或 PDF 文件。')
+ const imports=workspaceWorkbookImports(capabilities)
+ if(!isWorkspaceFileName(file.name,imports))throw new Error(`请选择 ${['DOCX','XLSX','PPTX','PDF',...imports.map(format=>format.toUpperCase())].join('、')} 文件。`)
  if(!expectedProof)throw new Error('登录状态未核验，请重新加载当前工作区。')
  busy=true
  try{
@@ -476,6 +476,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const pendingMenuCommand=useRef<DocumentMenuCommand|null>(null)
  const [uploadFiles,setUploadFiles]=useState<File[]|null>(null)
  const uploadProof=sourceWorkspace?.bound.proof
+ const workbookImports=useMemo(()=>workspaceWorkbookImports(capabilities),[capabilities])
  showUpload=files=>setUploadFiles(files??[])
  const [chromeMenu,setChromeMenu]=useState<{kind:'app'|'new'|'tabs'|'tab';x:number;y:number;id?:string}|null>(null)
  showChromeMenu=(kind,x,y,id)=>setChromeMenu({kind,x,y,id})
@@ -800,7 +801,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
  }
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList allowHomeTabMenu renameTabFile={renameTabFile} closeTabWithKeyboard={closeTabWithKeyboard} detachTabOnDrop={moveTabToWindow} homeBeside={split?.left==='home'?'left':split?.right==='home'?'right':undefined} initialOnboardingSeen={true} homeProps={{copyWorkspaceFileLink,renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf',...(capabilities.tsvImport==='editable'?['tsv']:[])],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=>{
+  <AppFrame hideAppMenu hideSingleTabList allowHomeTabMenu renameTabFile={renameTabFile} closeTabWithKeyboard={closeTabWithKeyboard} detachTabOnDrop={moveTabToWindow} homeBeside={split?.left==='home'?'left':split?.right==='home'?'right':undefined} initialOnboardingSeen={true} homeProps={{copyWorkspaceFileLink,renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf',...workbookImports],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=>{
    const active=tabs.some(tab=>tab.id===file.id&&tab.active)
    const pane=split?.left===file.id?'left':split?.right===file.id?'right':undefined
    const selectPane=pane&&!active&&workspaceShortcutsActive?()=>{
@@ -811,13 +812,13 @@ function Shell({recovery=false}:{recovery?:boolean}){
      data-workspace-pane={pane} onPointerDown={selectPane} onFocusCapture={selectPane}>
     {file.format==='pdf'||file.src.startsWith('/native-')
      ?<DocumentFrame key={`${file.src}:${documentTabs.renderGeneration(file.id)}`} file={file} documentShortcutsActive={workspaceShortcutsActive&&active} menuCommand={menuCommand?.id===file.id?menuCommand:null}
-       onOpenShortcut={openShortcut} onOpenWorkspaceFile={openWorkspaceFile} onSaveAssistantSide={saveWorkspaceAssistantSide} takeOfficeImportUnlock={takeOfficeImportUnlock} onPaneInteraction={selectPane} onDropWorkspaceFiles={openWorkspaceFile} canImportTsv={capabilities.tsvImport==='editable'}
+       onOpenShortcut={openShortcut} onOpenWorkspaceFile={openWorkspaceFile} onSaveAssistantSide={saveWorkspaceAssistantSide} takeOfficeImportUnlock={takeOfficeImportUnlock} onPaneInteraction={selectPane} onDropWorkspaceFiles={openWorkspaceFile} workbookImports={workbookImports}
        registerGuard={documentTabs.setGuard} registerSleepGuard={documentTabs.setSleepGuard} onAutoFileName={updateAutoFileTab} sessionActive={()=>!recoveryBlocked.current}/>
      :<DocumentPreview key={file.src} fileId={file.id} name={file.name} format={file.format} sourceRevision={file.sourceRevision} request={sourceWorkspace?.bound.request??client.request}/>}
    </div>
   })}{split&&<WorkspaceSplitDivider key={JSON.stringify([split.left,split.right])} disabled={!workspaceShortcutsActive||recovery} initialWidth={split.width} onResize={documentTabs.resizeSplit}/>}</>}/>
   {page&&<NativeSettingsDialog title={page==='documentResults'?workspacePages[page]+' · '+(tabs.find(tab=>tab.id===resultFileId)?.title??''):workspacePages[page]} onClose={close}><WorkspacePageContent key={page} documentId={page==='documentResults'?resultFileId:undefined} page={page} channelId={channelId} onOpenChannel={id=>{setChannelId(id);setPage('channels')}} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/></NativeSettingsDialog>}
-  {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} canImportTsv={capabilities.tsvImport==='editable'} upload={(file,password)=>upload(file,uploadProof,false,password)} loadRecent={loadRecentWorkspaceFiles} openRecent={open} onClose={()=>setUploadFiles(null)}/>}
+  {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} workbookImports={workbookImports} upload={(file,password)=>upload(file,uploadProof,false,password)} loadRecent={loadRecentWorkspaceFiles} openRecent={open} onClose={()=>setUploadFiles(null)}/>}
   {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?tabMenuItems:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='documentResults'&&target.id){setResultFileId(target.id);setPage('documentResults')}else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&(key==='save'||key==='save-as'||key==='print'))queueMenuCommand(target.id,key);else if(target.kind==='tab'&&target.id&&(key==='copyName'||key==='copyWorkspaceLink'))void copyTabIdentity(target.id,key).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='downloadSavedFile')void downloadSavedTab(target.id).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='splitBeside'&&!recoveryBlocked.current)documentTabs.splitBeside(target.id);else if(target.kind==='tab'&&key==='swapSplit'&&!recoveryBlocked.current)documentTabs.swapSplit();else if(target.kind==='tab'&&key==='endSplit')documentTabs.endSplit();else if(target.kind==='tab'&&target.id&&key==='moveWindow')void moveTabToWindow(target.id);else if(target.kind==='tab'&&target.id&&key==='returnWindow')void returnTabToWorkspace(target.id);else if(target.kind==='tab'&&target.id&&key==='pin'&&!recoveryBlocked.current)documentTabs.setPinned(target.id,!documentTabs.list().some(tab=>tab.id===target.id&&tab.pinned));else if(target.kind==='tab'&&target.id&&(key==='moveLeft'||key==='moveRight')&&!recoveryBlocked.current)moveTabMenuSelection(target.id,key);else if(target.kind==='tab'&&target.id&&(key==='closeOthers'||key==='closeRight'||key==='closeAll'))closeTabMenuSelection(target.id,key);else if(target.kind==='tab'&&key==='reopen'&&!recoveryBlocked.current)void documentTabs.reopenClosed(resolveOpenDocument).catch(e=>notice(e.message));else if(target.kind==='tab'&&target.id&&key==='reveal'&&!recoveryBlocked.current)void revealTab(target.id);else if(target.kind==='tab'&&target.id&&key==='rename'&&!recoveryBlocked.current)tabRenameListeners.forEach(listener=>listener(target.id!));else if(target.kind==='tab'&&target.id&&key==='duplicate'&&!recoveryBlocked.current)void window.aiOffice.duplicateFile(target.id).then(()=>setMessage(current=>current===message?'':current)).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
   {message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}
  </>

@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises'
 import {runInNewContext} from 'node:vm'
 import {transform} from 'esbuild'
 import {editorCapabilityKey,readOpenDocument} from '../src/shell/document-entry-reader.ts'
-import {isWorkspaceFileName} from '../src/shell/workspace-file-formats.ts'
+import {isWorkspaceFileName,workspaceWorkbookImports} from '../src/shell/workspace-file-formats.ts'
 const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.url),'utf8')
 const slice=source.slice(source.indexOf('async function resolveOpenDocument(id:'),source.indexOf('const unsupported='))
 const {code}=await transform(slice,{loader:'ts',target:'es2022'})
@@ -12,7 +12,7 @@ function fixture({format='docx',capability='editable',fail=false,download,revisi
  const calls=[],opened=[],navigated=[],inputs=[],reserved=[];let release
  const result={name:`test.${format}`,format,file:{fileId:'file',revision},downloadEndpoint:download??`/api/v1/files/file/content?revision=${revision}`}
  const client={async request(path,method){calls.push([path,method]);if(fail)throw Error('Forbidden');return result},async upload(file,proof){assert.equal(proof,'a'.repeat(43));calls.push(['upload',file.name]);if(pending)await new Promise(r=>release=r);return result}}
- const actions=runInNewContext(code+'\n({open,upload,browse})',{client,sourceWorkspace:{bound:{request:client.request,proof:'a'.repeat(43)}},readOpenDocument,isWorkspaceFileName,capabilities:{[editorCapabilityKey(format)]:capability},documentTabs:{renderedDocuments:()=>opened,reserveOpen:id=>{const token={renameVersion:0,sequence:reserved.length+1};reserved.push({id,token});return token},open:(x,token)=>{assert.equal(reserved.at(-1)?.id,x.id);assert.equal(token,reserved.at(-1)?.token);opened.push(x)}},notifyFilesChanged(){},notice(){},showUpload(){inputs.push({dialog:true})},location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){inputs.push(this)}}}},encodeURIComponent})
+ const actions=runInNewContext(code+'\n({open,upload,browse})',{client,sourceWorkspace:{bound:{request:client.request,proof:'a'.repeat(43)}},readOpenDocument,isWorkspaceFileName,workspaceWorkbookImports,capabilities:{[editorCapabilityKey(format)]:capability},documentTabs:{renderedDocuments:()=>opened,reserveOpen:id=>{const token={renameVersion:0,sequence:reserved.length+1};reserved.push({id,token});return token},open:(x,token)=>{assert.equal(reserved.at(-1)?.id,x.id);assert.equal(token,reserved.at(-1)?.token);opened.push(x)}},notifyFilesChanged(){},notice(){},showUpload(){inputs.push({dialog:true})},location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){inputs.push(this)}}}},encodeURIComponent})
  const api={...actions,upload:file=>actions.upload(file,'a'.repeat(43))}
  return {api,calls,opened,navigated,inputs,release:()=>release()}
 }

@@ -3,14 +3,14 @@ import {CheckCircleFilled,CloseCircleFilled,CloudUploadOutlined,DeleteOutlined,F
 import {useEffect,useRef,useState} from 'react'
 import type {RecentEntry} from '../../../shell/src/shared/home-api'
 import {IncorrectOfficeUploadPassword} from './local-client'
-import {isWorkspaceFileName,workspaceFileAccept} from './workspace-file-formats'
+import {isWorkspaceFileName,type WorkbookImportFormat,workspaceFileAccept} from './workspace-file-formats'
 import './workspace-upload.css'
 type UploadItem={id:number;file:File;state:'queued'|'processing'|'success'|'password-required'|'skipped'|'error'|'rejected';error?:string}
 type RecentDocument=Pick<RecentEntry,'path'|'name'|'locationLabel'>
 type WorkspaceUploadDialogProps={
  open:boolean
  initialFiles?:File[]
- canImportTsv?:boolean
+ workbookImports?:readonly WorkbookImportFormat[]
  upload:(file:File,password?:string)=>Promise<void|'password-required'>
  onClose:()=>void
  loadRecent?:()=>Promise<RecentDocument[]>
@@ -18,14 +18,14 @@ type WorkspaceUploadDialogProps={
 }
 const maxFileSize=32*1024*1024
 const sizeLabel=(size:number)=>size<1024?`${size} B`:size<1024*1024?`${(size/1024).toFixed(1)} KB`:`${(size/1024/1024).toFixed(1)} MB`
-const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,tsv:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
+const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,tsv:FileExcelOutlined,xls:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
 const compoundFileHeader=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]
 async function needsOfficePassword(file:File){
  if(!/\.(docx|xlsx)$/i.test(file.name)||file.size<compoundFileHeader.length)return false
  const header=new Uint8Array(await file.slice(0,compoundFileHeader.length).arrayBuffer())
  return compoundFileHeader.every((byte,index)=>header[index]===byte)
 }
-export function WorkspaceUploadDialog({open,initialFiles=[],canImportTsv=false,upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
+export function WorkspaceUploadDialog({open,initialFiles=[],workbookImports=[],upload,onClose,loadRecent,openRecent}:WorkspaceUploadDialogProps){
  const sequence=useRef(0),locked=useRef(false)
  const mounted=useRef(false),answerPassword=useRef<((password:string|null)=>void)|null>(null)
  const [passwordPrompt,setPasswordPrompt]=useState<{file:File;incorrect:boolean}|null>(null)
@@ -36,7 +36,7 @@ export function WorkspaceUploadDialog({open,initialFiles=[],canImportTsv=false,u
   return()=>{mounted.current=false;answerPassword.current?.(null);answerPassword.current=null}
  },[])
  useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(locked.current){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
- function item(file:File):UploadItem{const error=!isWorkspaceFileName(file.name,canImportTsv)?'不支持此格式':file.size>maxFileSize?'文件超过 32 MiB 限制':undefined;return {id:sequence.current++,file,state:error?'rejected':'queued',error}}
+ function item(file:File):UploadItem{const error=!isWorkspaceFileName(file.name,workbookImports)?'不支持此格式':file.size>maxFileSize?'文件超过 32 MiB 限制':undefined;return {id:sequence.current++,file,state:error?'rejected':'queued',error}}
  const [items,setItems]=useState<UploadItem[]>(()=>initialFiles.map(item)),[busy,setBusy]=useState(false)
  const [showRecent,setShowRecent]=useState(false)
  const [recent,setRecent]=useState<RecentDocument[]|null>(null)
@@ -129,11 +129,11 @@ export function WorkspaceUploadDialog({open,initialFiles=[],canImportTsv=false,u
   </form>}
   <Typography.Paragraph type="secondary" className="workspace-upload-intro">将本地文件添加到工作区，上传成功后在文档标签页中打开。</Typography.Paragraph>
   <div onKeyDown={event=>{if(event.key===' '&&event.target instanceof HTMLElement&&event.target.getAttribute('role')==='button'){event.preventDefault();if(!locked.current&&!event.repeat)event.target.click()}}}>
-  <Upload.Dragger multiple accept={workspaceFileAccept+(canImportTsv?',.tsv':'')} showUploadList={false} disabled={busy} beforeUpload={file=>{if(!locked.current)setItems(current=>[...current,item(file)]);return Upload.LIST_IGNORE}}>
+  <Upload.Dragger multiple accept={[workspaceFileAccept,...workbookImports.map(format=>'.'+format)].join(',')} showUploadList={false} disabled={busy} beforeUpload={file=>{if(!locked.current)setItems(current=>[...current,item(file)]);return Upload.LIST_IGNORE}}>
    <span className="workspace-upload-drop-icon"><CloudUploadOutlined/></span>
    <span className="workspace-upload-drop-title">点击选择文件，或拖拽到这里</span>
    <span className="workspace-upload-drop-hint">支持 Word、Excel、PowerPoint 和 PDF · 单个文件最大 32 MiB</span>
-   <span className="workspace-upload-formats"><Tag>DOCX</Tag><Tag>XLSX</Tag><Tag>PPTX</Tag><Tag>PDF</Tag>{canImportTsv&&<Tag>TSV 转 XLSX</Tag>}</span>
+   <span className="workspace-upload-formats"><Tag>DOCX</Tag><Tag>XLSX</Tag><Tag>PPTX</Tag><Tag>PDF</Tag>{workbookImports.map(format=><Tag key={format}>{format.toUpperCase()} 转 XLSX</Tag>)}</span>
   </Upload.Dragger>
   </div>
   {items.length>0&&<><div className="workspace-upload-list-heading"><Typography.Text strong>文件列表</Typography.Text><Typography.Text type="secondary">{items.length} 个文件</Typography.Text></div><ul className="workspace-upload-list" aria-label="待上传文件">{items.map(entry=>{

@@ -4,6 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises'
 import {randomUUID} from 'node:crypto'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import JSZip from 'jszip'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 const manifestPath=process.env.DYOFFICE_TEST_HOST_MANIFEST??new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url)
@@ -50,7 +51,20 @@ for(const mode of runtimeModes)test(`actual ${mode} server entry enables owned S
  const address=String(output).match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];assert.ok(address)
  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
  const headers={cookie:'__Host-dyoffice-session='+f.alice.token,origin,'x-csrf-token':csrf.sessionToken(f.alice.token),'content-type':'application/json'}
- const capabilities=await fetch(address+'/api/v1/capabilities',{headers});assert.equal((await capabilities.json()).xlsx,'editable')
+ const capabilities=await fetch(address+'/api/v1/capabilities',{headers})
+ const catalog=await capabilities.json()
+ assert.equal(catalog.xlsx,'editable')
+ assert.equal(catalog.xlsImport,'editable')
+ const fixture=await readFile(new URL('../../../sheets/native/xlsx-engine/tests/fixtures/merges-widths-picture.xls',import.meta.url))
+ const convert=body=>fetch(address+'/api/v1/files/convert-xls',{method:'POST',headers:{...headers,'content-type':'application/octet-stream'},body})
+ const converted=await convert(fixture)
+ assert.equal(converted.status,200,converted.status===200?'':await converted.text())
+ const legacy=await JSZip.loadAsync(await converted.arrayBuffer())
+ const sheet=await legacy.file('xl/worksheets/sheet1.xml').async('string')
+ assert.match(sheet,/<mergeCell ref="A5:C5"\/>/)
+ assert.match(sheet,/<row r="2" ht="30\.00" customHeight="1">/)
+ assert.ok(legacy.file('xl/media/image1.png'))
+ assert.equal((await convert(Buffer.from('not a workbook'))).status,400)
  const result=await fetch(address+'/api/v1/files/'+file.fileId+'/sheets/inspect',{method:'POST',headers,body:JSON.stringify({revision:file.revision})})
  assert.equal(result.status,200);assert.equal((await result.json()).sheets[0].name,'Acceptance')
  const links=await fetch(address+'/api/v1/files/'+file.fileId+'/sheets/external-links',{method:'POST',headers,body:JSON.stringify({revision:file.revision})})

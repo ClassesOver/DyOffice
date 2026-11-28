@@ -92,6 +92,11 @@ pub enum Command {
         target_path: PathBuf,
     },
     #[serde(rename_all = "camelCase")]
+    ConvertLegacyXls {
+        path: PathBuf,
+        target_path: PathBuf,
+    },
+    #[serde(rename_all = "camelCase")]
     SaveArchive {
         source_path: PathBuf,
         target_path: PathBuf,
@@ -610,6 +615,15 @@ pub fn handle_request(
                     "cells": result.cells,
                 }))
             })
+        }
+        Command::ConvertLegacyXls { path, target_path } => {
+            match crate::convert::convert_legacy_xls_to_xlsx(&path, &target_path) {
+                Ok(_) => to_json_value(serde_json::json!({ "written": true })),
+                Err(SidecarError::Workbook(_)) => {
+                    to_json_value(serde_json::json!({ "invalidInput": true }))
+                }
+                Err(error) => Err(error),
+            }
         }
         Command::ArchiveManifest { path } => archive_manifest(&path)
             .and_then(|entries| to_json_value(serde_json::json!({ "entries": entries }))),

@@ -21,6 +21,7 @@ const fetchWorkbookQuery:SheetsQueryFetcher=(source,signal)=>fetchRemoteTable(so
 export type SheetsPackageReader = (bytes: Buffer, signal?: AbortSignal, query?: WorkbookPackageQuery) => Promise<unknown>
 export interface SheetsNative {
   convertTsvImport?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
+  convertLegacyXls?(input:Buffer,signal?:AbortSignal):Promise<Buffer>
   convertMergeSource?(input:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal):Promise<Buffer>
   readMedia?(input:Uint8Array,visualId:string,signal?:AbortSignal):Promise<unknown>
   recalculate?(input: Uint8Array, request: RecalcInput, signal?: AbortSignal): Promise<unknown>

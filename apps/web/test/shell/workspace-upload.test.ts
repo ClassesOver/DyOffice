@@ -119,15 +119,15 @@ test('queued files can be removed before uploading',async()=>{
  expect(upload).not.toHaveBeenCalled()
 })
 
-test('TSV uploads convert within the bound session and stage the XLSX copy',async()=>{
+test.each(['TSV','XLS'] as const)('%s uploads convert within the bound session and stage the XLSX copy',async format=>{
  const proof='p'.repeat(43),staged:string[]=[]
- const input=new File(['Name\tValue\nA, B\t42'],'Report.TSV')
+ const input=new File(['Workbook source'],`Report.${format}`)
  const converted=new Blob(['converted workbook'],{type:'application/octet-stream'})
  const client=createLocalShellClient(async(request,options)=>{
   const path=String(request)
   if(path.endsWith('/session-proof'))return Response.json({csrfToken:proof})
   expect(new Headers(options?.headers).get('x-csrf-token')).toBe(proof)
-  if(path.endsWith('/convert-tsv')){
+  if(path.endsWith(`/convert-${format.toLowerCase()}`)){
    expect(await (options?.body as Blob).text()).toBe(await input.text())
    return Object.assign(new Response(null,{headers:{'content-type':'application/octet-stream'}}),{blob:async()=>converted})
   }

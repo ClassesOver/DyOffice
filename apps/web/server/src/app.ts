@@ -274,7 +274,10 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     if (config.objectStore && files) {
       const leases = createLeaseService({ transactions, assertOfficeWritable:files.assertOfficeLeaseAllowed })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
-      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration },config.sheetsNative?.convertTsvImport)
+      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration },{
+        tsv:config.sheetsNative?.convertTsvImport,
+        xls:config.sheetsNative?.convertLegacyXls,
+      })
       registerMcpRoutes(app,transactions,files,csrf,config.objectStore,config.filePolicy,
         config.sheetsPlanner && config.sheetsWorkbookPlanner && config.sheetsNative?.savePlan ? {
           native: config.sheetsNative as SheetsSaveNative,
