@@ -18,6 +18,11 @@
  * TextDecoder.decode with a raw RangeError instead of converting.
  */
 export const CSV_IMPORT_LIMIT_CHOICES_MB = [64, 128, 256] as const
+export type CsvImportLimitMb = (typeof CSV_IMPORT_LIMIT_CHOICES_MB)[number]
+
+export function isCsvImportLimitMb(value: unknown): value is CsvImportLimitMb {
+  return CSV_IMPORT_LIMIT_CHOICES_MB.some(limit => value === limit)
+}
 
 /** the ceiling a delimited import starts at, in MB */
 export const CSV_IMPORT_DEFAULT_LIMIT_MB = 256

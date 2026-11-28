@@ -1,6 +1,7 @@
 import './personal-settings-page.css'
 import {useCallback,useEffect,useId,useRef,useState} from 'react'
 import type {PersonalPreferences} from '../../../../packages/browser-host/src/preferences'
+import {CSV_IMPORT_DEFAULT_LIMIT_MB,CSV_IMPORT_LIMIT_CHOICES_MB,isCsvImportLimitMb} from '@genoffice/xlsx-gateway/gateway/csv-limits'
 import {AI_CUSTOM_FONT_MAX_PX,AI_CUSTOM_FONT_MIN_PX,DEFAULT_AI_PANEL_PREFS,aiPanelFontPx,type AiFontSize} from '@genoffice/ui/ai-panel-prefs'
 import {LocalPasswordForm} from './LocalPasswordForm'
 import {LocalSessionsPanel} from './LocalSessionsPanel'
@@ -123,6 +124,15 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
    <div className="personal-page-preference-row personal-page-switch-row">
     <div><label htmlFor={`${preferenceId}-odf-import`}>确认 OpenDocument 转换</label><p id={`${preferenceId}-odf-import-hint`} className="personal-page-field-hint">导入 ODS 或 OTS 并创建 XLSX 副本前询问。</p></div>
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-odf-import`} aria-describedby={`${preferenceId}-odf-import-hint`} checked={draft?.skipOdfImportPrompt!==true} onChange={event=>edit({skipOdfImportPrompt:!event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row">
+    <div><label htmlFor={`${preferenceId}-csv-import-limit`}>CSV 导入上限</label><p id={`${preferenceId}-csv-import-limit-hint`} className="personal-page-field-hint">设置 Excel「从文本/CSV」导入的单个文件大小上限。</p></div>
+    <select id={`${preferenceId}-csv-import-limit`} aria-describedby={`${preferenceId}-csv-import-limit-hint`} value={draft?.csvImportLimitMb??CSV_IMPORT_DEFAULT_LIMIT_MB} onChange={event=>{
+     const limit=Number(event.target.value)
+     if(isCsvImportLimitMb(limit))edit({csvImportLimitMb:limit})
+    }}>
+     {CSV_IMPORT_LIMIT_CHOICES_MB.map(limit=><option key={limit} value={limit}>{limit} MiB</option>)}
+    </select>
    </div>
    <p className="personal-page-field-hint">更改语言后，请刷新页面或重新打开文档。</p>
   </fieldset>

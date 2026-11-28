@@ -9,6 +9,7 @@ import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {draftCopyParentActive} from './draft-copy-authority'
 import type {RegisterWorkbookPicker} from './workbook-tab-picker'
 import type {HomeApi} from '../../../shell/src/shared/home-api'
+import {CSV_IMPORT_DEFAULT_LIMIT_MB} from '@genoffice/xlsx-gateway/gateway/csv-limits'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
   workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,externalLinksUpdateResultSchema,
@@ -601,6 +602,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     writeWorkbookRecovery:unavailable,exportPdf:unavailable,exportCsv:unavailable,
+    async getCsvImportLimit(){return (await host.getPreferences()).csvImportLimitMb??CSV_IMPORT_DEFAULT_LIMIT_MB},
     openAiModelSettings:async()=>{
       const parent=typeof window!=='undefined'?(window.parent as unknown as {dyofficeOpenEditorSettings?:(tab:'models'|'skills',source:Window)=>Promise<void>}):undefined
       if(parent&&typeof parent.dyofficeOpenEditorSettings==='function')return parent.dyofficeOpenEditorSettings('models',window)

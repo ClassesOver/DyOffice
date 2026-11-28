@@ -1,3 +1,4 @@
+import { isCsvImportLimitMb, type CsvImportLimitMb } from '../../xlsx-gateway/src/gateway/csv-limits.ts'
 import {ASSISTANT_PREFERENCES_FIELDS,DOCUMENT_THEME_MODES,PDF_DEFAULT_ZOOM_MODES,isAssistantPreferences,type AssistantPreferences,type DocumentTheme,type PdfDefaultZoom} from '../../web-contracts/src/preferences.ts'
 import type {PublicGlobalSettings} from '../../web-contracts/src/settings.ts'
 
@@ -11,15 +12,16 @@ export interface PersonalPreferences extends AssistantPreferences {
   restoreSession?: boolean
   sleepInactiveTabs?: boolean
   skipOdfImportPrompt?: boolean
+  csvImportLimitMb?: CsvImportLimitMb
   pdfDefaultZoom?: PdfDefaultZoom
 }
 export type SettingsRequest = <T = unknown>(path: string, method?: string, body?: unknown, signal?: AbortSignal) => Promise<T>
-const fields = ['theme', 'documentTheme', 'language', 'authorName', 'autoSave', 'showAssistant', 'restoreSession', 'sleepInactiveTabs', 'skipOdfImportPrompt', 'pdfDefaultZoom', ...ASSISTANT_PREFERENCES_FIELDS] as const
+const fields = ['theme', 'documentTheme', 'language', 'authorName', 'autoSave', 'showAssistant', 'restoreSession', 'sleepInactiveTabs', 'skipOdfImportPrompt', 'csvImportLimitMb', 'pdfDefaultZoom', ...ASSISTANT_PREFERENCES_FIELDS] as const
 
 function project(value: unknown): PersonalPreferences {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无法确认偏好保存结果，请重新加载。')
   const v = value as PersonalPreferences
-  if (!['light', 'dark', 'system'].includes(v.theme) || !['zh', 'en'].includes(v.language) || typeof v.authorName !== 'string' || typeof v.autoSave !== 'boolean' || typeof v.showAssistant !== 'boolean' || [v.restoreSession,v.sleepInactiveTabs,v.skipOdfImportPrompt].some(value=>value!==undefined&&typeof value!=='boolean') || (v.pdfDefaultZoom !== undefined && !PDF_DEFAULT_ZOOM_MODES.includes(v.pdfDefaultZoom)) || (v.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(v.documentTheme)) || !isAssistantPreferences(v)) throw new Error('无法确认偏好保存结果，请重新加载。')
+  if (!['light', 'dark', 'system'].includes(v.theme) || !['zh', 'en'].includes(v.language) || typeof v.authorName !== 'string' || typeof v.autoSave !== 'boolean' || typeof v.showAssistant !== 'boolean' || [v.restoreSession,v.sleepInactiveTabs,v.skipOdfImportPrompt].some(value=>value!==undefined&&typeof value!=='boolean') || (v.csvImportLimitMb !== undefined && !isCsvImportLimitMb(v.csvImportLimitMb)) || (v.pdfDefaultZoom !== undefined && !PDF_DEFAULT_ZOOM_MODES.includes(v.pdfDefaultZoom)) || (v.documentTheme !== undefined && !DOCUMENT_THEME_MODES.includes(v.documentTheme)) || !isAssistantPreferences(v)) throw new Error('无法确认偏好保存结果，请重新加载。')
   return Object.fromEntries(fields.filter(key => v[key] !== undefined).map(key => [key, v[key]])) as unknown as PersonalPreferences
 }
 

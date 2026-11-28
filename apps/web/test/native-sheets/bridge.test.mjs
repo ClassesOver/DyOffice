@@ -80,6 +80,22 @@ test('unsupported workbook operations reject asynchronously instead of breaking 
  }
 })
 
+test('Sheets bridge reads the current account text import limit',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'dyoffice-csv-preference-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const outfile=join(dir,'bridge.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
+ const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
+ let csvImportLimitMb=64
+ const getPreferences=async()=>({language:'zh',theme:'system',csvImportLimitMb})
+ const bridge=createSheetsBridge({getPreferences},'unused',await getPreferences())
+ t.after(()=>bridge.dispose())
+ assert.equal(await bridge.api.getCsvImportLimit(),64)
+ csvImportLimitMb=128
+ assert.equal(await bridge.api.getCsvImportLimit(),128)
+ csvImportLimitMb=undefined
+ assert.equal(await bridge.api.getCsvImportLimit(),256)
+})
+
 test('browser printing keeps the selected workbook pages alive until the print dialog closes', async t => {
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-browser-print-'));t.after(()=>rm(dir,{recursive:true,force:true}))
  const outfile=join(dir,'bridge.mjs')
