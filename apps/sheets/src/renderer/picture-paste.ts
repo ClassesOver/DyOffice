@@ -78,6 +78,18 @@ export function pickTransferImage(data: TransferLike): File | null {
   return null
 }
 
+/** A browser may provide just the HTML fragment and URL for a copied picture. */
+export function pickTransferPictureSource(data: TransferLike): string | null {
+  const html = data.getData('text/html')
+  if (!/<img\b/i.test(html)) return null
+  const fragment = document.createElement('template')
+  fragment.innerHTML = html
+  const images = fragment.content.querySelectorAll('img')
+  if (images.length !== 1 || fragment.content.textContent?.trim() || fragment.content.querySelector('table')) return null
+  const source = images[0]?.getAttribute('src')?.trim()
+  return source && /^https?:\/\//i.test(source) ? source : null
+}
+
 export function pictureMediaType(fileType: string): string {
   return fileType === 'image/jpg' ? 'image/jpeg' : fileType
 }
@@ -115,6 +127,7 @@ export interface PictureTransferHost {
   isCellEditing(): boolean
   cellAtPoint(clientX: number, clientY: number): PictureAnchor | null
   insert(file: File, anchor: PictureAnchor | null): void
+  insertRemote?(source: string): boolean
 }
 
 export function installPictureTransfer(
@@ -125,10 +138,13 @@ export function installPictureTransfer(
     if (event.defaultPrevented || !event.clipboardData) return
     if (host.isCellEditing() || !isGridKeyTarget(event.target)) return
     const file = pickTransferImage(event.clipboardData)
-    if (!file) return
+    if (!file) {
+      const source = host.insertRemote && pickTransferPictureSource(event.clipboardData)
+      if (!source || !host.insertRemote?.(source)) return
+    }
     event.preventDefault()
     event.stopImmediatePropagation()
-    host.insert(file, null)
+    if (file) host.insert(file, null)
   }
   const onDragOver = (event: DragEvent): void => {
     if (host.isCellEditing()) return

@@ -663,6 +663,7 @@ export interface SheetsEditorHost {
   getSupportedCreateDocumentTypes?: () => readonly import('../shared/desktop-api').WorkbookCreateDocumentRequest['type'][]
   setImageAttachments?: (files: readonly { name: string; image: AgentImage }[]) => string
   supportedMergeExtensions?: readonly string[]
+  fetchClipboardPicture?: (source: string) => Promise<File | null>
   saveDownload?: React.ReactNode
   fileMenu?: React.ReactNode
   workbookPasswordLimit?: number
@@ -4207,6 +4208,13 @@ export function App({
           isCellEditing: () => editingCellRef.current,
           cellAtPoint: (x, y) => cellAtClientPoint(runtime, x, y),
           insert: (file, anchor) => handleInsertPictureFile(visualContext(), file, anchor),
+          insertRemote: source => {
+            const current = hostRef.current
+            const fetchPicture = current?.fetchClipboardPicture
+            if (!fetchPicture || current?.readOnly) return false
+            handleInsertPictureFile(visualContext(), () => fetchPicture(source))
+            return true
+          },
         })
       : () => undefined
     // Double-click on a cell picture opens the viewer instead of the editor.

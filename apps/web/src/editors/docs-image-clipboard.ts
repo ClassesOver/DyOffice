@@ -13,7 +13,7 @@ const IMAGE_EXTENSIONS = new Map([
 ])
 
 async function readResponseImage(response: Response): Promise<Blob> {
-  const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? ''
+  const type = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? ''
   if (!response.ok || !response.body || !IMAGE_EXTENSIONS.has(type)
     || Number(response.headers.get('content-length')) > MAX_IMAGE_BYTES) {
     await response.body?.cancel()
@@ -79,7 +79,7 @@ function decodeImageBytes(type: string, encoded: string): Uint8Array<ArrayBuffer
 
 async function readImage(src: string): Promise<Blob> {
   const data = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(src)
-  if (data) {
+  if (data?.[1]) {
     const type = data[1].toLowerCase()
     return new Blob([decodeImageBytes(type, src.slice(data[0].length))], { type })
   }
@@ -133,7 +133,7 @@ async function readThroughImageService(src: string, fetchRemote: ClipboardImageF
   return new Blob([bytes], { type: picture.mime })
 }
 
-export async function fetchDocsClipboardImage(
+export async function fetchClipboardImage(
   src: string,
   fetchRemote: ClipboardImageFetcher | undefined,
   signal: AbortSignal,

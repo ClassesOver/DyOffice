@@ -14,7 +14,7 @@ import { createSaveGenerationGuard, type SaveTicket } from '../../../../packages
 import { messages } from './messages.ts'
 import { createAiPdf } from './create-ai-pdf.ts'
 import { prepareMarkdownDownload } from './docs-markdown-export.ts'
-import { copyDocsImageToClipboard, fetchDocsClipboardImage, readDocsImage, type ClipboardImageFetcher } from './docs-image-clipboard.ts'
+import { copyDocsImageToClipboard, fetchClipboardImage, readDocsImage, type ClipboardImageFetcher } from './docs-image-clipboard.ts'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
 import type {WorkspaceSourceAccess} from './workspace-source-picker'
@@ -281,7 +281,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     fetchImage: unavailable,
     async fetchClipboardImage(src:string){
       if(disposed||host.getState(fileId).status==='unauthorized')return null
-      const image=await fetchDocsClipboardImage(src,options.fetchClipboardRemoteImage,lifetime.signal)
+      const image=await fetchClipboardImage(src,options.fetchClipboardRemoteImage,lifetime.signal)
       return disposed||host.getState(fileId).status==='unauthorized'?null:image
     },
     async saveImageAs(src: string) {

@@ -43,7 +43,9 @@ import './sheets.css'
 import './ribbon-file-button.css'
 import './ai-dock-theme.css'
 import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
-import {createWorkbookImageApi} from './web-ai-media-api'
+import {createWebAiMediaApi,createWorkbookImageApi} from './web-ai-media-api'
+import {fetchClipboardImage} from './docs-image-clipboard'
+import {decodeBrowserBase64} from './browser-download'
 import {confirmWebCsvSave,createWebWorkbookDocumentApi,downloadWebCsv} from './web-ai-document-api'
 import {confirmWorkspaceCopy,suggestWebFileName} from './web-ai-naming'
 
@@ -76,6 +78,15 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   applyBrowserEditorTheme(document.documentElement, prefs)
   let naming = false, copying = false, copyNotice = ''
   const copyLifetime = new AbortController()
+  const clipboardMedia=copyAuthority?.request&&!isCsv?createWebAiMediaApi(copyAuthority.request):undefined
+  const fetchClipboardPicture=clipboardMedia?async(source:string)=>{
+    const editable=()=>!disposed&&!closing&&copyAuthority?.current()&&!!host.getState(fileId).lease
+    if(!editable())return null
+    const picture=await fetchClipboardImage(source,clipboardMedia.fetchImage,copyLifetime.signal)
+    if(!editable())return null
+    const ext=picture.mime==='image/jpeg'?'jpg':picture.mime==='image/gif'?'gif':'png'
+    return new File([decodeBrowserBase64(picture.base64)],`Clipboard picture.${ext}`,{type:picture.mime})
+  }:undefined
   const bridge = createSheetsBridge(host,fileId,prefs,{
     isCsv,confirmCsvSave:()=>confirmWebCsvSave(locale,!!copyAuthority?.current() && canCopy()),
     getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},
@@ -309,6 +320,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
       ]} />
       <App queuedWorkbookAtBoot host={{readOnly,saveDownload,fileMenu,
+        ...(fetchClipboardPicture?{fetchClipboardPicture}:{}),
         ...(passwordProtected?{workbookPasswordLimit:255}:{}),
         ...(passwordProtected&&bridge.needsConfirmation()?{confirmWorkbookPasswordSave:{label:text.retry,busy:confirming,...(actionError?{error:actionError}:{}),run:()=>{void confirmSave()}}}:{}),
         getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,...(workbookImages?{setImageAttachments:workbookImages.setImageAttachments}:{}),supportedMergeExtensions:bridge.supportedMergeExtensions,workspaceCopy:loaded&&!copying&&canCopy()?workspaceCopy:undefined,inPlaceSave:true,...(isCsv?{saveCsvContent:bridge.saveCsv}:{}),workspaceLinks:bridge.workspaceLinks,assistantAvailable,...(assistant?{assistant}:{}),...(harnessRecovery?{harnessRecovery}:{}),onWorkbookOpened:()=>{documentLoaded=true;setLoaded(true)},onOpenFailed:()=>{documentLoaded=false;setFailed(true);reportDocumentLoading('error')},onEditorReady:handle=>{editor=handle}}} />

@@ -12,6 +12,7 @@ import { createServer } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
+import {PNG} from 'pngjs'
 import officeCrypto from 'officecrypto-tool'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { macroWorkbook, vbaFixture } from '../helpers/xlsm.mjs'
@@ -72,6 +73,61 @@ async function fixture(t,{nodeEngine=false,sheetsQueryFetcher,workspaceShell=fal
   errors.length=0
   return { ...f, original, opened, browser, context, page, origin, errors, planner }
 }
+
+test('native Sheets pastes a website picture into the originally selected cell',{timeout:120000},async t=>{
+ const f=await fixture(t,{nodeEngine:true}),{page}=f,file=f.opened.file
+ const url='https://clipboard-images.example/sheet-picture.png'
+ const png=new PNG({width:3,height:2});png.data.fill(255)
+ const bytes=PNG.sync.write(png)
+ let release
+ const hold=new Promise(resolve=>{release=resolve})
+ let requests=0
+ await page.route(url,route=>route.fulfill({status:403}))
+ await page.route('**/api/v1/ai/media',async route=>{
+  assert.deepEqual(route.request().postDataJSON(),{action:'fetch_image',url})
+  assert.ok(route.request().headers()['x-csrf-token'])
+  requests++
+  await hold
+  await route.fulfill({json:{mime:'image/png',base64:bytes.toString('base64')}})
+ })
+ await page.goto(f.origin+'/native-xlsx/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const canvas=page.locator('canvas[id^="univer-sheet-main-canvas"]')
+ await canvas.click({position:{x:120,y:50}})
+ const select=address=>page.evaluate(address=>{
+  const workbook=window.__genofficeDebug.univerAPI.getActiveWorkbook()
+  workbook.setActiveRange(workbook.getActiveSheet().getRange(address))
+ },address)
+ await select('F4')
+ await canvas.evaluate((target,src)=>{
+  const clipboardData=new DataTransfer()
+  clipboardData.setData('text/html','<meta charset="utf-8"><img src="'+src+'">')
+  clipboardData.setData('text/plain',src)
+  target.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}))
+ },url)
+ try{
+  await expect.poll(()=>requests,{timeout:5000}).toBe(1)
+  await select('H8')
+ }finally{release()}
+ await expect(page.locator('.status-msg')).toContainText('Picture inserted')
+ const [download]=await Promise.all([page.waitForEvent('download'),page.locator('.dyoffice-sheets-download').click()])
+ const saved=(await f.files.openFile(f.alice.token,file.fileId)).file
+ assert.notEqual(saved.revision,file.revision)
+ const downloaded=await readFile(await download.path())
+ assert.deepEqual(downloaded,await f.files.readFile(f.alice.token,file.fileId,saved.revision))
+ const archive=await JSZip.loadAsync(downloaded)
+ const drawings=await archive.file(/^xl\/drawings\/drawing\d+\.xml$/)[0].async('string')
+ const anchors=drawings.match(/<xdr:twoCellAnchor\b[^>]*>[\s\S]*?<\/xdr:twoCellAnchor>/g)??[]
+ const picture=anchors.find(anchor=>anchor.includes('<xdr:pic>'))
+ assert.match(picture??'',/<xdr:from><xdr:col>5<\/xdr:col>[\s\S]*?<xdr:row>3<\/xdr:row>/)
+ const media=await Promise.all(archive.file(/^xl\/media\//).map(part=>part.async('nodebuffer')))
+ assert.ok(media.some(image=>image.equals(bytes)))
+ const sheet=await archive.file('xl/worksheets/sheet1.xml').async('string')
+ assert.doesNotMatch(sheet,/clipboard-images\.example/)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),f.original)
+ await page.reload()
+ await expect(page.locator('img.xlsx-image')).toBeVisible({timeout:30000})
+})
 
 test('workspace locates a linked workbook and picks a source range across tabs',{timeout:120000},async t=>{
  const f=await fixture(t,{nodeEngine:true,workspaceShell:true}),{page}=f
