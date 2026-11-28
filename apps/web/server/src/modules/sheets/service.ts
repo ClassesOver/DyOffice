@@ -177,22 +177,26 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
       if(!metadata.sheets?.some(sheet=>sheet.pivotTables?.some(pivot=>pivot.path===path&&pivot.cachePath===cachePath)))throw authError(400)
       return readPackage(bytes,signal,{path,cachePath})
     },signal,unlockId),
-    async refreshWebQuery(token:string,fileId:string,input:SheetsQueryInput,signal?:AbortSignal){
+    async refreshWebQuery(token:string,fileId:string,input:SheetsQueryInput,signal?:AbortSignal,unlockId?:string){
       if(!readPackage||!leases)throw authError(501)
       if(queryActive)throw Object.assign(authError(429),{retryAfter:1})
       queryActive=true
       try{
         const authority={editorId:input.editorId,leaseEpoch:input.leaseEpoch}
-        const check=async()=>{
+        const check=async(checkUnlock=false)=>{
           signal?.throwIfAborted()
           const current=await assertMergeContext(token,fileId,input.revision)
           if(current.officeSignatureProtected)throw authError(403)
           await leases.renewLease(token,fileId,authority)
+          if(checkUnlock&&current.workbookPasswordProtected){
+            if(!unlockId)throw authError(423)
+            authorizedUnlock(token,fileId,input.revision,unlockId)
+          }
         }
         await check()
-        const {source}=await read(token,fileId,input.revision,bytes=>readPackage(bytes,signal,{webQuery:input.connectionId}),signal) as {source?:unknown}
+        const {source}=await read(token,fileId,input.revision,bytes=>readPackage(bytes,signal,{webQuery:input.connectionId}),signal,unlockId) as {source?:unknown}
         if(typeof source!=='string'||!source.length||source.length>4096)throw authError(400)
-        await check()
+        await check(true)
         const table=await fetchQuery(source,signal).catch(()=>null)
         if(!table||(!table.headers.length&&!table.rows.length))throw Object.assign(new Error('Could not read the workbook web query'),{statusCode:502})
         const rows=[table.headers,...table.rows]
@@ -202,7 +206,7 @@ export function createSheetsService({ files, native, readPackage, leases, fetchQ
           for(const cell of row)characters+=cell.length
           if(cells>100_000||characters>2*1024*1024)throw Object.assign(new Error('Web query exceeds the table limit'),{statusCode:413})
         }
-        await check()
+        await check(true)
         return {headers:table.headers,rows:table.rows}
       }finally{queryActive=false}
     },

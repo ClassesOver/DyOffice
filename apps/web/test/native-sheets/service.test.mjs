@@ -1,13 +1,74 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
+import {randomUUID} from 'node:crypto'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {createSheetsService} from '../../server/src/modules/sheets/service.ts'
+import {createLeaseService} from '../../server/src/modules/leases/service.ts'
 import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
 import officeCrypto from 'officecrypto-tool'
 import {password as accountPassword} from '../helpers/identity.mjs'
 const bytes=()=>readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+test('encrypted workbook queries require the current unlock before fetching and returning data',{timeout:60000},async t=>{
+ const plain=await bytes(),password='Workbook query fixture',source='https://data.example.test/table.csv'
+ let reads=0,fetches=0,entered,release
+ const started=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{release=resolve})
+ const table={headers:['Price'],rows:[['42']]}
+ const f=await fileFixture(t,{
+  sheetsNative:{},
+  async sheetsPackageReader(input,_signal,query){
+   assert.deepEqual(input,plain)
+   assert.deepEqual(query,{webQuery:'7'})
+   reads++
+   return {source}
+  },
+  async sheetsQueryFetcher(url){
+   assert.equal(url,source)
+   if(++fetches===2){entered();await gate}
+   return table
+  },
+ })
+ const encrypted=Buffer.from(officeCrypto.encrypt(plain,{password})),token=f.alice.token
+ const upload=await f.files.stageUpload(token,{name:'Query.xlsx',size:encrypted.length})
+ await f.files.receiveUpload(token,upload.uploadId,encrypted,{password})
+ const {file}=await f.files.finishUpload(token,upload.uploadId)
+ const leases=createLeaseService({transactions:f.transactions}),editorId=randomUUID()
+ let authority=await leases.acquireLease(token,file.fileId,{editorId})
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+ const request=(path,payload,unlockId,login=token)=>f.app.inject({
+  method:'POST',url:`/api/v1/files/${file.fileId}/sheets/${path}`,payload,
+  headers:{origin:restrictedOrigin,cookie:`${SESSION_COOKIE}=${login}`,'x-csrf-token':csrf.sessionToken(login),
+   ...(unlockId?{'x-dyoffice-workbook-unlock':unlockId}:{})},
+ })
+ const query=(unlockId,login)=>request('web-query',{
+  revision:file.revision,connectionId:'7',editorId:authority.editorId,leaseEpoch:authority.leaseEpoch,
+ },unlockId,login)
+ const unlocked=await request('unlock',{revision:file.revision,password})
+ assert.equal(unlocked.statusCode,200,unlocked.body)
+ const {unlockId}=unlocked.json()
+ const otherLogin=(await f.sessions.login('alice',accountPassword)).token
+ for(const response of [await query(),await query(randomUUID())])assert.equal(response.statusCode,423,response.body)
+ authority=await leases.takeoverLease(otherLogin,file.fileId,{editorId:randomUUID(),expectedEpoch:authority.leaseEpoch})
+ const wrongLogin=await query(unlockId,otherLogin)
+ assert.equal(wrongLogin.statusCode,423,wrongLogin.body)
+ authority=await leases.takeoverLease(token,file.fileId,{editorId,expectedEpoch:authority.leaseEpoch})
+ assert.equal(reads,0)
+ assert.equal(fetches,0)
+ const refreshed=await query(unlockId)
+ assert.equal(refreshed.statusCode,200,refreshed.body)
+ assert.deepEqual(refreshed.json(),table)
+ const pending=query(unlockId)
+ await started
+ try{
+  assert.equal((await request('lock',{revision:file.revision,unlockId})).statusCode,200)
+ }finally{release()}
+ assert.equal((await pending).statusCode,423)
+ assert.equal(reads,2)
+ assert.equal(fetches,2)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),encrypted)
+})
+
 test('password unlock gates native reads to the current workbook revision and login session',async t=>{
  const f=await fileFixture(t),plain=await bytes(),password='工作簿密码 fixture',encrypted=Buffer.from(officeCrypto.encrypt(plain,{password}))
  const staged=await f.files.stageUpload(f.alice.token,{name:'locked.xlsx',size:encrypted.length})

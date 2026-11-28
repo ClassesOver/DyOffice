@@ -246,7 +246,7 @@ test('Review changes an encrypted XLSX password and reconciles a lost commit rec
  await expect.poll(cell,{timeout:25000}).toBe(108)
 })
 
-test('Web XLSX refreshes a workbook web query and saves the resulting cells',{timeout:120000},async t=>{
+for(const encrypted of [false,true])test(`Web XLSX refreshes a web query and saves the ${encrypted?'encrypted':'plain'} workbook`,{timeout:120000},async t=>{
  const source='https://data.example.test/revenue.csv'
  const fetched=[]
  let releaseSecond
@@ -277,8 +277,19 @@ test('Web XLSX refreshes a workbook web query and saves the resulting cells',{ti
   '<Override PartName="/xl/connections.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"/>'+
   '<Override PartName="/xl/queryTables/queryTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml"/></Types>'))
  const original=await zip.generateAsync({type:'nodebuffer'})
- const {file}=await importFile(f,f.alice.token,original,'Web query.xlsx')
+ const password='Web query workbook fixture'
+ const imported=encrypted?Buffer.from(officeCrypto.encrypt(original,{password})):original
+ const upload=await f.files.stageUpload(f.alice.token,{name:'Web query.xlsx',size:imported.length})
+ await f.files.receiveUpload(f.alice.token,upload.uploadId,imported,encrypted?{password}:undefined)
+ const {file}=await f.files.finishUpload(f.alice.token,upload.uploadId)
+ const unlock=async()=>{
+  if(!encrypted)return
+  const dialog=page.getByRole('dialog',{name:'Open password-protected workbook'})
+  await dialog.getByLabel('Password').fill(password)
+  await dialog.getByRole('button',{name:'Open',exact:true}).click()
+ }
  await page.goto(f.origin+'/native-xlsx/?fileId='+file.fileId)
+ await unlock()
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
  await page.getByRole('button',{name:'Data',exact:true}).click()
  const refresh=async()=>{
@@ -288,7 +299,7 @@ test('Web XLSX refreshes a workbook web query and saves the resulting cells',{ti
  const reply=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/sheets/web-query'))
  await refresh()
  assert.equal((await reply).status(),200)
- const cell=address=>page.evaluate(address=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange(address).getValue(),address)
+ const cell=address=>page.evaluate(address=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange(address).getValue(),address)
  await expect.poll(()=>cell('A2'),{timeout:15000}).toBe(24.5)
  assert.equal(await cell('A1'),'Fresh revenue')
  assert.ok([null,undefined,''].includes(await cell('A3')))
@@ -298,10 +309,13 @@ test('Web XLSX refreshes a workbook web query and saves the resulting cells',{ti
  const revision=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  await expect.poll(revision,{timeout:15000}).not.toBe(file.revision)
  const committed=await revision()
- const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,committed))
+ const savedBytes=await f.files.readFile(f.alice.token,file.fileId,committed)
+ const saved=await JSZip.loadAsync(encrypted?await officeCrypto.decrypt(savedBytes,{password}):savedBytes)
  assert.match(await saved.file(sheet).async('string'),/<c\b[^>]*r="A2"[^>]*><v>24\.5<\/v>/)
  assert.equal(await saved.file('xl/connections.xml').async('string'),await zip.file('xl/connections.xml').async('string'))
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),imported)
  await page.reload()
+ await unlock()
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
  await expect.poll(()=>cell('A2'),{timeout:10000}).toBe(24.5)
  await page.getByRole('button',{name:'Data',exact:true}).click()

@@ -68,7 +68,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     route<SheetsQueryInput>('/api/v1/files/:id/sheets/web-query',{
       ...revisionBody,connectionId:{type:'string',minLength:1,maxLength:200},
       editorId:uuidSchema,leaseEpoch:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER},
-    },(token,id,body,signal)=>sheets.refreshWebQuery(token,id,body,signal))
+    },(token,id,body,signal,unlockId)=>sheets.refreshWebQuery(token,id,body,signal,unlockId))
     route<{revision:string}>('/api/v1/files/:id/sheets/external-links',revisionBody,(token,id,body,signal,unlockId)=>sheets.listExternalLinks(token,id,body.revision,signal,unlockId))
     route<{revision:string;sources:ExternalLinkBinding[]}>('/api/v1/files/:id/sheets/external-links/preview',{
       ...revisionBody,sources:{type:'array',maxItems:256,items:{
