@@ -57,10 +57,12 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
   }
   return {
     async listFiles(token: string, options: WorkspaceFileQuery = {}): Promise<WorkspaceFileList> {
-      const input = record(options, ['view','sort','folderId','limit','offset','ext','q','id','group'])
+      const input = record(options, ['view','sort','folderId','limit','offset','ext','family','q','id','group'])
       const view = input.view ?? 'all', limit = input.limit ?? 50, offset = input.offset ?? 0
       if (!['all','recent','starred','trash'].includes(view as string) || !Number.isSafeInteger(limit) || (limit as number) < 0 || (limit as number) > 100 || !Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > 1_000_000) throw authError(400)
       if (input.ext !== undefined && !['docx','xlsx','pptx','pdf','csv','xlsm'].includes(input.ext as string)) throw authError(400)
+      if (input.family !== undefined && (input.family !== 'spreadsheet' || input.ext !== undefined)) throw authError(400)
+      const formats = input.family === 'spreadsheet' ? ['xlsx','xlsm','csv'] : input.ext === undefined ? null : [input.ext]
       if (input.sort !== undefined && !['modified-asc','modified-desc'].includes(input.sort as string)) throw authError(400)
       if (input.q !== undefined && (typeof input.q !== 'string' || [...input.q].length > 200 || /[\u0000-\u001f\u007f]/u.test(input.q))) throw authError(400)
       const group = input.group === undefined ? null : starredGroupName(input.group)
@@ -86,12 +88,12 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
               AND ($11::text IS NULL OR s.starred_group=$11)
               AND (NOT $4::boolean OR s.folder_id IS NOT DISTINCT FROM $5::uuid)
           ), matching AS MATERIALIZED (
-            SELECT * FROM scoped WHERE ($8::text IS NULL OR format=$8)
+            SELECT * FROM scoped WHERE ($8::text[] IS NULL OR format=ANY($8::text[]))
               AND ($9::text IS NULL OR strpos(lower(name),lower($9)) > 0)
           )
           SELECT (SELECT count(*) FROM scoped) AS total_all,(SELECT count(*) FROM matching) AS total,COALESCE(json_agg(page),'[]'::json) AS files
           FROM (SELECT * FROM matching ORDER BY ${order} LIMIT $6 OFFSET $7) page
-        `, [...scope(principal),view,filtered,folderId,limit,offset,input.ext ?? null,input.q ?? null,selectedId,group])).rows[0]
+        `, [...scope(principal),view,filtered,folderId,limit,offset,formats,input.q ?? null,selectedId,group])).rows[0]
         return { files: result.files.map(row=>fileDto(row,view==='starred')), total: Number(result.total), totalAll: Number(result.total_all) }
       })
     },

@@ -17,6 +17,8 @@ export interface WorkspaceFile {
 
 export interface WorkspaceFileQuery {
   ext?: WorkspaceFileFormat
+  /** Spreadsheet formats supported by the workspace. Mutually exclusive with ext. */
+  family?: 'spreadsheet'
   q?: string
   /** Direct identity lookup; totalAll is limited to this identity, not the entire workspace. */
   id?: string

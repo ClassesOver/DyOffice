@@ -35,9 +35,11 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     pending.set(key, {promise: result, intent})
     return result
   }
-  async function queryFiles(view: WorkspaceView, query: Omit<WorkspaceFileQuery,'view'|'ext'> & {ext?: string} = {}): Promise<WorkspaceFileList> {
+  async function queryFiles(view: WorkspaceView, query: Omit<WorkspaceFileQuery,'view'|'ext'|'family'> & {ext?: string} = {}): Promise<WorkspaceFileList> {
     const params = new URLSearchParams({view, limit: String(query.limit ?? 50), offset: String(query.offset ?? 0)})
-    for (const key of ['folderId','ext','q','id','sort','group'] as const) if (query[key] !== undefined) params.set(key, query[key]!)
+    for (const key of ['folderId','q','id','sort','group'] as const) if (query[key] !== undefined) params.set(key, query[key]!)
+    if (query.ext === 'xlsx') params.set('family', 'spreadsheet')
+    else if (query.ext !== undefined) params.set('ext', query.ext)
     const page = await deps.request<WorkspaceFileList>(`/api/v1/workspace/files?${params}`)
     if (!page || !Array.isArray(page.files) || !Number.isSafeInteger(page.total) || page.total < 0 || !Number.isSafeInteger(page.totalAll) || page.totalAll < page.total || page.files.length > (query.limit ?? 50)) throw new Error('无法读取个人文件列表。')
     return page
