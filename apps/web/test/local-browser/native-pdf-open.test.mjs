@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
 import {deflateSync} from 'node:zlib'
 import JSZip from 'jszip'
-import {PDFArray,PDFDict,PDFDocument,PDFHexString,PDFName,PDFRawStream,PDFString,degrees,rgb} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFDocument,PDFHexString,PDFName,PDFRawStream,PDFString,concatTransformationMatrix,degrees,drawObject,popGraphicsState,pushGraphicsState,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
@@ -1282,10 +1282,54 @@ test('native PDF model receives visible page and selection context, and cites na
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
 })
 
+test('native PDF renders a JPEG 2000 image with the packaged decoder',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((request,response)=>app.routing(request,response))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{theme:'light'})
+ const source=await PDFDocument.create(),sheet=source.addPage([240,240])
+ // Lossless 16 × 16 OpenJPEG codestream with blue and gold halves.
+ const jpeg2000=Buffer.from(
+  '/0//UQAvAAAAAAAQAAAAEAAAAAAAAAAAAAAAEAAAABAAAAAAAAAAAAADBwEBBwEBBwEB/1IADAAAAAEBAgQEAAH/XAAKQEBISFBISFD/ZAAlAAFDcmVhdGVkIGJ5IE9wZW5KUEVHIHZlcnNpb24gMi40LjD/'+
+  'kAAKAAAAAACBAAH/k8fUFCIT9xKfOitokxffgJAX1YCE2D696zRjQrhOasJztYffgIgRT4oXYm5kgRUHeIWg0ARmf8HzhgAXLKiIKD/PwCQX2JaJCi2LiB/H2hAAFyvIPOhBScnB84QAIW4NJ8/AICIaDsVNOP8fx9oIACFuDNH/2Q==','base64')
+ const image=PDFRawStream.of(source.context.obj({Type:'XObject',Subtype:'Image',Width:16,Height:16,ColorSpace:'DeviceRGB',BitsPerComponent:8,Filter:'JPXDecode',Length:jpeg2000.length}),jpeg2000)
+ const key=PDFName.of('ImageFixture')
+ sheet.node.setXObject(key,source.context.register(image))
+ sheet.pushOperators(pushGraphicsState(),concatTransformationMatrix(128,0,0,128,32,48),drawObject(key),popGraphicsState())
+ const {file}=await importFile(f,f.alice.token,Buffer.from(await source.save()),'jpeg2000.pdf')
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
+  nativePdfDirectory:directory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const canvas=page.locator('.pdf-page[data-page="0"] canvas').first()
+ await expect(canvas).toBeVisible()
+ const colors=await canvas.evaluate(node=>[64,128].map(x=>
+  Array.from(node.getContext('2d').getImageData(Math.floor(node.width*x/240),Math.floor(node.height*128/240),1,1).data)))
+ assert.deepEqual(colors,[[0,128,255,255],[255,192,0,255]])
+})
+
 for (const theme of ['light','dark']) test(`native PDF saves and reopens an assistant mark without changing other page colors in the ${theme} UI theme`,{skip:!directory,timeout:90000},async t=>{
  const origin='http://localhost:4267',f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{theme})
  const source=await PDFDocument.create(),sheet=source.addPage([300,240])
+ const rotated=theme==='dark'
+ if(rotated){
+  sheet.setCropBox(10,20,270,200)
+  sheet.setRotation(degrees(90))
+  sheet.node.set(PDFName.of('UserUnit'),source.context.obj(2))
+ }
  sheet.drawRectangle({x:40,y:140,width:16,height:16,borderWidth:1,borderColor:rgb(0,0,0)})
  sheet.drawText('Consent',{x:64,y:141,size:12})
  source.addPage([300,240]).drawRectangle({x:24,y:30,width:180,height:120,color:rgb(0.15,0.45,0.85)})
@@ -1306,7 +1350,7 @@ for (const theme of ['light','dark']) test(`native PDF saves and reopens an assi
   if(isHomeHeroRequest(route.request()))return route.fallback()
   const call=turn++===0
   if(!call)result=route.request().postDataJSON().request.messages.at(-1).results[0]
-  const body=call?'event: tool_call\ndata: '+JSON.stringify({id:'printed-check',name:'add_form_mark',input:{page:1,kind:'check',x:40,y:84}})
+  const body=call?'event: tool_call\ndata: '+JSON.stringify({id:'printed-check',name:'add_form_mark',input:{page:1,kind:'check',...(rotated?{x:250,y:70}:{x:40,y:84})}})
    :'event: delta\ndata: '+JSON.stringify({text:'Printed mark queued'})
   return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
  })
