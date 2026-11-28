@@ -55,27 +55,47 @@ async function testLocalPictures(t,method){
   const {name,mimeType,buffer}=file
   await picker.setFiles({name,mimeType,buffer})
  }
- if(method==='paste'){
+ if(method==='paste'||method==='mixed-paste'){
+  const mixed=method==='mixed-paste'
   const urls=fixtures.map(({name})=>'https://clipboard-images.example/'+name)
+  const missing='https://clipboard-images.example/missing.png'
+  if(mixed)urls.splice(1,0,missing)
+  let resume
+  const paused=new Promise(resolve=>{resume=resolve})
   const fetched=[]
   await page.route('https://clipboard-images.example/**',route=>route.fulfill({status:403}))
   await page.route('**/api/v1/ai/media',async route=>{
    const body=route.request().postDataJSON()
    assert.equal(body.action,'fetch_image')
    assert.ok(route.request().headers()['x-csrf-token'])
-   const index=urls.indexOf(body.url)
-   assert.ok(index>=0)
+   assert.ok(urls.includes(body.url))
    fetched.push(body.url)
+   if(mixed&&body.url===urls[0])await paused
+   if(body.url===missing)return route.fulfill({status:404})
+   const index=fixtures.findIndex(fixture=>body.url.endsWith('/'+fixture.name))
+   assert.ok(index>=0)
    await route.fulfill({json:{mime:['image/png','image/jpeg','image/gif'][index],base64:fixtures[index].buffer.toString('base64')}})
   })
   await editor.click()
-  await editor.evaluate((node,urls)=>{
+  if(mixed)await page.keyboard.press('ControlOrMeta+End')
+  await editor.evaluate((node,{urls,mixed})=>{
    const clipboardData=new DataTransfer()
-   clipboardData.setData('text/html',urls.map(src=>'<img src="'+src+'">').join(''))
-   clipboardData.setData('text/plain',urls.join('\n'))
+   const pictures=urls.map(src=>'<img src="'+src+'">').join('')
+   clipboardData.setData('text/html',mixed
+    ? '<p><strong>Before the pictures</strong></p>'+pictures+'<p>After the pictures</p>'
+    : pictures)
+   clipboardData.setData('text/plain',mixed?'Before the pictures\nAfter the pictures':urls.join('\n'))
    node.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}))
-  },urls)
+  },{urls,mixed})
+  try{
+   if(mixed){
+    await expect.poll(()=>fetched.length).toBe(1)
+    await page.keyboard.press('ControlOrMeta+Home')
+    await page.keyboard.insertText('Typed while the pictures loaded. ')
+   }
+  }finally{resume()}
   await expect(images).toHaveCount(3,{timeout:7000})
+  if(mixed)await page.keyboard.insertText('Continued here. ')
   assert.deepEqual(fetched,urls)
  }else if(method==='drop'){
   const unsupported={name:'masquerading.png',mimeType:'application/octet-stream',buffer:Buffer.from(webp,'base64')}
@@ -110,6 +130,14 @@ async function testLocalPictures(t,method){
  const parts=await Promise.all(doc.file(/^word\/media\//).map(async part=>({name:part.name,bytes:await part.async('nodebuffer')})))
  assert.equal(parts.length,3)
  for(const fixture of fixtures)assert.ok(parts.some(part=>fixture.extension.test(part.name)&&part.bytes.equals(fixture.buffer)),fixture.name)
+ if(method==='mixed-paste'){
+  const xml=await doc.file('word/document.xml').async('string')
+  const before=xml.indexOf('Before the pictures')
+  assert.match(xml.slice(xml.lastIndexOf('<w:p',before),before),/<w:b\b[^>]*\/>/)
+  assert.match(xml.slice(before),/Before the pictures[^]*<w:drawing>[^]*After the pictures/)
+  assert.match(xml.replace(/<[^>]+>/g,''),/Typed while the pictures loaded\. Continued here\. [^]*Before the pictures/)
+  assert.doesNotMatch(xml,/clipboard-images\.example/)
+ }
  await page.reload()
  await expect(images).toHaveCount(3,{timeout:18000})
  assert.deepEqual(await f.files.readFile(f.alice.token,opened.fileId,opened.revision),original)
@@ -118,6 +146,7 @@ async function testLocalPictures(t,method){
 test('Word inserts local PNG JPEG and GIF when the browser reports an unknown MIME type',{timeout:65000},t=>testLocalPictures(t,'picker'))
 test('Word drops local PNG JPEG and GIF when the browser reports an unknown MIME type',{timeout:65000},t=>testLocalPictures(t,'drop'))
 test('Word pastes remote pictures with their original bytes when cross-origin access is denied',{timeout:65000},t=>testLocalPictures(t,'paste'))
+test('Word pastes webpage text and embeds remote pictures in their original order',{timeout:65000},t=>testLocalPictures(t,'mixed-paste'))
 
 test('Word AI inserts generated, linked and attached images into DOCX without reusing expired attachments',{timeout:120_000},async t=>{
  const origin='http://localhost:4254',f=await fileFixture(t,{origin,buildApp:false})

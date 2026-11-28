@@ -6,7 +6,8 @@
  */
 import { pendingDocumentOperation } from './pending-document-operation'
 import type { Editor } from '@tiptap/core'
-import { insertImageFromDataUrl } from '../components/ribbon-tabs'
+import type { SelectionBookmark, Transaction } from '@tiptap/pm/state'
+import { imageSizeOf, insertImageFromDataUrl, MAX_IMAGE_WIDTH_PX } from '../components/ribbon-tabs'
 import {
   beginForeignPaste,
   defaultPasteMode,
@@ -22,6 +23,9 @@ export type ClipboardPayload = { html: string; text: string; image: Blob | null 
 /** A paste-special choice: one of the paste modes, or the bitmap flavor. */
 export type PasteChoice = PasteMode | 'picture'
 
+const MAX_REMOTE_PASTE_IMAGES = 10
+const MAX_REMOTE_PASTE_BASE64 = 4 * Math.ceil(16 * 1024 * 1024 / 3)
+
 /** Load image-only clipboard URLs through the platform bridge. */
 export async function pasteRemoteImages(
   editor: Editor,
@@ -33,7 +37,7 @@ export async function pasteRemoteImages(
   try {
     let inserted = false
     let failed = false
-    for (const src of sources.slice(0, 10)) {
+    for (const src of sources.slice(0, MAX_REMOTE_PASTE_IMAGES)) {
       if (!current()) return
       try {
         const fetchImage = window.desktop.fetchClipboardImage ?? window.desktop.fetchImage
@@ -72,6 +76,89 @@ export async function pasteRemoteImages(
   }
 }
 
+/** Materialize remote pictures before replaying a rich paste at its original selection. */
+export async function pasteHtmlWithRemoteImages(
+  editor: Editor,
+  html: string,
+  text: string,
+  mode: PasteMode,
+  fetchImage: NonNullable<Window['desktop']['fetchClipboardImage']>,
+  onFailure: () => void,
+): Promise<void> {
+  const fragment = document.createElement('template')
+  fragment.innerHTML = html
+  const pictures = [...fragment.content.querySelectorAll<HTMLImageElement>('img[src]')]
+    .filter(img => /^https?:\/\//i.test(img.getAttribute('src')?.trim() ?? ''))
+  const { current, dispose } = pendingDocumentOperation(editor)
+  let insertion = editor.state.selection.getBookmark()
+  let laterSelection: SelectionBookmark | undefined
+  const mapSelections = ({ transaction, appendedTransactions = [] }: {
+    transaction: Transaction
+    appendedTransactions?: Transaction[]
+  }) => {
+    for (const tr of [transaction, ...appendedTransactions]) {
+      insertion = insertion.map(tr.mapping)
+      laterSelection = laterSelection?.map(tr.mapping)
+    }
+  }
+  editor.on('transaction', mapSelections)
+  const fetched = new Map<string, { dataUrl: string; width: number; height: number } | null>()
+  let remaining = MAX_REMOTE_PASTE_BASE64
+  let failed = false
+  try {
+    for (const [index, img] of pictures.entries()) {
+      if (!current()) return
+      const src = img.getAttribute('src')!.trim()
+      if (!fetched.has(src) && index < MAX_REMOTE_PASTE_IMAGES && remaining > 0) {
+        let picture = null
+        try {
+          const result = await fetchImage(src)
+          if (!current()) return
+          if (result && /^image\/(png|jpeg|gif)$/.test(result.mime) &&
+              result.base64 && result.base64.length <= remaining) {
+            const dataUrl = `data:${result.mime};base64,${result.base64}`
+            picture = { dataUrl, ...await imageSizeOf(dataUrl) }
+          }
+        } catch {
+          // The rest of the copied fragment is still pasteable.
+        }
+        fetched.set(src, picture)
+      }
+      const picture = fetched.get(src)
+      if (index >= MAX_REMOTE_PASTE_IMAGES || !picture || picture.dataUrl.length > remaining) {
+        img.remove()
+        failed = true
+        continue
+      }
+      remaining -= picture.dataUrl.length
+      const declaredWidth = Number(img.getAttribute('width'))
+      const declaredHeight = Number(img.getAttribute('height'))
+      const width = Number.isFinite(declaredWidth) && declaredWidth > 0 ? declaredWidth : picture.width
+      const height = Number.isFinite(declaredHeight) && declaredHeight > 0
+        ? declaredHeight : picture.height * width / picture.width
+      const scale = Math.min(1, MAX_IMAGE_WIDTH_PX / width)
+      img.removeAttribute('srcset')
+      img.setAttribute('src', picture.dataUrl)
+      img.setAttribute('width', String(Math.max(1, Math.round(width * scale))))
+      img.setAttribute('height', String(Math.max(1, Math.round(height * scale))))
+    }
+    if (!current()) return
+    const target = insertion.resolve(editor.state.doc)
+    if (!target.eq(editor.state.selection)) {
+      laterSelection = editor.state.selection.getBookmark()
+      editor.view.dispatch(editor.state.tr.setSelection(target))
+    }
+    pasteForeignHtml(editor, fragment.innerHTML, text, mode)
+    if (failed) onFailure()
+  } finally {
+    editor.off('transaction', mapSelections)
+    dispose()
+    if (laterSelection && current()) {
+      editor.view.dispatch(editor.state.tr.setSelection(laterSelection.resolve(editor.state.doc)))
+    }
+  }
+}
+
 export async function readClipboardPayload(): Promise<ClipboardPayload> {
   const payload: ClipboardPayload = { html: '', text: '', image: null }
   try {
@@ -100,6 +187,14 @@ function clipboardEvent(html: string | null, text: string): ClipboardEvent {
   if (html) data.setData('text/html', html)
   if (text) data.setData('text/plain', text)
   return new ClipboardEvent('paste', { clipboardData: data })
+}
+
+function pasteForeignHtml(editor: Editor, html: string, text: string, mode?: PasteMode): boolean {
+  if (mode) forceNextPasteMode(mode)
+  if (!beginForeignPaste(html)) return false
+  stashPastePayload({ html, text, mode: mode ?? defaultPasteMode() })
+  editor.view.pasteHTML(html, clipboardEvent(html, text))
+  return true
 }
 
 function htmlText(html: string): string {
@@ -156,14 +251,9 @@ export function pastePayload(
     // lanes that consume the mode handshake; text-box and header/footer
     // sub-editors must not arm it (the mode would leak into the next paste)
     const consumes = Boolean(editor.view.someProp('transformPasted'))
-    if (consumes) {
-      if (mode) forceNextPasteMode(mode)
-      if (beginForeignPaste(html)) {
-        stashPastePayload({ html, text, mode: mode ?? defaultPasteMode() })
-        editor.view.pasteHTML(html, clipboardEvent(html, text))
-        editor.commands.focus()
-        return true
-      }
+    if (consumes && pasteForeignHtml(editor, html, text, mode)) {
+      editor.commands.focus()
+      return true
     }
     // the default mode only ever applies to HTML from other programs
     const textOnly = mode

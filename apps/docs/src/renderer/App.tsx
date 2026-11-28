@@ -44,7 +44,7 @@ import { linkTarget } from './editor/link-actions'
 import { FieldDialog } from './components/FieldDialog'
 import { markdownPasteHtml } from './editor/markdown-paste'
 import { pasteTextSlice, singleCellPasteText } from './editor/paste-text'
-import { insertBlobImage, pasteRemoteImages } from './editor/paste-actions'
+import { insertBlobImage, pasteHtmlWithRemoteImages, pasteRemoteImages } from './editor/paste-actions'
 import {
   imageFilesFromDataTransfer,
   insertImageFilesAtCoords,
@@ -1409,8 +1409,8 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
         if (!ed || files.length === 0) return false
         return insertImageFilesAtCoords(ed, files, { left: event.clientX, top: event.clientY })
       },
-      // clipboard images (screenshots/copied images): become inline images; mixed content
-      // with HTML still uses default parsing (text in the HTML takes priority)
+      // Image-only clipboard data prefers the bitmap. Rich web fragments retain their text
+      // and use the normal HTML paste path once the Web bridge has embedded their pictures.
       handlePaste: (view, event) => {
         const data = event.clipboardData
         if (!data) return false
@@ -1448,7 +1448,7 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
           try {
             const imgDom = new window.DOMParser().parseFromString(html, 'text/html')
             htmlImgSrcs = [...imgDom.querySelectorAll('img')]
-              .map((img) => img.getAttribute('src') ?? '')
+              .map((img) => img.getAttribute('src')?.trim() ?? '')
               .filter(Boolean)
             htmlHasText = (imgDom.body.textContent ?? '').trim().length > 0
           } catch {
@@ -1462,6 +1462,17 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
           htmlImgSrcs.length > 0 &&
           !htmlHasText &&
           htmlImgSrcs.every((src) => /^https?:\/\//i.test(src))
+        const mode = lastForeignPasteMode()
+        const ed = editorRef.current
+        const fetchClipboardImage = window.desktop.fetchClipboardImage
+        if (ed && fetchClipboardImage && mode && mode !== 'text' && htmlHasText &&
+            htmlImgSrcs.some(src => /^https?:\/\//i.test(src))) {
+          stashPastePayload(null)
+          void pasteHtmlWithRemoteImages(ed, html, data.getData('text/plain'), mode, fetchClipboardImage, () => {
+            showToast(t('appPasteRemoteImageFailed'), 'error')
+          })
+          return true
+        }
         // pasting block HTML onto an empty paragraph: replace wholesale (ProseMirror's default
         // first-block merge would demote headings to body text; Word keeps the source block format on empty paragraphs)
         const { $from, empty: selEmpty } = view.state.selection
