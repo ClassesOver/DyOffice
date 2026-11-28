@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {createRequire} from 'node:module'
 import {PDFDocument} from 'pdf-lib'
 import JSZip from 'jszip'
 import {PNG} from 'pngjs'
@@ -53,7 +54,8 @@ test('PDF to Markdown reports pages without extractable text',async()=>{
 })
 
 test('PDF Office conversion respects the copy permission and accepts the owner password',async()=>{
- const pdf=await PDFDocument.create()
+ const {PDFDocument:NativePDFDocument}=createRequire(new URL('../../pdf/package.json',import.meta.url))('pdf-lib')
+ const pdf=await NativePDFDocument.create()
  pdf.addPage().drawText('Restricted report')
  encryptDocument(pdf,{
   userPassword:'reader-pass',ownerPassword:'owner-pass',

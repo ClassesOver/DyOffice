@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {execFileSync} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
+import {createRequire} from 'node:module'
 import {createServer} from 'node:http'
 import {deflateSync} from 'node:zlib'
 import JSZip from 'jszip'
@@ -627,7 +628,8 @@ test('native Web PDF converts to editable Word Excel and PowerPoint downloads',{
   assert.equal(denied.status(),404)
  } finally { await other.close() }
 
- const protectedPdf=await PDFDocument.create()
+ const {PDFDocument:NativePDFDocument}=createRequire(new URL('../../../pdf/package.json',import.meta.url))('pdf-lib')
+ const protectedPdf=await NativePDFDocument.create()
  protectedPdf.addPage().drawText('Owner-authorized conversion')
  encryptDocument(protectedPdf,{
   userPassword:'',ownerPassword:'export-owner',
