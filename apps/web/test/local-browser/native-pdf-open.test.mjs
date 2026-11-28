@@ -10,6 +10,7 @@ import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {password} from '../helpers/identity.mjs'
+import {accountAction,settingsTab} from '../helpers/workspace-ui.mjs'
 import {isHomeHeroRequest,stubHomeHero} from '../helpers/home-hero.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createAssistantChannelService} from '../../server/src/modules/assistant-channel/service.ts'
@@ -27,6 +28,73 @@ import {renderPdfPages} from '../../server/src/pdf/raster.mjs'
 
 const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const liveImageConfig=process.env.DYOFFICE_LIVE_PDF_IMAGE_CONFIG
+test('workspace PDF zoom follows personal settings and keeps the last zoom within the account',{skip:!directory,timeout:90000},async t=>{
+ let app
+ const server=createServer((request,response)=>app.routing(request,response))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ for(const account of [f.alice,f.bob])await f.preferences.update(account.token,{language:'en',restoreSession:false,showAssistant:false})
+ const doc=await PDFDocument.create()
+ doc.addPage([400,1200]).drawText('PDF zoom fixture',{x:50,y:1100})
+ const bytes=Buffer.from(await doc.save())
+ const files=[]
+ for(const [index,account] of [f.alice,f.alice,f.alice,f.bob].entries()){
+  files.push((await importFile(f,account.token,bytes,`zoom-${index}.pdf`)).file)
+ }
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1420,height:900}})
+ await stubHomeHero(page)
+ async function login(username){
+  const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+  assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username,password}})).status(),200)
+ }
+ async function setDefault(mode){
+  await page.goto(origin)
+  await expect(page.locator('.home')).toBeVisible()
+  await accountAction(page,'个人设置')
+  const settings=page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'通用偏好')
+  await settings.getByLabel('PDF 默认缩放',{exact:true}).selectOption(mode)
+  await settings.getByRole('button',{name:'保存个人偏好',exact:true}).click()
+  await expect(settings).toContainText('个人偏好已保存')
+ }
+ const zoom=()=>page.locator('.status-bar .zoom-value').textContent().then(value=>Number.parseInt(value,10))
+ async function open(index){
+  await page.goto(origin+'/native-pdf/?fileId='+files[index].fileId)
+  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+  await expect(page.locator('.pdf-page').first().locator('canvas')).toBeVisible()
+ }
+ await login('alice')
+ await setDefault('page')
+ await open(0)
+ await expect.poll(zoom).toBeLessThan(80)
+ const pageZoom=await zoom()
+ await page.locator('.status-bar').getByRole('button',{name:'Zoom in',exact:true}).click()
+ await expect.poll(zoom).toBeGreaterThan(pageZoom)
+ const custom=await zoom()
+ await setDefault('last')
+ await open(1)
+ await expect.poll(zoom).toBe(custom)
+ await setDefault('width')
+ await open(2)
+ await expect.poll(zoom).toBeGreaterThan(100)
+ const widthZoom=await zoom()
+ await open(0)
+ await expect.poll(zoom).toBe(custom)
+ await page.goto('about:blank')
+ await page.context().clearCookies()
+ await login('bob')
+ await setDefault('last')
+ await open(3)
+ await expect.poll(zoom).toBe(widthZoom)
+ assert.equal((await f.preferences.get(f.alice.token)).pdfDefaultZoom,'width')
+})
+
 test('native Web PDF reduces a saved file into a smaller copy',{skip:!directory,timeout:65000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))

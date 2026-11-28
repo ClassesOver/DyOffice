@@ -75,3 +75,17 @@ test('workspace session and sleep opt-outs round trip and reject malformed prefe
  value={...value,sleepInactiveTabs:'false'}
  await assert.rejects(client.getPreferences(),/无法确认/)
 })
+
+test('PDF zoom preferences round trip and reject unknown modes',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ for(const pdfDefaultZoom of ['page','last','width']){
+  assert.equal((await client.updatePreferences({pdfDefaultZoom})).pdfDefaultZoom,pdfDefaultZoom)
+  assert.equal((await client.getPreferences()).pdfDefaultZoom,pdfDefaultZoom)
+ }
+ value={...value,pdfDefaultZoom:'actual'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})

@@ -59,6 +59,12 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
    <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-author`}>文档作者</label><div><input id={`${preferenceId}-author`} aria-label="文档作者" aria-describedby={`${preferenceId}-author-hint`} value={draft?.authorName??''} maxLength={100} onChange={event=>edit({authorName:event.target.value})}/><p id={`${preferenceId}-author-hint`} className="personal-page-field-hint">作为文档批注与修订的作者名称。</p></div></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-autosave`}>自动保存</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-autosave`} aria-label="自动保存" aria-checked={!!draft?.autoSave} checked={!!draft?.autoSave} onChange={event=>edit({autoSave:event.target.checked})}/></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" aria-checked={!!draft?.showAssistant} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/></div>
+   <div className="personal-page-preference-row">
+    <div><label htmlFor={`${preferenceId}-pdf-zoom`}>PDF 默认缩放</label><p id={`${preferenceId}-pdf-zoom-hint`} className="personal-page-field-hint">打开没有阅读记录的 PDF 时使用的缩放。</p></div>
+    <select id={`${preferenceId}-pdf-zoom`} aria-describedby={`${preferenceId}-pdf-zoom-hint`} value={draft?.pdfDefaultZoom??'width'} onChange={event=>edit({pdfDefaultZoom:event.target.value as NonNullable<PersonalPreferences['pdfDefaultZoom']>})}>
+     <option value="width">适应宽度</option><option value="page">适应页面</option><option value="last">上次使用的缩放</option>
+    </select>
+   </div>
    <div className="personal-page-preference-row personal-page-switch-row">
     <div><label htmlFor={`${preferenceId}-restore`}>重新打开上次的文档</label><p id={`${preferenceId}-restore-hint`} className="personal-page-field-hint">在此浏览器刷新或从首页重新进入工作区时，恢复上次退出时的文档页签和并排布局。</p></div>
     <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-restore`} aria-describedby={`${preferenceId}-restore-hint`} checked={draft?.restoreSession!==false} onChange={event=>edit({restoreSession:event.target.checked})}/>

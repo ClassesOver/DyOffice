@@ -133,7 +133,7 @@ import {
   saveViewState,
   zoomAnchorY,
 } from './view-state'
-import type { PdfViewState, ZoomAnchor } from './view-state'
+import type { PdfViewState, PdfZoom, ZoomAnchor } from './view-state'
 import { LinkLayer } from './LinkLayer'
 import { pageDestination } from './page-destination'
 import { OutlinePanel } from './OutlinePanel'
@@ -483,12 +483,13 @@ type WritePageRewrite = () => Promise<SavePdfResult>
 type PreparePageRewrite = () => WritePageRewrite | Promise<WritePageRewrite | null>
 type PageRewriteRun = { write: WritePageRewrite; afterReload?: () => void; restore?: boolean }
 
-export default function App({ hostReadOnly = false, hostInspectDocument, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize }: {
+export default function App({ hostReadOnly = false, hostInspectDocument, hostLastZoomStorage, hostSave, hostSaveCopy, hostOpenFile, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr, hostMergePdf, hostProtectCopy, hostPageLimits, hostConvertOffice, hostReduceFileSize }: {
   hostReadOnly?: boolean
   hostInspectDocument?: (bytes: Uint8Array, encrypted: boolean) => Promise<{
     restriction: string | null
     staticFormFills: StaticFormFillRecord[]
   }>
+  hostLastZoomStorage?: Pick<Storage, 'getItem' | 'setItem'>
   hostLifecycle?: (editor: PdfHostLifecycle | null) => void
   hostAssistant?: (view: PdfAssistantView) => ReactNode
   hostOpenFile?: () => boolean
@@ -1866,7 +1867,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostSav
           applyOpeningZoom(savedView)
         } else {
           const pref = await window.pdfApi.getDefaultZoom().catch(() => 'width' as const)
-          const zoom = pref === 'last' ? loadLastZoom() : null
+          const zoom = pref === 'last' ? loadLastZoom(hostLastZoomStorage) : null
           applyOpeningZoom(zoom ?? { scale: 1, fitMode: pref === 'page' ? 'page' : 'width' })
         }
         setStatus('ready')
@@ -1897,7 +1898,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostSav
         setStatus('error')
       }
     },
-    [loadDoc, applyOpeningZoom],
+    [loadDoc, applyOpeningZoom, hostLastZoomStorage],
   )
 
   useEffect(() => {
@@ -2085,30 +2086,32 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostSav
     )
   }, [status, rows, pageCount, rowOfVis])
 
-  /** Persist the reading position (debounced) so reopening the file returns here.
-   *  Listens to scroll directly — currentPage only changes per page, not per pixel. */
-  useEffect(() => {
+  const rememberView = useCallback((zoom?: PdfZoom) => {
     if (status !== 'ready' || !filePath || rows.length === 0) return
     const el = scrollRef.current
-    if (!el) return
+    // Saving before the restored scroll lands would overwrite the stored page.
+    if (!el || pendingViewRestoreRef.current) return
+    const visPos = new Map(visList.map((origIdx, i) => [origIdx, i]))
+    const current = captureViewState({
+      scrollTop: el.scrollTop,
+      rowHeights: rows.map((row) => rowSize(row).height * scale),
+      rowPages: rows.map((row) => (visPos.get(row[0]!) ?? 0) + 1),
+      gap: PAGE_GAP,
+      scale,
+      fitMode: fitModeRef.current,
+    })
+    saveViewState(filePath, zoom ? { ...current, ...zoom } : current)
+    saveLastZoom(zoom ?? { scale, fitMode: fitModeRef.current }, hostLastZoomStorage)
+  }, [status, filePath, rows, rowSize, visList, scale, hostLastZoomStorage])
+
+  /** Persist the reading position after scrolling, and flush on page close. */
+  useEffect(() => {
+    const el = scrollRef.current
+    if (status !== 'ready' || !el) return
     let timer = 0
     const saveNow = () => {
       window.clearTimeout(timer)
-      // Not yet positioned — saving now would overwrite the stored spot with page 1
-      if (pendingViewRestoreRef.current) return
-      const visPos = new Map(visList.map((origIdx, i) => [origIdx, i]))
-      saveViewState(
-        filePath,
-        captureViewState({
-          scrollTop: el.scrollTop,
-          rowHeights: rows.map((row) => rowSize(row).height * scale),
-          rowPages: rows.map((row) => (visPos.get(row[0]!) ?? 0) + 1),
-          gap: PAGE_GAP,
-          scale,
-          fitMode: fitModeRef.current,
-        }),
-      )
-      saveLastZoom({ scale, fitMode: fitModeRef.current })
+      rememberView()
     }
     const schedule = () => {
       window.clearTimeout(timer)
@@ -2123,7 +2126,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostSav
       window.removeEventListener('pagehide', saveNow)
       window.clearTimeout(timer)
     }
-  }, [status, filePath, rows, rowSize, visList, scale])
+  }, [status, rememberView])
 
   /** Page-top offset of a visible position (used for search positioning) */
   const pageTop = useCallback((visIdx: number) => rowTop(rowOfVis(visIdx)), [rowTop, rowOfVis])
@@ -2321,6 +2324,7 @@ export default function App({ hostReadOnly = false, hostInspectDocument, hostSav
   const applyScale = (next: number, mode: FitMode) => {
     fitModeRef.current = mode
     const clamped = clampScale(next)
+    rememberView({ scale: clamped, fitMode: mode })
     anchorZoomScroll(clamped)
     setScale(clamped)
   }

@@ -58,7 +58,17 @@ async function mount(){
  const openWorkspaceFile=workspaceOpenAction()
  const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
  const grant=await openNativePdfBrowserFile({fileId,editorId:params.get('guest')==='1'?params.get('editorId')??undefined:undefined,expectedRevision:params.get('sourceRevision')??undefined})
- const prefs=await grant.getPreferences().catch(()=>undefined)
+ const browserActions=new AbortController()
+ const [prefs,account]=await Promise.all([
+  grant.getPreferences().catch(()=>undefined),
+  params.get('guest')==='1'?undefined:grant.accountIdentity(browserActions.signal).catch(()=>undefined),
+ ])
+ const lastZoomStorage={
+  getItem:(key:string)=>account?localStorage.getItem(`${key}:${account.join(':')}`):null,
+  setItem(key:string,value:string){
+   if(account&&(window.parent===window||window.frameElement?.getClientRects().length))localStorage.setItem(`${key}:${account.join(':')}`,value)
+  },
+ }
  const inspectDocument=async(bytes:Uint8Array,encrypted:boolean)=>{
   grant.inspectSignatureMarker(bytes,encrypted)
   const {inspectNativePdf}=await import('./native-pdf-edit-restriction')
@@ -72,14 +82,13 @@ async function mount(){
  const unsubscribe=()=>()=>{}
  const empty=async()=>[]
  let disposed=false,view:PdfAssistantView|undefined
- const browserActions=new AbortController()
  const certificate=createBrowserPdfCertificate({
   path:grant.path,signal:browserActions.signal,current:grant.current,readPdf:grant.api.readFile,
   canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length,
  })
  const api={
-  ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.signatureGalleryAccount,browserActions.signal),
-  getUsername:grant.username,getDefaultZoom:async()=>'width' as const,
+  ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.accountIdentity,browserActions.signal),
+  getUsername:grant.username,getDefaultZoom:async()=>prefs?.pdfDefaultZoom??'width',
   listEditFonts:empty,listPrinters:empty,
   onLanguageChanged:unsubscribe,onUsernameChanged:unsubscribe,onFileRenamed:unsubscribe,onSaveAsFlow:unsubscribe,
   onCloseSaveRequest:unsubscribe,onSaveAsRequest:unsubscribe,onChromePressed:unsubscribe,
@@ -922,7 +931,7 @@ async function mount(){
   }finally{ribbonBusy=false;if(!disposed)render()}
  }
  const render=()=>root.render(<LocaleProvider initial={prefs?.language??'zh'}>
-  <App hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
+  <App hostOpenFile={openWorkspaceFile} hostInspectDocument={inspectDocument} hostLastZoomStorage={lastZoomStorage} hostSave={hostSave} hostSaveCopy={params.has('sourceRevision')||params.get('guest')==='1'?undefined:saveCopy} hostPageLimits={{maxPages:MAX_PDF_EDIT_PAGES,maxBlankPagesPerSave:MAX_PDF_DRAFT_BLANK_PAGES}} hostMergePdf={api.mergePdf} hostConvertOffice={convertOffice} hostReduceFileSize={reduceFileSize} {...(globalThis.crypto?.subtle ? {hostProtectCopy:exportProtectedCopy} : {})} hostOcr={grant.recognizeOcr} hostImageBakePreview={grant.previewImageBakes} hostLifecycle={onLifecycle} hostAssistant={assistant?.available&&(prefs?.showAssistant!==false||handoffOpen)?value=><Dock value={value}/>:undefined}
    hostFindSensitive={copies?findRedactionCandidates:undefined}
    hostRedact={copies?publishManualRedaction:undefined} hostRedactionPending={recoverManual?'确认保存结果':undefined}
    hostReview={ribbonPending?<section className="native-pdf-redaction-review" aria-label="页面副本保存">
