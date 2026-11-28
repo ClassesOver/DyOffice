@@ -35,7 +35,7 @@ import {createNativePdfPageCopies} from './native-pdf-page-copies'
 import type {PdfRedactionReview} from './pdf-redactions'
 import {browserFileName,decodeBrowserBase64,downloadBrowserFile} from './browser-download'
 import {confirmWorkspaceCopy} from './web-ai-naming'
-import {MAX_WORKSPACE_PDF_COPY_BYTES} from './pdf-extraction'
+import {MAX_WORKSPACE_COPY_BYTES} from './pdf-extraction'
 import {printInBrowser} from './browser-print'
 import {subscribeBrowserDocumentCommands,workspaceOpenAction} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
@@ -89,11 +89,13 @@ async function mount(){
   path:grant.path,signal:browserActions.signal,current:grant.current,readPdf:grant.api.readFile,
   canSign:()=>isClean()&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length,
  })
- const pageCopyName=(value:string|undefined,fallback:string)=>{
-  const points=Array.from(browserFileName(value?.replace(/\.pdf$/i,'')??'',fallback).replace(/[\p{Cs}\u202a-\u202e\u2066-\u2069]/gu,'_'))
+ const copyName=(value:string|undefined,fallback:string,extension='pdf')=>{
+  const suffix='.'+extension
+  const stem=value?.toLowerCase().endsWith(suffix)?value.slice(0,-suffix.length):value
+  const points=Array.from(browserFileName(stem??'',fallback).replace(/[\p{Cs}\u202a-\u202e\u2066-\u2069]/gu,'_'))
   const encoder=new TextEncoder()
-  while(encoder.encode(points.join('')+'.pdf').length>255)points.pop()
-  return points.join('')+'.pdf'
+  while(encoder.encode(points.join('')+suffix).length>255)points.pop()
+  return points.join('')+suffix
  }
  const api={
   ...grant.api,...certificate,...createBrowserPdfSavedSignatures(grant.accountIdentity,browserActions.signal),
@@ -202,9 +204,9 @@ async function mount(){
     const {merged,appended}=await preparePdfMerge(await grant.api.readFile(path),files,signal)
     signal.throwIfAborted()
     if(!unchanged())return fail('The PDF changed during the merge. Retry the merge.')
-    const filename=pageCopyName(destination?.name??suggestedName,'merged')
+    const filename=copyName(destination?.name??suggestedName,'merged')
     if(publisher&&destination){
-     if(merged.byteLength<=MAX_WORKSPACE_PDF_COPY_BYTES){
+     if(merged.byteLength<=MAX_WORKSPACE_COPY_BYTES){
       const ok=await publisher.publish(merged,{name:filename,folderId:destination.folderId},unchanged,signal)
       if(!ok)return fail(locale==='en'?'Could not save the merged PDF.':'无法保存合并后的 PDF。')
       return {ok:true,savedPath:publisher.getReceipts()[0]!.fileId,appendedCount:appended}
@@ -227,7 +229,7 @@ async function mount(){
   },
   setDirty(){},
   extractPages:({path,pages,suggestedName}:Parameters<PdfApi['extractPages']>[0])=>
-   ribbonCopy(path,client=>client.extract(pages.map(page=>page+1),browserActions.signal,pageCopyName(suggestedName,'pages'))),
+   ribbonCopy(path,client=>client.extract(pages.map(page=>page+1),browserActions.signal,copyName(suggestedName,'pages'))),
   splitPdf:async({path,chunkSize,baseName}:Parameters<PdfApi['splitPdf']>[0])=>{
    const signal=browserActions.signal,base=grant.current()
    const locale=prefs?.language==='en'?'en':'zh'
@@ -236,15 +238,15 @@ async function mount(){
     const chosen=await confirmWorkspaceCopy(baseName,{locale,signal,request:grant.workspaceRequest,fileId,batchPdf:true})
     if(!chosen){canceled=true;return false}
     if(disposed||base!==grant.current())throw Error('PDF copy authorization changed.')
-    return client.split(chunkSize,signal,{name:pageCopyName(chosen.name,'split'),folderId:chosen.folderId})
+    return client.split(chunkSize,signal,{name:copyName(chosen.name,'split'),folderId:chosen.folderId})
    })
    if(canceled)return {ok:true as const,canceled:true as const}
    return result.ok?{ok:true as const,savedDir:'',count:copies!.getReceipts().length}:result
   },
   splitPages:({path,perPage,suggestedName}:Parameters<PdfApi['splitPages']>[0])=>
-   ribbonCopy(path,client=>client.layout({kind:'split',perPage},browserActions.signal,pageCopyName(suggestedName,'split-pages'))),
+   ribbonCopy(path,client=>client.layout({kind:'split',perPage},browserActions.signal,copyName(suggestedName,'split-pages'))),
   mergePages:({path,perSheet,direction,separator,suggestedName}:Parameters<PdfApi['mergePages']>[0])=>
-   ribbonCopy(path,client=>client.layout({kind:'merge',perSheet,direction,separator},browserActions.signal,pageCopyName(suggestedName,'merged-pages'))),
+   ribbonCopy(path,client=>client.layout({kind:'merge',perSheet,direction,separator},browserActions.signal,copyName(suggestedName,'merged-pages'))),
  } satisfies Partial<PdfApi>
  const unavailable=async()=>{throw Error('PDF action is unavailable in this Web preview')}
  window.pdfApi=new Proxy<Partial<PdfApi>>(api,{get(target,key,receiver){
@@ -281,7 +283,7 @@ async function mount(){
    const ok=run?await run(copies):await copies.confirm(browserActions.signal)
    if(!ok)return fail('当前不能生成 PDF 副本。')
    ribbonPending=false
-   if(!run)saveCopyNotice=prefs?.language==='en'?'PDF copy saved.':'PDF 副本已保存。'
+   if(!run)saveCopyNotice=prefs?.language==='en'?'Copy saved.':'副本已保存。'
    return {ok:true as const,savedPath:copies.getReceipts().at(-1)!.fileId}
   }catch(error){
    ribbonError=error instanceof Error?error.message:'无法确认 PDF 副本。'
@@ -940,7 +942,7 @@ async function mount(){
   if(disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher?.hasPending())throw Error(failure)
   const base=grant.current()
   const active=()=>!disposed&&grant.current()===base
-  const suggested=pageCopyName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-small','document-small')
+  const suggested=copyName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'-small','document-small')
   ribbonBusy=true;ribbonError='';saveCopyNotice=''
   try{
    const destination=publisher
@@ -953,7 +955,7 @@ async function mount(){
    if(publisher&&destination){
     const bytes=new Uint8Array(await blob.arrayBuffer())
     const ok=await publisher.publish(bytes,{
-     name:pageCopyName(destination.name,'document-small'),folderId:destination.folderId,
+     name:copyName(destination.name,'document-small'),folderId:destination.folderId,
     },active,signal,'save')
     if(!ok)throw Error(failure)
    }else downloadBrowserFile(new Blob([blob],{type:'application/pdf'}),suggested)
@@ -971,22 +973,53 @@ async function mount(){
   }
  }
  const convertOffice=async(format:PdfConvertFormat,pdfPassword:string|undefined,draft?:PdfHostConversionDraft)=>{
-  const signal=browserActions.signal
+  const signal=browserActions.signal,base=grant.current()
+  const locale=prefs?.language==='en'?'en':'zh',zh=locale==='zh'
+  const officeFormat=format==='docx'||format==='xlsx'||format==='pptx'?format:undefined
+  const publisher=officeFormat?workspaceCopies:undefined
+  if(disposed||ribbonBusy||ribbonPending||redacting||review?.candidates.length||publisher?.hasPending()){
+   throw Error(zh?'请先完成待处理的 PDF 操作。':'Finish the pending PDF operation first.')
+  }
+  const active=()=>!disposed&&grant.current()===base
+  ribbonBusy=true;ribbonError='';saveCopyNotice=''
   try{
    const blob=await grant.convertOffice(format,pdfPassword,signal,draft)
    signal.throwIfAborted()
-   const name=browserFileName((grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,''),'document')
-   downloadBrowserFile(blob,`${name}.${format}`)
+   const suggested=(grant.path.split('/').at(-1)??'').replace(/\.pdf$/i,'')+'.'+format
+   if(publisher&&officeFormat){
+    if(blob.size<=MAX_WORKSPACE_COPY_BYTES){
+     const destination=await confirmWorkspaceCopy(copyName(suggested,'document',format),{locale,signal,request:grant.workspaceRequest,fileId})
+     if(!destination)return
+     const bytes=new Uint8Array(await blob.arrayBuffer())
+     const ok=await publisher.publish(bytes,{
+      name:copyName(destination.name,'document',format),folderId:destination.folderId,format:officeFormat,
+     },active,signal)
+     if(!ok)throw Error('Could not publish the conversion.')
+     return
+    }
+    const message=zh
+     ?'转换结果超过工作区 32 MiB 的文件上限。要改为下载吗？'
+     :'The converted file exceeds the 32 MiB workspace file limit. Download it instead?'
+    if(!window.confirm(message))return
+   }
+   if(active())downloadBrowserFile(blob,copyName(suggested,'document',format))
   }catch(error){
    if(signal.aborted)return
+   if(publisher?.hasPending()){
+    ribbonPending=true
+    ribbonError=error instanceof Error?error.message:String(error)
+    throw Error(zh?'请确认转换副本的保存结果。':'Confirm the converted copy’s save result.')
+   }
    const code=(error as {code?:string})?.code
-   const zh=prefs?.language!=='en'
    let message=zh?'无法转换此 PDF。':'Could not convert this PDF.'
    if(code==='PDF_COPY_RESTRICTED')message=zh?'此 PDF 限制复制内容。':'This PDF restricts copying its contents.'
    if(code==='PDF_CONVERSION_NEEDS_OCR')message=zh?'请先识别扫描件中的文字，再转换格式。':'Recognize the text in this scan before converting it.'
    if(code==='PDF_CONVERSION_NO_TEXT')message=zh?'此 PDF 没有可导出为 Markdown 的文字。':'This PDF has no text to export as Markdown.'
    if(code==='PDF_CONVERSION_LIMIT'||code==='OUTPUT_LIMIT')message=zh?'此 PDF 超出转换大小限制。':'This PDF exceeds the conversion size limit.'
    throw Object.assign(new Error(message),{code})
+  }finally{
+   ribbonBusy=false
+   if(!disposed)render()
   }
  }
  const saveCopy: PdfHostSaveCopy = async (draft,count,modified,stamps,imageBakes)=>{

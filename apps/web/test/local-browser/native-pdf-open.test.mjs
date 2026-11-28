@@ -157,7 +157,7 @@ test('native Web PDF saves a reduced PDF to the selected folder without leaving 
  await expect(confirm).toBeVisible({timeout:20000})
  await confirm.click()
  await expect(confirm).toHaveCount(0)
- await expect(source.getByText('PDF copy saved.',{exact:true})).toBeVisible()
+ await expect(source.getByText('Copy saved.',{exact:true})).toBeVisible()
  assert.ok(published)
  assert.deepEqual(finishes,[finishes[0],finishes[0]])
  assert.equal(reductions.length,1)

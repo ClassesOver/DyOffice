@@ -28,10 +28,10 @@ test('PDF extraction stages current source revision, finishes a new PDF and veri
  assert.equal(f.calls.some(call=>call.path.endsWith('/commits')),false)
  assert.ok(f.calls.findIndex(call=>call.path.includes('/revisions/'))>f.calls.findIndex(call=>call.path.endsWith('/finish')))
 })
-for(const delivery of ['open','save'])test(`publishing a PDF with ${delivery} delivery verifies the original upload after a lost finish response`,async()=>{
+for(const [format,delivery] of [['pdf','open'],['pdf','save'],['docx','open']])test(`publishing ${format} with ${delivery} delivery verifies the original upload after a lost finish response`,async()=>{
  const bytes=new TextEncoder().encode('merged PDF fixture')
  const output={...receipt,size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')}
- const destination={name:'Packet.pdf',folderId:'folder'}
+ const destination={name:'Packet.'+format,folderId:'folder'}
  const calls=[],opened=[],saved=[]
  let finishAttempts=0
  const f=fixture({onCreated:async value=>opened.push(value),onSaved:async value=>saved.push(value),request:async(path,method,body)=>{
@@ -40,11 +40,11 @@ for(const delivery of ['open','save'])test(`publishing a PDF with ${delivery} de
   if(path==='/api/v1/uploads/upload/content')assert.deepEqual(new Uint8Array(await body.arrayBuffer()),bytes)
   if(path==='/api/v1/uploads/upload/finish'){
    if(++finishAttempts===1)throw Error('response lost')
-   return {format:'pdf',file:output}
+   return {format,file:output}
   }
   if(path.includes('/revisions/'))return output
  }})
- await assert.rejects(f.client.publish(bytes,destination,()=>true,undefined,delivery),/response lost/)
+ await assert.rejects(f.client.publish(bytes,{...destination,format},()=>true,undefined,delivery),/response lost/)
  assert.equal(f.client.hasPending(),true)
  assert.deepEqual(opened,[])
  assert.equal(await f.client.confirm(),true)

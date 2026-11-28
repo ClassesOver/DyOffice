@@ -676,6 +676,102 @@ test('workspace document theme updates the open Word and Excel canvases without 
  }
 })
 
+test('workspace converts a PDF into named editable Office copies in the selected folder',{skip:!built,timeout:150000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+16
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ const token=f.alice.token,workspace=createWorkspaceService(f.transactions)
+ await f.preferences.update(token,{language:'en',autoSave:false,showAssistant:false})
+ const folder=await workspace.createFolder(token,{name:'Converted reports',parentId:null})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({
+  DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),
+  DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+  nativeDocsDirectory:officeBrowserAsset('docs'),nativeSlidesDirectory:officeBrowserAsset('slides'),nativePdfDirectory:officeBrowserAsset('pdf'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},...sheets,
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const pdf=await PDFDocument.create()
+ pdf.addPage([600,800]).drawText('Quarterly revenue example',{x:65,y:710,size:18})
+ const original=Buffer.from(await pdf.save()),{file}=await importFile(f,token,original,'Quarterly report.pdf')
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{
+  headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password},
+ })).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ const source=frame(file.fileId)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const selectFormat=async label=>{
+  await source.getByRole('button',{name:'PDF Converter',exact:true}).click()
+  await source.getByRole('button',{name:'PDF to '+label,exact:true}).click()
+ }
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await selectFormat('Word')
+ await expect(destination.getByRole('textbox',{name:'File name'})).toHaveValue('Quarterly report.docx',{timeout:25000})
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal((await f.files.listFiles(token)).files.length,1)
+
+ let committed
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(committed)return route.continue()
+  const response=await route.fetch()
+  assert.equal(response.status(),200)
+  committed=(await response.json()).file
+  await route.abort()
+ })
+ for(const [label,format,part] of [
+  ['Word','docx','word/document.xml'],['Excel','xlsx','xl/worksheets/sheet1.xml'],['PPT','pptx','ppt/slides/slide1.xml'],
+ ]){
+  await page.getByRole('tab',{name:'Quarterly report.pdf',exact:true}).click()
+  if(format==='pptx'){
+   await source.getByRole('button',{name:'Pages',exact:true}).click()
+   await source.getByRole('button',{name:'Rotate right',exact:true}).click()
+   await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+   await source.getByRole('button',{name:'Home',exact:true}).click()
+  }
+  await selectFormat(label)
+  await destination.getByRole('textbox',{name:'File name'}).fill('Converted '+label)
+  await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
+  await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+  if(format==='docx'){
+   const confirm=source.getByRole('button',{name:'确认副本保存结果',exact:true})
+   await expect(confirm).toBeVisible({timeout:30000})
+   await confirm.click()
+   await expect(page).toHaveURL(origin+'/#/file/'+committed.fileId)
+   assert.deepEqual(finishes,[finishes[0],finishes[0]])
+  }
+  const tabName='Converted '+label+'.'+format
+  await expect(page.getByRole('tab',{name:tabName,exact:true})).toHaveAttribute('aria-selected','true',{timeout:30000})
+  const entry=(await workspace.listFiles(token,{folderId:folder.id})).files.find(item=>item.name===tabName)
+  assert.ok(entry)
+  const {file:saved}=await f.files.openFile(token,entry.id)
+  const archive=await JSZip.loadAsync(await f.files.readFile(token,entry.id,saved.revision))
+  const document=await archive.file(part).async('string')
+  if(format==='pptx'){
+   assert.match(await archive.file('ppt/presentation.xml').async('string'),/<p:sldSz\b[^>]*cx="10160000"[^>]*cy="7620000"/)
+   assert.match(document,/<p:pic>/)
+   assert.ok(archive.file(/^ppt\/media\/[^/]+\.png$/).length)
+  }else assert.match(document,/Quarterly revenue example/)
+  await expect(frame(entry.id).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ }
+ assert.equal((await f.files.listFiles(token)).files.length,4)
+ await page.getByRole('tab',{name:'Quarterly report.pdf',exact:true}).click()
+ await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ assert.equal((await f.files.openFile(token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),original)
+})
+
 test('workspace file menus, shortcuts and tab recovery work across four native editors',{skip:!built,timeout:210000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)
  const origin='http://localhost:'+port
