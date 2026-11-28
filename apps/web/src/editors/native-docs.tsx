@@ -166,6 +166,10 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       }
     },
     knowledgeRequest:assistant?.request,
+    ...(!guest&&!citationMode&&draftAuthority.request?{async pickMergeFile(signal:AbortSignal){
+      const {pickDocsMailMergeFile}=await import('./docs-mail-merge-workspace')
+      return pickDocsMailMergeFile(host,draftAuthority,prefs.language,signal)
+    }}:{}),
     fetchClipboardRemoteImage:assistant?.mediaApi?.fetchImage,
     wordCheckpoint:async()=>wordSync?.checkpoint(),
     onSourceOpenFailed:()=>{

@@ -3,7 +3,7 @@ import { BROWSER_MAIL_MERGE_MAX_OUTPUT_BYTES, mergeSourceFromRows } from '../../
 import { csvRows, decodeCsvBuffer, sniffDelimiter } from '@genoffice/xlsx-gateway/gateway/csv-import'
 import { browserFileName, downloadBrowserFile } from './browser-download'
 
-const SOURCE_MAX_BYTES = 16 * 1024 * 1024
+export const MAIL_MERGE_SOURCE_MAX_BYTES = 16 * 1024 * 1024
 const ROW_LIMIT = 1001
 const COLUMN_LIMIT = 256
 const CELL_CHARACTER_LIMIT = 8192
@@ -22,7 +22,7 @@ export async function readMailMergeSource(file: File, language: string, signal: 
   if (extension !== 'csv' && extension !== 'xlsx') {
     throw new Error(en ? 'Choose a CSV or XLSX recipient list.' : '请选择 CSV 或 XLSX 收件人列表。')
   }
-  if (file.size === 0 || file.size > SOURCE_MAX_BYTES) {
+  if (file.size === 0 || file.size > MAIL_MERGE_SOURCE_MAX_BYTES) {
     throw new Error(en ? 'Choose a nonempty recipient list up to 16 MiB.' : '请选择不超过 16 MiB 的非空收件人列表。')
   }
   const bytes = new Uint8Array(await file.arrayBuffer())

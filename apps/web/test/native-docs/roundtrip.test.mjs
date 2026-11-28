@@ -552,10 +552,15 @@ test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{tim
   await page.getByRole('button',{name:'Mailings',exact:true}).click()
   await page.getByRole('button',{name:'Start Mail Merge',exact:true}).click()
   const panel=page.locator('.modal-mailmerge')
+  const picker=page.getByRole('dialog',{name:'Select a recipient list',exact:true})
   async function pick(name,mimeType,buffer){
-    const chooser=page.waitForEvent('filechooser')
     await panel.getByRole('button',{name:/Select Recipient List/}).click()
-    await (await chooser).setFiles({name,mimeType,buffer})
+    await expect(picker).toBeVisible()
+    const [chooser]=await Promise.all([
+      page.waitForEvent('filechooser'),
+      picker.getByRole('button',{name:'Choose local file…',exact:true}).click(),
+    ])
+    await chooser.setFiles({name,mimeType,buffer})
     await expect(panel.locator('.mailmerge-source-name')).toHaveText(name)
   }
   async function merge(){
@@ -585,7 +590,35 @@ test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{tim
 
   const {csvToXlsxBuffer}=await import('@genoffice/xlsx-gateway/gateway/csv-import-xlsx')
   const xlsx=await csvToXlsxBuffer('Name,Code\nLee,0007\nLee,0100','Recipients')
-  await pick('recipients.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',xlsx)
+  const workspace=createWorkspaceService(f.transactions)
+  const folder=await workspace.createFolder(f.alice.token,{name:'Campaigns',parentId:null})
+  const savedCsv=Buffer.from('Name,Code\nRiley,0007')
+  const csvSource=(await importFile(f,f.alice.token,savedCsv,'online-recipients.csv')).file
+  const recipient=(await importFile(f,f.alice.token,xlsx,'recipients.xlsx')).file
+  await workspace.moveFile(f.alice.token,recipient.fileId,{folderId:folder.id})
+  await importFile(f,f.bob.token,xlsx,'private-recipients.xlsx')
+  await panel.getByRole('button',{name:/Select Recipient List/}).click()
+  const files=picker.getByRole('listbox',{name:'Workspace files',exact:true})
+  await expect(files.getByRole('option',{name:'Campaigns / recipients.xlsx',exact:true})).toBeAttached()
+  await expect(files.getByRole('option',{name:'private-recipients.xlsx',exact:false})).toHaveCount(0)
+  await picker.getByRole('button',{name:'Cancel',exact:true}).click()
+  await expect(panel.locator('.mailmerge-source-name')).toHaveText('recipients.csv')
+  await panel.getByRole('button',{name:/Select Recipient List/}).click()
+  await picker.getByRole('combobox',{name:'File type',exact:true}).selectOption('csv')
+  await picker.getByRole('searchbox',{name:'Search files',exact:true}).fill('online-recipients')
+  await files.selectOption(csvSource.fileId)
+  await picker.getByRole('button',{name:'Use selected file',exact:true}).click()
+  await expect(panel.locator('.mailmerge-preview')).toContainText('Riley')
+  const online=await merge()
+  assert.match(await documentXml(await readFile(await online.path())),/<w:t[^>]*>[^<]*Riley/)
+  await panel.getByRole('button',{name:/Select Recipient List/}).click()
+  await files.selectOption(recipient.fileId)
+  const input=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${recipient.fileId}/content`)
+  await picker.getByRole('button',{name:'Use selected file',exact:true}).click()
+  const response=await input
+  assert.ok(response.ok())
+  assert.equal(new URL(response.url()).searchParams.get('revision'),recipient.revision)
+  await expect(panel.locator('.mailmerge-source-name')).toHaveText('recipients.xlsx')
   await panel.getByRole('radio',{name:'One document per record'}).check()
   const batch=await merge()
   const zip=await JSZip.loadAsync(await readFile(await batch.path()))
@@ -612,7 +645,11 @@ test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{tim
   expectPaper(envelopeXml,13680,5940)
 
   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
-  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+  assert.equal((await f.files.openFile(f.alice.token,recipient.fileId)).file.revision,recipient.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,recipient.fileId,recipient.revision),xlsx)
+  assert.equal((await f.files.openFile(f.alice.token,csvSource.fileId)).file.revision,csvSource.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,csvSource.fileId,csvSource.revision),savedCsv)
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,3)
 })
 
 test('Web Word compares an unsaved draft with a local DOCX without changing either file',{timeout:120000},async t=>{

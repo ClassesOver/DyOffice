@@ -62,11 +62,12 @@ type ParentTabsWindow = Window & {
 
 /** A narrow compatibility bridge for the existing renderer. Opaque paths are
  * aliases only; they never become filesystem paths or server authorization. */
-export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;fetchClipboardRemoteImage?:ClipboardImageFetcher;wordCheckpoint?:()=>Promise<number|undefined>;onSourceOpenFailed?:()=>void;takeUnlockedBytes?:()=>Uint8Array|undefined;setOpenPassword?:(password:string|null)=>boolean}={}) {
+export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;fetchClipboardRemoteImage?:ClipboardImageFetcher;wordCheckpoint?:()=>Promise<number|undefined>;onSourceOpenFailed?:()=>void;takeUnlockedBytes?:()=>Uint8Array|undefined;setOpenPassword?:(password:string|null)=>boolean;pickMergeFile?:(signal:AbortSignal)=>Promise<File|null>}={}) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
   const lifetime = new AbortController()
   let disposed = false, downloading = false, takingOver = false
+  let pickingMergeFile = false
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(disposed||takingOver||saveFence||!check())return false
@@ -336,16 +337,19 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     },
     pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
     async pickMergeDataSource(){
-      if(disposed)return null
+      if(disposed||pickingMergeFile)return null
+      pickingMergeFile=true
       try{
-        const [file]=await pickLocalFiles('.csv,.xlsx',lifetime.signal)
+        const file=options.pickMergeFile
+          ? await options.pickMergeFile(lifetime.signal)
+          : (await pickLocalFiles('.csv,.xlsx',lifetime.signal))[0]
         if(!file)return null
         const {readMailMergeSource}=await import('./docs-mail-merge')
         return {ok:true,source:await readMailMergeSource(file,prefs.language,lifetime.signal)}
       }catch(error){
         if(disposed)return null
         return {ok:false,error:error instanceof Error?error.message:text.unavailable}
-      }
+      }finally{pickingMergeFile=false}
     },
     async writeMergeOutput(request){
       if(disposed||!host.getState(fileId).lease)return {ok:false,canceled:true}
