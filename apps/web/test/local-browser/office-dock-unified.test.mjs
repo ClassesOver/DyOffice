@@ -181,6 +181,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await settings.getByRole('button',{name:'关闭个人设置',exact:true}).click()
   }
   const setStartup=enabled=>setAssistantSwitch('在新文档中恢复 AI 助手',enabled)
+  let sheetSelection=0
   async function selectContent(format){
    const file=appearanceFiles[format], editor=frame(file)
    await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
@@ -199,10 +200,11 @@ test('four real Office editors share assistant chrome and retain drafts across c
      // Drag across multiple real cells so the grid opens its selection chip.
      await page.mouse.move(box.x+105,box.y+52)
      await page.mouse.down()
-     await page.mouse.move(box.x+245,box.y+99,{steps:8})
+     await page.mouse.move(box.x+245,box.y+99+24*sheetSelection++,{steps:8})
      await page.mouse.up()
     }else{
-     // The acceptance slide's title starts at 7% x and 13% y.
+     // Clear the previous selection, then select the title on the acceptance slide.
+     await page.mouse.click(box.x+box.width*.85,box.y+box.height*.8)
      await page.mouse.click(box.x+box.width*.12,box.y+box.height*.2)
     }
    }
@@ -223,7 +225,12 @@ test('four real Office editors share assistant chrome and retain drafts across c
   await expect(composer(wordFile)).toBeVisible()
   await page.getByRole('tab',{name:'首页',exact:true}).click()
   await setAssistantSwitch('显示选区旁的「询问 AI」',true)
-  for(const format of ['docx','xlsx','pptx'])await expect(await selectContent(format),format+' selection Ask AI restored').toBeVisible()
+  for(const format of ['docx','xlsx','pptx']){
+   const file=appearanceFiles[format]
+   await expect(editorHtml(file)).toHaveAttribute('data-web-ai-show-ask-trigger','true')
+   await expect(await selectContent(format),format+' selection Ask AI restored').toBeVisible()
+   assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  }
   await page.getByRole('tab',{name:'首页',exact:true}).click()
   await page.reload()
   await expect(page.locator('.home')).toBeVisible()
