@@ -290,13 +290,13 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   const canCopyLocalDraft=()=>!signed&&(passwordProtected()? !guest&&!citationMode : !host.hasDocxPasswordChange(fileId))
   const sealRecoveryDraft=(bytes:Uint8Array)=>host.sealDocxRecovery(fileId,bytes)
-  const saveAsCopy = () => saveCopy((request,signal) => confirmWorkspaceCopy(host.getState(fileId).name,{locale,signal,request}))
+  const saveAsCopy = () => saveCopy((request,signal) => confirmWorkspaceCopy(host.getState(fileId).name,{locale,signal,request,fileId}))
   const nameCopy: DocsNamedCopy = async propose => {
     const modelId = assistant?.selected()
     if (!assistant?.available || !modelId || pendingCopy || protectedView()) return
     await saveCopy(async (request,signal) => {
       const proposed = await propose(({content}) => protectedView()?Promise.resolve(''):suggestWebFileName(content,{modelId,proof:assistant.sessionProof,format:'docx',locale,signal}))
-      return proposed && !protectedView() && canSaveCopy() ? confirmWorkspaceCopy(proposed,{locale,signal,request}) : null
+      return proposed && !protectedView() && canSaveCopy() ? confirmWorkspaceCopy(proposed,{locale,signal,request,fileId}) : null
     })
   }
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}

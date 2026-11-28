@@ -214,7 +214,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     let upload:string|undefined,finishStarted=false
     try{
       if(!await copyAuthority?.verify()||!canCopy())throw Error('Draft session ended')
-      const chosen=await confirmWorkspaceCopy(stem+'.pptx',{locale,signal,request,document:stage.document})
+      const chosen=await confirmWorkspaceCopy(stem+'.pptx',{locale,signal,request,fileId,document:stage.document})
       if(!chosen||signal.aborted)return
       const name=chosen.name.replace(/\.pptx$/i,'')+'.pptx'
       if(!await copyAuthority?.verify()||!canCopy())throw Error('Draft session ended')

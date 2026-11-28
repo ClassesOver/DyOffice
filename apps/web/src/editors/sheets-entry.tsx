@@ -181,7 +181,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         const csvNotice = locale === 'en'
           ? 'CSV saves the current sheet as displayed values. Formulas, formatting, and other sheets are omitted.'+(passwordProtected?' The CSV copy is unencrypted.':'')
           : 'CSV 只保存当前工作表的显示值。公式、格式和其他工作表会丢失。'+(passwordProtected?' CSV 副本未加密。':'')
-        const chosen = await confirmWorkspaceCopy(stem+copyExtension,{locale,signal,request,...(csv?{csvNotice}:{})})
+        const chosen = await confirmWorkspaceCopy(stem+copyExtension,{locale,signal,request,fileId,...(csv?{csvNotice}:{})})
         if (!chosen || !canCopy()) return
         const csvCopy = csv && /\.csv$/i.test(chosen.name) ? csv : undefined
         const base = chosen.name.replace(csvCopy?/\.csv$/i:/\.(xlsx|xlsm)$/i,'').trim()

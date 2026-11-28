@@ -923,7 +923,7 @@ async function mount(){
   const base=grant.current()
   ribbonBusy=true;saveCopyNotice=''
   try{
-   const chosen=await confirmWorkspaceCopy(grant.path.split('/').pop()??'document.pdf',{locale,signal,request:grant.workspaceRequest})
+   const chosen=await confirmWorkspaceCopy(grant.path.split('/').pop()??'document.pdf',{locale,signal,request:grant.workspaceRequest,fileId})
    if(!chosen)return null
    if(disposed||base!==grant.current())throw Error('PDF copy authorization changed.')
    const name=browserFileName(chosen.name.replace(/\.pdf$/i,''),'document')+'.pdf'

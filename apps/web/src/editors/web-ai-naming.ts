@@ -2,14 +2,14 @@ import {createSseAgentTransport} from '../../../../packages/browser-host/src/ai-
 import type {AssistantDocumentFormat} from '../../../../packages/web-contracts/src/assistant.ts'
 import {buildNamingInstruction,excerptForNaming,sanitizeFileStem} from '../../../shell/src/main/ai-naming.ts'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences.ts'
-import type {WorkspaceFolderList} from '../../../../packages/web-contracts/src/workspace.ts'
+import type {WorkspaceFileList,WorkspaceFolderList} from '../../../../packages/web-contracts/src/workspace.ts'
 import {folderChoices} from '../workspace-folder-options'
 import './web-ai-naming.css'
 
 export type WorkspaceCopyDestination = { name: string; folderId?: string }
 
-export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,document:doc=window.document,csvNotice}:{
- locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;document?:Document;csvNotice?:string
+export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice}:{
+ locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string
 }):Promise<WorkspaceCopyDestination|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
@@ -52,7 +52,8 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,docu
  folderLabel.textContent=en?'Folder':'保存位置'
  rootOption.value='';rootOption.textContent=en?'My files':'个人文件'
  folderStatus.setAttribute('role','status')
- folderStatus.hidden=true
+ folderStatus.textContent=en?'Loading workspace folders…':'正在读取工作区文件夹…'
+ folder.disabled=true;save.disabled=true
  folder.append(rootOption);folderLabel.append(folder)
  actions.append(cancel,save);form.append(folderLabel,folderStatus,actions);dialog.append(form)
  return new Promise((resolve,reject)=>{
@@ -67,6 +68,7 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,docu
   dialog.oncancel=event=>{event.preventDefault();abort()}
   form.onsubmit=event=>{
    event.preventDefault()
+   if(save.disabled)return
    const name=input.value.trim()
    const stem=format?name.replace(/\.(xlsx|csv)$/i,'').trim():name
    if(stem)finish({name:format?stem+'.'+format.value:stem,...(folder.value?{folderId:folder.value}:{})})
@@ -76,16 +78,23 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,docu
   catch(error){dialog.remove();reject(error);return}
   signal.addEventListener('abort',abort,{once:true})
   if(signal.aborted){abort();return}
-  void request<WorkspaceFolderList>('/api/v1/workspace/folders','GET',undefined,folders.signal).then(({folders:entries})=>{
+  void Promise.allSettled([
+   request<WorkspaceFolderList>('/api/v1/workspace/folders','GET',undefined,folders.signal),
+   request<WorkspaceFileList>('/api/v1/workspace/files?'+new URLSearchParams({id:fileId}),'GET',undefined,folders.signal),
+  ]).then(([directoryList,source])=>{
    if(folders.signal.aborted)return
-   for(const {id,name} of folderChoices(entries)){
+   const choices=directoryList.status==='fulfilled'?folderChoices(directoryList.value.folders):[]
+   for(const {id,name} of choices){
     const option=doc.createElement('option')
     option.value=id;option.textContent=name;folder.append(option)
    }
-  }).catch(()=>{
-   if(folders.signal.aborted)return
-   folderStatus.textContent=en?'Could not load workspace folders.':'无法读取工作区文件夹。'
-   folderStatus.hidden=false
+   const sourceFolder=source.status==='fulfilled'?source.value.files[0]?.folderId:undefined
+   if(sourceFolder&&choices.some(({id})=>id===sourceFolder))folder.value=sourceFolder
+   const warning=directoryList.status==='rejected'?(en?'Could not load workspace folders.':'无法读取工作区文件夹。')
+    :source.status==='rejected'?(en?'Could not find the original file’s folder.':'无法读取原文件所在的文件夹。'):''
+   folderStatus.textContent=warning
+   folderStatus.hidden=!warning
+   folder.disabled=false;save.disabled=false
   })
  })
 }
