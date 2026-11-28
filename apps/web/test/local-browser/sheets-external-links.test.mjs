@@ -12,6 +12,7 @@ import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
+import {macroWorkbook} from '../helpers/xlsm.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
@@ -107,7 +108,9 @@ for(const mode of modes)test(mode!=='node'
  sourceZip.file(worksheet,(await sourceZip.file(worksheet).async('string')).replace(
   '<c r="A1" t="inlineStr"><is><t>Revenue</t></is></c>','<c r="A1"><v>37</v></c>'))
  const sourceBytes=await sourceZip.generateAsync({type:'nodebuffer'})
- const source=(await importFile(f,f.alice.token,sourceBytes,'Source catalog.xlsx')).file
+ const macroSourceBytes=refreshAvailable?await macroWorkbook(sourceBytes):null
+ const source=macroSourceBytes?(await importFile(f,f.alice.token,macroSourceBytes,'Source catalog.xlsm')).file:null
+ if(refreshAvailable)await importFile(f,f.alice.token,sourceBytes,'Source catalog.xlsx')
  app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,
   csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,
@@ -211,7 +214,9 @@ for(const mode of modes)test(mode!=='node'
  if(refreshAvailable){
   const beforeSourceChange=await revisionCount()
   await reopenedPanel.getByRole('button',{name:'Change Source',exact:true}).click()
-  await reopenedPanel.getByRole('combobox',{name:'Source',exact:true}).selectOption({label:'Source catalog.xlsx'})
+  const choices=reopenedPanel.getByRole('combobox',{name:'Source',exact:true})
+  await expect(choices.getByRole('option',{name:'Source catalog.xlsx',exact:true})).toHaveCount(1)
+  await choices.selectOption({label:'Source catalog.xlsm'},{timeout:5000})
   await reopenedPanel.getByRole('button',{name:'Save',exact:true}).click()
   await expect.poll(revisionCount,{timeout:20000}).toBe(beforeSourceChange+1)
   const changed=(await f.files.openFile(f.alice.token,initial.fileId)).file
@@ -219,13 +224,13 @@ for(const mode of modes)test(mode!=='node'
   const sourceTarget=origin+'/api/v1/files/'+source.fileId+'/content?revision='+source.revision
   assert.ok((await savedSource.file(linkRelationships).async('string')).includes(`Target="${sourceTarget}"`))
   assert.ok((await savedSource.file(worksheet).async('string')).includes(formula))
-  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsx',exact:true})).toBeVisible()
+  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsm',exact:true})).toBeVisible()
   let openedSource
   await expect.poll(async()=>{
    openedSource=await app.inject({method:'GET',url:sourceTarget,headers:{cookie:SESSION_COOKIE+'='+f.alice.token}})
    return openedSource.statusCode
   },{timeout:12000}).toBe(200)
-  assert.deepEqual(openedSource.rawPayload,sourceBytes)
+  assert.deepEqual(openedSource.rawPayload,macroSourceBytes)
   const preview=page.waitForResponse(response=>response.url().endsWith('/sheets/external-links/preview'),{timeout:20000})
   await reopenedPanel.getByRole('button',{name:'Update Values',exact:true}).click()
   const previewResult=await preview
@@ -274,7 +279,7 @@ for(const mode of modes)test(mode!=='node'
   {timeout:30000}).toBe(37)
   await page.getByRole('button',{name:'Formulas',exact:true}).click()
   await page.getByRole('button',{name:'External Links',exact:true}).click()
-  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsx',exact:true})).toBeVisible()
+  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsm',exact:true})).toBeVisible()
   expectedValue=37
  }
  const countBeforeBreak=await revisionCount()

@@ -1,4 +1,5 @@
 import type {SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
+import {isSpreadsheetArchive} from '../../../../packages/web-contracts/src/api.ts'
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {messages} from './messages.ts'
 import {browserEditorTheme} from './browser-editor-theme'
@@ -291,7 +292,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         const body:{files?:unknown;nextCursor?:unknown}=await response.json()
         if(!Array.isArray(body?.files))throw hostError('INVALID_RESPONSE','workspace workbooks')
         for(const item of body.files) {
-          if(item?.format==='xlsx'&&item.id!==fileId&&typeof item.name==='string'&&
+          if(item&&isSpreadsheetArchive(item.format)&&item.id!==fileId&&typeof item.name==='string'&&
             typeof item.id==='string'&&workbookId.test(item.id)&&typeof item.revision==='string'&&workbookId.test(item.revision)){
             workbooks.push({id:item.id,name:item.name,revision:item.revision})
           }
