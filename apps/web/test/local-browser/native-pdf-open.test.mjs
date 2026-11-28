@@ -2049,14 +2049,16 @@ test('native Web PDF compares local files and downloads page images and an embed
  assert.deepEqual(await readFile(await stored.path()),addedBytes)
 })
 
-test('native Web PDF merges local files in order into a separate download',{skip:!directory,timeout:90000},async t=>{
+test('native Web PDF publishes and opens merged local PDFs as one workspace copy',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
  const origin='http://localhost:'+server.address().port
  const f=await fileFixture(t,{origin,buildApp:false})
- await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const workspace=createWorkspaceService(f.transactions)
+ const folder=await workspace.createFolder(f.alice.token,{name:'Merged reports',parentId:null})
  const makePdf=async widths=>{
   const doc=await PDFDocument.create()
   for(const width of widths)doc.addPage([width,300]).drawText('Page '+width)
@@ -2080,26 +2082,30 @@ test('native Web PDF merges local files in order into a separate download',{skip
  }
  const original=await makePdf([240])
  const {file}=await importFile(f,f.alice.token,original,'merge-source.pdf')
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
  f.cleanup.unshift(()=>app.close())
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage({acceptDownloads:true})
+ const context=await browser.newContext({acceptDownloads:true}),page=await context.newPage()
  const errors=[]
  page.on('pageerror',error=>errors.push(error.message))
+ await stubHomeHero(page)
  const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
  assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
- await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
- await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
- await page.getByRole('button',{name:'Pages',exact:true}).click()
- await page.getByRole('button',{name:'Rotate right',exact:true}).click()
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ const source=frame(file.fileId)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await source.getByRole('button',{name:'Pages',exact:true}).click()
+ await source.getByRole('button',{name:'Rotate right',exact:true}).click()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  const pick=async()=> (await Promise.all([
   page.waitForEvent('filechooser',{timeout:5000}),
-  page.getByRole('button',{name:'Merge PDF',exact:true}).click(),
+  source.getByRole('button',{name:'Merge PDF',exact:true}).click(),
  ]))[0]
  const canceled=await pick()
  await canceled.setFiles([])
- await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
  assert.equal(await head(),file.revision)
  const selected=await pick()
  assert.equal(selected.isMultiple(),true)
@@ -2107,15 +2113,42 @@ test('native Web PDF merges local files in order into a separate download',{skip
  const donor=await createPdfStampsJob({allowAcroForm:true}).execute(await makePdf([250,260]),JSON.stringify({
   version:1,action:'stamps',operation:{op:'set_header_footer',header_left:'Donor header',page_number:true},
  }))
- const [download]=await Promise.all([
-  page.waitForEvent('download'),
-  selected.setFiles([
-   {name:'z-first.pdf',mimeType:'application/pdf',buffer:donor.bytes},
-   {name:'a-second.pdf',mimeType:'application/pdf',buffer:await makePdf([270])},
-  ]),
- ])
- assert.equal(download.suggestedFilename(),'merge-source-merged.pdf')
- const downloaded=await readFile(await download.path())
+ const inputs=[
+  {name:'z-first.pdf',mimeType:'application/pdf',buffer:donor.bytes},
+  {name:'a-second.pdf',mimeType:'application/pdf',buffer:await makePdf([270])},
+ ]
+ await selected.setFiles(inputs)
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(destination.getByRole('textbox',{name:'File name'})).toHaveValue('merge-source-merged.pdf',{timeout:5000})
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(source.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ assert.equal(await head(),file.revision)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+
+ await (await pick()).setFiles(inputs)
+ await destination.getByRole('textbox',{name:'File name'}).fill('Client packet')
+ await destination.getByRole('combobox',{name:'Folder',exact:true}).selectOption(folder.id)
+ let copy
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(finishes.length!==1)return route.continue()
+  const committed=await route.fetch()
+  assert.equal(committed.status(),200)
+  copy=(await committed.json()).file
+  await route.abort()
+ })
+ await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=source.getByRole('button',{name:'确认副本保存结果',exact:true})
+ await expect(confirm).toBeVisible({timeout:20000})
+ assert.ok(copy)
+ await confirm.click()
+ await expect(page).toHaveURL(origin+'/#/file/'+copy.fileId)
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ const copies=(await workspace.listFiles(f.alice.token,{folderId:folder.id})).files
+ assert.deepEqual(copies.map(item=>[item.id,item.name]),[[copy.fileId,'Client packet.pdf']])
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+ const downloaded=await f.files.readFile(f.alice.token,copy.fileId,copy.revision)
  const merged=await PDFDocument.load(downloaded)
  assert.deepEqual(merged.getPages().map(p=>p.getWidth()),[240,250,260,270])
  assert.equal(merged.getPage(0).getRotation().angle,90)
@@ -2141,14 +2174,13 @@ test('native Web PDF merges local files in order into a separate download',{skip
  assert.equal(saved.getPage(0).getRotation().angle,90)
  assert.deepEqual(saved.getForm().getFields().map(field=>field.getName()),['customer'])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
- const {file:copy}=await importFile(f,f.alice.token,downloaded,'merged-form.pdf')
- await page.goto(origin+'/native-pdf/?fileId='+copy.fileId)
- await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
- const imported=page.locator('.pdf-form-layer input[title="customer_2"]')
+ const output=frame(copy.fileId)
+ await expect(output.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const imported=output.locator('.pdf-form-layer input[title="customer_2"]')
  await expect(imported).toHaveValue('Customer 250',{timeout:15000})
  await imported.fill('Updated imported value')
- await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
- await page.keyboard.press('Control+s')
+ await expect(output.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await output.getByRole('button',{name:'Save',exact:true}).click()
  const copyHead=async()=>(await f.files.openFile(f.alice.token,copy.fileId)).file.revision
  await expect.poll(copyHead,{timeout:18000}).not.toBe(copy.revision)
  const savedCopyBytes=await f.files.readFile(f.alice.token,copy.fileId,await copyHead())
@@ -2156,18 +2188,35 @@ test('native Web PDF merges local files in order into a separate download',{skip
  assert.deepEqual(fields.map(field=>savedCopy.getForm().getTextField(field.getName()).getText()),['Customer 240','Updated imported value','Customer 270'])
  const text=(await readPdfLeafObjects(savedCopyBytes)).filter(item=>item.type===1).map(item=>item.text).join('|')
  for(const stamp of ['Donor header','1 / 2','2 / 2'])assert.ok(text.includes(stamp),stamp)
- await page.getByRole('button',{name:'View',exact:true}).click()
- await page.getByRole('button',{name:'Outline',exact:true}).click()
- await page.getByRole('treeitem',{name:'Donor chapter',exact:true}).click()
- await expect(page.locator('.tb-page-input')).toHaveValue('3')
- await page.getByRole('button',{name:'Attachments',exact:true}).click()
+ await output.getByRole('button',{name:'View',exact:true}).click()
+ await output.getByRole('button',{name:'Outline',exact:true}).click()
+ await output.getByRole('treeitem',{name:'Donor chapter',exact:true}).click()
+ await expect(output.locator('.tb-page-input')).toHaveValue('3')
+ await output.getByRole('button',{name:'Attachments',exact:true}).click()
  for(const [name,content] of [['report.txt','Attachment 240'],['report (2).txt','Attachment 250'],['report (3).txt','Attachment 270']]){
-  const entry=page.locator('.pdf-attachment').filter({has:page.getByText(name,{exact:true})})
+  const entry=output.locator('.pdf-attachment').filter({has:output.getByText(name,{exact:true})})
   const [attachment]=await Promise.all([page.waitForEvent('download'),entry.getByRole('button',{name:'Export',exact:true}).click()])
   assert.equal(attachment.suggestedFilename(),name)
   assert.equal(await readFile(await attachment.path(),'utf8'),content)
  }
  assert.deepEqual(errors,[])
+
+ const standalone=await context.newPage()
+ await standalone.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(standalone.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await standalone.getByRole('button',{name:'Pages',exact:true}).click()
+ const [standalonePicker]=await Promise.all([
+  standalone.waitForEvent('filechooser'),
+  standalone.getByRole('button',{name:'Merge PDF',exact:true}).click(),
+ ])
+ const [directDownload]=await Promise.all([
+  standalone.waitForEvent('download'),
+  standalonePicker.setFiles([inputs[1]]),
+ ])
+ assert.equal(directDownload.suggestedFilename(),'merge-source-merged.pdf')
+ assert.deepEqual((await PDFDocument.load(await readFile(await directDownload.path()))).getPages().map(page=>page.getWidth()),[240,270])
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+
 })
 
 test('native Web PDF saves rotation, drawings, bookmarks and widget deletion together',{skip:!directory,timeout:90000},async t=>{

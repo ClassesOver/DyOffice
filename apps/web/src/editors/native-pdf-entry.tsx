@@ -35,6 +35,7 @@ import {createNativePdfPageCopies} from './native-pdf-page-copies'
 import type {PdfRedactionReview} from './pdf-redactions'
 import {browserFileName,decodeBrowserBase64,downloadBrowserFile} from './browser-download'
 import {confirmWorkspaceCopy} from './web-ai-naming'
+import {MAX_WORKSPACE_PDF_COPY_BYTES} from './pdf-extraction'
 import {printInBrowser} from './browser-print'
 import {subscribeBrowserDocumentCommands,workspaceOpenAction} from './browser-document-command'
 import {pickLocalFiles} from './pick-local-files'
@@ -179,7 +180,10 @@ async function mount(){
     return fail('A PDF merge is unavailable while another page operation is pending.')
    }
    const initial=grant.current()
-   ribbonBusy=true
+   const publisher=params.has('sourceRevision')||params.get('guest')==='1'?undefined:copies
+   const locale=prefs?.language==='en'?'en':'zh'
+   if(publisher?.hasPending())return fail(locale==='en'?'Confirm the pending PDF copy before merging.':'请先确认待保存的 PDF 副本。')
+   ribbonBusy=true;ribbonError=''
    try{
     const files=await pickLocalFiles('application/pdf,.pdf',signal,true)
     if(!files.length)return canceled
@@ -187,19 +191,38 @@ async function mount(){
     signal.throwIfAborted()
     validatePdfMergeFiles(files)
     if(grant.current()!==initial)return fail('The PDF changed while selecting files. Retry the merge.')
+    const destination=publisher
+     ?await confirmWorkspaceCopy(suggestedName,{locale,signal,request:grant.workspaceRequest,fileId})
+     :null
+    if(publisher&&!destination)return canceled
+    if(grant.current()!==initial)return fail('The PDF changed while choosing a destination. Retry the merge.')
     if(!await flushDraft())return canceled
     const revision=grant.current()
     const unchanged=()=>grant.current()===revision&&isClean()&&!redacting&&!review?.candidates.length
     const {merged,appended}=await preparePdfMerge(await grant.api.readFile(path),files,signal)
     signal.throwIfAborted()
     if(!unchanged())return fail('The PDF changed during the merge. Retry the merge.')
-    const filename=browserFileName(suggestedName.replace(/\.pdf$/i,''),'merged')+'.pdf'
+    const filename=pageCopyName(destination?.name??suggestedName,'merged')
+    if(publisher&&destination){
+     if(merged.byteLength<=MAX_WORKSPACE_PDF_COPY_BYTES){
+      const ok=await publisher.publish(merged,{name:filename,folderId:destination.folderId},unchanged,signal)
+      if(!ok)return fail(locale==='en'?'Could not save the merged PDF.':'无法保存合并后的 PDF。')
+      return {ok:true,savedPath:publisher.getReceipts()[0]!.fileId,appendedCount:appended}
+     }
+     const message=locale==='en'
+      ?'The merged PDF exceeds the 32 MiB workspace file limit. Download it instead?'
+      :'合并后的 PDF 超过工作区 32 MiB 的文件上限。要改为下载吗？'
+     if(!window.confirm(message))return canceled
+    }
     downloadBrowserFile(new Blob([merged],{type:'application/pdf'}),filename)
     return {ok:true,savedPath:filename,appendedCount:appended}
    }catch(error){
-    return signal.aborted?canceled:fail(error instanceof Error?error.message:String(error))
+    ribbonPending=!!publisher?.hasPending()
+    ribbonError=error instanceof Error?error.message:String(error)
+    return signal.aborted?canceled:fail(ribbonError)
    }finally{
     ribbonBusy=false
+    if(!disposed)render()
    }
   },
   setDirty(){},

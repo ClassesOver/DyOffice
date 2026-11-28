@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {createHash} from 'node:crypto'
 import {createPdfExtraction} from '../../src/editors/pdf-extraction.ts'
 
 const prepared={uploadId:'upload',fileId:'created',sha256:'a'.repeat(64),size:100}
@@ -26,6 +27,50 @@ test('PDF extraction stages current source revision, finishes a new PDF and veri
  assert.ok(f.calls.filter(call=>call.method==='POST').every(call=>call.signal===controller.signal))
  assert.equal(f.calls.some(call=>call.path.endsWith('/commits')),false)
  assert.ok(f.calls.findIndex(call=>call.path.includes('/revisions/'))>f.calls.findIndex(call=>call.path.endsWith('/finish')))
+})
+test('publishing a merged PDF verifies and opens the original upload after a lost finish response',async()=>{
+ const bytes=new TextEncoder().encode('merged PDF fixture')
+ const output={...receipt,size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')}
+ const destination={name:'Packet.pdf',folderId:'folder'}
+ const calls=[],opened=[]
+ let finishAttempts=0
+ const f=fixture({onCreated:async value=>opened.push(value),request:async(path,method,body)=>{
+  calls.push([path,method,body])
+  if(path==='/api/v1/files/uploads')return {uploadId:'upload',fileId:output.fileId}
+  if(path==='/api/v1/uploads/upload/content')assert.deepEqual(new Uint8Array(await body.arrayBuffer()),bytes)
+  if(path==='/api/v1/uploads/upload/finish'){
+   if(++finishAttempts===1)throw Error('response lost')
+   return {format:'pdf',file:output}
+  }
+  if(path.includes('/revisions/'))return output
+ }})
+ await assert.rejects(f.client.publish(bytes,destination,()=>true),/response lost/)
+ assert.equal(f.client.hasPending(),true)
+ assert.deepEqual(opened,[])
+ assert.equal(await f.client.confirm(),true)
+ assert.deepEqual(opened,[output])
+ assert.equal(f.client.hasPending(),false)
+ assert.deepEqual(calls[0],['/api/v1/files/uploads','POST',{...destination,size:bytes.length}])
+ assert.equal(calls.filter(([path])=>path==='/api/v1/files/uploads').length,1)
+ assert.equal(calls.filter(([path])=>path.endsWith('/content')).length,1)
+ assert.equal(finishAttempts,2)
+})
+test('a source change during upload cancels the unpublished merged PDF',async()=>{
+ const bytes=new TextEncoder().encode('merged PDF fixture')
+ const calls=[]
+ let active=true
+ const f=fixture({request:async(path,method)=>{
+  calls.push([path,method])
+  if(path==='/api/v1/files/uploads')return {uploadId:'upload',fileId:'created'}
+  if(path.endsWith('/content'))active=false
+ }})
+ await assert.rejects(f.client.publish(bytes,{name:'Packet.pdf'},()=>active),/authorization changed/)
+ assert.equal(f.client.hasPending(),false)
+ assert.deepEqual(calls,[
+  ['/api/v1/files/uploads','POST'],
+  ['/api/v1/uploads/upload/content','PUT'],
+  ['/api/v1/uploads/upload','DELETE'],
+ ])
 })
 test('lost finish responses retain the same upload and block another extraction until receipt recovery',async()=>{
  let lost=true
