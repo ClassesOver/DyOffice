@@ -6,6 +6,9 @@
 .workspace-upload-modal .ant-modal-footer{margin:0;padding:16px 24px;border-top:1px solid var(--border-subtle);background:var(--surface)}
 .workspace-upload-modal .ant-btn{height:36px;border-radius:6px;box-shadow:none}
 .workspace-upload-intro{margin-bottom:16px!important;font-size:13px;line-height:22px}
+.workspace-upload-password{display:grid;gap:8px;margin-bottom:16px;padding:14px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface-subtle)}
+.workspace-upload-password label{font-weight:500;overflow-wrap:anywhere}
+.workspace-upload-password>.ant-space{justify-self:end}
 .workspace-upload-modal .ant-upload-wrapper .ant-upload-drag{border-radius:10px;border-color:var(--border);background:var(--surface-subtle);transition:border-color .15s,background .15s}
 .workspace-upload-modal .ant-upload-wrapper .ant-upload-drag:not(.ant-upload-disabled):hover{border-color:var(--accent);background:var(--accent-soft)}
 .workspace-upload-modal .ant-upload-wrapper .ant-upload-drag .ant-upload{padding:22px 12px}
@@ -37,3 +40,7 @@
 .workspace-upload-footer>.ant-typography{font-size:12px}
 .workspace-upload-list::-webkit-scrollbar{width:8px;height:8px}.workspace-upload-list::-webkit-scrollbar-track{background:var(--surface-subtle)}.workspace-upload-list::-webkit-scrollbar-thumb{background:var(--border);border:2px solid var(--surface-subtle);border-radius:8px}
 @media(max-width:680px){.workspace-upload-modal{max-width:calc(100vw - 24px);margin:12px auto}.workspace-upload-modal .ant-modal-header{padding:16px}.workspace-upload-modal .ant-modal-close{top:12px;inset-inline-end:10px}.workspace-upload-modal .ant-modal-body{padding:16px;max-height:calc(92dvh - 170px)}.workspace-upload-modal .ant-modal-footer{padding:12px 16px}.workspace-upload-footer{align-items:flex-start;flex-direction:column;gap:10px}.workspace-upload-footer>.ant-space{align-self:flex-end}.workspace-upload-modal .ant-upload-wrapper .ant-upload-drag .ant-upload{padding:18px 8px}.workspace-upload-drop-title{font-size:14px}.workspace-upload-list{max-height:210px}.workspace-upload-item{padding:10px;gap:10px}}
+
+.workspace-open-choices{margin-bottom:16px}
+.workspace-upload-modal .workspace-recent-file{display:block;width:100%;height:auto;padding:8px 14px;text-align:left;border-radius:0}
+.workspace-recent-file .workspace-upload-file-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -27,7 +27,10 @@ export async function registerLocalShell(app:FastifyInstance,directory:string,em
   })()
   try{await refreshing}finally{refreshing=undefined}
  }
- for(const url of ['/','/index.html','/assets/*'])app.route({method:['GET','HEAD'],url,handler:async(request,reply)=>{
+ for(const url of ['/','/index.html','/assets/*'])app.route({
+  method:['GET','HEAD'],url,
+  ...(url==='/assets/*'?{config:{workspaceAssetPrefix:'/assets/'}}:{}),
+  handler:async(request,reply)=>{
   const target=new URL(request.url,'http://localhost'),path=target.pathname
   const embed=(path==='/'||path==='/index.html')&&target.searchParams.get('dshEmbed')==='1'
   const allowed=embed?(await origins()).join(' '):''

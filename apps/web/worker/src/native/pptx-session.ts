@@ -1,3 +1,4 @@
+import {isSelfContainedGlb} from '../../../../slides/src/shared/model3d-glb'
 import {decodeInkPayload,encodeInkPayload,INK_NAME_PREFIX,MAX_INK_PAYLOAD_BYTES} from '../../../../slides/src/shared/ink-payload'
 import {WEB_NOTES_TEXT_LIMIT} from '../../../../slides/src/shared/notes-draft'
 import {safeExternalUrl} from '../../../../../packages/electron-utils/src/safe-external-url'
@@ -22,9 +23,11 @@ import { PNG } from 'pngjs'
 import { JpegImage } from 'pdfjs-dist/image_decoders/pdf.image_decoders.mjs'
 import { randomUUID } from 'node:crypto'
 import { inflateSync } from 'node:zlib'
-import { MAX_SLIDES_CLIPBOARD_BYTES, type PptxChildSession, type SlidesPasteView, type SlidesCopyCommand, type SlidesPasteCommand, type SlidesImageCommand, type SlidesImagePayload, type SlidesApplyView } from './pptx-session-host.ts'
+import { MAX_SLIDES_CLIPBOARD_BYTES, type PptxChildSession, type SlidesPasteView, type SlidesCopyCommand, type SlidesPasteCommand, type SlidesImageCommand, type SlidesModel3dCommand, type SlidesImagePayload, type SlidesApplyView } from './pptx-session-host.ts'
 import { copySlide, copyElementData, hasSlideNumberField, planSlidePastes, type SlideBundle } from '@genoffice/pptx-engine'
-import {embeddedMediaData, recordingOps} from './pptx-media'
+import {embeddedMediaData, mediaInsertOp, recordingOps} from './pptx-media'
+import {readEmbeddedTypefaces} from './pptx-fonts'
+import {verifyPptxModificationPassword} from './pptx-modify-password'
 
 /** In-process reuse seam, NOT an authenticated service, durable revision ledger or sandbox.
  * No network, filesystem paths, global session registry or persistent save acknowledgements.
@@ -58,7 +61,7 @@ export interface PptxSelection {
   slide: {index: number; id: string | undefined}
   element?: {id: string; type: string}
 }
-export interface PptxSession extends Pick<PptxChildSession, 'copyClipboard'|'mediaData'|'applyRecording'> {
+export interface PptxSession extends Pick<PptxChildSession, 'copyClipboard'|'mediaData'|'applyRecording'|'insertMedia'|'model3dData'|'editModel3d'|'fontFaces'|'fontData'|'unlockEditing'> {
   pasteClipboard(expectedGeneration:number,input:SlidesPasteCommand,signal?:AbortSignal):Promise<SlidesPasteView<RenderSlide>|null>
   selection(expectedGeneration: number, slide: number, elementId?: string, signal?: AbortSignal): Promise<PptxSelection>
   apply(expectedGeneration: number, ops: unknown, signal?: AbortSignal, options?: { isolation?: 'atomic' | 'per_op'; dryRun?: boolean }): Promise<SlidesApplyResult>
@@ -651,7 +654,9 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   await assertZipInflatesWithinLimits(input,ZIP_LIMITS)
   aborted(signal)
   let opened: OpenedPptx | undefined=await openPptx(input)
-  const writeProtected=opened.writeProtected
+  let writeProtected=opened.writeProtected===true
+  const modifyVerifier=writeProtected?opened.archive.readPresentation().modifyVerifier:undefined
+  let rejectedPasswords=0, retryUnlockAt=0
   aborted(signal)
   let generation=0
   const generatedPages=new Map<string,{source:MergeSlideSource;bytes:number;size:SlideSize;createdAt:number}>()
@@ -813,19 +818,64 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       return `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`
     }
   }
+  let fontCache: { presentation: Uint8Array | null; relationships: Uint8Array | null; fonts: ReturnType<typeof readEmbeddedTypefaces> } | undefined
+  function embeddedFonts(state: OpenedPptx) {
+    const presentation = state.archive.readBytes('ppt/presentation.xml')
+    const relationships = state.archive.readBytes('ppt/_rels/presentation.xml.rels')
+    if (!fontCache || fontCache.presentation !== presentation || fontCache.relationships !== relationships) {
+      fontCache = { presentation, relationships, fonts: readEmbeddedTypefaces(state) }
+    }
+    return fontCache.fonts
+  }
   function renderSlides(state: OpenedPptx, width: number): RenderSlide[] {
     if (state.deck.slides.length>MAX_RENDER_SLIDES) throw new Error('RENDER_LIMIT')
     const media = mediaResolver(state)
-    return state.deck.slides.map((slide,index)=>structuredClone(buildRenderSlide(slide,state.deck.size,{fitWidthPx:width,slideNo:index+1,media})))
+    return state.deck.slides.map((slide,index)=>structuredClone(buildRenderSlide(slide,state.deck.size,{fitWidthPx:width,slideNo:index+1,media,metrics:embeddedFonts(state).metrics})))
   }
   function renderMaster(state: OpenedPptx, slide: Slide, width: number): RenderSlide {
-    const rendered = structuredClone(buildRenderSlide(slide, state.deck.size, {fitWidthPx:width, media:mediaResolver(state)}))
+    const rendered = structuredClone(buildRenderSlide(slide, state.deck.size, {fitWidthPx:width, media:mediaResolver(state),metrics:embeddedFonts(state).metrics}))
     // The engine mints parse-time IDs on each read. The renderer's selection
     // must remain addressable through a later parse of the same package part.
     for (const node of rendered.nodes) {
       if (!node.decoration && node.durableId) node.sourceId = node.durableId
     }
     return rendered
+  }
+  function modelElement(state:OpenedPptx,slide:number,sourceId:string){
+    const matches=state.deck.slides[slide]?.elements.filter(element=>matchesElementRef(element,sourceId))
+    const model=matches?.length===1?matches[0]:undefined
+    return model?.type==='picture'&&model.model3d?model:undefined
+  }
+  function model3dOp(state:OpenedPptx,input:SlidesModel3dCommand):Op {
+    const {slide}=input
+    if(!Number.isSafeInteger(slide)||slide<0||!state.deck.slides[slide])throw Error('INVALID_SLIDE')
+    const poster=input.poster===undefined?undefined:decodedAnalysisPicture(Buffer.from(input.poster),'png')
+    if(input.mode==='insert'){
+      if(!(input.bytes instanceof Uint8Array)||!isSelfContainedGlb(input.bytes)||typeof input.name!=='string'||!input.name||input.name.length>255||/[\u0000-\u001f\u007f]/u.test(input.name)||!Number.isFinite(input.aspect)||input.aspect<1/3||input.aspect>3||!Number.isInteger(input.fitWidthPx)||input.fitWidthPx<320||input.fitWidthPx>4096)throw Error('INVALID_MEDIA')
+      const size=state.deck.size,cy=Math.round(size.cy/2),cx=Math.round(cy*input.aspect)
+      return {op:'addModel3d',target:{slide},bytes:input.bytes,ext:'glb',name:input.name,
+        offset:{x:Math.round((size.cx-cx)/2),y:Math.round((size.cy-cy)/2),cx,cy},...(poster?{poster:{bytes:poster,ext:'png'}}:{})}
+    }
+    if(input.mode!=='view'||!input.rot||![input.rot.ax,input.rot.ay,input.rot.az].every(angle=>Number.isFinite(angle)&&Math.abs(angle)<=2160000000))throw Error('INVALID_MEDIA')
+    const model=modelElement(state,slide,input.sourceId)
+    if(!model)throw Error('INVALID_ELEMENT')
+    return {op:'setModel3dView',target:{slide,el:elementDurableId(model)??model.id},
+      ax:Math.round(input.rot.ax),ay:Math.round(input.rot.ay),az:Math.round(input.rot.az),...(poster?{poster,posterExt:'png'}:{})}
+  }
+  function commitEmbeddedAssetOps(state:OpenedPptx,ops:Op[]):SlidesApplyView {
+    const before=snapshot(state)
+    let result:ReturnType<typeof runTxn>
+    try{
+      result=runTxn(state,{isolation:'atomic',ops})
+      if(!result.applied)throw new Error('OP_REJECTED')
+      historyCost(state)
+    }catch(error){restore(state,before);throw error}
+    redoStack.length=0;redoBytes=0
+    push(undoStack,before)
+    generation++;stateGeneration=generation
+    // Send the operation summary without the embedded media bytes.
+    const records=(result.records??[]).map(({op,slideId,created})=>({op:{op:op.op},...(slideId?{slideId}:{}),...(created?{created}:{})}))
+    return {generation,stateGeneration,...history(),records,...outlineOf(state),created:createdOf(state,result.records??[]),transaction:{applied:true,records}}
   }
   return {
     selection(expected,slide,elementId,signal) {
@@ -957,7 +1007,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
           }
           const media=mediaResolver(state)
           const slides=[...changed].map(i=>structuredClone(buildRenderSlide(state.deck.slides[i]!,state.deck.size,{
-            fitWidthPx:DEFAULT_FIT_WIDTH_PX,slideNo:i+1,media,
+            fitWidthPx:DEFAULT_FIT_WIDTH_PX,slideNo:i+1,media,metrics:embeddedFonts(state).metrics,
           })))
           redoStack.length=0;redoBytes=0
           if(!repaste)push(undoStack,before)
@@ -1027,7 +1077,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
           historyCost(state)
           redoStack.length=0;redoBytes=0;push(undoStack,before)
           generation++;stateGeneration=generation
-          return {generation,stateGeneration,...history(),slide:structuredClone(buildRenderSlide(state.deck.slides[slideIndex]!,state.deck.size,{fitWidthPx:DEFAULT_FIT_WIDTH_PX,slideNo:slideIndex+1,media:mediaResolver(state)})),sourceId:refreshed.id}
+          return {generation,stateGeneration,...history(),slide:structuredClone(buildRenderSlide(state.deck.slides[slideIndex]!,state.deck.size,{fitWidthPx:DEFAULT_FIT_WIDTH_PX,slideNo:slideIndex+1,media:mediaResolver(state),metrics:embeddedFonts(state).metrics})),sourceId:refreshed.id}
         }catch(error){restore(state,before);throw error}
       })
     },
@@ -1093,21 +1143,30 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     async applyRecording(expected,input,signal){
       return enqueueWrite(expected,signal,state=>{
         const ops=recordingOps(state,input)
-        if(!ops.length)return null
-        const before=snapshot(state)
-        let result:ReturnType<typeof runTxn>
-        try{
-          result=runTxn(state,{isolation:'atomic',ops})
-          if(!result.applied)throw new Error('OP_REJECTED')
-          historyCost(state)
-        }catch(error){restore(state,before);throw error}
-        redoStack.length=0;redoBytes=0
-        push(undoStack,before)
-        generation++;stateGeneration=generation
-        // The raw transaction contains recorded WAVs. Only forward its operation summary.
-        const records=(result.records??[]).map(({op,slideId,created})=>({op:{op:op.op},...(slideId?{slideId}:{}),...(created?{created}:{})}))
-        return {generation,stateGeneration,...history(),records,...outlineOf(state),created:createdOf(state,result.records??[]),transaction:{applied:true,records}}
+        return ops.length?commitEmbeddedAssetOps(state,ops):null
       })
+    },
+    async insertMedia(expected,input,signal){
+      return enqueueWrite(expected,signal,state=>commitEmbeddedAssetOps(state,[mediaInsertOp(state,input)]))
+    },
+    fontFaces(expected,signal){
+      return enqueue(expected,signal,state=>embeddedFonts(state).faces.map(({id,family,bold,italic})=>({id,family,bold,italic})))
+    },
+    fontData(expected,sourceId,signal){
+      return enqueue(expected,signal,state=>{
+        const face=embeddedFonts(state).faces.find(face=>face.id===sourceId)
+        return face?Uint8Array.from(face.bytes):null
+      })
+    },
+    async model3dData(expected,slide,sourceId,signal){
+      return enqueue(expected,signal,state=>{
+        const model=modelElement(state,slide,sourceId)
+        const bytes=model?.model3d?.target?state.archive.readBytes(model.model3d.target):undefined
+        return bytes&&isSelfContainedGlb(bytes)?Uint8Array.from(bytes):null
+      })
+    },
+    async editModel3d(expected,input,signal){
+      return enqueueWrite(expected,signal,state=>commitEmbeddedAssetOps(state,[model3dOp(state,input)]))
     },
     async applyImage(expected,input,signal){
       if(input.mode==='background'||input.mode==='fill'){
@@ -1258,7 +1317,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     render(expected,slide,width,signal) {
       return enqueue(expected,signal,state=>{
         if (!Number.isSafeInteger(slide) || slide<0 || slide>=state.deck.slides.length) throw new Error('INVALID_SLIDE')
-        return structuredClone(buildRenderSlide(state.deck.slides[slide]!,state.deck.size,{fitWidthPx:fitWidth(width),slideNo:slide+1,media:mediaResolver(state)}))
+        return structuredClone(buildRenderSlide(state.deck.slides[slide]!,state.deck.size,{fitWidthPx:fitWidth(width),slideNo:slide+1,media:mediaResolver(state),metrics:embeddedFonts(state).metrics}))
       })
     },
     chartData(expected,slide,sourceId,signal) {
@@ -1345,8 +1404,25 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     renderAll(expected,width,signal) {
       return enqueue(expected,signal,state=>renderSlides(state,fitWidth(width)))
     },
+    unlockEditing(expected,password,signal) {
+      return enqueue(expected,signal,()=>{
+        if(typeof password!=='string'||!password.length||password.length>255)throw new Error('INVALID_PASSWORD')
+        if(!writeProtected)return 'unlocked'
+        if(Date.now()<retryUnlockAt)return 'retry'
+        const result=verifyPptxModificationPassword(modifyVerifier,password)
+        if(result==='match'){
+          writeProtected=false
+          return 'unlocked'
+        }
+        if(result==='incorrect'&&++rejectedPasswords===3){
+          rejectedPasswords=0
+          retryUnlockAt=Date.now()+5000
+        }
+        return result
+      })
+    },
     outline(expected,signal) {
-      return enqueue(expected,signal,state=>({...outlineOf(state),defaultFont:deckFont(state),...(writeProtected?{writeProtected}:{})}))
+      return enqueue(expected,signal,state=>({...outlineOf(state),defaultFont:deckFont(state),...(writeProtected?{writeProtected:true as const}:{})}))
     },
     exportBytes(expected,signal) {
       return enqueueWrite(expected,signal,async state=>{
@@ -1357,6 +1433,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     close() {
+      fontCache=undefined
       if (opened) { opened=undefined; undoStack.length=0; undoBytes=0; redoStack.length=0; redoBytes=0;batchBefore=undefined;batchDepth=0;aiSnapshots.clear();aiSnapshotBytes=0 }
     },
   }
@@ -1365,7 +1442,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
 // ── child-process IPC loop: one untrusted deck per isolated Node child ──
 
 export interface PptxChildBinding { fileId: string; revision: string }
-interface ChildMessage { copy?:SlidesCopyCommand; recording?: import('./pptx-session-host').SlidesRecordingCommand; paste?:SlidesPasteCommand; snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
+interface ChildMessage { password?:string;  model?:SlidesModel3dCommand; media?:import('./pptx-session-host').SlidesMediaInsert; copy?:SlidesCopyCommand; recording?: import('./pptx-session-host').SlidesRecordingCommand; paste?:SlidesPasteCommand; snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
 /** Child entry body: serves exactly one bound session over IPC, then exits. Exported for the
  * dedicated child entry module; never starts from an imported module by accident. */
 export function runPptxSessionChild(): void {
@@ -1395,6 +1472,11 @@ export function runPptxSessionChild(): void {
           case 'copyClipboard': reply(id,{id,ok:true,result:await session.copyClipboard(raw.expected!,raw.copy!)}); return
           case 'pasteClipboard': reply(id,{id,ok:true,result:await session.pasteClipboard(raw.expected!,raw.paste!)}); return
           case 'mediaData': reply(id,{id,ok:true,result:await session.mediaData(raw.expected!,raw.slide!,raw.sourceId!)}); return
+          case 'fontFaces': reply(id,{id,ok:true,result:await session.fontFaces(raw.expected!)}); return
+          case 'fontData': reply(id,{id,ok:true,result:await session.fontData(raw.expected!,raw.sourceId!)}); return
+          case 'model3dData': reply(id,{id,ok:true,result:await session.model3dData(raw.expected!,raw.slide!,raw.sourceId!)}); return
+          case 'editModel3d': if(!raw.model)throw Error('INVALID_MEDIA');reply(id,{id,ok:true,result:await session.editModel3d(raw.expected!,raw.model)}); return
+          case 'insertMedia': if(!raw.media)throw new Error('INVALID_MEDIA');reply(id,{id,ok:true,result:await session.insertMedia(raw.expected!,raw.media)}); return
           case 'applyRecording': if(!raw.recording)throw new Error('INVALID_MEDIA');reply(id,{id,ok:true,result:await session.applyRecording(raw.expected!,raw.recording)}); return
           case 'applyImage': if(!raw.image)throw new Error('INVALID_MEDIA');reply(id,{id,ok:true,result:await session.applyImage(raw.expected!,raw.image)}); return
           case 'historyBatchBegin': reply(id,{id,ok:true,result:await session.beginHistoryBatch(raw.expected!)}); return
@@ -1416,6 +1498,7 @@ export function runPptxSessionChild(): void {
           case 'applyMaster': reply(id,{id,ok:true,result:await session.applyMaster(raw.expected!,raw.partPath!,raw.operation,raw.width)}); return
           case 'customShows': reply(id,{id,ok:true,result:await session.customShows(raw.expected!)}); return
           case 'renderAll': reply(id,{id,ok:true,result:await session.renderAll(raw.expected!,raw.width)}); return
+          case 'unlockEditing': reply(id,{id,ok:true,result:await session.unlockEditing(raw.expected!,raw.password!)}); return
           case 'outline': reply(id,{id,ok:true,result:await session.outline(raw.expected!)}); return
           case 'export': reply(id,{id,ok:true,result:await session.exportBytes(raw.expected!)}); return
           case 'close': reply(id,{id,ok:true,result:true}); session.close(); process.exit(0); return

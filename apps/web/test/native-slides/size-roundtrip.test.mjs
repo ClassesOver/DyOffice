@@ -40,6 +40,65 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[]}}))
  await page.goto(`${origin}/native-pptx/?fileId=${id}`)
  await expect(page.locator('.app-main')).toBeVisible({timeout:45_000})
+ await page.getByRole('button',{name:'File',exact:true}).click()
+ await page.getByRole('group',{name:'File',exact:true}).getByRole('button',{name:/^Print/}).click()
+ const printDialog=page.getByRole('dialog',{name:'Print',exact:true})
+ await expect(printDialog).toBeVisible()
+ await expect(printDialog.getByRole('group',{name:'Printer',exact:true})).toHaveCount(0)
+ await printDialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ await page.keyboard.press('ControlOrMeta+p')
+ await expect(printDialog).toBeVisible()
+ await printDialog.getByRole('radio',{name:'Current slide',exact:true}).check()
+ const printPreview=printDialog.frameLocator('iframe[title="Print"]')
+ await expect(printPreview.locator('.page img')).toBeVisible()
+ await page.evaluate(()=>{
+  const append=document.body.append
+  document.body.append=function(...children){
+   for(const frame of children){
+    if(!(frame instanceof HTMLIFrameElement)||!frame.sandbox.contains('allow-modals'))continue
+    frame.addEventListener('load',()=>{
+     const target=frame.contentWindow
+     const browserPrint=target.print.bind(target)
+     target.print=()=>{
+      const images=[...target.document.querySelectorAll('.page img')]
+      window.printedSlides={title:target.document.title,widths:images.map(image=>image.naturalWidth)}
+      browserPrint()
+     }
+    },{capture:true,once:true})
+   }
+   return append.apply(this,children)
+  }
+ })
+ await printDialog.getByRole('button',{name:'Print',exact:true}).click()
+ await expect(printDialog).toBeHidden()
+ const printed=await page.evaluate(()=>window.printedSlides)
+ assert.equal(printed?.title,'size-roundtrip')
+ assert.equal(printed.widths.length,1)
+ assert.ok(printed.widths[0]>0)
+ assert.equal((await f.files.openFile(f.alice.token,id)).file.revision,file.file.revision)
+ const draftNotes='Manual Save As speaker notes'
+ assert.equal(await page.evaluate(text=>window.slidesApi.setNotes({slideIndex:0,text}),draftNotes),true)
+ await page.getByRole('button',{name:'File',exact:true}).click()
+ const saveAs=page.getByRole('group',{name:'File',exact:true}).getByRole('button',{name:/^Save As/})
+ await expect(saveAs).toBeEnabled()
+ await saveAs.click()
+ const confirmation=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ const copyName=confirmation.getByRole('textbox',{name:'File name'})
+ await expect(copyName).toHaveValue('size-roundtrip.pptx')
+ await confirmation.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(confirmation).toHaveCount(0)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ await copyName.fill('Manual presentation copy')
+ await confirmation.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(page.getByText('Saved copy: Manual presentation copy.pptx',{exact:true})).toBeVisible({timeout:30000})
+ const manualCopy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Manual presentation copy.pptx')
+ assert.ok(manualCopy)
+ const manualZip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,manualCopy.id,manualCopy.revision))
+ const notesXml=await Promise.all(manualZip.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(part=>part.async('string')))
+ assert.ok(notesXml.some(xml=>xml.includes(draftNotes)))
+ assert.equal((await f.files.openFile(f.alice.token,id)).file.revision,file.file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,id,file.file.revision),original)
  const assistantNotice=page.getByRole('complementary',{name:'Document notifications'}).getByRole('status')
  await expect(assistantNotice.filter({hasText:'No model is available for AI assistant.'})).toBeVisible()
  for(const name of ['AI 助手','AI Beautify','AI Fact Check','AI Image']){
@@ -269,9 +328,9 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
   await expect(confirmation).toHaveCount(0)
  }
  await chooseCopyName(null)
- assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
  await chooseCopyName('Reviewed Revenue')
- await expect.poll(async()=>(await f.files.listFiles(f.alice.token)).files.length).toBe(2)
+ await expect.poll(async()=>(await f.files.listFiles(f.alice.token)).files.length).toBe(3)
  const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Reviewed Revenue.pptx')
  assert.ok(copy)
  const copyArchive=await JSZip.loadAsync(await f.files.readFile(f.alice.token,copy.id,copy.revision))

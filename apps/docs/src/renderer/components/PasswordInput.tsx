@@ -21,6 +21,7 @@ export function PasswordInput({
   invalid,
   hideReveal,
   placeholder,
+  label,
 }: {
   value: string
   onChange: (value: string) => void
@@ -31,6 +32,7 @@ export function PasswordInput({
   invalid?: boolean
   hideReveal?: boolean
   placeholder?: string
+  label?: string
 }) {
   const { t } = useI18n()
   const [show, setShow] = useState(false)
@@ -70,6 +72,7 @@ export function PasswordInput({
         disabled={disabled}
         maxLength={maxLength}
         placeholder={placeholder}
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}

@@ -1,12 +1,12 @@
-/**
- * Office-private font registration. Layout (main process) may resolve run fonts to files
- * Chromium cannot see (PowerPoint's bundled DFonts, Office cloud fonts); glyph positions are
- * baked with those metrics, so the canvas must draw with the same faces. Main exposes the
- * referenced faces + extracted sfnt bytes; here they become document FontFaces. Canvas layers
- * redraw via the FontFaceSet 'loadingdone' listener in SlideCanvas.
- */
+/** The layout process supplies the exact font faces used to measure text. */
+const registered = new Map<string, FontFace>()
+const pending = new Map<string, Promise<FontFace | null>>()
+let embeddedFamilies = new Set<string>()
+let syncAttempt = 0
 
-const requested = new Set<string>()
+export function hasEmbeddedFontFamily(family: string): boolean {
+  return embeddedFamilies.has(family.normalize('NFKC').toLowerCase())
+}
 
 declare global {
   interface Window {
@@ -15,51 +15,64 @@ declare global {
   }
 }
 
-/** Fetch and register any private faces not yet requested. Safe to call often (idempotent). */
-export async function syncPrivateFonts(): Promise<void> {
+type PrivateFace = Awaited<ReturnType<Window['slidesApi']['privateFontFaces']>>[number]
+
+function loadFace(face: PrivateFace): Promise<FontFace | null> {
+  const existing = pending.get(face.id)
+  if (existing) return existing
+  const promise = (async () => {
+    try {
+      const data = await window.slidesApi.privateFontData(face.id)
+      if (!data) return null
+      return await new FontFace(face.family, data, {
+        weight: face.bold ? '700' : '400',
+        style: face.italic ? 'italic' : 'normal',
+      }).load()
+    } catch {
+      return null
+    }
+  })().finally(() => pending.delete(face.id))
+  pending.set(face.id, promise)
+  return promise
+}
+
+/** Reconcile the deck's font faces. Desktop keeps the process-wide registrations. */
+export async function syncPrivateFonts(replace = false): Promise<void> {
+  const attempt = ++syncAttempt
   window.__genofficeDocFontsSynced = false
-  let faces: Array<{ id: string; family: string; bold: boolean; italic: boolean }>
   try {
-    faces = await window.slidesApi.privateFontFaces()
+    const faces = await window.slidesApi.privateFontFaces()
+    if (attempt !== syncAttempt || !Array.isArray(faces)) return
+    const added = await Promise.all(faces.filter(face => !registered.has(face.id)).map(async face =>
+      [face.id, await loadFace(face)] as const))
+    if (attempt !== syncAttempt) return
+    let changed = false
+    if (replace) {
+      const retained = new Set(faces.map(face => face.id))
+      for (const [id, face] of registered) {
+        if (retained.has(id)) continue
+        document.fonts.delete(face)
+        registered.delete(id)
+        changed = true
+      }
+    }
+    for (const [id, face] of added) {
+      if (!face || registered.has(id)) continue
+      document.fonts.add(face)
+      registered.set(id, face)
+      changed = true
+    }
+    if (replace) {
+      embeddedFamilies = new Set([...registered.values()].map(face => face.family.normalize('NFKC').toLowerCase()))
+    }
+    // ArrayBuffer-backed faces don't emit loadingdone on the document's FontFaceSet.
+    if (changed) {
+      document.fonts.dispatchEvent(new Event('loadingdone'))
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    }
   } catch {
-    window.__genofficeDocFontsSynced = true
-    return
+    // A failed font request leaves the existing CSS fallbacks in place.
+  } finally {
+    if (attempt === syncAttempt) window.__genofficeDocFontsSynced = true
   }
-  // Test harnesses stub the bridge with null results
-  if (!Array.isArray(faces)) {
-    window.__genofficeDocFontsSynced = true
-    return
-  }
-  const added = await Promise.all(
-    faces
-      .filter((f) => !requested.has(f.id))
-      .map(async (f) => {
-        requested.add(f.id)
-        try {
-          const data = await window.slidesApi.privateFontData(f.id)
-          if (!data) return false
-          const face = new FontFace(f.family, data, {
-            weight: f.bold ? '700' : '400',
-            style: f.italic ? 'italic' : 'normal',
-          })
-          document.fonts.add(face)
-          await face.load()
-          return true
-        } catch {
-          /* unparseable face: keep the CSS fallback chain */
-          return false
-        }
-      }),
-  )
-  // ArrayBuffer-backed FontFaces parse synchronously in the constructor, so the set never
-  // enters the loading state and never emits a real 'loadingdone' — canvases already
-  // rastered with a fallback face would keep the stale pixels. Fire it by hand.
-  if (added.some(Boolean)) {
-    document.fonts.dispatchEvent(new Event('loadingdone'))
-    // The listeners redraw Konva layers on the next animation frame; the fidelity
-    // harness screenshots as soon as the synced flag flips, so hold it until the
-    // redraw has actually presented (two rAFs = schedule + commit).
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-  }
-  window.__genofficeDocFontsSynced = true
 }

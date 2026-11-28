@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {PDFDocument,PDFHexString,PDFName,degrees} from 'pdf-lib'
+import {PDFDocument,PDFHexString,PDFName,PDFPageLeaf,degrees} from 'pdf-lib'
 import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs'
 import {createPdfSplitJob} from '../server/src/pdf/split-job.mjs'
 import {createIsolatedPdfSplitJob} from '../server/src/pdf/split-isolated.mjs'
@@ -14,6 +14,25 @@ async function fixture(){
  return Buffer.from(await doc.save())
 }
 async function read(bytes){const task=getDocument({data:Uint8Array.from(bytes),disableFontFace:true,useSystemFonts:true});try{const doc=await task.promise,out=[];for(let i=1;i<=doc.numPages;i++){const page=await doc.getPage(i);out.push({text:(await page.getTextContent()).items.map(item=>item.str??'').join(''),rotation:page.rotate,notes:(await page.getAnnotations()).map(note=>note.contentsObj.str)})}return out}finally{await task.destroy()}}
+test('PDF splitting retains links within each part and disables jumps to other parts',async()=>{
+ const doc=await PDFDocument.load(await fixture())
+ const addLink=(from,to)=>doc.getPage(from).node.addAnnot(doc.context.register(doc.context.obj({
+  Type:'Annot',Subtype:'Link',Rect:[20,20,100,40],Dest:[doc.getPage(to).ref,'Fit'],
+ })))
+ addLink(0,1);addLink(0,2);addLink(2,3);addLink(2,0)
+ const result=await createIsolatedPdfSplitJob().execute(Buffer.from(await doc.save()),command(2))
+ for(const part of result.files.slice(0,2)){
+  const task=getDocument({data:Uint8Array.from(part.bytes),disableFontFace:true,useSystemFonts:true})
+  try{
+   const output=await task.promise
+   const links=(await (await output.getPage(1)).getAnnotations()).filter(annotation=>annotation.subtype==='Link')
+   assert.equal(await output.getPageIndex(links[0].dest[0]),1)
+   assert.equal(links[1].dest,undefined)
+  }finally{await task.destroy()}
+  const output=await PDFDocument.load(part.bytes)
+  assert.equal(output.context.enumerateIndirectObjects().filter(([,object])=>object instanceof PDFPageLeaf).length,2)
+ }
+})
 test('PDF split produces ordered real PDF chunks including the short tail and preserves the source',async()=>{
  const bytes=await fixture(),before=Buffer.from(bytes),result=await createPdfSplitJob().execute(bytes,command(2))
  assert.deepEqual(bytes,before);assert.equal(result.files.length,3)
@@ -36,8 +55,9 @@ test('PDF split refuses protected documents and aggregate output over 64 MiB',as
  const bytes=await fixture(),job=createPdfSplitJob()
  const signed=await PDFDocument.load(bytes);signed.context.register(signed.context.obj({Type:'Sig',ByteRange:[0,1,2,3]}))
  await assert.rejects(job.execute(Buffer.from(await signed.save()),command(2)),{code:'SIGNATURE_EDIT_REFUSED'})
- const form=await PDFDocument.load(bytes);form.getForm().createTextField('x')
- await assert.rejects(job.execute(Buffer.from(await form.save()),command(2)),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})
+ const form=await PDFDocument.load(bytes)
+ form.getForm().acroForm.dict.set(PDFName.of('XFA'),form.context.register(form.context.flateStream('<xdp/>')))
+ await assert.rejects(job.execute(Buffer.from(await form.save({updateFieldAppearances:false})),command(2)),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})
  const encrypted=await PDFDocument.load(bytes);encrypted.context.trailerInfo.Encrypt=encrypted.context.register(encrypted.context.obj({Filter:'Standard',V:1,R:2,Length:40,O:'x',U:'y',P:-4}))
  await assert.rejects(job.execute(Buffer.from(await encrypted.save()),command(2)),{code:'PASSWORD'})
  const source=await PDFDocument.create(),shared=source.context.register(source.context.stream('q\n'+' '.repeat(680000)+'\nQ\n'))

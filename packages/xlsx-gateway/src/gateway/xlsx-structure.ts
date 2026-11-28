@@ -2443,6 +2443,41 @@ export function* formulaCodeSegments(formula: string) {
   yield { code: formula.slice(start), literal: '' }
 }
 
+/// Numeric workbook qualifiers in SpreadsheetML formulas, with the digit span
+/// so a link can be renumbered without changing the rest of the reference.
+export function* externalWorkbookReferences(formula: string) {
+  const markers = /["'[]/g
+  const bareQualifier = /\[(\d+)\][^\s!(),;"'^&*<>=+\-*/[\]]*!/y
+  for (let match = markers.exec(formula); match; match = markers.exec(formula)) {
+    const { index } = match
+    const marker = match[0]
+    if (marker === '"') {
+      markers.lastIndex = formulaQuoteEnd(formula, index, marker)
+      continue
+    }
+    if (marker === "'") {
+      const end = formulaQuoteEnd(formula, index, marker)
+      markers.lastIndex = end
+      if (formula[end] !== '!') continue
+      const digits = /^'\[(\d+)\]/.exec(formula.slice(index, end))?.[1]
+      if (digits) yield { index: Number(digits), start: index + 2, end: index + 2 + digits.length }
+      continue
+    }
+    // A table identifier followed by brackets, or a nested bracket group,
+    // belongs to a structured reference. Skip its contents as a unit.
+    bareQualifier.lastIndex = index
+    const digits = /[\p{L}\p{N}_.\\\]]/u.test(formula[index - 1] ?? '')
+      ? undefined
+      : bareQualifier.exec(formula)?.[1]
+    if (digits) {
+      markers.lastIndex = bareQualifier.lastIndex
+      yield { index: Number(digits), start: index + 1, end: index + 1 + digits.length }
+    } else {
+      markers.lastIndex = formulaBracketEnd(formula, index)
+    }
+  }
+}
+
 /// Shifts A1 references in a formula, preserving `$` markers and other
 /// sheets' qualified references. String literals are left untouched. A
 /// reference fully inside a deleted range aborts (Excel would emit #REF!).

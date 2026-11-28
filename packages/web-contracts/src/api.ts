@@ -4,7 +4,7 @@ export type Principal = Readonly<{ userId: string; sessionId: string; deployment
 export type JobRef = Readonly<{ id: string }>
 export type RevisionRef = Readonly<{ fileId: string; revision: string; sha256: string; size: number }>
 export type SaveInput = Readonly<{ fileId: string; uploadId: string; baseRevision: string; idempotencyKey: string; leaseEpoch: number; wordVersion?: number; sourceCommandId?: string }>
-export type OpenFileResult = Readonly<{ name?: string; pdfAutoNamePending?: true; autoNamePending?: true; officeSignatureProtected?: true; file: RevisionRef; format: OfficeFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
+export type OpenFileResult = Readonly<{ name?: string; pdfAutoNamePending?: true; autoNamePending?: true; officeSignatureProtected?: true; workbookPasswordProtected?: true; documentPasswordProtected?: true; file: RevisionRef; format: OfficeFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
 export type PublicSettings = Readonly<{ theme: 'light' | 'dark' | 'system'; language: string; authorName?: string; autoSave?: boolean; showAssistant?: boolean }>
 
 export function isRevisionRef(value: unknown): value is RevisionRef {

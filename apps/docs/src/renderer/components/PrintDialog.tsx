@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrintDuplex, PrintPaper, PrinterInfo } from '../../shared/ipc'
 import { useI18n } from '../i18n/locale'
+import { addBrowserPrintLinks } from '../pdf-internal-links'
 import { parsePrintRange } from '../print-range'
 import { clearPrintZoom, setPrintZoom } from '../print-zoom'
 
@@ -42,10 +43,12 @@ function paperOfPage(page: HTMLElement | undefined): PrintPaper | undefined {
 
 export function PrintDialog({
   browserOnly = false,
+  internalLinkBlocks,
   onClose,
   setStatus,
 }: {
   browserOnly?: boolean
+  internalLinkBlocks?: Parameters<typeof addBrowserPrintLinks>[2]
   onClose: () => void
   setStatus: (s: string) => void
 }) {
@@ -160,6 +163,9 @@ export function PrintDialog({
     if (!last) return
     const paper = paperOfPage(browserOnly ? pages[0] : els[0])
     const app = browserOnly ? last.closest('.app') : null
+    const removeLinks = browserOnly && internalLinkBlocks
+      ? addBrowserPrintLinks(els, pages, internalLinkBlocks)
+      : undefined
     setPrinting(true)
     app?.classList.add('pv-printing')
     els.forEach((el, i) => el.classList.toggle('pv-print-skip', !sel.has(i)))
@@ -180,6 +186,7 @@ export function PrintDialog({
       // not ok without an error = canceled in the system dialog: keep the dialog open
     } finally {
       if (!browserOnly) clearPrintZoom()
+      removeLinks?.()
       app?.classList.remove('pv-printing')
       last.classList.remove('pv-print-tail')
       els.forEach((el) => el.classList.remove('pv-print-skip'))

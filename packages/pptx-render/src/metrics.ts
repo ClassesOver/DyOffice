@@ -243,7 +243,8 @@ export class OpentypeMetrics implements FontMetricsProvider {
           if (font.charToGlyphIndex(ch) === 0) return this.fallback.measure(text, style)
         }
       }
-      return font.getAdvanceWidth(text, style.fontSizePx, { kerning: style.kerning !== false })
+      const width = font.getAdvanceWidth(text, style.fontSizePx, { kerning: style.kerning !== false })
+      return Number.isFinite(width) && width >= 0 ? width : this.fallback.measure(text, style)
     } catch {
       return this.fallback.measure(text, style)
     }

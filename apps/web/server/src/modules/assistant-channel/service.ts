@@ -479,7 +479,8 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
    if(typeof write!=='boolean')throw fail(400)
    const origin=draftOrigin(originValue)
    return withCreatedDocument(token,fileId,proof,async(c,p,id)=>{
-    if(!isBackgroundFormat((await loadFile(c,p,id)).format))throw fail(403)
+    const file=await loadFile(c,p,id)
+    if(!isBackgroundFormat(file.format)||(file.format==='docx'&&file.office_password_protected))throw fail(403)
     const expires=Date.now()+60000
     return {ticket:expires+'.'+draftSignature(p,id,origin,expires,write)}
    })
@@ -492,7 +493,8 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     const expires=Number(match[1]),signature=Buffer.from(match[2])
     const write=timingSafeEqual(signature,Buffer.from(draftSignature(p,id,origin,expires,true)))
     if(!write&&!timingSafeEqual(signature,Buffer.from(draftSignature(p,id,origin,expires))))throw fail(403)
-    if(!isBackgroundFormat((await loadFile(c,p,id)).format))throw fail(403)
+    const file=await loadFile(c,p,id)
+    if(!isBackgroundFormat(file.format)||(file.format==='docx'&&file.office_password_protected))throw fail(403)
     return {expires,...(write&&{write})}
    })
   },

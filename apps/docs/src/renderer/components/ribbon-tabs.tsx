@@ -788,6 +788,7 @@ export type { BalloonMode, RevisionDisplayMode }
 
 interface ReviewTabProps extends TabProps {
   desktopActionsAvailable?: boolean
+  compareAvailable?: boolean
   onAiPreset: (instruction: string) => void
   commentCount: number
   /** unresolved root comments; 0 disables the AI resolve-comments action */
@@ -839,6 +840,7 @@ interface ReviewTabProps extends TabProps {
 
 export function ReviewTab({
   desktopActionsAvailable = true,
+  compareAvailable = desktopActionsAvailable,
   editor,
   hasDoc,
   dropdown,
@@ -1338,8 +1340,7 @@ export function ReviewTab({
         <div className="ribbon-group-items">
           <button
             className="rb-big"
-            disabled={!hasDoc || !desktopActionsAvailable}
-            title={!desktopActionsAvailable ? '文档比较仅桌面版可用。' : undefined}
+            disabled={!hasDoc || !compareAvailable}
             data-tip={t('ribbonCompareTip')}
             onClick={onCompare}
           >

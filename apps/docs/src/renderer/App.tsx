@@ -538,6 +538,7 @@ import {
   printDoc as printDocImpl,
   save as saveImpl,
   suggestedSaveAsName,
+  currentDocGeneration,
   writeRecoveryCopy as writeRecoveryCopyImpl,
   buildDocBytes,
   type FileActionContext,
@@ -815,7 +816,7 @@ function shadowPlanDiff(
 
 export type DocsNamedCopy = (propose: (suggest: NonNullable<Parameters<typeof suggestedSaveAsName>[1]>) => Promise<string>) => Promise<void>
 
-export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions?: React.ReactNode; saveStatus?: React.ReactNode; setImageAttachments?: SetDocsImageAttachments; desktopActionsAvailable?: boolean; namedCopy?: DocsNamedCopy; bodyCollaboration?: boolean; syncBody?:()=>Promise<boolean>; onCollabEditor?: (editor: import('@tiptap/core').Editor | null) => void; readOnly: boolean; assistantAvailable: boolean; getSupportedCreateDocumentTypes?: () => readonly import('../shared/ipc').CreateDocumentType[]; resolveKnowledgeCitation?: (path: string) => string | undefined; externalAssistant?: {id:string;activity:React.ReactNode}; onHandoffReady?: (runner: import('./file-actions').OfficeHandoffRunner | null) => void; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined} & DocsAssistantRecovery; recoveryRevision?: string | undefined; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions?: React.ReactNode; saveStatus?: React.ReactNode; setImageAttachments?: SetDocsImageAttachments; desktopActionsAvailable?: boolean; openPasswordAvailable?: boolean; mailMergeMaxBytes?: number; openWorkspaceFile?: () => boolean; saveAsCopy?:()=>Promise<boolean>; canSaveAsCopy?:boolean; namedCopy?: DocsNamedCopy; bodyCollaboration?: boolean; syncBody?:()=>Promise<boolean>; onCollabEditor?: (editor: import('@tiptap/core').Editor | null) => void; readOnly: boolean; assistantAvailable: boolean; getSupportedCreateDocumentTypes?: () => readonly import('../shared/ipc').CreateDocumentType[]; resolveKnowledgeCitation?: (path: string) => string | undefined; externalAssistant?: {id:string;activity:React.ReactNode}; onHandoffReady?: (runner: import('./file-actions').OfficeHandoffRunner | null) => void; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined} & DocsAssistantRecovery; recoveryRevision?: string | undefined; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -2517,13 +2518,20 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
   }, [commitOpenedFile, editor, loadFile, resetFile])
 
   const openFile = useCallback(
-    () => { if(host?.desktopActionsAvailable===false){setStatus('请在工作区打开其他文件。');return Promise.resolve(false)} return runGuardedCandidate(
+    async () => {
+      if (host?.desktopActionsAvailable === false) {
+        if (host.openWorkspaceFile) return host.openWorkspaceFile()
+        setStatus('请在工作区打开其他文件。')
+        return false
+      }
+      return runGuardedCandidate(
         () => window.desktop.confirmDocumentReplace(),
         () => window.desktop.openDocx(),
         commitOpenedFile,
         replacesDocument,
-      )},
-    [commitOpenedFile,host?.desktopActionsAvailable],
+      )
+    },
+    [commitOpenedFile, host?.desktopActionsAvailable, host?.openWorkspaceFile],
   )
 
   /** new document from the built-in blank template (AI can then generate into it) */
@@ -2578,13 +2586,14 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
   const applyProtectDialog = async (result: ProtectDialogResult) => {
     setShowProtectDialog(false)
     let changed = false
-    if (result.openPassword !== undefined && host?.desktopActionsAvailable !== false) {
+    if (result.openPassword !== undefined && (host?.desktopActionsAvailable !== false || host?.openPasswordAvailable)) {
       const cur = fileCtxRef.current.doc
       const res = await window.desktop.setDocPassword(cur?.filePath ?? null, result.openPassword)
       if (res.ok) {
         setDoc((d) => (d ? { ...d, encrypted: !!result.openPassword } : d))
         // the on-disk file only changes on the next save
         dirtyRef.current = true
+        host?.onDocumentEdited()
         changed = true
       }
     }
@@ -2623,10 +2632,19 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
   }
 
   const save = useCallback(
-    (saveAs: boolean, auto = false) => {if(host?.bodyCollaboration && host.syncBody)return host.syncBody();if(saveAs&&host?.desktopActionsAvailable===false){setStatus('Web 暂不支持另存为，请下载原件。');return Promise.resolve(false)}return analysisSaveConsent.current.run(auto,
-      () => saveImpl(fileCtxRef.current, saveAs, auto),
-      ok => ok && !isDocDirty(fileCtxRef.current),false)},
-    [host?.desktopActionsAvailable,host?.bodyCollaboration,host?.syncBody],
+    (saveAs: boolean, auto = false) => {
+      if (saveAs && host?.desktopActionsAvailable === false) {
+        return host.saveAsCopy?.() ?? Promise.resolve(false)
+      }
+      if (host?.bodyCollaboration && host.syncBody) return host.syncBody()
+      return analysisSaveConsent.current.run(
+        auto,
+        () => saveImpl(fileCtxRef.current, saveAs, auto),
+        ok => ok && !isDocDirty(fileCtxRef.current),
+        false,
+      )
+    },
+    [host?.desktopActionsAvailable,host?.bodyCollaboration,host?.syncBody,host?.saveAsCopy],
   )
 
   // ---- Mailings: the data source and the merge ----
@@ -2651,11 +2669,20 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
     )
   }, [])
 
+  const mailMergeMaxBytes = host?.mailMergeMaxBytes
+
   /** build the merged documents and write them where the user says */
   const mergeMailings = useCallback(
     async (request: MailMergeRequest): Promise<MailMergeResponse> => {
       try {
-        const files = await buildMailMergeFiles(fileCtxRef.current, request)
+        await waitForFullContent()
+        const current = fileCtxRef.current
+        if (mailMergeMaxBytes && !current.editor?.isEditable) return { ok: false, canceled: true }
+        const files = await buildMailMergeFiles(current, request, mailMergeMaxBytes ? {
+          bytes: mailMergeMaxBytes,
+          message: lang === 'zh' ? '合并文档总大小超过 64 MiB。' : 'The merged documents exceed 64 MiB.',
+        } : undefined)
+        if (mailMergeMaxBytes && !current.editor?.isEditable) return { ok: false, canceled: true }
         if (files.length === 0) return { ok: false, error: t('appMergeNothingToWrite') }
         const written = await window.desktop.writeMergeOutput({
           mode: request.mode,
@@ -2675,7 +2702,7 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
     },
-    [],
+    [lang, mailMergeMaxBytes],
   )
 
   /**
@@ -3506,7 +3533,14 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
   )
   const removeInks = useCallback((ids: string[]) => removeInksImpl(reviewCtxRef.current, ids), [])
   const clearInks = useCallback(() => clearInksImpl(reviewCtxRef.current), [])
-  const compareWithFile = useCallback(() => compareWithFileImpl(reviewCtxRef.current), [])
+  const comparisonRequest = useRef(0)
+  const compareWithFile = useCallback(() => {
+    const request = ++comparisonRequest.current
+    const generation = currentDocGeneration()
+    return compareWithFileImpl(() => request === comparisonRequest.current &&
+      generation === currentDocGeneration() && !reviewCtxRef.current.editor?.isDestroyed
+      ? reviewCtxRef.current : null)
+  }, [])
 
   // the ribbon's revision badge walks every block: paced with the word count below
   const [revisionRanges, setRevisionRanges] = useState<RevisionRange[]>([])
@@ -8423,6 +8457,10 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
       <Ribbon
         embeddedDocument={host?.embeddedDocument === true}
         desktopActionsAvailable={desktopActionsAvailable}
+        mailMergeAvailable={desktopActionsAvailable !== false || !!mailMergeMaxBytes}
+        compareAvailable={desktopActionsAvailable !== false || !!window.desktop.pickComparisonDocx}
+        openAvailable={desktopActionsAvailable !== false || !!host?.openWorkspaceFile}
+        saveAsAvailable={desktopActionsAvailable !== false || host?.canSaveAsCopy === true}
         aiNamingAvailable={desktopActionsAvailable !== false || !!namedCopy}
         fileActions={host?.fileActions}
         trailingActions={host?.saveStatus}
@@ -9410,7 +9448,14 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
         />
       )}
 
-      {doc && showPrintDialog && <PrintDialog browserOnly={host?.desktopActionsAvailable === false} onClose={closePrintDialog} setStatus={setStatus} />}
+      {doc && showPrintDialog && (
+        <PrintDialog
+          browserOnly={desktopActionsAvailable === false}
+          internalLinkBlocks={doc.parsed.blocks}
+          onClose={closePrintDialog}
+          setStatus={setStatus}
+        />
+      )}
 
       {stats && <WordCountDialog stats={stats} onClose={() => setStats(null)} />}
 
@@ -9437,7 +9482,7 @@ export function App({ host }: { host?: { embeddedDocument?: boolean; fileActions
       {showProtectDialog && (
         <ProtectDialog
           encrypted={doc?.encrypted ?? false}
-          openPasswordAvailable={desktopActionsAvailable !== false}
+          openPasswordAvailable={desktopActionsAvailable !== false || host?.openPasswordAvailable === true}
           writeProtection={writeProtection}
           protection={protection}
           removePersonalInfo={removePersonalInfo}

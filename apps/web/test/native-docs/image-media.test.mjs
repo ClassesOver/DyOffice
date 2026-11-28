@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {Readable} from 'node:stream'
 import {randomFillSync} from 'node:crypto'
+import {createServer} from 'node:http'
 import {fileURLToPath} from 'node:url'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
@@ -16,6 +17,107 @@ import {createGlobalConfigService} from '../../server/src/modules/admin/service.
 const webp='UklGRhwAAABXRUJQVlA4TA8AAAAvA8AAAAcQ/Y/+ByKi/wEA'
 const remoteUrl='https://images.example/icon.webp'
 const frame=(delta,finish_reason)=>Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason}]})+'\n\n')
+
+async function testLocalPictures(t,method){
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port
+ const f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const original=await docxBytes(),opened=(await importFile(f,f.alice.token,original)).file
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,nativeDocsDirectory:process.env.DYOFFICE_TEST_DOCS_DIST??fileURLToPath(new URL('../../dist-docs',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1450,height:900}})
+ const {csrfToken}=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/native-docx/?fileId='+opened.fileId)
+ const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+ await expect(editor).toBeVisible({timeout:18000})
+ await editor.click()
+ await page.getByRole('button',{name:'Insert',exact:true}).click()
+ const picture=page.getByRole('button',{name:'Picture',exact:true})
+ const images=page.locator('.tiptap.doc-page img')
+ const png=new PNG({width:3,height:2});png.data.fill(255)
+ const jpeg=Buffer.from(await page.evaluate(()=>{
+  const canvas=document.createElement('canvas');canvas.width=4;canvas.height=3
+  return canvas.toDataURL('image/jpeg').split(',')[1]
+ }),'base64')
+ const fixtures=[
+  {name:'photo.PNG',mimeType:'application/octet-stream',buffer:PNG.sync.write(png),extension:/\.png$/},
+  {name:'camera.JPG',mimeType:'',buffer:jpeg,extension:/\.jpe?g$/},
+  {name:'animation.gif',mimeType:'application/octet-stream',buffer:Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7','base64'),extension:/\.gif$/},
+ ]
+ async function choose(file){
+  const [picker]=await Promise.all([page.waitForEvent('filechooser'),picture.click()])
+  const {name,mimeType,buffer}=file
+  await picker.setFiles({name,mimeType,buffer})
+ }
+ if(method==='paste'){
+  const urls=fixtures.map(({name})=>'https://clipboard-images.example/'+name)
+  const fetched=[]
+  await page.route('https://clipboard-images.example/**',route=>route.fulfill({status:403}))
+  await page.route('**/api/v1/ai/media',async route=>{
+   const body=route.request().postDataJSON()
+   assert.equal(body.action,'fetch_image')
+   assert.ok(route.request().headers()['x-csrf-token'])
+   const index=urls.indexOf(body.url)
+   assert.ok(index>=0)
+   fetched.push(body.url)
+   await route.fulfill({json:{mime:['image/png','image/jpeg','image/gif'][index],base64:fixtures[index].buffer.toString('base64')}})
+  })
+  await editor.click()
+  await editor.evaluate((node,urls)=>{
+   const clipboardData=new DataTransfer()
+   clipboardData.setData('text/html',urls.map(src=>'<img src="'+src+'">').join(''))
+   clipboardData.setData('text/plain',urls.join('\n'))
+   node.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}))
+  },urls)
+  await expect(images).toHaveCount(3,{timeout:7000})
+  assert.deepEqual(fetched,urls)
+ }else if(method==='drop'){
+  const unsupported={name:'masquerading.png',mimeType:'application/octet-stream',buffer:Buffer.from(webp,'base64')}
+  const malformed={name:'invalid.png',mimeType:'application/octet-stream',buffer:Buffer.from('not a picture')}
+  const transfer=await page.evaluateHandle(files=>{
+   const dt=new DataTransfer()
+   for(const {name,mimeType,data} of files)dt.items.add(new File([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],name,{type:mimeType}))
+   return dt
+  },[unsupported,malformed,...fixtures].map(({name,mimeType,buffer})=>({name,mimeType,data:buffer.toString('base64')})))
+  const target=await editor.locator('p').first().boundingBox()
+  assert.ok(target)
+  const event={dataTransfer:transfer,clientX:target.x+4,clientY:target.y+target.height/2}
+  await editor.dispatchEvent('dragover',event)
+  await expect(page.locator('.editor-scroll')).toHaveClass(/image-drop-target/,{timeout:3000})
+  await editor.dispatchEvent('drop',event)
+  await expect(page.locator('.editor-scroll')).not.toHaveClass(/image-drop-target/)
+  await transfer.dispose()
+ }else{
+  for(const [index,file] of fixtures.entries()){
+   await choose(file)
+   await expect(images).toHaveCount(index+1,{timeout:7000})
+  }
+  await choose({name:'invalid.png',mimeType:'image/png',buffer:Buffer.from('not a picture')})
+  await expect(page.getByText('Failed to load image',{exact:true})).toBeVisible()
+ }
+ await expect(images).toHaveCount(3,{timeout:7000})
+ const saved=page.waitForResponse(response=>response.url().endsWith('/commits')&&response.ok(),{timeout:18000})
+ await page.keyboard.press('ControlOrMeta+s');await saved
+ const {file}=await f.files.openFile(f.alice.token,opened.fileId)
+ assert.notEqual(file.revision,opened.revision)
+ const doc=await JSZip.loadAsync(await f.files.readFile(f.alice.token,opened.fileId,file.revision))
+ const parts=await Promise.all(doc.file(/^word\/media\//).map(async part=>({name:part.name,bytes:await part.async('nodebuffer')})))
+ assert.equal(parts.length,3)
+ for(const fixture of fixtures)assert.ok(parts.some(part=>fixture.extension.test(part.name)&&part.bytes.equals(fixture.buffer)),fixture.name)
+ await page.reload()
+ await expect(images).toHaveCount(3,{timeout:18000})
+ assert.deepEqual(await f.files.readFile(f.alice.token,opened.fileId,opened.revision),original)
+}
+
+test('Word inserts local PNG JPEG and GIF when the browser reports an unknown MIME type',{timeout:65000},t=>testLocalPictures(t,'picker'))
+test('Word drops local PNG JPEG and GIF when the browser reports an unknown MIME type',{timeout:65000},t=>testLocalPictures(t,'drop'))
+test('Word pastes remote pictures with their original bytes when cross-origin access is denied',{timeout:65000},t=>testLocalPictures(t,'paste'))
 
 test('Word AI inserts generated, linked and attached images into DOCX without reusing expired attachments',{timeout:120_000},async t=>{
  const origin='http://localhost:4254',f=await fileFixture(t,{origin,buildApp:false})

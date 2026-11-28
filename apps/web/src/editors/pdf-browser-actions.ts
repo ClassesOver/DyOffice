@@ -1,39 +1,45 @@
 import JSZip from 'jszip'
-import {loadPdfForView} from '../../../pdf/src/renderer/open-document'
+import wasmUrl from '@embedpdf/pdfium/pdfium.wasm?url'
+import type {PdfComparisonReply,PdfComparisonTask} from './pdf-comparison.worker'
 import type {ExportImagesRequest} from '../../../pdf/src/shared/ipc'
 import {browserFileName, downloadBrowserFile} from './browser-download'
+
+// Retain the engine asset for this viewer. Each file still gets its own worker
+// so the PDFium heap can be released as soon as the extraction finishes.
+let comparisonEngine:Promise<Blob>|undefined
+function loadComparisonEngine(signal?:AbortSignal):Promise<Blob>{
+  comparisonEngine??=fetch(wasmUrl,{signal:signal??null}).then(response=>{
+    if(!response.ok)throw Error('PDF comparison engine could not load.')
+    return response.blob()
+  }).catch(error=>{
+    comparisonEngine=undefined
+    throw error
+  })
+  return comparisonEngine
+}
 
 export async function readPdfComparisonPages(bytes: Uint8Array, password?: string, signal?: AbortSignal): Promise<string[]> {
   if (!bytes.length || bytes.length > 64 * 1024 * 1024) throw new Error('PDF exceeds the comparison size limit.')
   signal?.throwIfAborted()
-  const task = loadPdfForView(bytes, password)
-  const abort = () => { void task.destroy().catch(() => {}) }
-  signal?.addEventListener('abort', abort, {once:true})
+  const wasm=await loadComparisonEngine(signal)
+  signal?.throwIfAborted()
+  const worker = new Worker(new URL('./pdf-comparison.worker.ts', import.meta.url), {type:'module'})
+  let abort: (()=>void) | undefined
   try {
-    const pdf = await task.promise
-    if (pdf.numPages > 500) throw new Error('PDF exceeds the comparison page limit.')
-    const pages: string[] = []
-    let characters = 0
-    for (let index = 1; index <= pdf.numPages; index++) {
-      signal?.throwIfAborted()
-      const page = await pdf.getPage(index)
-      try {
-        const {items} = await page.getTextContent()
-        const lines: string[] = []
-        for (const item of items) {
-          if (!('str' in item)) continue
-          characters += item.str.length + Number(item.hasEOL)
-          if (characters > 5_000_000) throw new Error('PDF exceeds the comparison text limit.')
-          lines.push(item.str)
-          if (item.hasEOL) lines.push('\n')
-        }
-        pages.push(lines.join(''))
-      } finally { page.cleanup() }
-    }
-    return pages
+    const reply=await new Promise<PdfComparisonReply>((resolve,reject)=>{
+      abort=()=>reject(signal?.reason)
+      signal?.addEventListener('abort',abort,{once:true})
+      worker.onmessage=({data}:MessageEvent<PdfComparisonReply>)=>resolve(data)
+      worker.onerror=worker.onmessageerror=()=>reject(Error('PDF comparison engine failed.'))
+      const task:PdfComparisonTask={bytes,password,wasm}
+      worker.postMessage(task,bytes.buffer instanceof ArrayBuffer?[bytes.buffer]:[])
+    })
+    signal?.throwIfAborted()
+    if(!reply.ok)throw Error(reply.error)
+    return reply.pages
   } finally {
-    signal?.removeEventListener('abort', abort)
-    if (!signal?.aborted) await task.destroy()
+    if(abort)signal?.removeEventListener('abort',abort)
+    worker.terminate()
   }
 }
 

@@ -7,13 +7,13 @@ let root:Root|undefined
 let clicks=0,blobs:Blob[]=[]
 let filenames:string[]=[]
 afterEach(async()=>{if(root)await act(async()=>root!.unmount());root=undefined;document.body.replaceChildren();vi.restoreAllMocks();vi.unstubAllGlobals();clicks=0;blobs=[];filenames=[]})
-async function fixture(serialize:()=>Promise<Uint8Array|null>,authority={current:()=>true,verify:async()=>true}){
+async function fixture(serialize:()=>Promise<Uint8Array|null>,authority={current:()=>true,verify:async()=>true},seal?:(bytes:Uint8Array)=>Promise<Uint8Array>){
  const editor={serialize,save:vi.fn(()=>{throw Error('must not save')}),isDirty:()=>true},host=document.createElement('div');document.body.append(host)
  let current:typeof editor|null=editor
  vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(function(){clicks++;filenames.push(this.download)})
  vi.stubGlobal('URL',Object.assign(URL,{createObjectURL:vi.fn((blob:Blob)=>{blobs.push(blob);return 'blob:local-copy'}),revokeObjectURL:vi.fn()}))
  root=createRoot(host)
- await act(async()=>root!.render(h(LocalDraftCopy,{name:'private.docx',locale:'en',getEditor:()=>current,authority})))
+ await act(async()=>root!.render(h(LocalDraftCopy,{name:'private.docx',locale:'en',getEditor:()=>current,authority,seal})))
  return {button:()=>host.querySelector('button')!,host,editor,detach(){current=null},replace(){current={...editor}}}
 }
 test('draft bytes are serialized only after explicit click; not an implicit save',async()=>{
@@ -87,4 +87,19 @@ test('real proof binding blocks cookie rotation during serialization without ser
  await act(async()=>f.button().click())
  expect(clicks).toBe(0);expect(f.editor.isDirty()).toBe(true);expect(f.editor.save).not.toHaveBeenCalled()
  expect(send).toHaveBeenCalledTimes(3)
+})
+
+test('an encrypted draft cannot download after the original login proof changes during sealing',async()=>{
+ const source=new Uint8Array([80,75,1,2])
+ let valid=true
+ const authority={current:()=>valid,verify:async()=>valid}
+ const seal=vi.fn(async()=>{
+  valid=false
+  return new Uint8Array([0xd0,0xcf,0x11,0xe0])
+ })
+ const f=await fixture(async()=>source,authority,seal)
+ await act(async()=>f.button().click())
+ expect(seal).toHaveBeenCalledWith(source)
+ expect(clicks).toBe(0)
+ expect(f.editor.save).not.toHaveBeenCalled()
 })

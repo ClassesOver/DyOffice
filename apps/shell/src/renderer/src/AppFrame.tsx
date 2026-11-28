@@ -10,13 +10,18 @@ interface AppFrameProps {
   /** resolved before first paint (main.tsx) so home never flashes under the overlay */
   initialOnboardingSeen: boolean
   hideSingleTabList?: boolean
+  allowHomeTabMenu?: boolean
+  renameTabFile?:(id:string,name:string)=>Promise<void>
+  closeTabWithKeyboard?:(id:string)=>Promise<boolean>
+  detachTabOnDrop?:(id:string)=>void
+  homeBeside?: 'left' | 'right'
   hideAppMenu?: boolean
   homeProps?:HomeProps
   renderEditor?:(tab:TabSummary)=>ReactNode
   editorContent?:ReactNode
 }
 
-export function AppFrame({ initialOnboardingSeen, homeProps, renderEditor, editorContent, hideSingleTabList, hideAppMenu }: AppFrameProps) {
+export function AppFrame({ initialOnboardingSeen, homeProps, renderEditor, editorContent, hideSingleTabList, hideAppMenu, allowHomeTabMenu, renameTabFile, closeTabWithKeyboard, detachTabOnDrop, homeBeside }: AppFrameProps) {
   const [activeTab,setActiveTab] = useState<TabSummary | undefined>()
   const [homeActive, setHomeActive] = useState(true)
   const [showOnboarding, setShowOnboarding] = useState(!initialOnboardingSeen)
@@ -59,11 +64,14 @@ export function AppFrame({ initialOnboardingSeen, homeProps, renderEditor, edito
 
   return (
     <div className="app-frame">
-      <TabBar hideSingleTabList={hideSingleTabList} hideAppMenu={hideAppMenu}/>
+      <TabBar hideSingleTabList={hideSingleTabList} hideAppMenu={hideAppMenu} allowHomeTabMenu={allowHomeTabMenu} renameTabFile={renameTabFile} closeTabWithKeyboard={closeTabWithKeyboard} detachTabOnDrop={detachTabOnDrop}/>
       {/* docs/sheets tabs render as WebContentsView children of this window, positioned
        * by the main process to cover this area — only Home paints its own content here. */}
-      <div className="app-frame-content" style={{ visibility: homeActive ? 'visible' : 'hidden' }}>
-        <Home {...homeProps}/>
+      <div className="app-frame-content" data-workspace-pane={homeBeside}
+        style={{ visibility: homeActive || homeBeside ? 'visible' : 'hidden' }}
+        onPointerDown={homeBeside&&!homeActive?()=>{void window.aiOfficeTabs.activate('home')}:undefined}
+        onFocusCapture={homeBeside&&!homeActive?()=>{void window.aiOfficeTabs.activate('home')}:undefined}>
+        <Home {...homeProps} active={homeActive}/>
       </div>
       {editorContent}
       {!homeActive && activeTab && renderEditor?.(activeTab)}

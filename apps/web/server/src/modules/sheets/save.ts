@@ -4,6 +4,8 @@ import type { LeaseService } from '../leases/service.ts'
 import type { RevisionService } from '../revisions/service.ts'
 import { authError } from '../auth/sessions.ts'
 import type { XlsxMutationPlan } from '../../../../worker/src/native/xlsx.ts'
+import type { createSheetsService } from './service.ts'
+import type { createWorkbookPasswordCodec } from '../files/workbook-password.ts'
 
 export type SheetsPlanner = (bytes: Buffer, sheets: readonly { id: string; name: string }[], request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
 export type SheetsWorkbookPlanner = (bytes: Buffer, request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
@@ -12,21 +14,25 @@ export interface SheetsSaveNative {
   inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
   savePlan(input: Uint8Array, plan: XlsxMutationPlan, signal?: AbortSignal): Promise<{ bytes: Buffer }>
 }
-export interface SheetsSaveInput { baseRevision: string; leaseEpoch: number; editorId: string; request: unknown }
+type SheetsRevisionInput = { baseRevision: string; leaseEpoch: number; editorId: string; unlockId?:string }
+export interface SheetsSaveInput extends SheetsRevisionInput { request: unknown }
+export interface SheetsPasswordInput extends SheetsRevisionInput { unlockId: string; newPassword: string }
 export type SheetsExportInput = Omit<SheetsSaveInput, 'request'> & { phases: unknown[] }
+type PreparedWorkbook = Awaited<ReturnType<ReturnType<typeof createWorkbookPasswordCodec>['seal']>> & {rememberSave():void}
 
 /** Prepare the normal T06 upload. The browser then commits it using the same
  * idempotent receipt/reconciliation protocol used by the other editors. */
-export function createSheetsSaveService({ files, leases, revisions, native, plan, planFromWorkbook, planAfterSave, maxConcurrent = 2 }: {
-  files: FileService; leases: LeaseService; revisions: RevisionService; native: SheetsSaveNative; plan: SheetsPlanner; planFromWorkbook?: SheetsWorkbookPlanner; planAfterSave?: SheetsFollowUpPlan; maxConcurrent?: number
+export function createSheetsSaveService({ files, leases, revisions, native, plan, planFromWorkbook, planAfterSave, protectedWorkbooks, maxConcurrent = 2 }: {
+  files: FileService; leases: LeaseService; revisions: RevisionService; native: SheetsSaveNative; plan: SheetsPlanner; planFromWorkbook?: SheetsWorkbookPlanner; planAfterSave?: SheetsFollowUpPlan; protectedWorkbooks?: Pick<ReturnType<typeof createSheetsService>,'openForProtectedSave'>; maxConcurrent?: number
 }) {
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
-  async function assertSource(token: string, fileId: string, input: Omit<SheetsSaveInput, 'request'>) {
+  async function assertSource(token: string, fileId: string, input: SheetsRevisionInput) {
     await leases.renewLease(token, fileId, { editorId: input.editorId, leaseEpoch: input.leaseEpoch })
     const head = await files.openFile(token, fileId)
     if (head.format !== 'xlsx') throw authError(415)
     if (head.file.revision !== input.baseRevision) throw authError(409)
+    return head
   }
   async function planDraft(bytes: Buffer, request: unknown, signal?: AbortSignal) {
     // Resolve sheet identities from the actual input for this phase.
@@ -35,6 +41,25 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
     if (!metadata || !Array.isArray(metadata.sheets) || metadata.sheets.some(sheet => typeof sheet?.id !== 'string' || typeof sheet.name !== 'string')) throw new Error('Invalid workbook metadata')
     return plan(bytes, metadata.sheets, request, signal)
   }
+  async function stageOutput(token:string,fileId:string,input:SheetsRevisionInput,output:Buffer,touchedEntries:string[],sealed?:PreparedWorkbook,signal?:AbortSignal){
+    signal?.throwIfAborted()
+    const draft={size:output.length,baseRevision:input.baseRevision,leaseEpoch:input.leaseEpoch,editorId:input.editorId}
+    // The lease and base are checked again after encryption, then atomically at commit.
+    const {uploadId}=sealed?await revisions.stageProtectedWorkbookUpload(token,fileId,draft):await revisions.stageUpload(token,fileId,draft)
+    try{
+      if(sealed)await files.receiveProtectedOfficeRevision(token,uploadId,sealed)
+      else await files.receiveUpload(token,uploadId,output)
+      signal?.throwIfAborted()
+      await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch})
+      signal?.throwIfAborted()
+      sealed?.rememberSave()
+      const sha256=sealed?.file.sha256??createHash('sha256').update(output).digest('hex')
+      return {uploadId,touchedEntries,baseRevision:input.baseRevision,leaseEpoch:input.leaseEpoch,sha256,size:output.length}
+    }catch(error){
+      await files.cancelUpload(token,uploadId).catch(()=>{})
+      throw error
+    }
+  }
   return {
     async exportDraft(token: string, fileId: string, input: SheetsExportInput, signal?: AbortSignal) {
       if (active >= maxConcurrent) throw Object.assign(authError(429), { retryAfter: 1 })
@@ -42,7 +67,7 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
       active++
       try {
         signal?.throwIfAborted()
-        await assertSource(token, fileId, input)
+        if((await assertSource(token, fileId, input)).workbookPasswordProtected)throw authError(423)
         let bytes = await files.readFile(token, fileId, input.baseRevision, signal)
         for (const phase of input.phases) {
           signal?.throwIfAborted()
@@ -59,11 +84,13 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
     async prepare(token: string, fileId: string, input: SheetsSaveInput, signal?: AbortSignal) {
       if (active >= maxConcurrent) throw Object.assign(authError(429), { retryAfter: 1 })
       active++
-      let uploadId: string | undefined
       try {
         signal?.throwIfAborted()
-        await assertSource(token, fileId, input)
-        const bytes = await files.readFile(token, fileId, input.baseRevision, signal)
+        const head=await assertSource(token, fileId, input)
+        if(head.workbookPasswordProtected&&(!protectedWorkbooks||!input.unlockId))throw authError(423)
+        const protection=head.workbookPasswordProtected&&input.unlockId
+          ? await protectedWorkbooks!.openForProtectedSave(token,fileId,input.baseRevision,input.unlockId,signal) : undefined
+        const bytes = protection?.bytes ?? await files.readFile(token, fileId, input.baseRevision, signal)
         signal?.throwIfAborted()
         const mutation = await planDraft(bytes, input.request, signal)
         signal?.throwIfAborted()
@@ -72,23 +99,27 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
         const followUp = await planAfterSave?.(bytes, saved.bytes, signal)
         if (followUp) saved = await native.savePlan(saved.bytes, followUp, signal)
         signal?.throwIfAborted()
-        // Staging checks current owner/session, head and lease again after all
-        // expensive work. The ordinary commit repeats those checks atomically.
-        const upload = await revisions.stageUpload(token, fileId, { size: saved.bytes.length, baseRevision: input.baseRevision, leaseEpoch: input.leaseEpoch, editorId: input.editorId })
-        uploadId = upload.uploadId
-        await files.receiveUpload(token, uploadId, saved.bytes)
-        signal?.throwIfAborted()
-        await leases.renewLease(token, fileId, { editorId: input.editorId, leaseEpoch: input.leaseEpoch })
+        const sealed=await protection?.seal(saved.bytes)
         const touchedEntries = [...new Set([mutation, ...(followUp ? [followUp] : [])].flatMap(plan =>
           [...plan.replaced.keys(), ...plan.added.keys(), ...plan.addedBinary.keys(), ...plan.removedEntries],
         ))]
-        return { uploadId, touchedEntries, baseRevision: input.baseRevision, leaseEpoch: input.leaseEpoch, sha256: createHash('sha256').update(saved.bytes).digest('hex'), size: saved.bytes.length }
-      } catch (error) {
-        // Cancellation never publishes a revision. Abandoned uploads also have
-        // the existing T06 expiry/sweep when revocation prevents cleanup here.
-        if (uploadId) await files.cancelUpload(token, uploadId).catch(() => {})
-        throw error
+        return await stageOutput(token,fileId,input,sealed?.bytes??saved.bytes,touchedEntries,sealed,signal)
       } finally { active-- }
+    },
+    async preparePassword(token:string,fileId:string,input:SheetsPasswordInput,signal?:AbortSignal){
+      if(token.startsWith('dsh-edit:'))throw authError(404)
+      if(!protectedWorkbooks||!input.unlockId)throw authError(423)
+      if(typeof input.newPassword!=='string'||!input.newPassword.length||input.newPassword.length>255)throw authError(400)
+      if(active>=maxConcurrent)throw Object.assign(authError(429),{retryAfter:1})
+      active++
+      try{
+        signal?.throwIfAborted()
+        const head=await assertSource(token,fileId,input)
+        if(!head.workbookPasswordProtected||head.officeSignatureProtected)throw authError(423)
+        const protection=await protectedWorkbooks.openForProtectedSave(token,fileId,input.baseRevision,input.unlockId,signal)
+        const sealed=await protection.seal(protection.bytes,input.newPassword)
+        return await stageOutput(token,fileId,input,sealed.bytes,[],sealed,signal)
+      }finally{active--}
     },
   }
 }

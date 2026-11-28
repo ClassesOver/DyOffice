@@ -18,7 +18,10 @@ const MAX_FRAME_ASPECT = 3
 export async function insertModel3dFile(ctx: ActionCtx): Promise<void> {
   const slide = ctx.slide
   if (!slide) return
-  const picked = await window.slidesApi.pickModel3d()
+  const picked = await window.slidesApi.pickModel3d().catch(error=>{
+    ctx.setStatus(error instanceof Error?error.message:t('appStatusModel3dNoPreview'))
+    return null
+  })
   if (!picked) return
   let view: ModelView | null = null
   let posterBase64: string | undefined
@@ -41,6 +44,9 @@ export async function insertModel3dFile(ctx: ActionCtx): Promise<void> {
     ...(posterBase64 ? { posterBase64 } : {}),
     aspect,
     fitWidthPx: FIT_WIDTH,
+  }).catch(error=>{
+    ctx.setStatus(error instanceof Error?error.message:t('appStatusModel3dNoPreview'))
+    return null
   })
   if (!r) return
   ctx.applySlide(ctx.current, r.slide)

@@ -53,6 +53,39 @@ test('workspace lists persisted files with bounded pagination without inventing 
   assert.match((await request(f, 'GET', '/files')).headers['cache-control'], /no-store/)
 })
 
+test('starred groups filter pages, survive trash restoration and stay private', async t => {
+  const f = await fileFixture(t)
+  const first = await imported(f, 'first.docx'), second = await imported(f, 'second.docx')
+  const other = await imported(f, 'other.docx', f.bob.token)
+  const groups = async (token = f.alice.token) => {
+    const response = await request(f, 'GET', '/starred-groups', undefined, token)
+    assert.equal(response.statusCode, 200, response.body)
+    return response.json().groups
+  }
+  const assign = (ids, group, status) => mutate(f, 'PUT', '/starred-groups', { ids, group }, status)
+  for (const id of [first, second]) await mutate(f, 'PUT', '/files/' + id + '/star', { starred: true })
+  assert.deepEqual(await groups(), [])
+  await assign([first, other], 'Private', 404)
+  assert.deepEqual(await groups(), [])
+  await assign([first, second], '  客户  ')
+  assert.deepEqual(await groups(), ['客户'])
+  assert.deepEqual(await groups(f.bob.token), [])
+  const page = await list(f, '?view=starred&group=' + encodeURIComponent('客户') + '&limit=1')
+  assert.equal(page.total, 2)
+  assert.equal(page.files[0].group, '客户')
+  assert.equal((await list(f, '?view=starred&group=missing')).total, 0)
+  await assign([second], null)
+  assert.equal((await list(f, '?view=starred&group=' + encodeURIComponent('客户'))).total, 1)
+  await f.files.trashFile(f.alice.token, first)
+  assert.deepEqual(await groups(), [])
+  await f.files.restoreFile(f.alice.token, first)
+  assert.deepEqual(await groups(), ['客户'])
+  await mutate(f, 'PUT', '/files/' + first + '/star', { starred: false })
+  await mutate(f, 'PUT', '/files/' + first + '/star', { starred: true })
+  assert.deepEqual(await groups(), [])
+  assert.ok((await list(f, '?view=starred')).files.every(file=>file.group===undefined))
+})
+
 test('folder create rename move and delete persist a deterministic tree and reject duplicate siblings or cycles', async t => {
   const f = await fileFixture(t)
   const parent = await folder(f, '  Projects  '), other = await folder(f, 'Archive')

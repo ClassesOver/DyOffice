@@ -1,8 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { readFile, readdir, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { PDFDocument } from 'pdf-lib'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { restrictedOrigin } from '../helpers/restricted.mjs'
 import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
@@ -11,6 +13,34 @@ import { password } from '../helpers/identity.mjs'
 
 const credential = token => ({ kind: 'session', token })
 const own = (f, callback) => f.transactions.withPrincipalTransaction(credential(f.alice.token), callback)
+
+test('duplicate publishes exactly one independent copy in the source folder and can recover the finish receipt', async t => {
+  const f=await fileFixture(t),bytes=await docxBytes()
+  const source=await importFile(f,f.alice.token,bytes,'report.docx')
+  const id=source.file.fileId
+  const {createWorkspaceService}=await import('../../server/src/modules/workspace/service.ts')
+  const workspace=createWorkspaceService(f.transactions)
+  const folder=await workspace.createFolder(f.alice.token,{name:'Reports',parentId:null})
+  await workspace.moveFile(f.alice.token,id,{folderId:folder.id})
+  await workspace.setStar(f.alice.token,id,{starred:true})
+  await assert.rejects(()=>f.files.prepareDuplicate(f.bob.token,id),{statusCode:404})
+  const pending=await f.files.prepareDuplicate(f.alice.token,id)
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+  const finish=()=>f.files.finishDuplicate(f.alice.token,id,pending.uploadId,pending.revision,'en')
+  const [copy,retry]=await Promise.all([finish(),finish()])
+  assert.equal(copy.name,'report Copy.docx')
+  assert.deepEqual(copy,retry)
+  assert.notEqual(copy.file.fileId,id)
+  assert.notEqual(copy.file.revision,source.file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,copy.file.fileId,copy.file.revision),bytes)
+  assert.deepEqual(await f.files.openFile(f.alice.token,id),source)
+  const copied=(await workspace.listFiles(f.alice.token,{view:'all',id:copy.file.fileId})).files[0]
+  assert.equal(copied.folderId,folder.id)
+  assert.equal(copied.starred,false)
+  const next=await f.files.prepareDuplicate(f.alice.token,id)
+  assert.equal((await f.files.finishDuplicate(f.alice.token,id,next.uploadId,next.revision,'en')).name,'report Copy 2.docx')
+  assert.equal((await f.files.usage(f.alice.token)).storedBytes,bytes.length*3)
+})
 
 test('four-format import publishes exact originals only after explicit finish and never leaks object keys', async t => {
   const f = await fileFixture(t)
@@ -475,4 +505,43 @@ test('a finishing import holds authority through commit before account disable m
     const { password } = await import('../helpers/identity.mjs'), fresh = await f.sessions.login('alice',password)
     assert.deepEqual(await f.files.readFile(fresh.token,opened.file.fileId,opened.file.revision),bytes)
   } finally { release.resolve(); await Promise.allSettled([finishing,disable].filter(Boolean)) }
+})
+
+test('editor assets use a bounded quota separate from document entry and file APIs',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'office-assets-quota-'))
+ t.after(()=>rm(directory,{recursive:true,force:true}))
+ await mkdir(join(directory,'.vite'))
+ await mkdir(join(directory,'assets'))
+ await writeFile(join(directory,'index.html'),'<title>PDF editor</title>')
+ await writeFile(join(directory,'assets/editor.js'),'void 0')
+ await writeFile(join(directory,'.vite/manifest.json'),'{"entry":{"file":"assets/editor.js"}}')
+ await writeFile(join(directory,'.vite/native-assets.json'),'[]')
+ const f=await fileFixture(t,{buildApp:false})
+ const {buildLocalApp}=await import('../../server/src/app.ts')
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin:restrictedOrigin,csrfKey:f.csrfKey,objectStore:f.objects,
+  nativePdfDirectory:directory,localShellDirectory:directory,rateLimit:{max:2,windowMs:60000},
+ })
+ f.cleanup.unshift(()=>app.close())
+ const pdf=await PDFDocument.create()
+ pdf.addPage([240,300])
+ const {file}=await importFile(f,f.alice.token,Buffer.from(await pdf.save()),'quota.pdf')
+ const headers=signedHeaders(f)
+ const pdfAsset='/native-pdf/assets/editor.js', shellAsset='/assets/editor.js'
+ assert.equal((await app.inject({url:pdfAsset,remoteAddress:'192.0.2.5'})).statusCode,401)
+ assert.equal((await app.inject({url:'/native-pdf/assets/private.js',headers,remoteAddress:'192.0.2.6'})).statusCode,404)
+ const entry='/native-pdf/?fileId='+file.fileId, metadata='/api/v1/files/'+file.fileId
+ const request=(url,method='GET')=>app.inject({url,method,headers})
+ for(const url of [pdfAsset,shellAsset,pdfAsset]){
+  const result=await request(url)
+  assert.equal(result.statusCode,200,url)
+  assert.equal(result.headers['cache-control'],'private, no-store')
+ }
+ assert.equal((await request(entry)).statusCode,200)
+ assert.equal((await request(metadata)).statusCode,200)
+ assert.equal((await request('/native-pdf/index.html?fileId='+file.fileId)).statusCode,429)
+ assert.equal((await request('/native-pdf/assets/../index.html?fileId='+file.fileId)).statusCode,429)
+ for(let i=0;i<5;i++) assert.equal((await request(i%2?pdfAsset:shellAsset,'HEAD')).statusCode,200)
+ assert.equal((await request(pdfAsset)).statusCode,429)
 })

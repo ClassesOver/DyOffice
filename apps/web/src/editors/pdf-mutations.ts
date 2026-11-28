@@ -34,7 +34,7 @@ export function createPdfMutations({fileId,request,getRevision,onSaved,editGrant
    busy=true
    try{return await commit(undefined,true)}finally{busy=false}
   },
- async mutate(action:'rotate'|'edit-text'|'annotate'|'delete-annotations'|'update-notes'|'page-ops'|'form-values'|'form-fields'|'text-inserts'|'block-edits'|'block-moves'|'image-edits'|'image-content'|'image-bakes'|'stamps'|'replace-pages'|'insert-pages'|'draft-inserts'|'apply-ops',operations:readonly unknown[],signal?:AbortSignal,check=()=>true){
+ async mutate(action:'rotate'|'edit-text'|'annotate'|'delete-annotations'|'update-notes'|'page-ops'|'form-values'|'form-fields'|'text-inserts'|'block-edits'|'block-moves'|'image-edits'|'image-content'|'image-bakes'|'stamps'|'replace-pages'|'insert-pages'|'restore-revision'|'draft-inserts'|'apply-ops',operations:readonly unknown[],signal?:AbortSignal,check=()=>true){
    signal?.throwIfAborted()
    if(busy||pending||!check()||!getRevision()||['image-content','image-bakes','stamps','draft-inserts','apply-ops'].includes(action)&&operations.length!==1)return false
    const snapshot=action==='apply-ops'?structuredClone(operations[0]) as {fileId?:string;baseRevision?:string}|undefined:undefined
@@ -43,6 +43,8 @@ export function createPdfMutations({fileId,request,getRevision,onSaved,editGrant
    if(action==='replace-pages'&&(operations.length!==1||!(replacement?.source instanceof Blob)||replacement.source.size<1||replacement.source.size>64*1024*1024||!Array.isArray(replacement.pages)||!replacement.pages.length||replacement.pages.length>100||new Set(replacement.pages).size!==replacement.pages.length||replacement.pages.some(page=>!Number.isSafeInteger(page)||page<1||page>100)))return false
    const insertion=action==='insert-pages'?operations[0] as {afterPageIndex:number;source:Blob}|undefined:undefined
    if(action==='insert-pages'&&(operations.length!==1||!(insertion?.source instanceof Blob)||insertion.source.size<1||insertion.source.size>64*1024*1024||!Number.isSafeInteger(insertion.afterPageIndex)||insertion.afterPageIndex< -1||insertion.afterPageIndex>=100))return false
+   const restoration=action==='restore-revision'?operations[0] as {revision:string}|undefined:undefined
+   if(action==='restore-revision'&&(operations.length!==1||typeof restoration?.revision!=='string'||!restoration.revision||restoration.revision===getRevision()))return false
    busy=true
    const editorId=editGrantId??crypto.randomUUID(),baseRevision=getRevision()
    let leaseEpoch:number|undefined,commitStarted=false
@@ -55,8 +57,10 @@ export function createPdfMutations({fileId,request,getRevision,onSaved,editGrant
     const idempotencyKey=crypto.randomUUID()
     const endpoint=`/api/v1/files/${fileId}/pdf/${path}`
     const metadata={baseRevision,editorId,leaseEpoch,idempotencyKey}
-    const prepared=await request<{commitInput?:SaveInput;uploadId?:string}>(replacement?`${endpoint}?${new URLSearchParams({...metadata,leaseEpoch:String(leaseEpoch),pages:JSON.stringify(replacement.pages)})}`:insertion?`${endpoint}?${new URLSearchParams({...metadata,leaseEpoch:String(leaseEpoch),afterPageIndex:String(insertion.afterPageIndex)})}`:endpoint,'POST',replacement?.source??insertion?.source??{...metadata,...(action==='apply-ops'?{snapshot}:['image-content','image-bakes','stamps','draft-inserts'].includes(action)?{operation:operations[0]}:{operations})},signal)
-    const input=prepared.commitInput??(action==='rotate'?{fileId,uploadId:prepared.uploadId!,baseRevision,leaseEpoch,idempotencyKey}:undefined)
+    const prepared=restoration
+     ?await request<{commitInput?:SaveInput;uploadId?:string}>(`/api/v1/files/${fileId}/restoration-uploads`,'POST',{revision:restoration.revision,baseRevision,editorId,leaseEpoch},signal)
+     :await request<{commitInput?:SaveInput;uploadId?:string}>(replacement?`${endpoint}?${new URLSearchParams({...metadata,leaseEpoch:String(leaseEpoch),pages:JSON.stringify(replacement.pages)})}`:insertion?`${endpoint}?${new URLSearchParams({...metadata,leaseEpoch:String(leaseEpoch),afterPageIndex:String(insertion.afterPageIndex)})}`:endpoint,'POST',replacement?.source??insertion?.source??{...metadata,...(action==='apply-ops'?{snapshot}:['image-content','image-bakes','stamps','draft-inserts'].includes(action)?{operation:operations[0]}:{operations})},signal)
+    const input=prepared?.commitInput??(prepared?.uploadId&&(restoration||action==='rotate')?{fileId,uploadId:prepared.uploadId,baseRevision,leaseEpoch,idempotencyKey}:undefined)
     if(!input||input.fileId!==fileId||input.baseRevision!==baseRevision||input.leaseEpoch!==leaseEpoch||typeof input.uploadId!=='string'||typeof input.idempotencyKey!=='string')throw Error('Invalid PDF save preparation')
     pending={input,editorId}
     signal?.throwIfAborted()

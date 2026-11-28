@@ -30,6 +30,22 @@ test('saved note edits and markup deletions retain unrelated annotations in a re
  assert.deepEqual(annots.map(ref=>out.context.lookup(ref).lookup(n('Contents')).decodeText()),['After','Same position'])
  assert.equal(out.context.lookup(note).lookup(n('T')).decodeText(),'Author')
 })
+test('the regular PDF save rewrites navigation while preserving unrelated annotations',async()=>{
+ const doc=await PDFDocument.create(),source=doc.addPage(),deleted=doc.addPage(),keep=doc.addPage()
+ const add=entry=>source.node.addAnnot(doc.context.register(doc.context.obj({
+  Type:'Annot',Rect:[20,30,100,50],...entry,
+ })))
+ add({Subtype:'Link',Dest:[2,'Fit']})
+ add({Subtype:'Link',Dest:[deleted.ref,'Fit']})
+ add({Subtype:'Text',Contents:PDFString.of('Keep this note')})
+ const result=await createPdfApplyOpsJob().execute(Buffer.from(await doc.save()),raw({...empty(),deleted:[1],order:[2,0,1]}))
+ const output=await PDFDocument.load(result.bytes),[destination,from]=output.getPages()
+ assert.equal(String(destination.ref),String(keep.ref))
+ const [link,removed,note]=from.node.Annots().asArray().map(ref=>output.context.lookup(ref,PDFDict))
+ assert.equal(String(link.lookup(n('Dest'),PDFArray).get(0)),String(destination.ref))
+ assert.equal(removed.has(n('Dest')),false)
+ assert.equal(note.lookup(n('Contents'),PDFString).decodeText(),'Keep this note')
+})
 test('native text rewrite changes only the chosen occurrence and rejects a wrong target atomically',async()=>{
  const doc=await PDFDocument.create(),page=doc.addPage([400,500])
  page.drawText('Repeated text',{x:30,y:420,size:12})
@@ -286,4 +302,9 @@ test('PDF widget removal keeps the surviving radio option and clears the removed
  assert.deepEqual(actual.getOptions(),['keep option'])
  assert.equal(actual.getSelected(),undefined)
  assert.equal(saved.getPage(0).node.Annots().asArray().length,1)
+})
+test('PDF attachment snapshots accept an empty file without accepting noncanonical base64',()=>{
+ const draft=bytesBase64=>({...empty(),attachments:{add:[{name:'empty.txt',bytesBase64}]}})
+ assert.deepEqual(validatePdfApplySnapshot(draft('')),draft(''))
+ for(const invalid of ['====','  ','YQ','Y Q=='])assert.throws(()=>validatePdfApplySnapshot(draft(invalid)),{code:'INVALID_PDF_APPLY_SNAPSHOT'})
 })

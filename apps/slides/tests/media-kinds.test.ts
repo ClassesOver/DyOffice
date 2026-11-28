@@ -7,6 +7,13 @@ describe('classifyDroppedFile', () => {
     expect(classifyDroppedFile('logo.svg', 'image/svg+xml')).toBe('image')
   })
 
+  it('routes supported local images with empty or generic browser MIME types', () => {
+    expect(classifyDroppedFile('PHOTO.PNG', 'application/octet-stream')).toBe('image')
+    expect(classifyDroppedFile('camera.jpeg', '')).toBe('image')
+    expect(classifyDroppedFile('picture.tiff', '')).toBe('image')
+    expect(classifyDroppedFile('picture.png', 'application/pdf')).toBe('other')
+  })
+
   it('routes the Insert dialog video/audio containers by extension', () => {
     for (const ext of ['mp4', 'm4v', 'mov', 'webm', 'avi']) {
       expect(classifyDroppedFile(`clip.${ext}`, '')).toBe('video')

@@ -1,5 +1,5 @@
-/** Print the already paginated workbook in a separate, script-free document. */
-export async function printSheetsInBrowser(html: string, fileName: string): Promise<void> {
+/** Print the already paginated document in a separate, script-free document. */
+export async function printInBrowser(html: string, fileName: string): Promise<void> {
   const frame = document.createElement('iframe')
   frame.setAttribute('sandbox', 'allow-same-origin allow-modals')
   frame.setAttribute('aria-hidden', 'true')

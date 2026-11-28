@@ -26,6 +26,7 @@ export function App({host} = {}) {
         window.__slidesEntryProbe.saves++
         return (await api.save()).ok
       },
+      waitForSave() { return undefined },
       isDirty() { return !!window.__slidesEntryProbe.dirty },
       canContinueAssistant() { return !window.__slidesEntryProbe.dirty && !window.__slidesEntryProbe.editing },
       async reload() {

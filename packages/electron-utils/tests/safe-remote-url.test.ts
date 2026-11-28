@@ -343,6 +343,17 @@ describe('fetchWithSsrfGuard', () => {
     expect((fetchImpl.mock.calls[0][1] as { dispatcher?: unknown }).dispatcher).toBeUndefined()
   })
 
+  it('uses a direct dispatcher for a public query across redirects', async () => {
+    const final = new Response('Name,Total\nRevenue,24.5')
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(res(302, 'https://1.1.1.1/latest.csv'))
+      .mockResolvedValueOnce(final)
+    await expect(fetchWithSsrfGuard('https://8.8.8.8/revenue.csv', { directPublic: true, fetchImpl }))
+      .resolves.toBe(final)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    for (const [, options] of fetchImpl.mock.calls) expect(options.dispatcher).toBeInstanceOf(Agent)
+  })
+
   it('skips pinning when a forward proxy owns the global dispatcher', async () => {
     const undici = await import('undici')
     const prior = undici.getGlobalDispatcher()

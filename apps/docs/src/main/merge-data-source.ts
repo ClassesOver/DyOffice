@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { basename, extname } from 'node:path'
-import { mergeDataFromRows, type MergeRecord } from '@genoffice/docx-engine'
+import { mergeSourceFromRows } from '../shared/merge-data'
+import type { MergeDataSource } from '../shared/ipc'
 import { decodeCsvBuffer, parseCsv } from '@genoffice/xlsx-gateway/gateway/csv-import'
 import { readSheetRows } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 
@@ -14,18 +15,6 @@ import { readSheetRows } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
  * so a list that opens correctly in Sheets opens correctly here.
  * genoffice#2097.
  */
-
-/** A data source the mail merge reads: the field names and the records. */
-export interface MergeDataSource {
-  /** absolute path of the file the records came from */
-  path: string
-  /** the file's name, for the UI */
-  name: string
-  /** the column names, in file order */
-  fields: string[]
-  /** one entry per record */
-  records: MergeRecord[]
-}
 
 /** the file extensions a data source may have */
 export const MERGE_DATA_SOURCE_EXTENSIONS = ['xlsx', 'csv'] as const
@@ -46,29 +35,5 @@ export async function readMergeDataSource(path: string): Promise<MergeDataSource
         ? await readSheetRows(bytes)
         : null
   if (!rows) throw new Error(`unsupported data source: ${extension || path}`)
-  const data = mergeDataFromRows(namedHeaders(rows))
-  return {
-    path,
-    name: basename(path),
-    fields: [...data.fields],
-    records: [...data.records],
-  }
-}
-
-/**
- * A header cell that is empty names no field, and two cells with the same
- * name would fight over one value: the second becomes "Name2", the way Word
- * names them.
- */
-function namedHeaders(rows: readonly (readonly string[])[]): readonly (readonly string[])[] {
-  const header = rows[0]
-  if (!header) return []
-  const seen = new Map<string, number>()
-  const names = header.map((raw, index) => {
-    const name = raw.trim() || `Column${index + 1}`
-    const count = seen.get(name) ?? 0
-    seen.set(name, count + 1)
-    return count === 0 ? name : `${name}${count + 1}`
-  })
-  return [names, ...rows.slice(1)]
+  return mergeSourceFromRows(path, basename(path), rows)
 }

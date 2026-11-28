@@ -60,6 +60,8 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
         ...(result.format !== 'pdf' && result.autoNamePending === true ? { autoNamePending: true as const } : {}),
         ...(result.format === 'pdf' && result.pdfAutoNamePending === true ? { pdfAutoNamePending: true as const } : {}),
         ...(result.format !== 'pdf' && result.officeSignatureProtected === true ? { officeSignatureProtected: true as const } : {}),
+        ...(result.format === 'xlsx' && result.workbookPasswordProtected === true ? { workbookPasswordProtected: true as const } : {}),
+        ...(result.format === 'docx' && result.documentPasswordProtected === true ? { documentPasswordProtected: true as const } : {}),
         file: publicRevision(result.file),
         format: result.format,
         downloadEndpoint: result.downloadEndpoint,

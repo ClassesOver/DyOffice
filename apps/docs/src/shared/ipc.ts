@@ -457,6 +457,8 @@ export interface DesktopApi {
   onZoteroRequest(handler: (request: ZoteroRendererRequest) => void): () => void
   respondToZotero(response: ZoteroRendererResponse): void
   openDocx(): Promise<OpenDocxResult>
+  /** Pick a comparison target without opening it as the current document. */
+  pickComparisonDocx?(): Promise<{ name: string; bytes: Uint8Array } | null>
   openDocxPath(path: string): Promise<OpenDocxResult>
   confirmDocumentReplace(): Promise<boolean>
   /** decrypt-and-open a password-protected docx (path from a needsPassword result) */

@@ -12,6 +12,7 @@ import { createServer } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
+import officeCrypto from 'officecrypto-tool'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
@@ -19,7 +20,8 @@ import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.t
 import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 
 const sheetsDirectory = process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/',import.meta.url))
-async function fixture(t,{nodeEngine=false}={}) {
+const workspaceDirectory = process.env.DYOFFICE_TEST_WORKSPACE_DIRECTORY ?? fileURLToPath(new URL('../../dist-local-shell/',import.meta.url))
+async function fixture(t,{nodeEngine=false,sheetsQueryFetcher,workspaceShell=false}={}) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-native-sheets-'))
   let f, browser, server
   t.after(async () => {
@@ -47,7 +49,7 @@ async function fixture(t,{nodeEngine=false}={}) {
   }
   const native=Object.fromEntries(Object.entries(engine).map(([name,operation])=>[name,async(...args)=>{try{return await operation(...args)}catch(error){t.diagnostic('Native '+name+' failed: '+String(error?.code ?? error?.message ?? error));throw error}}]))
   const planner=async(...args)=>{try{return await planWorkbookSave(...args)}catch(error){t.diagnostic('Workbook planner failed: '+String(error?.message ?? error));throw error}}
-  f = await fileFixture(t,{ origin,nativeSheetsDirectory: sheetsDirectory,sheetsNative:native,sheetsPlanner:planner,sheetsPackageReader:readWorkbookPackage })
+  f = await fileFixture(t,{ origin,nativeSheetsDirectory: sheetsDirectory,sheetsNative:native,sheetsPlanner:planner,sheetsPackageReader:readWorkbookPackage,sheetsQueryFetcher,...(workspaceShell?{localShellDirectory:workspaceDirectory}:{}) })
   await f.preferences.update(f.alice.token,{ language: 'en',autoSave: false,showAssistant: false })
   const original = await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)), opened = await importFile(f,f.alice.token,original,'acceptance.xlsx')
   browser = await chromium.launch({ headless: true })
@@ -68,6 +70,354 @@ async function fixture(t,{nodeEngine=false}={}) {
   errors.length=0
   return { ...f, original, opened, browser, context, page, origin, errors, planner }
 }
+
+test('workspace imports and opens a local encrypted XLSX after one correct password',{timeout:150000},async t=>{
+ const f=await fixture(t,{nodeEngine:true,workspaceShell:true}),{page}=f
+ const name='local-encrypted.xlsx',secret='  表格🔑 ',encrypted=Buffer.from(officeCrypto.encrypt(f.original,{password:secret}))
+ await f.preferences.update(f.alice.token,{language:'zh'})
+ await page.goto(f.origin)
+ await page.getByRole('button',{name:/^打开本地文件/}).click()
+ const dialog=page.getByRole('dialog',{name:'上传文件',exact:true})
+ await dialog.locator('input[type=file]').setInputFiles({name,mimeType:'application/octet-stream',buffer:encrypted})
+ await dialog.getByRole('button',{name:'开始上传（1）'}).click()
+ const prompt=dialog.getByLabel(`输入 ${name} 的工作簿密码`)
+ await expect(prompt).toBeFocused()
+ const countImported=async()=>(await f.files.listFiles(f.alice.token)).files.filter(file=>file.name===name)
+ assert.equal((await countImported()).length,0)
+ await prompt.fill('wrong password')
+ await dialog.getByRole('button',{name:'确认密码'}).click()
+ await expect(dialog.getByRole('alert')).toContainText('工作簿密码错误')
+ assert.equal((await countImported()).length,0)
+ await expect(prompt).toHaveValue('')
+ await prompt.fill(secret)
+ await prompt.press('Enter')
+ await expect(dialog).toContainText('已上传并打开',{timeout:35000})
+ await dialog.getByRole('button',{name:'完成',exact:true}).click()
+ const native=page.frameLocator(`iframe[title="${name}"]`)
+ await expect(native.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:55000})
+ await expect.poll(()=>native.locator('html').evaluate(element=>element.ownerDocument.defaultView.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A1').getValue()),{timeout:20000}).toBe('Revenue')
+ await expect(native.locator('.encrypted-workbook-password-dialog')).toHaveCount(0)
+ assert.equal((await countImported()).length,1)
+ const [{id}]=await countImported(),opened=await f.files.openFile(f.alice.token,id)
+ assert.equal(opened.workbookPasswordProtected,true)
+ assert.deepEqual(await f.files.readFile(f.alice.token,id,opened.file.revision),encrypted)
+ await native.locator('html').evaluate(element=>{element.ownerDocument.defaultView.location.reload()})
+ await expect(native.locator('.encrypted-workbook-password-dialog')).toBeVisible({timeout:30000})
+})
+
+test('Web XLSX prompts for a password and saves edits as a protected revision',{timeout:120000},async t=>{
+ const f=await fixture(t,{nodeEngine:true}),{page}=f
+ const workbookPassword='表格 password fixture',zip=await JSZip.loadAsync(f.original)
+ const path='xl/worksheets/sheet1.xml',xml=await zip.file(path).async('string')
+ const modified=xml.replace(/<c\b[^>]*\br="A1"[^>]*>[\s\S]*?<\/c>/,'<c r="A1" t="inlineStr"><is><t>Locked workbook fixture</t></is></c>')
+ assert.notEqual(modified,xml)
+ zip.file(path,modified)
+ const encrypted=Buffer.from(officeCrypto.encrypt(await zip.generateAsync({type:'nodebuffer'}),{password:workbookPassword}))
+ const stage=await f.files.stageUpload(f.alice.token,{name:'locked.xlsx',size:encrypted.length})
+ await f.files.receiveUpload(f.alice.token,stage.uploadId,encrypted,{password:workbookPassword})
+ const {file}=await f.files.finishUpload(f.alice.token,stage.uploadId)
+ const unlock=async value=>{
+  const dialog=page.getByRole('dialog',{name:'Open password-protected workbook'})
+  await dialog.getByLabel('Password').fill(value)
+  const response=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/sheets/unlock'))
+  await dialog.getByRole('button',{name:'Open',exact:true}).click()
+  return (await response).status()
+ }
+ await page.goto(f.origin+'/native-xlsx/?fileId='+file.fileId)
+ assert.equal(await unlock('wrong password'),422)
+ await expect(page.getByRole('alert')).toContainText('The workbook password is incorrect.')
+ assert.equal(await unlock(workbookPassword),200)
+ await expect.poll(async()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A1').getValue()),{timeout:25000}).toBe('Locked workbook fixture')
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),encrypted)
+ const current=()=>f.files.openFile(f.alice.token,file.fileId)
+ let latest=file.revision
+ for(const value of [73,89]){
+  const prior=latest
+  const reopened=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/sheets/inspect')&&response.request().postDataJSON()?.revision!==prior)
+  await page.evaluate(value=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(value),value)
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(async()=>(await current()).file.revision,{timeout:16000}).not.toBe(latest)
+  const saved=await current()
+  latest=saved.file.revision
+  assert.equal(saved.workbookPasswordProtected,true)
+  const stored=await f.files.readFile(f.alice.token,file.fileId,latest)
+  assert.equal(stored.subarray(0,8).toString('hex'),'d0cf11e0a1b11ae1')
+  const decrypted=await JSZip.loadAsync(await officeCrypto.decrypt(stored,{password:workbookPassword}))
+  assert.match(await decrypted.file(path).async('string'),new RegExp(`<c\\b[^>]*r="A2"[^>]*><v>${value}<\\/v>`))
+  assert.equal((await reopened).status(),200)
+  await expect.poll(async()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:20000}).toBe(value)
+ }
+ await page.reload()
+ await expect(page.getByRole('dialog',{name:'Open password-protected workbook'})).toBeVisible()
+ assert.equal(await unlock(workbookPassword),200)
+ await expect.poll(async()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:20000}).toBe(89)
+ assert.equal((await current()).file.revision,latest)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),encrypted)
+})
+
+test('Review changes an encrypted XLSX password and reconciles a lost commit receipt',{timeout:160000},async t=>{
+ const f=await fixture(t,{nodeEngine:true}),{page}=f,token=f.alice.token
+ const oldPassword='Old workbook password',newPassword='  新密码 🔑 '
+ const ciphertext=Buffer.from(officeCrypto.encrypt(f.original,{password:oldPassword}))
+ const upload=await f.files.stageUpload(token,{name:'change-password.xlsx',size:ciphertext.length})
+ await f.files.receiveUpload(token,upload.uploadId,ciphertext,{password:oldPassword})
+ const {file}=await f.files.finishUpload(token,upload.uploadId),id=file.fileId
+ await page.goto(`${f.origin}/native-xlsx/?fileId=${id}`)
+ const open=page.getByRole('dialog',{name:'Open password-protected workbook'})
+ const unlock=async password=>{
+  await open.getByLabel('Password').fill(password)
+  await open.getByRole('button',{name:'Open',exact:true}).click()
+ }
+ const cell=()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue())
+ const edit=value=>page.evaluate(value=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(value),value)
+ const current=()=>f.files.openFile(token,id)
+ const decrypt=async(revision,password)=>JSZip.loadAsync(await officeCrypto.decrypt(await f.files.readFile(token,id,revision),{password}))
+ const sheetXml=workbook=>workbook.file('xl/worksheets/sheet1.xml').async('string')
+ let allowUnlock,unlockRequested
+ const pauseUnlock=new Promise(resolve=>{allowUnlock=resolve}),requestStarted=new Promise(resolve=>{unlockRequested=resolve})
+ await page.route('**/sheets/unlock',async route=>{unlockRequested();await pauseUnlock;await route.continue()},{times:1})
+ try{
+  await unlock(oldPassword)
+  await requestStarted
+  assert.equal(await page.evaluate(()=>window.dyofficeEditorDispose()),false)
+ }finally{allowUnlock()}
+ await expect.poll(cell,{timeout:25000}).toBe(12.5)
+ await page.getByRole('button',{name:'Review',exact:true}).click()
+ await edit(97)
+ await page.locator('.ribbon-tool[data-tip="Change Password"]').click()
+ const dialog=page.getByRole('dialog',{name:'Change workbook password'})
+ await dialog.getByLabel('New password',{exact:true}).fill(newPassword)
+ await dialog.getByLabel('Confirm new password',{exact:true}).fill('different')
+ await dialog.getByRole('button',{name:'Update Password',exact:true}).click()
+ await expect(dialog.getByRole('alert')).toHaveText('The passwords do not match.')
+ assert.equal((await current()).file.revision,file.revision)
+
+ let rotationUpload,rotationGrant,rotationProof,receiptLost=false,prepares=0
+ const commitAttempts=[]
+ await page.route('**/sheets/password-uploads',async route=>{
+  prepares++
+  rotationGrant=route.request().postDataJSON().unlockId
+  rotationProof=(await route.request().allHeaders())['x-csrf-token']
+  const response=await route.fetch()
+  rotationUpload=(await response.json()).uploadId
+  await route.fulfill({response})
+ })
+ await page.route('**/commits',async route=>{
+  const input=route.request().postDataJSON()
+  if(input.uploadId!==rotationUpload)return route.continue()
+  commitAttempts.push(input)
+  if(receiptLost)return route.continue()
+  const result=await route.fetch()
+  receiptLost=result.ok()
+  if(receiptLost){
+   // The editor must also recover if the original in-memory grant is gone.
+   const lock=await page.request.post(`${f.origin}/api/v1/files/${id}/sheets/lock`,{
+    headers:{origin:f.origin,'x-csrf-token':rotationProof},data:{revision:input.baseRevision,unlockId:rotationGrant},
+   })
+   assert.equal(lock.status(),200)
+  }
+  await route.abort()
+ })
+ await dialog.getByLabel('Confirm new password',{exact:true}).fill(newPassword)
+ await dialog.getByRole('button',{name:'Update Password',exact:true}).click()
+ const confirm=dialog.getByRole('button',{name:'Confirm save outcome',exact:true})
+ await expect(confirm).toBeVisible({timeout:40000})
+ assert.equal(receiptLost,true)
+ await confirm.click()
+ await expect(dialog).not.toBeVisible({timeout:25000})
+ assert.equal(prepares,1)
+ assert.equal(commitAttempts.length,2)
+ assert.deepEqual(commitAttempts[0],commitAttempts[1])
+ const rotated=(await current()).file.revision
+ assert.match(await sheetXml(await decrypt(rotated,newPassword)),/<c\b[^>]*r="A2"[^>]*><v>97<\/v>/)
+ await expect.poll(cell).toBe(97)
+
+ await edit(108)
+ await page.keyboard.press('ControlOrMeta+s')
+ await expect.poll(async()=>(await current()).file.revision,{timeout:25000}).not.toBe(rotated)
+ const saved=(await current()).file.revision
+ assert.match(await sheetXml(await decrypt(saved,newPassword)),/<c\b[^>]*r="A2"[^>]*><v>108<\/v>/)
+ assert.deepEqual(await f.files.readFile(token,id,file.revision),ciphertext)
+ await page.reload()
+ await unlock(oldPassword)
+ await expect(open.getByRole('alert')).toHaveText('The workbook password is incorrect.')
+ await unlock(newPassword)
+ await expect.poll(cell,{timeout:25000}).toBe(108)
+})
+
+test('Web XLSX refreshes a workbook web query and saves the resulting cells',{timeout:120000},async t=>{
+ const source='https://data.example.test/revenue.csv'
+ const fetched=[]
+ let releaseSecond
+ const pause=new Promise(resolve=>{releaseSecond=resolve})
+ const f=await fixture(t,{nodeEngine:true,sheetsQueryFetcher:async url=>{
+  fetched.push(url)
+  if(fetched.length===2)await pause
+  return {headers:['Fresh revenue'],rows:[['24.5']]}
+ }}),{page}=f
+ const zip=await JSZip.loadAsync(f.original)
+ const book='xl/workbook.xml'
+ const rel='xl/_rels/workbook.xml.rels'
+ const ct='[Content_Types].xml'
+ const sheet='xl/worksheets/sheet1.xml'
+ const relationships='http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+ const spreadsheet='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+ zip.file(book,(await zip.file(book).async('string')).replace('</definedNames>',
+  '<definedName name="ExternalData_1" localSheetId="0" hidden="1">Acceptance!$A$1:$A$3</definedName></definedNames>'))
+ zip.file(rel,(await zip.file(rel).async('string')).replace('</Relationships>',
+  `<Relationship Id="rId900" Type="${relationships}/connections" Target="connections.xml"/></Relationships>`))
+ zip.file('xl/connections.xml',`<connections xmlns="${spreadsheet}"><connection id="7" name="Revenue feed" type="4"><webPr url="${source}"/></connection></connections>`)
+ zip.file('xl/queryTables/queryTable1.xml',`<queryTable xmlns="${spreadsheet}" name="ExternalData_1" connectionId="7"/>`)
+ const sheetRels='xl/worksheets/_rels/sheet1.xml.rels'
+ const current=await zip.file(sheetRels)?.async('string')??'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+ zip.file(sheetRels,current.replace('</Relationships>',
+  `<Relationship Id="rId900" Type="${relationships}/queryTable" Target="../queryTables/queryTable1.xml"/></Relationships>`))
+ zip.file(ct,(await zip.file(ct).async('string')).replace('</Types>',
+  '<Override PartName="/xl/connections.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"/>'+
+  '<Override PartName="/xl/queryTables/queryTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml"/></Types>'))
+ const original=await zip.generateAsync({type:'nodebuffer'})
+ const {file}=await importFile(f,f.alice.token,original,'Web query.xlsx')
+ await page.goto(f.origin+'/native-xlsx/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ await page.getByRole('button',{name:'Data',exact:true}).click()
+ const refresh=async()=>{
+  await page.getByRole('button',{name:'Refresh query',exact:true}).click({timeout:10000})
+  await page.getByRole('option',{name:'Revenue feed — data.example.test',exact:true}).click()
+ }
+ const reply=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/sheets/web-query'))
+ await refresh()
+ assert.equal((await reply).status(),200)
+ const cell=address=>page.evaluate(address=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange(address).getValue(),address)
+ await expect.poll(()=>cell('A2'),{timeout:15000}).toBe(24.5)
+ assert.equal(await cell('A1'),'Fresh revenue')
+ assert.ok([null,undefined,''].includes(await cell('A3')))
+ assert.deepEqual(fetched,[source])
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ await page.keyboard.press('ControlOrMeta+s')
+ const revision=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ await expect.poll(revision,{timeout:15000}).not.toBe(file.revision)
+ const committed=await revision()
+ const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,committed))
+ assert.match(await saved.file(sheet).async('string'),/<c\b[^>]*r="A2"[^>]*><v>24\.5<\/v>/)
+ assert.equal(await saved.file('xl/connections.xml').async('string'),await zip.file('xl/connections.xml').async('string'))
+ await page.reload()
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ await expect.poll(()=>cell('A2'),{timeout:10000}).toBe(24.5)
+ await page.getByRole('button',{name:'Data',exact:true}).click()
+ await refresh()
+ try {
+  await expect.poll(()=>fetched.length,{timeout:15000}).toBe(2)
+  await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(88))
+ } finally {
+  releaseSecond()
+ }
+ await expect(page.locator('.workbook-status')).toHaveText('Could not refresh Revenue feed',{timeout:15000})
+ assert.equal(await cell('A2'),88)
+ assert.deepEqual(fetched,[source,source])
+ assert.equal(await revision(),committed)
+})
+
+test('Web XLSX Save As creates a workspace copy of unsaved cells without AI',{timeout:90000},async t=>{
+ const f=await fixture(t,{nodeEngine:true}), {page}=f
+ const original=f.opened.file
+ await page.goto(f.origin+'/native-xlsx/?fileId='+original.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25))
+ await page.getByRole('button',{name:'File',exact:true}).click()
+ const saveAs=page.getByRole('group',{name:'File',exact:true}).getByRole('button',{name:'Save As',exact:true})
+ await expect(saveAs).toBeEnabled()
+ await saveAs.click()
+ const dialog=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ const input=dialog.getByRole('textbox',{name:'File name'})
+ await expect(input).toHaveValue('acceptance.xlsx')
+ await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ await input.fill('Manual workbook copy')
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(page.getByText('Saved copy: Manual workbook copy.xlsx',{exact:true})).toBeVisible({timeout:30000})
+ const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Manual workbook copy.xlsx')
+ assert.ok(copy)
+ const archive=await JSZip.loadAsync(await f.files.readFile(f.alice.token,copy.id,copy.revision))
+ assert.match(await archive.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="A2"[^>]*><v>21\.25<\/v>/)
+ assert.equal((await f.files.openFile(f.alice.token,original.fileId)).file.revision,original.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,original.fileId,original.revision),f.original)
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').getValue())).toBe(21.25)
+ await expect(page.getByRole('button',{name:/^Save \(/})).toBeEnabled()
+})
+
+test('Web XLSX File menu and shortcut open Print preview and print without saving',{timeout:90000},async t=>{
+ const f=await fixture(t,{nodeEngine:true})
+ const original=f.opened.file
+ await f.page.goto(f.origin+'/native-xlsx/?fileId='+original.fileId)
+ await expect(f.page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ await f.page.evaluate(()=>{
+  const sheet=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
+  sheet.getRange('A1').setValue('Draft revenue')
+ })
+
+ await f.page.getByRole('button',{name:'File',exact:true}).click()
+ const filePrint=f.page.getByRole('group',{name:'File',exact:true}).getByRole('button',{name:'Print',exact:true})
+ await expect(filePrint).toBeEnabled()
+ await filePrint.click()
+ const dialog=f.page.getByRole('dialog',{name:'Print',exact:true})
+ await expect(dialog).toBeVisible()
+ await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(dialog).toBeHidden()
+ await f.page.keyboard.press('ControlOrMeta+p')
+ await expect(dialog).toBeVisible()
+ const print=dialog.getByRole('button',{name:'Print / Print to PDF',exact:true})
+ const preview=dialog.frameLocator('iframe[title="Print"]')
+ await expect(preview.getByText('Draft revenue',{exact:true})).toBeVisible()
+ const previewPageCount=await preview.locator('.page').count()
+ await expect(print).toBeEnabled()
+ await f.page.evaluate(()=>{
+  const append=document.body.append
+  document.body.append=function(...children){
+   for(const frame of children){
+    if(!(frame instanceof HTMLIFrameElement)||!frame.sandbox.contains('allow-modals'))continue
+    frame.addEventListener('load',()=>{
+     const target=frame.contentWindow
+     const browserPrint=target.print.bind(target)
+     target.print=()=>{
+      window.printedWorkbook={
+       title:target.document.title,
+       pages:target.document.querySelectorAll('.page').length,
+       html:frame.srcdoc,
+      }
+      browserPrint()
+     }
+    },{capture:true,once:true})
+   }
+   return append.apply(this,children)
+  }
+ })
+ await print.click()
+ await expect(dialog).toBeHidden()
+ const printed=await f.page.evaluate(()=>window.printedWorkbook)
+ assert.equal(printed?.title,'acceptance')
+ assert.equal(printed.pages,previewPageCount)
+ const pdfPage=await f.context.newPage()
+ try {
+  await pdfPage.setContent(printed.html)
+  const bytes=await pdfPage.pdf({preferCSSPageSize:true,printBackground:true})
+  const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const task=getDocument({data:Uint8Array.from(bytes)})
+  try {
+   const pdf=await task.promise
+   assert.equal(pdf.numPages,printed.pages)
+   const content=await (await pdf.getPage(1)).getTextContent()
+   assert.ok(content.items.some(item=>item.str==='Draft revenue'))
+  } finally {
+   await task.destroy()
+  }
+ } finally {
+  await pdfPage.close()
+ }
+ assert.equal((await f.files.openFile(f.alice.token,original.fileId)).file.revision,original.revision)
+})
 
 test('Node XLSX preserves existing cell notes when adding a note and saving in Chromium',{timeout:90000},async t=>{
  const f=await fixture(t,{nodeEngine:true})

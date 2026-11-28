@@ -25,8 +25,10 @@ export async function openPdfForInserts(bytes,{planning=false}={}){
  return doc
 }
 /** Resolve object numbers, dictionary ordering and page backrefs before comparing form state. */
-export function pdfInsertFormState(doc){
- const pages=doc.getPages(),pageRefs=new Map(pages.map((page,index)=>[String(page.ref),index])),stack=new Set(),fieldPaths=new Map();let visited=0
+export function pdfInsertFormState(doc,{ignoreAttachedWidgetRects=false,pages=doc.getPages()}={}){
+ const pageRefs=new Map(pages.flatMap((page,index)=>page?[[String(page.ref),index]]:[])),stack=new Set(),fieldPaths=new Map();let visited=0
+ const widgets=pages.map(page=>(page?.node.Annots()?.asArray()??[]).map(ref=>doc.context.lookup(ref)).filter(dict=>dict instanceof PDFDict&&String(dict.lookup(name('Subtype')))==='/Widget'))
+ const omitRects=ignoreAttachedWidgetRects?new Set(widgets.flat()):undefined
  const acro=doc.catalog.lookup(name('AcroForm'))
  function mapField(raw,path,depth=0){
   const field=doc.context.lookup(raw)
@@ -51,6 +53,16 @@ export function pdfInsertFormState(doc){
     const widget=String(value.lookup(name('Subtype')))==='/Widget',entries=[]
     for(const [key,item]of value.entries().sort(([a],[b])=>a.decodeText().localeCompare(b.decodeText()))){
      const k=key.decodeText()
+     if(k==='Rect'&&omitRects?.has(value))continue
+     if(k==='CO'&&value===acro){
+      const order=doc.context.lookup(item)
+      if(!(order instanceof PDFArray))fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
+      entries.push([k,order.asArray().map(ref=>{
+       const field=fieldPaths.get(doc.context.lookup(ref))
+       if(field===undefined)fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
+       return {field}
+      })]);continue
+     }
      if((field||widget)&&k==='Parent'){
       const parent=fieldPaths.get(doc.context.lookup(item));if(parent===undefined)fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
       entries.push([k,{field:parent}]);continue
@@ -66,7 +78,6 @@ export function pdfInsertFormState(doc){
   if(typeof value.asBytes==='function')return {bytes:Buffer.from(value.asBytes()).toString('hex')}
   return String(value)
  }
- const widgets=pages.map(page=>{const annots=page.node.Annots();return (annots?.asArray()??[]).map(ref=>doc.context.lookup(ref)).filter(dict=>dict instanceof PDFDict&&String(dict.lookup(name('Subtype')))==='/Widget').map(dict=>encode(dict,true))})
- return JSON.stringify({acro:encode(acro),widgets})
+ return JSON.stringify({acro:encode(acro),widgets:widgets.map(page=>page.map(dict=>encode(dict,true)))})
 }
 export function assertPdfInsertFormPreserved(before,after){if(pdfInsertFormState(before)!==pdfInsertFormState(after))fail('PDF_FORM_INSERT_INTEGRITY_FAILED')}

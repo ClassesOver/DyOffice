@@ -8,7 +8,7 @@ const MAX_BYTES=64*1024*1024
 /** Shared killable process boundary for the fixed PDF edit actions. Caps
  * V8 old-space and wall time, not OS filesystem/network access or WASM RSS. */
 export function createPdfProcessJob(action,parseRequest,safetyCodes){
- if(!['applyOpsQuery','annotationsQuery','signaturesQuery','textEditsQuery','imagePreviewQuery','applyOps','editText','annotateText','deleteAnnotations','updateNotes','pageOps','extractPages','splitPdf','pageLayout','formValues','formFields','textInserts','blockEdits','blockMoves','imageEdits','imageQuery','imageContent','imageBakes','stamps','replacePages','redactionsQuery','redactedCopy','textInsertsQuery','imageInsertsQuery','draftInserts','draftInsertsQuery'].includes(action))fail('INVALID_REQUEST')
+ if(!['applyOpsQuery','annotationsQuery','signaturesQuery','textEditsQuery','imagePreviewQuery','applyOps','editText','annotateText','deleteAnnotations','updateNotes','pageOps','extractPages','convertOffice','reduceSize','splitPdf','pageLayout','formValues','formFields','textInserts','blockEdits','blockMoves','imageEdits','imageQuery','imageContent','imageBakes','stamps','replacePages','redactionsQuery','redactedCopy','textInsertsQuery','imageInsertsQuery','draftInserts','draftInsertsQuery'].includes(action))fail('INVALID_REQUEST')
  let busy=false
  return {async execute(input,raw,signal){
   if(signal?.aborted)fail('ABORTED')
@@ -41,7 +41,7 @@ export function createPdfProcessJob(action,parseRequest,safetyCodes){
     if(!result||!Buffer.isBuffer(result.bytes)||result.bytes.length<1||result.bytes.length>MAX_BYTES||result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==hash(result.bytes)){finish('NATIVE_FAILED');return}
     finish(undefined,result)
    })
-   const command=action==='replacePages'&&operations?.action==='insertPages'?{version:1,...operations}:{version:1,action,...(['applyOps','applyOpsQuery'].includes(action)?{snapshot:operations}:['redactionsQuery','redactedCopy','textInsertsQuery','imageInsertsQuery'].includes(action)?operations:['extractPages','replacePages'].includes(action)?{pages:operations}:action==='splitPdf'?{pagesPerFile:operations}:['pageLayout','imageContent','imageBakes','stamps','draftInserts','draftInsertsQuery'].includes(action)?{operation:operations}:{operations})}
+   const command=action==='replacePages'&&operations?.action==='insertPages'?{version:1,...operations}:{version:1,action,...(['applyOps','applyOpsQuery'].includes(action)?{snapshot:operations}:['redactionsQuery','redactedCopy','textInsertsQuery','imageInsertsQuery'].includes(action)?operations:['extractPages','replacePages'].includes(action)?{pages:operations}:action==='splitPdf'?{pagesPerFile:operations}:['pageLayout','imageContent','imageBakes','stamps','draftInserts','draftInsertsQuery','convertOffice'].includes(action)?{operation:operations}:{operations})}
    child.send({input:bytes,raw:JSON.stringify(command)},error=>{if(error)finish('NATIVE_FAILED')})
    if(signal?.aborted)aborted()
   })}finally{busy=false}

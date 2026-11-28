@@ -40,3 +40,20 @@ test('Web Word drops invalid paper dimensions and removes a valid rule on print 
   assert.equal(duringPrint.length,1)
   assert.deepEqual(styles(),[])
 })
+
+test('Web Word assigns named paper rules to selected mixed-size pages',async t=>{
+  const {window,bridge,styles}=fixture(t)
+  window.document.querySelector('.pagination-preview').innerHTML=
+    '<div class="pv-page pv-print-skip" data-pv-page="0" style="width:576px;height:768px"></div>'+
+    '<div class="pv-page" data-pv-page="1" style="width:816px;height:1056px"></div>'+
+    '<div class="pv-page pv-print-tail" data-pv-page="2" style="width:1056px;height:816px"></div>'
+  let css
+  window.print=()=>{css=styles().join('')}
+  assert.deepEqual(await bridge.api.print(1,{deviceName:null},{widthTwips:12240,heightTwips:15840}),{ok:true})
+  assert.match(css,/@page docx-paper-1\s*\{[^}]*size:\s*8\.5in 11in/)
+  assert.match(css,/@page docx-paper-2\s*\{[^}]*size:\s*11in 8\.5in/)
+  assert.match(css,/data-pv-page="1"\][^{]*\{\s*page:\s*docx-paper-1/)
+  assert.match(css,/data-pv-page="2"\][^{]*\{\s*page:\s*docx-paper-2/)
+  assert.doesNotMatch(css,/data-pv-page="0"/)
+  assert.deepEqual(styles(),[])
+})

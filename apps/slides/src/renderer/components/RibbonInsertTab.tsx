@@ -70,6 +70,9 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
     onInsertIcon,
     onInsertImage,
     desktopMediaAvailable = true,
+    fileMediaAvailable = desktopMediaAvailable,
+    model3dAvailable = desktopMediaAvailable,
+    screenRecordingAvailable = desktopMediaAvailable,
     onInsertMedia,
     onInsertModel3d,
     onInsertSmartArt,
@@ -268,7 +271,7 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
         )}
         <button
           className="rb-big"
-          disabled={!hasDoc || !desktopMediaAvailable}
+          disabled={!hasDoc || !model3dAvailable}
           onClick={onInsertModel3d}
           data-tip={t('ribbon3dModelTip')}
         >
@@ -504,7 +507,7 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
       <Group label={t('ribbonGroupMedia')}>
         <button
           className="rb-big"
-          disabled={!hasDoc || !desktopMediaAvailable}
+          disabled={!hasDoc || !fileMediaAvailable}
           onClick={() => onInsertMedia('video')}
           data-tip={t('ribbonVideoTip')}
         >
@@ -515,7 +518,7 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
         </button>
         <button
           className="rb-big"
-          disabled={!hasDoc || !desktopMediaAvailable}
+          disabled={!hasDoc || !fileMediaAvailable}
           onClick={() => onInsertMedia('audio')}
           data-tip={t('ribbonAudioTip')}
         >
@@ -526,7 +529,7 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
         </button>
         <button
           className={`rb-big ${recording ? 'active rb-recording' : ''}`}
-          disabled={!hasDoc || !desktopMediaAvailable}
+          disabled={!hasDoc || (!recording && !screenRecordingAvailable)}
           onClick={onToggleScreenRecord}
           data-tip={recording ? t('ribbonStopRecTip') : t('ribbonScreenRecTip')}
         >

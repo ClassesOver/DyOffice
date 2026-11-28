@@ -87,6 +87,7 @@ export function handleGlobalKeydown(
   ctx: ActionCtx,
   e: KeyboardEvent,
   platform = navigator.platform,
+  useBrowserPasteEvent = false,
 ): void {
   if (ctx.slideShow || ctx.presenter) return // In show/presenter view: navigation keys are handled by those views
   const mod = e.metaKey || e.ctrlKey
@@ -260,6 +261,7 @@ export function handleGlobalKeydown(
       void clipboardActions.pasteFormat(ctx)
       return
     }
+    if (useBrowserPasteEvent) return
     e.preventDefault()
     void clipboardActions.pasteClipboard(ctx)
     return

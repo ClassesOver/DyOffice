@@ -33,6 +33,7 @@ export interface PrintJobInput {
 
 export function usePrintJob(input: PrintJobInput) {
   const { filePath, pageCount, currentPage, flushThen, opFailed, diskPasswordRef } = input
+  const browserPrintDialog = typeof window.pdfApi.printBrowserPages === 'function'
   const [printDlg, setPrintDlg] = useState(false)
   const [printMode, setPrintMode] = useState<'all' | 'current' | 'custom'>('all')
   const [printInput, setPrintInput] = useState('')
@@ -60,6 +61,7 @@ export function usePrintJob(input: PrintJobInput) {
     setPrintInvalid(false)
     setPrintParity('all')
     setPrintDlg(true)
+    if (browserPrintDialog) return
     window.pdfApi
       .listPrinters()
       .then(setPrinters)
@@ -76,7 +78,7 @@ export function usePrintJob(input: PrintJobInput) {
     if (printBusyRef.current) return
     printBusyRef.current = true
     const job =
-      printDevice === PRINT_SYSTEM_DIALOG
+      browserPrintDialog || printDevice === PRINT_SYSTEM_DIALOG
         ? undefined
         : {
             deviceName: printDevice,
@@ -105,11 +107,12 @@ export function usePrintJob(input: PrintJobInput) {
             return
           }
           const data = await readFileBytes(window.pdfApi, filePath)
-          const pdoc = await getDocument({ data, ...DOC_OPTS }).promise
+          const password = diskPasswordRef.current
+          const task = getDocument({ data, ...DOC_OPTS, ...(password === null ? {} : { password }) })
           try {
-            await printPdf(pdoc, pages, job)
+            await printPdf(await task.promise, pages, job, window.pdfApi.printBrowserPages)
           } finally {
-            void pdoc.loadingTask.destroy()
+            await task.destroy()
           }
         } catch (err) {
           opFailed(err instanceof Error ? err.message : String(err))
@@ -140,6 +143,7 @@ export function usePrintJob(input: PrintJobInput) {
   }
 
   return {
+    browserPrintDialog,
     printing,
     printDlg,
     setPrintDlg,

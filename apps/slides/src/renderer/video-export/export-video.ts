@@ -5,6 +5,8 @@
  */
 import type { RenderSlide } from '@genoffice/pptx-render'
 import { buildSteps, computeNodeStates } from '../animation-play'
+import { loadShowData } from '../load-show-data'
+import { getLang } from '../i18n/locale'
 import type { FrameRenderer } from './frames'
 import { AUDIO_SAMPLE_RATE, EncoderUnsupportedError, Mp4Writer } from './encoder'
 import {
@@ -36,21 +38,26 @@ interface Narration {
 }
 
 /** A slide's recorded narration clips, decoded and resampled to the track rate, laid end to end. */
-async function loadNarration(slideIndex: number, ids: string[]): Promise<Narration | null> {
+async function loadNarration(slideIndex: number, ids: string[], signal: AbortSignal, required: boolean): Promise<Narration | null> {
   const parts: Float32Array<ArrayBuffer>[] = []
   for (const id of ids) {
+    signal.throwIfAborted()
     const media = await window.slidesApi.getMediaData(slideIndex, id).catch(() => null)
-    if (!media || media.kind !== 'audio') continue
-    // The CSP keeps fetch() off data: URLs; an external link has no bytes to decode
-    const b64 = media.dataUrl.startsWith('data:') ? media.dataUrl.split(',', 2)[1] : undefined
-    if (!b64) continue
     try {
-      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+      if (!media || media.kind !== 'audio') throw Error('Missing narration')
+      // Desktop returns inline bytes. Web returns an object URL owned by this editor.
+      const b64 = media.dataUrl.startsWith('data:') ? media.dataUrl.split(',', 2)[1] : undefined
+      const bytes = b64 ? Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer
+        : media.dataUrl.startsWith('blob:') ? await (await fetch(media.dataUrl, {signal})).arrayBuffer() : undefined
+      if (!bytes) throw Error('Missing narration')
       const probe = new OfflineAudioContext(1, 1, AUDIO_SAMPLE_RATE)
-      const decoded = await probe.decodeAudioData(bytes.buffer)
+      const decoded = await probe.decodeAudioData(bytes)
       parts.push(mixdown(decoded))
     } catch {
-      // an undecodable clip exports as silence
+      signal.throwIfAborted()
+      if (required) throw Error(getLang()==='zh'?'无法读取录制的旁白。':'Could not read the recorded narration.')
+    } finally {
+      if (media) window.slidesApi.releaseMediaData?.(media.dataUrl)
     }
   }
   if (!parts.length) return null
@@ -84,6 +91,7 @@ export async function exportVideo(
     slides: RenderSlide[]
     images: Map<string, HTMLImageElement>
     path: string
+    requireNarration?: boolean
   },
   opts: VideoExportOptions,
   onProgress: (fraction: number) => void,
@@ -96,8 +104,8 @@ export async function exportVideo(
   let writer: Mp4Writer | undefined
   let frames: FrameRenderer | undefined
   try {
-    const prefetch = await Promise.all(
-      visible.map(async ({ i }) => {
+    const prefetch = await loadShowData(visible.length, async index => {
+        const {i}=visible[index]!
         const [transition, anims, timing, keys] = await Promise.all([
           window.slidesApi.getTransition(i),
           window.slidesApi.getAnimations(i),
@@ -106,11 +114,10 @@ export async function exportVideo(
         ])
         const narration =
           opts.useTimings && timing.narrationIds.length
-            ? await loadNarration(i, timing.narrationIds)
+            ? await loadNarration(i, timing.narrationIds, signal, !!input.requireNarration)
             : null
         return { transition, anims, timing, keys, narration }
-      }),
-    )
+      }, () => !signal.aborted)
     if (signal.aborted) return cancelled()
 
     const shown: RenderSlide[] = visible.map(({ slide }, k) => {
@@ -141,6 +148,9 @@ export async function exportVideo(
       ...size,
       fps: VIDEO_FPS,
       audio: hasAudio,
+      ...(input.requireNarration ? {audioRequiredMessage:getLang()==='zh'
+        ?'当前浏览器无法编码 AAC 旁白。可取消使用录制的时间和旁白，再导出无声视频。'
+        :'This browser cannot encode AAC narration. Turn off recorded timings and narrations to export a silent video.'} : {}),
     })
     writer = mp4
     // Loaded on demand: the Konva stages pull react-konva into every importer of file-actions otherwise
@@ -253,11 +263,12 @@ export async function exportVideo(
         await new Promise((r) => setTimeout(r, 0))
       }
     }
-    await mp4.finish()
+    await mp4.finish(signal)
     onProgress(1)
     return { ok: true, path: input.path }
   } catch (e) {
     await writer?.abort()
+    if (signal.aborted) return cancelled()
     if (e instanceof EncoderUnsupportedError)
       return { ok: false, unsupported: true, error: e.message }
     return { ok: false, error: String(e) }

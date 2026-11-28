@@ -7,11 +7,11 @@ import { authError } from '../auth/sessions.ts'
 const dto = (row: LeaseRow) => ({ leaseEpoch: Number(row.lease_epoch), editorId: row.editor_id, expiresAt: row.expires_at.toISOString() })
 const shape = (value: object, fields: string[]) => { if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !fields.includes(key))) throw authError(400) }
 const nextEpoch = (epoch: number) => { if (!Number.isSafeInteger(epoch + 1)) throw authError(409); return epoch + 1 }
-export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeWritable }: { transactions: PrincipalTransactions; ttlMs?: number; assertOfficeWritable?: (file:FileRow)=>Promise<void> }) {
+export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeWritable }: { transactions: PrincipalTransactions; ttlMs?: number; assertOfficeWritable?: (file:FileRow,token:FileCredential,editorId:string,docxUnlockId?:string)=>Promise<void> }) {
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 300_000) throw new Error('Invalid lease lifetime')
-  const run = <T>(token: FileCredential, fileId: string, operation: (connection: import('pg').PoolClient, principal: BusinessPrincipal) => Promise<T>, edit = false) => runFileTransaction(transactions,token,'files:write',async (connection, principal) => {
+  const run = <T>(token: FileCredential, fileId: string, operation: (connection: import('pg').PoolClient, principal: BusinessPrincipal) => Promise<T>, edit?:{editorId:string;docxUnlockId:string|undefined}) => runFileTransaction(transactions,token,'files:write',async (connection, principal) => {
     const file=await loadFile(connection,principal,fileId,false,'UPDATE')
-    if(edit)await assertOfficeWritable?.(file)
+    if(edit)await assertOfficeWritable?.(file,token,edit.editorId,edit.docxUnlockId)
     return operation(connection,principal)
   })
   const editorAuthority = (p: BusinessPrincipal,id: string) => { if ((p.job && id!==p.job.id) || (p.dshEdit && id!==p.dshEdit.editorId)) throw authError(404) }
@@ -28,8 +28,8 @@ export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeW
         return { ...dto(row), active: row.auth_version === principal.authVersion && row.expires_at > now, heldByCurrentSession: row.session_id === principal.sessionId && (!principal.dshEdit || row.editor_id===principal.dshEdit.editorId) && (principal.job ? row.job_id===principal.job.id && Number(row.job_epoch)===principal.job.epoch : row.job_id===null) }
       })
     },
-    async acquireLease(token: FileCredential, fileId: string, input: { editorId: string }) {
-      shape(input,['editorId'])
+    async acquireLease(token: FileCredential, fileId: string, input: { editorId: string; docxUnlockId?:string }) {
+      shape(input,['editorId','docxUnlockId'])
       const id = uuid(fileId), editor = uuid(input.editorId)
       return run(token,id,async (connection, principal) => {
         editorAuthority(principal,editor)
@@ -44,25 +44,25 @@ export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeW
           return dto(row)
         }
         return install(connection,principal,id,editor,nextEpoch(Number(row.lease_epoch)))
-      },true)
+      },{editorId:editor,docxUnlockId:input.docxUnlockId})
     },
-    async renewLease(token: FileCredential, fileId: string, input: { editorId: string; leaseEpoch: number }) {
-      shape(input,['editorId','leaseEpoch'])
+    async renewLease(token: FileCredential, fileId: string, input: { editorId: string; leaseEpoch: number; docxUnlockId?:string }) {
+      shape(input,['editorId','leaseEpoch','docxUnlockId'])
       const id = uuid(fileId), editor = uuid(input.editorId), epoch = leaseEpoch(input.leaseEpoch)
       return run(token,id,async (connection, principal) => {
         await assertLiveLease(connection,principal,id,epoch,editor)
         return install(connection,principal,id,editor,epoch)
-      },true)
+      },{editorId:editor,docxUnlockId:input.docxUnlockId})
     },
-    async takeoverLease(token: FileCredential, fileId: string, input: { editorId: string; expectedEpoch: number }) {
-      shape(input,['editorId','expectedEpoch'])
+    async takeoverLease(token: FileCredential, fileId: string, input: { editorId: string; expectedEpoch: number; docxUnlockId?:string }) {
+      shape(input,['editorId','expectedEpoch','docxUnlockId'])
       const id = uuid(fileId), editor = uuid(input.editorId), expected = leaseEpoch(input.expectedEpoch)
       return run(token,id,async (connection, principal) => {
         if (principal.job || principal.dshEdit) throw authError(404)
         const row = await lockLease(connection,principal,id)
         if (!row || Number(row.lease_epoch) !== expected) throw authError(409)
         return install(connection,principal,id,editor,nextEpoch(expected))
-      },true)
+      },{editorId:editor,docxUnlockId:input.docxUnlockId})
     },
     async releaseLease(token: FileCredential, fileId: string, input: { editorId: string; leaseEpoch: number }) {
       shape(input,['editorId','leaseEpoch'])

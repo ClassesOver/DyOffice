@@ -1,6 +1,8 @@
 /** Media containers the Insert dialog offers; a drop of the same files inserts them the same way. */
 export const VIDEO_EXTS = ['mp4', 'm4v', 'mov', 'webm', 'avi'] as const
 export const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'ogg'] as const
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff'])
+export const WEB_SLIDE_MEDIA_MAX_BYTES = 8 * 1024 * 1024
 
 export type DroppedFileKind = 'image' | 'video' | 'audio' | 'other'
 
@@ -20,5 +22,6 @@ export function classifyDroppedFile(name: string, mime: string): DroppedFileKind
   if ((VIDEO_EXTS as readonly string[]).includes(ext)) return 'video'
   if ((AUDIO_EXTS as readonly string[]).includes(ext)) return 'audio'
   if (mime.startsWith('image/')) return 'image'
+  if ((!mime || mime === 'application/octet-stream') && IMAGE_EXTS.has(ext)) return 'image'
   return 'other'
 }

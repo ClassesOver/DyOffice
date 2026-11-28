@@ -80,3 +80,19 @@ for(const identity of [200,401,'network'] as const)test(`change-password 401 che
  expect(paths).toContain('/api/v1/auth/me')
  if(identity===401)expect(notify).toHaveBeenCalledWith('expired');else expect(notify).not.toHaveBeenCalled()
 })
+
+test('bound file download rejects bytes returned after a cookie rotation',async()=>{
+ const path='/api/v1/files/file/content?revision=revision&download=1'
+ let proof='p'.repeat(43),rotate=false
+ const send=vi.fn(async(input:RequestInfo|URL)=>{
+  if(input==='/api/v1/auth/session-proof')return new Response(JSON.stringify({csrfToken:proof}))
+  expect(input).toBe(path)
+  if(rotate)proof='r'.repeat(43)
+  return new Response('saved file bytes',{headers:{'Content-Type':'application/octet-stream'}})
+ })
+ const bound=await createLocalShellClient(send).bindSession()
+ const saved=await bound.download(path)
+ expect(await saved.text()).toBe('saved file bytes')
+ rotate=true
+ await expect(bound.download(path)).rejects.toMatchObject({code:'stale_session'})
+})

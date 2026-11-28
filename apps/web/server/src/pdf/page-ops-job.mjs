@@ -1,6 +1,8 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-import {PDFName} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFName,PDFNumber} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
+import {hasUnsupportedPdfForm} from '../../../shared/pdf-edit-structure.mjs'
+import {pdfInsertFormState} from './insert-form-integrity.mjs'
 
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=64*1024
 const annotationRefs=page=>JSON.stringify((page.node.Annots()?.asArray()??[]).map(String))
@@ -16,7 +18,29 @@ export function parsePdfPageOpsRequest(raw){
  return validatePdfPageOperations(command.operations)
 }
 
-async function geometryBytes(original,source,operation,signal){
+const isWidget=dict=>dict instanceof PDFDict&&String(dict.lookup(PDFName.of('Subtype')))==='/Widget'
+function widgetRect(widget){
+ const rect=widget.lookup(PDFName.of('Rect'))
+ if(!(rect instanceof PDFArray)||rect.size()!==4)fail('PDF_PAGE_OPS_VERIFY_FAILED')
+ const coordinates=rect.asArray().map((_,index)=>rect.lookup(index))
+ if(!coordinates.every(value=>value instanceof PDFNumber&&Number.isFinite(value.asNumber())))fail('PDF_PAGE_OPS_VERIFY_FAILED')
+ return coordinates.map(value=>value.asNumber())
+}
+function verifyWidgetScale(before,after,k){
+ for(const ref of before.node.Annots()?.asArray()??[]){
+  const source=before.doc.context.lookup(ref)
+  if(!isWidget(source))continue
+  const output=after.doc.context.lookup(ref)
+  if(!isWidget(output))fail('PDF_PAGE_OPS_VERIFY_FAILED')
+  const initial=widgetRect(source),scaled=widgetRect(output)
+  if(scaled.some((value,index)=>Math.abs(value-initial[index]*k)>1e-7))fail('PDF_PAGE_OPS_VERIFY_FAILED')
+ }
+}
+
+async function geometryBytes(original,doc,operation,signal){
+ const source=doc.getPages(),hasForm=doc.catalog.has(PDFName.of('AcroForm'))
+ const formOptions={ignoreAttachedWidgetRects:operation.op==='setPageSize'}
+ const formState=hasForm?pdfInsertFormState(doc,formOptions):null
  for(const page of source){
   for(const box of [page.getMediaBox(),page.getCropBox()])if(!Object.values(box).every(Number.isFinite)||box.width<=0||box.height<=0)fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
   if(!Number.isFinite(page.getRotation().angle)||page.getRotation().angle%90!==0)fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
@@ -27,14 +51,16 @@ async function geometryBytes(original,source,operation,signal){
   :await cropPagesBytes(original,operation.pages.map(page=>page-1),{l:operation.left,t:operation.top,r:operation.right,b:operation.bottom}))
  check(signal)
  if(bytes.length<1||bytes.length>MAX_BYTES)fail('OUTPUT_LIMIT')
- const reopened=await openEditablePdf(bytes);check(signal)
+ const reopened=await openEditablePdf(bytes,{allowAcroForm:true});check(signal)
  if(reopened.getPageCount()!==source.length)fail('PDF_PAGE_OPS_VERIFY_FAILED')
+ if(formState!==null&&pdfInsertFormState(reopened,formOptions)!==formState)fail('PDF_PAGE_OPS_VERIFY_FAILED')
  for(let index=0;index<source.length;index++){
   const before=source[index],after=reopened.getPage(index)
   if(String(after.ref)!==String(before.ref)||after.getRotation().angle!==before.getRotation().angle||annotationRefs(after)!==annotationRefs(before))fail('PDF_PAGE_OPS_VERIFY_FAILED')
   if(operation.op==='setPageSize'){
    const rotated=((after.getRotation().angle%180)+180)%180===90
    if(after.getWidth()!==(rotated?operation.height:operation.width)||after.getHeight()!==(rotated?operation.width:operation.height))fail('PDF_PAGE_OPS_VERIFY_FAILED')
+   if(hasForm)verifyWidgetScale(before,after,Math.min(after.getWidth()/before.getWidth(),after.getHeight()/before.getHeight()))
   }else{
    // CropBox affects viewing only: all content streams and annotation dictionaries must remain.
    if(JSON.stringify(after.getMediaBox())!==JSON.stringify(before.getMediaBox())||String(after.node.get(PDFName.of('Contents')))!==String(before.node.get(PDFName.of('Contents'))))fail('PDF_PAGE_OPS_VERIFY_FAILED')
@@ -48,7 +74,7 @@ async function geometryBytes(original,source,operation,signal){
    }else if(JSON.stringify(actual)!==JSON.stringify(old))fail('PDF_PAGE_OPS_VERIFY_FAILED')
   }
  }
- return bytes
+ return {bytes,reopened}
 }
 
 export function createPdfPageOpsJob(){
@@ -59,11 +85,19 @@ export function createPdfPageOpsJob(){
   const operations=parsePdfPageOpsRequest(raw),original=Buffer.from(input),inputSha256=hash(original)
   busy=true
   try{
-   const managed=await capturePdfManagedStamps(original),working=managed.bytes,doc=await openEditablePdf(working);check(signal)
+   const geometry=operations[0].op==='setPageSize'||operations[0].op==='cropPages'
+   const options={allowAcroForm:geometry}
+   const managed=await capturePdfManagedStamps(original,options),working=managed.bytes,doc=await openEditablePdf(working,options);check(signal)
+   if(geometry&&hasUnsupportedPdfForm(doc))fail('PDF_EDIT_UNSUPPORTED_STRUCTURE')
    const source=doc.getPages(),count=source.length,deleted=new Set(),rotation=new Map(),inserts=[]
    validatePdfPageOperations(operations,count)
-   if(operations[0].op==='setPageSize'||operations[0].op==='cropPages'){
-    const bytes=await reapplyPdfManagedStamps(await geometryBytes(working,source,operations[0],signal),managed.operations)
+   if(geometry){
+    const adjusted=await geometryBytes(working,doc,operations[0],signal)
+    const bytes=await reapplyPdfManagedStamps(adjusted.bytes,managed.operations,{...options,signal})
+    if(managed.operations.length&&doc.catalog.has(PDFName.of('AcroForm'))){
+     const final=await openEditablePdf(bytes,options)
+     if(pdfInsertFormState(adjusted.reopened)!==pdfInsertFormState(final))fail('PDF_PAGE_OPS_VERIFY_FAILED')
+    }
     check(signal);if(bytes.length>MAX_BYTES)fail('OUTPUT_LIMIT')
     return {bytes,inputSha256,sha256:hash(bytes),size:bytes.length}
    }

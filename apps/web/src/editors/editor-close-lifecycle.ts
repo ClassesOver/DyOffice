@@ -46,8 +46,10 @@ export function createEditorCloseLifecycle(options:{
 }
 
 /** Installed while booting as fail-closed, then replaced by the mounted editor. */
-export function installEditorCloseLifecycle(stage:Window,lifecycle:{canClose:()=>Promise<boolean>;dispose:()=>Promise<boolean>}){
- const view=stage as unknown as {dyofficeEditorCanClose?:()=>boolean|Promise<boolean>;dyofficeEditorDispose?:()=>Promise<boolean>}
+export function installEditorCloseLifecycle(stage:Window,lifecycle:{canClose:()=>Promise<boolean>;dispose:()=>Promise<boolean>;canSleep?:()=>boolean}){
+ const view=stage as unknown as {dyofficeEditorCanClose?:()=>boolean|Promise<boolean>;dyofficeEditorDispose?:()=>Promise<boolean>;dyofficeEditorCanSleep?:()=>boolean}
  view.dyofficeEditorCanClose=lifecycle.canClose
  view.dyofficeEditorDispose=lifecycle.dispose
+ if(lifecycle.canSleep)view.dyofficeEditorCanSleep=lifecycle.canSleep
+ else delete view.dyofficeEditorCanSleep
 }

@@ -1,4 +1,5 @@
-import {PDFArray,PDFDict,PDFName} from 'pdf-lib'
+import {PDFDict,PDFName} from 'pdf-lib'
+import {assertNoPdfSignatures} from '../../pdf/src/shared/pdf-signature-guard.ts'
 
 export const MAX_PDF_EDIT_PAGES=100
 export const MAX_PDF_DRAFT_BLANK_PAGES=20
@@ -7,17 +8,7 @@ export const MAX_PDF_DRAFT_BLANK_PAGES=20
 export function assertPdfEditStructure(doc,{allowAcroForm=false}={}){
  const fail=code=>{throw Object.assign(Error(code),{code})}
  if(doc.getPageCount()<1||doc.getPageCount()>MAX_PDF_EDIT_PAGES)fail('PDF_EDIT_LIMIT')
- const pending=doc.context.enumerateIndirectObjects().map(([,object])=>object),visited=new Set()
- while(pending.length){
-  const object=pending.pop();if(!object||visited.has(object))continue
-  visited.add(object);if(visited.size>100000)fail('PDF_EDIT_LIMIT')
-  if(object instanceof PDFDict){
-   if(String(object.get(PDFName.of('Type')))==='/Sig'||(String(object.get(PDFName.of('FT')))==='/Sig'&&(!allowAcroForm||(object.has(PDFName.of('V'))&&String(object.lookup(PDFName.of('V')))!=='null')))||object.has(PDFName.of('ByteRange')))fail('SIGNATURE_EDIT_REFUSED')
-   pending.push(...object.values())
-  }else if(object instanceof PDFArray)pending.push(...object.asArray())
-  else if(object.dict instanceof PDFDict)pending.push(object.dict)
- }
- if(doc.catalog.has(PDFName.of('Perms')))fail('SIGNATURE_EDIT_REFUSED')
+ assertNoPdfSignatures(doc,{allowUnsignedFields:allowAcroForm,maxObjects:100000})
 }
 
 export function hasUnsupportedPdfForm(doc){

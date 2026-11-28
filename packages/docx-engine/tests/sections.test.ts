@@ -32,6 +32,21 @@ const sectBreakPara = (
 }
 
 describe('readSections enumerates all sections', () => {
+  it('writes requested paper settings when the source omits the final section properties', async () => {
+    const parsed = await parseDocx(await buildDocx({ bodyXml: P('Recipient'), sectPrXml: '' }))
+    const section = {
+      ...readSectionSettings(parsed),
+      pageWidth: 13680,
+      pageHeight: 5940,
+      orientation: 'landscape' as const,
+    }
+    const saved = await saveDocx(parsed, [{ kind: 'original', docxIndex: 0 }], { section })
+    const reopened = await parseDocx(saved)
+    expect(readSectionSettings(reopened)).toMatchObject({
+      pageWidth: 13680, pageHeight: 5940, orientation: 'landscape',
+    })
+  })
+
   it('single-section document: one section covers all blocks, trailing sectPr provides settings', async () => {
     const parsed = await parseDocx(await buildDocx({ bodyXml: P('a') + P('b') }))
     const sections = readSections(parsed)

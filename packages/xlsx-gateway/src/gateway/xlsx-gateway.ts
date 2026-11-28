@@ -4,7 +4,15 @@ import { rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 import JSZip from 'jszip'
-import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
+import { createBufferEntrySource, loadSafeZip, XLSX_ZIP_LIMITS } from './xlsx-zip.ts'
+import { resolveWorksheetPath } from './xlsx-row-reader.ts'
+import { booleanCellText, decodeCellMarkup, parseCellText, readSharedStrings, readSharedTextEntries, type CellText, type ReadRunStyle } from './xlsx-cell-text.ts'
+
+export { createBufferEntrySource, XLSX_ZIP_LIMITS } from './xlsx-zip.ts'
+export { dateStyleIndexes, isDateFormatCode, readSheetRows, serialDateText } from './xlsx-row-reader.ts'
+export { parseSharedStringsXml } from './xlsx-cell-text.ts'
+
+const MAX_UNCOMPRESSED_BYTES = XLSX_ZIP_LIMITS.maxTotalBytes
 
 import { formatAddress } from '../domain/cell-address.ts'
 import { splitSheetRef } from '../domain/chart-visual.ts'
@@ -85,13 +93,11 @@ import {
   FilterEditError,
 } from './xlsx-filter.ts'
 import { normalizeOoxmlPartPrefix, readRelationshipId, readRootOpening, readRootStartTag } from './xlsx-namespace.ts'
-import { childElements, resolvedStyleEntries } from './xlsx-style-entries.ts'
+import { childElements } from './xlsx-style-entries.ts'
 import {
   booleanCellValue,
   decodeCellText,
-  elementText,
   isElement,
-  isSpreadsheetNamespace,
   scopedChildren,
   sharedStringAt,
   withBody,
@@ -99,7 +105,7 @@ import {
   worksheetRoot,
   type ScopedElement,
 } from './xlsx-worksheet-xml.ts'
-import { isWorkbookSheetRelationship, readWorkbookPartPath, resolveWorkbookSheetTarget } from './xlsx-workbook-parts.ts'
+import { readWorkbookPartPath } from './xlsx-workbook-parts.ts'
 import { escapeRegExp } from './xlsx-sheets.ts'
 import type {
   SheetAllocation,
@@ -212,14 +218,6 @@ import {
 } from './xlsx-structure.ts'
 import { StylesheetEditor } from './xlsx-styles.ts'
 
-/** Shared with the CLI's pre-open check so both layers accept the same files. */
-export const XLSX_ZIP_LIMITS = {
-  maxParts: 10_000,
-  maxPartBytes: 256 * 1024 * 1024,
-  maxTotalBytes: 256 * 1024 * 1024,
-} as const
-const MAX_ENTRY_COUNT = XLSX_ZIP_LIMITS.maxParts
-const MAX_UNCOMPRESSED_BYTES = XLSX_ZIP_LIMITS.maxTotalBytes
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 
 export { MAX_GRID_COLUMNS, MAX_GRID_ROWS }
@@ -326,7 +324,7 @@ type ImportedWorkbookWithCellDetails = Omit<ImportedXlsx, 'snapshot'> & {
   }
 }
 
-type ReadRunStyle = (propertiesXml: string) => Omit<WorkbookRichRun, 'text'>
+
 
 export interface CellEdit {
   readonly sheetName: string
@@ -567,18 +565,6 @@ function markDynamicArrayAnchor(worksheetXml: string, address: string, cm: numbe
   )
 }
 
-export async function createBufferEntrySource(buffer: Buffer): Promise<EntrySource> {
-  const zip = await loadSafeZip(buffer)
-  return {
-    paths: async () =>
-      Object.entries(zip.files)
-        .filter(([, file]) => !file.dir)
-        .map(([path]) => path),
-    has: async (path) => zip.file(path) !== null,
-    readText: async (path) => normalizeOoxmlPartPrefix(await readTextEntry(zip, path)),
-  }
-}
-
 /// In-memory assembler: applies a plan onto the source buffer with JSZip.
 /// Every entry is recompressed, so it stays subject to the whole-package
 /// decompression limit — the sidecar streaming assembler is the large-file
@@ -650,172 +636,6 @@ async function readWorkbookCells(
     snapshot: { revision: 0, sheets },
     sheetNamesById,
   }
-}
-
-/**
- * A worksheet read as plain text rows — the values as the file stores them.
- *
- * The editable model (readBasicWorkbook) keeps a formula as a formula and
- * drops the value Excel cached for it, which is the wrong answer for a reader
- * that wants the data itself: a data source (the recipient list of a mail
- * merge) holds what the file last calculated. So the cell's own <v> is what
- * this reads, exactly like the pivot source reader does.
- *
- * The first sheet is read unless a sheet is named. genoffice#2097.
- */
-export async function readSheetRows(buffer: Buffer, sheetName?: string): Promise<string[][]> {
-  const zip = await createBufferEntrySource(buffer)
-  const workbookXml = await zip.readText('xl/workbook.xml')
-  const sharedStrings = await readSharedStrings(zip)
-  const name = sheetName ?? firstSheetName(workbookXml)
-  const worksheetXml = await zip.readText(await resolveWorksheetPath(zip, name))
-  const stylesPath = await readWorkbookPartPath(zip, 'styles')
-  const dateStyles = (await zip.has(stylesPath))
-    ? dateStyleIndexes(await zip.readText(stylesPath))
-    : new Set<number>()
-  const date1904 = /<workbookPr\b[^>]*\bdate1904="(?:1|true)"/.test(workbookXml)
-  return worksheetRows(worksheetXml, sharedStrings, { dateStyles, date1904 })
-}
-
-/** how a worksheet's numbers read as text */
-interface RowTextOptions {
-  /** cellXfs indexes whose number format is a date or a time */
-  dateStyles: ReadonlySet<number>
-  date1904: boolean
-}
-
-/** the built-in number formats that are dates or times (ECMA-376 18.8.30) */
-const BUILTIN_DATE_FORMATS = new Set([
-  14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51,
-  52, 53, 54, 55, 56, 57, 58,
-])
-
-/** a custom format code is a date when a date token survives the literals and the colour/condition brackets */
-export function isDateFormatCode(code: string): boolean {
-  const bare = code
-    .replace(/"[^"]*"/g, '')
-    .replace(/\[[^\]]*\]/g, '')
-    .replace(/\\./g, '')
-  if (/[#0?@]/.test(bare) && !/[ymdh]/i.test(bare)) return false
-  return /[ymdh]/i.test(bare) || /s/.test(bare)
-}
-
-/** the cellXfs indexes whose number format is a date or a time */
-export function dateStyleIndexes(stylesXml: string): Set<number> {
-  // Entries as the sidecar reads them: a wrapped (mc:AlternateContent) numFmt
-  // or xf is one entry, read through its Fallback — a Choice branch may give
-  // the same numFmtId another format code.
-  const custom = new Set<number>()
-  const numFmts = /<numFmts\b[^>]*>([\s\S]*?)<\/numFmts>/.exec(stylesXml)?.[1] ?? ''
-  for (const numFmt of resolvedStyleEntries(numFmts, 'numFmt')) {
-    const attributes = /^<numFmt\b([^>]*?)\/?>/.exec(numFmt)?.[1] ?? ''
-    const id = Number(readXmlAttribute(attributes, 'numFmtId'))
-    const code = decodeXmlText(readXmlAttribute(attributes, 'formatCode') ?? '')
-    if (Number.isFinite(id) && isDateFormatCode(code)) custom.add(id)
-  }
-  const out = new Set<number>()
-  const cellXfs = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(stylesXml)?.[1] ?? ''
-  for (const [index, xf] of resolvedStyleEntries(cellXfs, 'xf').entries()) {
-    const id = Number(readXmlAttribute(/^<xf\b([^>]*?)\/?>/.exec(xf)?.[1] ?? '', 'numFmtId'))
-    if (BUILTIN_DATE_FORMATS.has(id) || custom.has(id)) out.add(index)
-  }
-  return out
-}
-
-/** an Excel serial as ISO text: the date, and the time when the serial carries one */
-export function serialDateText(serial: number, date1904: boolean): string {
-  const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30)
-  const ms = Math.round((serial + (!date1904 && serial < 60 ? 1 : 0)) * 86_400_000)
-  const date = new Date(epoch + ms)
-  if (Number.isNaN(date.getTime())) return String(serial)
-  const iso = date.toISOString()
-  const dayPart = iso.slice(0, 10)
-  const timePart = iso.slice(11, 19)
-  if (serial < 1) return timePart
-  return timePart === '00:00:00' ? dayPart : `${dayPart} ${timePart}`
-}
-
-/** the name of the first sheet in workbook.xml */
-function firstSheetName(workbookXml: string): string {
-  const sheetPattern = /<sheet\b((?:"[^"]*"|'[^']*'|[^>"'])*?)\/?>/g
-  const match = sheetPattern.exec(workbookXml)
-  const name = match ? readXmlAttribute(match[1] ?? '', 'name') : undefined
-  if (!name) throw new Error('Workbook contains no readable worksheets.')
-  return decodeXmlText(name)
-}
-
-/** the zero-based column an A1 address names */
-function columnIndexOf(address: string): number {
-  const match = /^\$?([A-Z]+)\$?[0-9]+$/.exec(address)
-  if (!match) return -1
-  let column = 0
-  for (const character of match[1]!) column = column * 26 + character.charCodeAt(0) - 64
-  return column - 1
-}
-
-/** the text of one cell, whatever the file stored it as */
-function cellText(
-  body: string,
-  type: string | undefined,
-  sharedStrings: readonly string[],
-  asDate = false,
-  date1904 = false,
-): string {
-  if (type === 'inlineStr') {
-    return [...body.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
-      .map((textMatch) => decodeCellText(textMatch[1] ?? ''))
-      .join('')
-  }
-  const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
-  if (rawValue === undefined) return ''
-  if (type === 's') return sharedStringAt(sharedStrings, decodeCellMarkup(rawValue)) ?? ''
-  if (type === 'str') return decodeCellText(rawValue)
-  if (type === 'b') return booleanCellText(decodeCellMarkup(rawValue))
-  // a number keeps the file's own spelling, except that a date-formatted
-  // cell reads as a date, not as the serial the file holds
-  const text = decodeCellText(rawValue)
-  if (asDate && (type === undefined || type === 'n')) {
-    const serial = finiteDecimalCellValue(decodeCellMarkup(rawValue))
-    if (serial !== null) return serialDateText(serial, date1904)
-  }
-  return text
-}
-
-/** the rows of a worksheet, in file order; a row that is not there is empty */
-function worksheetRows(
-  worksheetXml: string,
-  sharedStrings: readonly string[],
-  options: RowTextOptions = { dateStyles: new Set(), date1904: false },
-): string[][] {
-  const rows: string[][] = []
-  const rowPattern = /<row\b([^>]*)>([\s\S]*?)<\/row>/g
-  let rowMatch: RegExpExecArray | null
-  while ((rowMatch = rowPattern.exec(worksheetXml)) !== null) {
-    const rowNumber = Number(readXmlAttribute(rowMatch[1] ?? '', 'r'))
-    const rowIndex = Number.isFinite(rowNumber) && rowNumber > 0 ? rowNumber - 1 : rows.length
-    const cells: string[] = []
-    const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g
-    let cellMatch: RegExpExecArray | null
-    while ((cellMatch = cellPattern.exec(rowMatch[2] ?? '')) !== null) {
-      const attributes = cellMatch[1] ?? ''
-      const address = readXmlAttribute(attributes, 'r')
-      const column = address ? columnIndexOf(address) : cells.length
-      if (column < 0) continue
-      const style = Number(readXmlAttribute(attributes, 's'))
-      const value = cellText(
-        cellMatch[2] ?? '',
-        readXmlAttribute(attributes, 't'),
-        sharedStrings,
-        options.dateStyles.has(style),
-        options.date1904,
-      )
-      while (cells.length < column) cells.push('')
-      cells[column] = value
-    }
-    while (rows.length < rowIndex) rows.push([])
-    rows[rowIndex] = cells
-  }
-  return rows
 }
 
 export async function inventoryXlsx(buffer: Buffer): Promise<readonly PackageEntry[]> {
@@ -2789,47 +2609,6 @@ export function sha256(input: Buffer | string): string {
 /// '\' separators, a leading '/' and empty segments are producer quirks Excel
 /// tolerates (genoffice#196 shipped `/xl/workbook.xml`); folding them keeps
 /// lookups and the saved package on conformant names.
-function canonicalEntryName(raw: string): string | null {
-  if (raw.includes('\0')) return null
-  const segments: string[] = []
-  for (const segment of raw.split(/[/\\]/)) {
-    if (segment === '' || segment === '.') continue
-    if (segment === '..') {
-      if (segments.pop() === undefined) return null
-      continue
-    }
-    segments.push(segment)
-  }
-  const name = segments.join('/')
-  return name && /[/\\]$/.test(raw) ? `${name}/` : name
-}
-
-async function loadSafeZip(buffer: Buffer): Promise<JSZip> {
-  // Metered gate first: a forged central directory must not reach JSZip.
-  await assertZipInflatesWithinLimits(buffer, XLSX_ZIP_LIMITS)
-  const zip = await JSZip.loadAsync(buffer, { checkCRC32: true })
-  const paths = Object.keys(zip.files)
-  if (paths.length > MAX_ENTRY_COUNT) throw new Error('Workbook contains too many ZIP entries.')
-  // Snapshot first: removing a folder entry such as "/" drops its children too.
-  const files = paths.map((path) => [path, zip.files[path]] as const)
-  for (const [path, file] of files) {
-    const canonical = canonicalEntryName(path)
-    if (canonical === null) throw new Error('Workbook contains an unsafe ZIP path.')
-    if (canonical === path) continue
-    zip.remove(path)
-    if (file && !file.dir && canonical && !zip.files[canonical]) {
-      zip.file(canonical, await file.async('nodebuffer'), { createFolders: false, date: file.date })
-    }
-  }
-  return zip
-}
-
-async function readTextEntry(zip: JSZip, path: string): Promise<string> {
-  const entry = zip.file(path)
-  if (!entry) throw new Error(`Workbook is missing ${path}.`)
-  return entry.async('text')
-}
-
 /// Drawings, table and pivot ranges, and annotations live in sibling parts
 /// that must shift with the worksheet.
 async function shiftAnchoredSheetParts(
@@ -3007,23 +2786,6 @@ function tableFilterRoute(tableXml: string): TableFilterRoute | null {
   } catch {
     return null
   }
-}
-
-async function resolveWorksheetPath(
-  reader: Pick<EntrySource, 'readText'>,
-  sheetName: string,
-): Promise<string> {
-  const workbookXml = await reader.readText('xl/workbook.xml')
-  const relationshipId = findSheetElement(workbookXml, sheetName)?.relationshipId
-  if (relationshipId === undefined)
-    throw new Error(`Sheet "${sheetName}" was not found in workbook.xml.`)
-
-  const relationshipsXml = await reader.readText('xl/_rels/workbook.xml.rels')
-  const relationship = parseRelationships(relationshipsXml).find(({ id }) => relationshipIdsMatch(id, relationshipId))
-  if (!relationship?.target || !isWorkbookSheetRelationship(relationship)) {
-    throw new Error(`Worksheet relationship ${relationshipId} was not found.`)
-  }
-  return resolveWorkbookSheetTarget(relationship.target)
 }
 
 function replaceSheetName(workbookXml: string, before: string, after: string): string {
@@ -3984,85 +3746,9 @@ function parseWorksheetCells(
   return { cells, storedCellCount }
 }
 
-function booleanCellText(value: string): string {
-  const decoded = booleanCellValue(value)
-  return decoded === null ? '' : decoded ? 'TRUE' : 'FALSE'
-}
-
-function hasLiteralMarkup(xml: string): boolean {
-  return xml.includes('<![CDATA[') || xml.includes('<!--')
-}
-
-function decodeCellMarkup(xml: string): string {
-  return hasLiteralMarkup(xml) ? elementText(xml) : decodeXmlText(xml)
-}
-
 function sharedFormulaIndex(id: string): number | undefined {
   const si = Number(id)
   return /^\d+$/.test(id) && si <= 0xffff_ffff ? si : undefined
-}
-
-async function readSharedStrings(source: EntrySource): Promise<readonly string[]> {
-  const path = await readWorkbookPartPath(source, 'sharedStrings')
-  if (!(await source.has(path))) return []
-  return parseSharedStringsXml(await source.readText(path))
-}
-
-async function readSharedTextEntries(
-  source: EntrySource,
-  readRunStyle?: ReadRunStyle,
-): Promise<CellText[]> {
-  const path = await readWorkbookPartPath(source, 'sharedStrings')
-  if (!(await source.has(path))) return []
-  const xml = await source.readText(path)
-  return Array.from(sharedStringItems(xml), (item) => parseCellText(item.inner, readRunStyle, item))
-}
-
-export function parseSharedStringsXml(xml: string): string[] {
-  return Array.from(sharedStringItems(xml), (item) => parseCellText(item.inner, undefined, item).value)
-}
-
-function* sharedStringItems(xml: string): Iterable<ScopedElement> {
-  const [element] = childElements(xml)
-  const sst = element && withNamespaces(element, new Map())
-  if (sst?.local !== 'sst' || !isSpreadsheetNamespace(sst.namespace)) return
-  for (const node of childElements(sst.inner)) {
-    const item = withNamespaces(node, sst.namespaces)
-    if (isElement(item, 'si', sst.namespace)) yield item
-  }
-}
-
-type CellText = { readonly value: string; readonly rich?: WorkbookRichRun[] }
-const plainTextRun = { bold: false, italic: false, underline: false, strikethrough: false }
-
-function cellTextChildren(xml: string, parent?: ScopedElement) {
-  return childElements(xml).flatMap(element => {
-    const scope = parent && withNamespaces(element, parent.namespaces)
-    if (parent && scope?.namespace !== parent.namespace) return []
-    return [{ element, name: scope?.local ?? element.name, scope }]
-  })
-}
-
-function parseCellText(xml: string, readRunStyle?: ReadRunStyle, scope?: ScopedElement): CellText {
-  const runs: WorkbookRichRun[] = []
-  let value = ''
-  let styled = false
-  // Only direct text and rich runs contribute cell content. Phonetic guides do not.
-  for (const item of cellTextChildren(xml, scope)) {
-    if (item.name !== 't' && item.name !== 'r') continue
-    const children = item.name === 'r' ? cellTextChildren(item.element.inner, item.scope) : []
-    const node = item.name === 't' ? item.element : children.find(({ name }) => name === 't')?.element
-    const preserveSpace = node !== undefined && readWorksheetTagAttribute(node.opening, 'xml:space') === 'preserve'
-    const text = decodeCellText(node?.inner ?? '', preserveSpace)
-    value += text
-    if (readRunStyle) {
-      const properties = children.find(({ name }) => name === 'rPr')?.element.xml
-      const style = properties === undefined ? plainTextRun : readRunStyle(properties)
-      styled ||= properties !== undefined && Object.values(style).some(Boolean)
-      runs.push({ text, ...style })
-    }
-  }
-  return runs.length > 1 || styled ? { value, rich: runs } : { value }
 }
 
 /** Cell addresses outside the Excel grid cannot exist in a valid file; skip them. Exported for tests. */

@@ -10,6 +10,7 @@ export interface WorkspaceFile {
   size: number
   updatedAt: string
   starred: boolean
+  group?: string
   folderId: string | null
   lastOpenedAt: string | null
 }
@@ -20,6 +21,8 @@ export interface WorkspaceFileQuery {
   /** Direct identity lookup; totalAll is limited to this identity, not the entire workspace. */
   id?: string
   view?: WorkspaceView
+  /** Restrict the starred view to a named group. */
+  group?: string
   sort?: WorkspaceFileSort
   /** Omit to include all folders; use "root" for files without a folder. */
   folderId?: string
@@ -28,6 +31,8 @@ export interface WorkspaceFileQuery {
 }
 
 export interface WorkspaceFileList { files: WorkspaceFile[]; total: number; totalAll: number }
+export interface WorkspaceStarredGroups { groups: string[] }
+export interface UpdateWorkspaceStarredGroup { ids: string[]; group: string | null }
 
 export interface WorkspaceFolder {
   id: string

@@ -106,6 +106,7 @@ const FLAG_ENCRYPTED = 0x1
 export async function assertZipInflatesWithinLimits(
   bytes: Uint8Array,
   limits: ZipLimits = DEFAULT_ZIP_LIMITS,
+  onVerified?: (usage: { parts: number; bytes: number }) => void,
 ): Promise<void> {
   const parts = scanParts(bytes)
   if (parts.length > limits.maxParts) {
@@ -127,6 +128,7 @@ export async function assertZipInflatesWithinLimits(
       )
     }
   }
+  onVerified?.({ parts: parts.length, bytes: total })
 }
 
 /**

@@ -148,6 +148,33 @@ describe('transformSheetForLinkBreak', () => {
     expect(out).not.toContain('[3]Sheet1')
   })
 
+  it('breaks true external references without changing string literals or structured table columns', () => {
+    const input =
+      '<worksheet><sheetData><row r="1">' +
+      '<c r="A1" t="str"><f>&quot;[1]Source!A1&quot;</f><v>[1]Source!A1</v></c>' +
+      '<c r="B1"><f>Sales[[#This Row],[1]Source]</f><v>7</v></c>' +
+      '<c r="C1" t="str"><f>&quot;He said &quot;&quot;[3]Live!A1&quot;&quot;&quot;&amp;[3]Live!B1</f><v>text</v></c>' +
+      '<c r="D1"><f>[1]!ExternalRate</f><v>42</v></c>' +
+      '<c r="E1"><f>&apos;[3]O&apos;&apos;Brien&apos;!B1</f><v>5</v></c>' +
+      '</row></sheetData></worksheet>'
+    expect(transformSheetForLinkBreak(input, [1])).toBe(
+      '<worksheet><sheetData><row r="1">' +
+      '<c r="A1" t="str"><f>&quot;[1]Source!A1&quot;</f><v>[1]Source!A1</v></c>' +
+      '<c r="B1"><f>Sales[[#This Row],[1]Source]</f><v>7</v></c>' +
+      '<c r="C1" t="str"><f>"He said ""[3]Live!A1"""&amp;[2]Live!B1</f><v>text</v></c>' +
+      '<c r="D1"><v>42</v></c>' +
+      `<c r="E1"><f>'[2]O''Brien'!B1</f><v>5</v></c>` +
+      '</row></sheetData></worksheet>',
+    )
+  })
+
+  it('preserves local conditional-format formulas that contain external-looking strings', () => {
+    const xml =
+      '<worksheet><conditionalFormatting sqref="A1"><cfRule type="expression" priority="1">' +
+      '<formula>A1=&quot;[1]Source!A1&quot;</formula></cfRule></conditionalFormatting></worksheet>'
+    expect(transformSheetForLinkBreak(xml, [1])).toBe(xml)
+  })
+
   it('renumbers conditional-format and data-validation formulas too', () => {
     const xml =
       '<worksheet><conditionalFormatting sqref="A1"><cfRule type="expression" priority="1">' +
@@ -196,12 +223,36 @@ describe('transformSheetForLinkBreak', () => {
     expect(() => transformSheetForLinkBreak(xml, [1])).toThrow(/data-validation rule/)
   })
 
-  it('still refuses a shared-formula anchor that references the broken link', () => {
+  it('refuses to leave a broken reference in an unrecognized worksheet extension', () => {
+    const xml =
+      '<worksheet><extLst><ext><customExpr><![CDATA[[1]Sheet1!A1]]></customExpr></ext></extLst></worksheet>'
+    expect(() => transformSheetForLinkBreak(xml, [1])).toThrow(/outside cell formulas/)
+  })
+
+  it('freezes each member of a broken shared-formula group using its own cached value', () => {
     const xml =
       '<worksheet><sheetData><row r="1">' +
-      '<c r="A1"><f t="shared" ref="A1:A2" si="0">[1]Sheet1!A1</f><v>1</v></c>' +
-      '<c r="A2"><f t="shared" si="0"/><v>2</v></c></row></sheetData></worksheet>'
-    expect(() => transformSheetForLinkBreak(xml, [1])).toThrow(/shared formula/)
+      '<c r="A1" s="2"><f si="0" ref="A1:E1" t="shared">[1]Sheet1!A1</f><v>1</v></c>' +
+      '<c r="B1" t="str"><f t="shared" si="0"/><v>A&amp;B</v></c>' +
+      '<c r="C1" t="b"><f si="0" t="shared"></f><v>1</v></c>' +
+      '<c r="D1" t="e"><f t="shared" si="0"/><v>#N/A</v></c>' +
+      '<c r="E1"><f t="shared" si="0"/></c>' +
+      '<c r="F1"><f t="shared" ref="F1:G1" si="1">[2]Source!A1</f><v>7</v></c>' +
+      '<c r="G1"><f t="shared" si="1"/><v>8</v></c>' +
+      '<c r="H1" t="inlineStr"><is><t>[2]Source!A1</t></is></c>' +
+      `<c r="I1"><f>'[3]Other'!B1</f><v>9</v></c></row></sheetData></worksheet>`
+    expect(transformSheetForLinkBreak(xml, [1])).toBe(
+      '<worksheet><sheetData><row r="1">' +
+      '<c r="A1" s="2"><v>1</v></c>' +
+      '<c r="B1" t="inlineStr"><is><t xml:space="preserve">A&amp;B</t></is></c>' +
+      '<c r="C1" t="b"><v>1</v></c>' +
+      '<c r="D1" t="e"><v>#N/A</v></c>' +
+      '<c r="E1" t="e"><v>#REF!</v></c>' +
+      '<c r="F1"><f t="shared" ref="F1:G1" si="1">[1]Source!A1</f><v>7</v></c>' +
+      '<c r="G1"><f t="shared" si="1"/><v>8</v></c>' +
+      '<c r="H1" t="inlineStr"><is><t>[2]Source!A1</t></is></c>' +
+      `<c r="I1"><f>'[2]Other'!B1</f><v>9</v></c></row></sheetData></worksheet>`,
+    )
   })
 })
 

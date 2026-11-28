@@ -44,6 +44,14 @@ const FILM_H = 118
 
 const PEN_COLOR = '#e53935'
 
+export interface PresenterBrowserAudience {
+  active: boolean
+  openLabel: string
+  blockedMessage: string
+  open: () => boolean
+  end: () => void
+}
+
 /** Elapsed show seconds → mm:ss (past 1 hour minutes keep accumulating) */
 function fmtElapsed(sec: number): string {
   const m = Math.floor(sec / 60)
@@ -63,6 +71,7 @@ export function PresenterView({
   onExit,
   onUseSlideShow,
   audienceAvailable = true,
+  browserAudience,
 }: {
   slides: RenderSlide[]
   images: Map<string, HTMLImageElement>
@@ -73,6 +82,7 @@ export function PresenterView({
   /** "Switch to normal show": exit this view and start a normal show from lastIndex */
   onUseSlideShow?: (lastIndex: number) => void
   audienceAvailable?: boolean
+  browserAudience?: PresenterBrowserAudience
 }) {
   const { t } = useI18n()
   // Playback sequence (original indexes): hidden pages skipped; the start page kept even if hidden (consistent with SlideShowView)
@@ -97,6 +107,12 @@ export function PresenterView({
   const navModeRef = useRef<'fresh' | 'all'>('fresh')
   /** Whether an external audience window was opened (swap-displays button availability) */
   const [hasAudience, setHasAudience] = useState(false)
+  const [audienceBlocked, setAudienceBlocked] = useState(false)
+  const endBrowserAudience = browserAudience?.end
+  const audienceOpen = useRef(false)
+  audienceOpen.current = browserAudience?.active === true
+  const externalAudio = audienceAvailable || browserAudience?.active === true
+  useEffect(() => () => endBrowserAudience?.(), [endBrowserAudience])
 
   // ── Timer (pausable/resettable) and clock ──────────────────────────────────
   const [elapsed, setElapsed] = useState(0)
@@ -139,14 +155,14 @@ export function PresenterView({
   const currentSlideIndex = order[pos]!
   const [narration, setNarration] = useState<{index:number;ids:Set<string>}>()
   useEffect(() => {
-    if (audienceAvailable) return
+    if (externalAudio) return
     let cancelled = false
     void window.slidesApi.getShowTiming(currentSlideIndex).then(
       (timing) => { if (!cancelled) setNarration({ index: currentSlideIndex, ids: new Set(timing.narrationIds) }) },
       () => {},
     )
     return () => { cancelled = true }
-  }, [audienceAvailable, currentSlideIndex])
+  }, [externalAudio, currentSlideIndex])
   const slide = slides[order[pos]!]
   const player = useAnimPlayer(slide?.heightPx ?? 540, slide?.widthPx ?? 960)
 
@@ -201,15 +217,28 @@ export function PresenterView({
    *  windowed-flash guard as SlideShowView's covered gate */
   const [covered, setCovered] = useState(false)
   useEffect(() => {
+    const browserFullscreen = !!window.slidesApi.requestShowFullScreen
     // Same cover mechanics as SlideShowView: one main-side call bleeds the view over
     // the tab strip and snaps the window (macOS simpleFullScreen, no Space animation);
     // HTML fullscreen is only used off-macOS where it is instant.
     let alive = true
+    let entered = !!document.fullscreenElement
+    let exitTimer = 0
+    const onFsChange = () => {
+      window.clearTimeout(exitTimer)
+      if (document.fullscreenElement) { entered = true; return }
+      if (!entered) return
+      // A browser may leave fullscreen when the new audience window takes focus.
+      exitTimer = window.setTimeout(() => {
+        if (!document.fullscreenElement && !audienceOpen.current) exitRef.current()
+      }, 150)
+    }
+    if (browserFullscreen) document.addEventListener('fullscreenchange', onFsChange)
     const snapped = window.slidesApi.setShowFullScreen?.(true) ?? Promise.resolve()
     void snapped
       .catch(() => {})
       .then(() => {
-        if (!IS_MAC) void document.documentElement.requestFullscreen?.().catch(() => {})
+        if (!browserFullscreen && !IS_MAC) void document.documentElement.requestFullscreen?.().catch(() => {})
         // Same settle condition as SlideShowView: viewport spans the whole
         // screen in BOTH dimensions — no bleed-only or full-width-only
         // intermediate passes. Deadline covers stale preloads that never snap.
@@ -219,7 +248,7 @@ export function PresenterView({
           const w = window.innerWidth
           const h = window.innerHeight
           const settled = w >= screen.width && h >= screen.height
-          if (!settled && performance.now() < deadline) {
+          if (!browserFullscreen && !settled && performance.now() < deadline) {
             requestAnimationFrame(reveal)
             return
           }
@@ -230,8 +259,10 @@ export function PresenterView({
       })
     return () => {
       alive = false
+      window.clearTimeout(exitTimer)
+      if (browserFullscreen) document.removeEventListener('fullscreenchange', onFsChange)
       if (!keepFsRef.current) {
-        if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+        if (!browserFullscreen && document.fullscreenElement) void document.exitFullscreen().catch(() => {})
         void window.slidesApi.setShowFullScreen?.(false)
       }
       liftShowCurtain()
@@ -438,12 +469,18 @@ export function PresenterView({
             ⇄ {t('panePresenterSwap')}
           </button>
         )}
+        {browserAudience && (
+          <button className="pv-top-btn" onClick={() => setAudienceBlocked(!browserAudience.open())}>
+            {browserAudience.openLabel}
+          </button>
+        )}
         {onUseSlideShow && (
           <button className="pv-top-btn" onClick={useShow} data-tip={t('panePresenterUseShowTip')}>
             ▤ {t('panePresenterUseShow')}
           </button>
         )}
         <div className="pv-top-spacer" />
+        {audienceBlocked && browserAudience && <span className="pv-top-hint" role="alert">{browserAudience.blockedMessage}</span>}
         {audienceAvailable && !hasAudience && <span className="pv-top-hint">{t('panePresenterSingleHint')}</span>}
       </div>
       <div className="pv-body">
@@ -512,8 +549,8 @@ export function PresenterView({
                   commands={player.mediaCmds}
                   epoch={player.epoch}
                   mediaBase={player.mediaBase}
-                  muted={audienceAvailable}
-                  interactive={!audienceAvailable && tool === 'none'}
+                  muted={externalAudio}
+                  interactive={!externalAudio && tool === 'none'}
                   {...(narration?.index === currentSlideIndex ? { hiddenIds: narration.ids } : {})}
                 />
                 <InkLayer strokes={strokes} laser={laser} width={fitW} height={fitH} />

@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import { assertDeclaredSizesWithinLimits, assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
+import { assertDeclaredSizesWithinLimits, assertZipInflatesWithinLimits, type ZipLimits } from '@genoffice/zip-gate'
 import {
   dedupeStyleRefs,
   hasDuplicateStyleRefs,
@@ -128,11 +128,15 @@ async function normalizeOoxmlParts(zip: JSZip): Promise<void> {
 }
 
 /** Load a docx/zip resolving part names the way Word does. */
-export async function loadDocxZip(bytes: Uint8Array): Promise<JSZip> {
+export async function loadDocxZip(
+  bytes: Uint8Array,
+  limits?: ZipLimits,
+  onVerified?: (usage: { parts: number; bytes: number }) => void,
+): Promise<JSZip> {
   const prepared = neutralizeUnicodePathFields(bytes)
   // Metered inflation first: past this point no part is larger than a limit,
   // so the inflates normalizeOoxmlParts and every caller perform are bounded.
-  await assertZipInflatesWithinLimits(prepared)
+  await assertZipInflatesWithinLimits(prepared, limits, onVerified)
   const zip = await JSZip.loadAsync(prepared)
   assertZipWithinLimits(zip)
   await normalizeOoxmlParts(zip)

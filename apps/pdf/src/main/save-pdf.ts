@@ -27,6 +27,9 @@ import {
   type OriginalProtection,
 } from './pdf-crypt'
 import { applyAttachments } from './pdf-attachments'
+import { copyImportedPages } from '../shared/copy-imported-pages'
+import { readPageLabels, writePageLabels } from '../shared/page-labels'
+import { retargetPageDestinations } from './retarget-page-destinations'
 import type {
   BlankPageInput,
   DrawingInput,
@@ -1090,9 +1093,11 @@ export async function extractPagesBytes(bytes: Uint8Array, pages: number[]): Pro
   const src = await PDFDocument.load(bytes, { updateMetadata: false })
   const out = await PDFDocument.create()
   const valid = pages.filter((p) => p >= 0 && p < src.getPageCount())
-  const copied = await out.copyPages(src, valid)
+  const copied = await copyImportedPages(out, src, valid, { copyForm: 'subset' })
   for (const p of copied) out.addPage(p)
-  return out.save({ useObjectStreams: false })
+  const labels = readPageLabels(src)
+  writePageLabels(out, valid.map(index => labels[index]))
+  return out.save({ useObjectStreams: false, updateFieldAppearances: false })
 }
 
 /** Insert all pages of another PDF after afterPageIndex (-1 = front); returns merged bytes and inserted page count */
@@ -1100,12 +1105,18 @@ export async function insertPdfBytes(
   bytes: Uint8Array,
   otherBytes: Uint8Array,
   afterPageIndex: number,
+  inspect?: (doc: PDFDocument) => void,
 ): Promise<{ merged: Uint8Array; count: number }> {
   const dst = await PDFDocument.load(bytes, { updateMetadata: false })
   const src = await PDFDocument.load(otherBytes, { updateMetadata: false })
-  const copied = await dst.copyPages(src, src.getPageIndices())
+  const copied = await copyImportedPages(dst, src, undefined, { copyForm: 'all' })
   let at = Math.min(Math.max(afterPageIndex + 1, 0), dst.getPageCount())
+  const labels = readPageLabels(dst)
+  const mergedLabels = labels.slice(0, at).concat(readPageLabels(src), labels.slice(at))
+  if (at < dst.getPageCount()) retargetPageDestinations(dst, dst.getPages(), [])
   for (const p of copied) dst.insertPage(at++, p)
+  if (copied.length) writePageLabels(dst, mergedLabels)
+  inspect?.(dst)
   return { merged: await dst.save({ useObjectStreams: false }), count: copied.length }
 }
 
@@ -1116,10 +1127,14 @@ export async function insertBlankPageBytes(
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false })
   const at = Math.min(Math.max(afterPageIndex + 1, 0), doc.getPageCount())
+  const labels = readPageLabels(doc)
+  labels.splice(at, 0, undefined)
   const ref = doc.getPage(Math.min(Math.max(afterPageIndex, 0), doc.getPageCount() - 1))
+  if (at < doc.getPageCount()) retargetPageDestinations(doc, doc.getPages(), [])
   const page = doc.insertPage(at, [ref.getWidth(), ref.getHeight()])
   // Match the neighbor's /Rotate too, or the blank page displays sideways next to it
   page.setRotation(ref.getRotation())
+  writePageLabels(doc, labels)
   return doc.save({ useObjectStreams: false })
 }
 
@@ -1127,17 +1142,21 @@ export async function insertBlankPageBytes(
 export async function splitPdfBytes(bytes: Uint8Array, chunkSize: number): Promise<Uint8Array[]> {
   const src = await PDFDocument.load(bytes, { updateMetadata: false })
   const total = src.getPageCount()
+  const labels = readPageLabels(src)
   const size = Math.max(1, Math.floor(chunkSize))
   const out: Uint8Array[] = []
   for (let start = 0; start < total; start += size) {
     const part = await PDFDocument.create()
     const count = Math.min(size, total - start)
-    const copied = await part.copyPages(
+    const copied = await copyImportedPages(
+      part,
       src,
       Array.from({ length: count }, (_, i) => start + i),
+      { copyForm: 'subset' },
     )
     for (const p of copied) part.addPage(p)
-    out.push(await part.save({ useObjectStreams: false }))
+    writePageLabels(part, labels.slice(start, start + count))
+    out.push(await part.save({ useObjectStreams: false, updateFieldAppearances: false }))
   }
   return out
 }
@@ -1279,6 +1298,7 @@ export async function replacePagesBytes(
   bytes: Uint8Array,
   otherBytes: Uint8Array,
   pages: number[],
+  inspect?: (doc: PDFDocument) => void,
 ): Promise<{ merged: Uint8Array; removed: number; inserted: number }> {
   const dst = await PDFDocument.load(bytes, { updateMetadata: false })
   const src = await PDFDocument.load(otherBytes, { updateMetadata: false })
@@ -1287,10 +1307,17 @@ export async function replacePagesBytes(
   )
   if (valid.length === 0) throw new Error('replacePages: no valid pages to replace')
   const at = valid[0]!
+  const originalPages = dst.getPages()
+  const replaced = new Set(valid)
+  const labels = readPageLabels(dst).filter((_, index) => !replaced.has(index))
+  const mergedLabels = labels.slice(0, at).concat(readPageLabels(src), labels.slice(at))
   for (const p of [...valid].reverse()) dst.removePage(p)
-  const copied = await dst.copyPages(src, src.getPageIndices())
+  const copied = await copyImportedPages(dst, src, undefined, { copyForm: 'all' })
   let i = Math.min(at, dst.getPageCount())
   for (const p of copied) dst.insertPage(i++, p)
+  retargetPageDestinations(dst, originalPages, valid, copied)
+  writePageLabels(dst, mergedLabels)
+  inspect?.(dst)
   return {
     merged: await dst.save({ useObjectStreams: false }),
     removed: valid.length,
@@ -1319,6 +1346,15 @@ export async function setPageSizeBytes(
     if (w === tw && h === th) continue
     const k = Math.min(tw / w, th / h)
     page.scaleContent(k, k)
+    // pdf-lib scales annotation arrays in place. Give each annotation its
+    // own rectangle before scaling, since several can share an indirect one.
+    const rectKey = PDFName.of('Rect')
+    for (const ref of page.node.Annots()?.asArray() ?? []) {
+      const annotation = doc.context.lookup(ref)
+      if (!(annotation instanceof PDFDict) || !(annotation.get(rectKey) instanceof PDFRef)) continue
+      const rect = annotation.lookup(rectKey)
+      if (rect instanceof PDFArray) annotation.set(rectKey, rect.clone())
+    }
     page.scaleAnnotations(k, k)
     // Both scale about the user-space origin; frame the scaled region centered
     const bx = x * k - (tw - w * k) / 2
@@ -1326,7 +1362,7 @@ export async function setPageSizeBytes(
     page.setMediaBox(bx, by, tw, th)
     page.setCropBox(bx, by, tw, th)
   }
-  return doc.save({ useObjectStreams: false })
+  return doc.save({ useObjectStreams: false, updateFieldAppearances: false })
 }
 
 /** Map a fractional rect of the displayed page (after /Rotate, y down from the top) to user space */
@@ -1420,7 +1456,7 @@ export async function cropPagesBytes(
     const rect = displayFracToUserRect(rot, page.getCropBox(), l, t, r, b)
     page.setCropBox(rect.x, rect.y, rect.w, rect.h)
   }
-  return doc.save({ useObjectStreams: false })
+  return doc.save({ useObjectStreams: false, updateFieldAppearances: false })
 }
 
 export { mergePdfBytes } from '../shared/merge-pdf'
@@ -1554,6 +1590,7 @@ export interface AppliedSaveRequest {
 
 async function appendBlankPages(bytes: Uint8Array, blanks: BlankPageInput[]): Promise<Uint8Array> {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false })
+  const labels = readPageLabels(doc)
   for (const blank of [...blanks].sort((a, b) => a.pageIndex - b.pageIndex)) {
     if (blank.pageIndex !== doc.getPageCount()) {
       throw new Error(
@@ -1563,7 +1600,9 @@ async function appendBlankPages(bytes: Uint8Array, blanks: BlankPageInput[]): Pr
     if (!(blank.width > 0) || !(blank.height > 0))
       throw new Error('Blank page needs a positive size')
     doc.addPage([blank.width, blank.height])
+    labels.push(undefined)
   }
+  if (blanks.length) writePageLabels(doc, labels)
   return doc.save({ useObjectStreams: false })
 }
 
@@ -1644,9 +1683,31 @@ export async function applySaveRequest(
     skippedImageEdits = applied.skipped
   }
   const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false })
+  const pages = pdfDoc.getPages()
+  const deleted = new Set(
+    [...new Set(request.deletedPages ?? [])]
+      .filter(index => Number.isInteger(index) && index >= 0 && index < pages.length)
+      .sort((a, b) => b - a)
+      .slice(0, Math.max(0, pages.length - 1)),
+  )
+  const remaining = pages.filter((_, index) => !deleted.has(index))
+  const requestedOrder = request.pageOrder
+    ?.filter(index => !deleted.has(index))
+    .map(index => pages[index])
+    .filter(page => page !== undefined)
+  const pageOrder = requestedOrder?.length === remaining.length &&
+    new Set(requestedOrder).size === remaining.length ? requestedOrder : null
+  if (deleted.size || pageOrder?.some((page, index) => page !== remaining[index])) {
+    // Anchor the original links before changing page positions or capturing
+    // the annotations that the save must preserve.
+    retargetPageDestinations(pdfDoc, pages, [...deleted])
+    const labels = readPageLabels(pdfDoc)
+    const labelsByPage = new Map(pages.map((page, index) => [page, labels[index]]))
+    writePageLabels(pdfDoc, (pageOrder ?? remaining).map(page => labelsByPage.get(page)))
+  }
+
   if (forms.applyFormValues) await forms.applyFormValues(pdfDoc)
   else if (request.formValues.length > 0) applyFormValues(pdfDoc, request.formValues)
-  const pages = pdfDoc.getPages()
   // Apply rotations first so markup appearances draw lines for the page's final orientation
   for (const r of request.rotations ?? []) {
     const page = pages[r.pageIndex]
@@ -1717,7 +1778,7 @@ export async function applySaveRequest(
   if (request.outline !== undefined && request.outline !== null) {
     // A bookmark on a page this save removes cannot be written as a /Dest —
     // that page is leaving the page tree — so those entries go with it.
-    applyOutline(pdfDoc, request.outline, new Set(request.deletedPages ?? []))
+    applyOutline(pdfDoc, request.outline, deleted)
   }
   // Page thumbnails and producer piece-info can retain a pre-redaction rendering of
   // the same page. They are page-local derived data, so remove them for every affected
@@ -1728,24 +1789,11 @@ export async function applySaveRequest(
     page.node.delete(PDFName.of('Thumb'))
     page.node.delete(PDFName.of('PieceInfo'))
   }
-  // Deletions go last, in descending order; earlier ops all address original page indices
-  for (const idx of [...(request.deletedPages ?? [])].sort((a, b) => b - a)) {
-    if (idx >= 0 && idx < pdfDoc.getPageCount() && pdfDoc.getPageCount() > 1) pdfDoc.removePage(idx)
-  }
-  // Reorder last: pageOrder gives the new order of remaining-after-delete pages by original index.
-  // pdf-lib's removePage never invalidates its page cache, so getPages() here would return the
-  // stale pre-deletion list — derive the surviving pages from the pre-deletion snapshot instead.
-  const order = request.pageOrder
-  if (order && order.length > 0) {
-    const deletedSet = new Set(request.deletedPages ?? [])
-    const target = order
-      .filter((o) => !deletedSet.has(o))
-      .map((o) => pages[o])
-      .filter((p) => p !== undefined)
-    if (target.length === pdfDoc.getPageCount()) {
-      while (pdfDoc.getPageCount() > 0) pdfDoc.removePage(0)
-      for (const p of target) pdfDoc.addPage(p)
-    }
+  // Earlier edits address original indices, so apply the planned page changes last.
+  for (const index of deleted) pdfDoc.removePage(index)
+  if (pageOrder) {
+    while (pdfDoc.getPageCount() > 0) pdfDoc.removePage(0)
+    for (const page of pageOrder) pdfDoc.addPage(page)
   }
   const staticFormFills = resultingStaticFormFills(request, pages.length)
   if (staticFormFills !== undefined) {

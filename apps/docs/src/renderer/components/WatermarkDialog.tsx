@@ -221,13 +221,13 @@ export function WatermarkDialog({
   const canApply = mode === 'none' || resolved !== null
 
   const pick = async () => {
-    const picked = await window.desktop.pickImage()
-    if (!picked) return
-    if (!PICKABLE_MIME.has(picked.mime)) {
-      setPickError(true)
-      return
-    }
     try {
+      const picked = await window.desktop.pickImage()
+      if (!picked) return
+      if (!PICKABLE_MIME.has(picked.mime)) {
+        setPickError(true)
+        return
+      }
       const natural = await imageSizeOf(`data:${picked.mime};base64,${picked.base64}`)
       setImage({
         base64: picked.base64,

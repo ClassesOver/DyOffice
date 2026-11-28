@@ -8,7 +8,8 @@ const signatureGalleryStrings = {
   signGalleryDeleteFailed: 'Could not delete the saved signature. Try again.',
 }
 
-const blankPageLimitStrings = {
+const pageEditingStrings = {
+  cropPreviewChanged: 'The page changed. Open the crop preview again.',
   insertBlankPageWebLimit: 'Web PDF editing supports up to {limit} pages. Delete a page and save before inserting a blank page.',
   insertBlankPageDraftLimit: 'You can insert up to {limit} blank pages before saving. Save to insert more.',
 }
@@ -484,6 +485,7 @@ export const strings = {
     splitPagesHint: '将每页按网格切分为多页（共 {total} 页）',
     splitNLabel: '1 分 {n}',
     cropPages: '裁剪页面',
+    cropPreviewChanged: '页面已变化，请重新打开裁剪预览。',
     cropAllPages: '应用到全部页面',
     save: '保存',
     saving: '保存中…',
@@ -879,7 +881,7 @@ export const strings = {
   },
   en: {
     ...fillFormStringsFor('en'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('en'),
     ...protectStringsFor('en'),
     ...redactFindStringsFor('en'),
@@ -1327,7 +1329,7 @@ export const strings = {
   },
   vi: {
     ...fillFormStringsFor('vi'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('vi'),
     ...protectStringsFor('vi'),
     ...redactFindStringsFor('vi'),
@@ -1778,7 +1780,7 @@ export const strings = {
   },
   tr: {
     ...fillFormStringsFor('tr'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('tr'),
     ...protectStringsFor('tr'),
     ...redactFindStringsFor('tr'),
@@ -2227,7 +2229,7 @@ export const strings = {
   },
   ja: {
     ...fillFormStringsFor('ja'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('ja'),
     ...protectStringsFor('ja'),
     ...redactFindStringsFor('ja'),
@@ -2674,7 +2676,7 @@ export const strings = {
   },
   ko: {
     ...fillFormStringsFor('ko'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('ko'),
     ...protectStringsFor('ko'),
     ...redactFindStringsFor('ko'),
@@ -3119,7 +3121,7 @@ export const strings = {
   },
   fr: {
     ...fillFormStringsFor('fr'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('fr'),
     ...protectStringsFor('fr'),
     ...redactFindStringsFor('fr'),
@@ -3577,7 +3579,7 @@ export const strings = {
   },
   de: {
     ...fillFormStringsFor('de'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('de'),
     ...protectStringsFor('de'),
     ...redactFindStringsFor('de'),
@@ -4033,7 +4035,7 @@ export const strings = {
   },
   es: {
     ...fillFormStringsFor('es'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('es'),
     ...protectStringsFor('es'),
     ...redactFindStringsFor('es'),
@@ -4488,7 +4490,7 @@ export const strings = {
   },
   th: {
     ...fillFormStringsFor('th'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('th'),
     ...protectStringsFor('th'),
     ...redactFindStringsFor('th'),
@@ -4932,7 +4934,7 @@ export const strings = {
   },
   id: {
     ...fillFormStringsFor('id'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('id'),
     ...protectStringsFor('id'),
     ...redactFindStringsFor('id'),
@@ -5383,7 +5385,7 @@ export const strings = {
   },
   ru: {
     ...fillFormStringsFor('ru'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('ru'),
     ...protectStringsFor('ru'),
     ...redactFindStringsFor('ru'),
@@ -5835,7 +5837,7 @@ export const strings = {
   },
   ar: {
     ...fillFormStringsFor('ar'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('ar'),
     ...protectStringsFor('ar'),
     ...redactFindStringsFor('ar'),
@@ -6278,7 +6280,7 @@ export const strings = {
   },
   pt: {
     ...fillFormStringsFor('pt'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('pt'),
     ...protectStringsFor('pt'),
     ...redactFindStringsFor('pt'),
@@ -6731,7 +6733,7 @@ export const strings = {
   },
   it: {
     ...fillFormStringsFor('it'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('it'),
     ...protectStringsFor('it'),
     ...redactFindStringsFor('it'),
@@ -7188,7 +7190,7 @@ export const strings = {
   },
   pl: {
     ...fillFormStringsFor('pl'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('pl'),
     ...protectStringsFor('pl'),
     ...redactFindStringsFor('pl'),
@@ -7640,7 +7642,7 @@ export const strings = {
   },
   cs: {
     ...fillFormStringsFor('cs'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('cs'),
     ...protectStringsFor('cs'),
     ...redactFindStringsFor('cs'),
@@ -8089,7 +8091,7 @@ export const strings = {
   },
   nl: {
     ...fillFormStringsFor('nl'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('nl'),
     ...protectStringsFor('nl'),
     ...redactFindStringsFor('nl'),
@@ -8542,7 +8544,7 @@ export const strings = {
   },
   ms: {
     ...fillFormStringsFor('ms'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('ms'),
     ...protectStringsFor('ms'),
     ...redactFindStringsFor('ms'),
@@ -8993,7 +8995,7 @@ export const strings = {
   },
   he: {
     ...fillFormStringsFor('he'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('he'),
     ...protectStringsFor('he'),
     ...redactFindStringsFor('he'),
@@ -9430,7 +9432,7 @@ export const strings = {
   },
   hi: {
     ...fillFormStringsFor('hi'),
-    ...blankPageLimitStrings,
+    ...pageEditingStrings,
     ...certSignStringsFor('hi'),
     ...protectStringsFor('hi'),
     ...redactFindStringsFor('hi'),
@@ -9922,6 +9924,7 @@ export const strings = {
     splitPagesHint: '將每頁按網格切分為多頁（共 {total} 頁）',
     splitNLabel: '1 分 {n}',
     cropPages: '裁剪頁面',
+    cropPreviewChanged: '頁面已變更，請重新開啟裁剪預覽。',
     cropAllPages: '套用到全部頁面',
     save: '儲存',
     saving: '儲存中…',

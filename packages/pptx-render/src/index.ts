@@ -22,3 +22,5 @@ export * from './scene3d'
 export * from './cell-bevel'
 export { patternGrid } from './pattern-fills'
 export { imageDpiFromBytes, imageSizeFromBytes, type ImageDpi, type ImageSize } from './image-dpi'
+
+export { parseEmbeddedFontMetrics } from './embedded-font-metrics'

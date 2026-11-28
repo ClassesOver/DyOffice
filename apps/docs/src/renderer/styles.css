@@ -5871,6 +5871,10 @@ th[data-rev-fmt] {
   color: var(--docs-paper-ink);
 }
 
+.pv-print-links {
+  display: none;
+}
+
 .pv-clip {
   overflow: hidden;
 }
@@ -12776,6 +12780,23 @@ body.docs-crop-active
 
   .pv-pageno {
     display: none;
+  }
+
+  .pv-print-links {
+    display: block;
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .pv-print-links > * {
+    position: absolute;
+  }
+
+  .pv-print-links > span {
+    left: 0;
+    width: 1px;
+    height: 1px;
   }
 
   /* forced breaks are disabled inside the clone, and page-break fields keep placeholders matching canvas measurement */

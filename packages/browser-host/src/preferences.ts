@@ -6,15 +6,17 @@ export interface PersonalPreferences {
   authorName: string
   autoSave: boolean
   showAssistant: boolean
+  restoreSession?: boolean
+  sleepInactiveTabs?: boolean
 }
 export type SettingsRequest = <T = unknown>(path: string, method?: string, body?: unknown, signal?: AbortSignal) => Promise<T>
-const fields = ['theme', 'language', 'authorName', 'autoSave', 'showAssistant'] as const
+const fields = ['theme', 'language', 'authorName', 'autoSave', 'showAssistant', 'restoreSession', 'sleepInactiveTabs'] as const
 
 function project(value: unknown): PersonalPreferences {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无法确认偏好保存结果，请重新加载。')
   const v = value as PersonalPreferences
-  if (!['light', 'dark', 'system'].includes(v.theme) || !['zh', 'en'].includes(v.language) || typeof v.authorName !== 'string' || typeof v.autoSave !== 'boolean' || typeof v.showAssistant !== 'boolean') throw new Error('无法确认偏好保存结果，请重新加载。')
-  return {theme: v.theme, language: v.language, authorName: v.authorName, autoSave: v.autoSave, showAssistant: v.showAssistant}
+  if (!['light', 'dark', 'system'].includes(v.theme) || !['zh', 'en'].includes(v.language) || typeof v.authorName !== 'string' || typeof v.autoSave !== 'boolean' || typeof v.showAssistant !== 'boolean' || [v.restoreSession,v.sleepInactiveTabs].some(value=>value!==undefined&&typeof value!=='boolean')) throw new Error('无法确认偏好保存结果，请重新加载。')
+  return {theme: v.theme, language: v.language, authorName: v.authorName, autoSave: v.autoSave, showAssistant: v.showAssistant, ...(v.restoreSession === undefined ? {} : {restoreSession: v.restoreSession}), ...(v.sleepInactiveTabs === undefined ? {} : {sleepInactiveTabs: v.sleepInactiveTabs})}
 }
 
 /** Keep one client for a session so replacing a settings panel cannot duplicate a write. */

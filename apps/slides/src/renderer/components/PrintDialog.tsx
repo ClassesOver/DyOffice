@@ -54,6 +54,7 @@ export function PrintDialog({
   const [frame, setFrame] = useState(false)
   const [includeHidden, setIncludeHidden] = useState(false)
   const [printing, setPrinting] = useState(false)
+  const browserPrintDialog = window.slidesApi.browserPrintDialog === true
   // the printer section: '' = the OS default, a name = that queue, SYSTEM = the OS dialog
   const [printers, setPrinters] = useState<PrinterInfo[]>([])
   const [printDevice, setPrintDevice] = useState(IS_MAC ? PRINT_SYSTEM_DIALOG : '')
@@ -123,6 +124,7 @@ export function PrintDialog({
   }, [onClose])
 
   useEffect(() => {
+    if (browserPrintDialog) return
     let alive = true
     window.slidesApi
       .listPrinters()
@@ -133,7 +135,7 @@ export function PrintDialog({
     return () => {
       alive = false
     }
-  }, [])
+  }, [browserPrintDialog])
 
   /** 0-based deck indices selected by the range options (before the hidden filter) */
   const rangeIndices = useMemo<number[] | null>(() => {
@@ -189,7 +191,7 @@ export function PrintDialog({
     try {
       const first = slides[selected[0]]
       const job =
-        printDevice === PRINT_SYSTEM_DIALOG
+        browserPrintDialog || printDevice === PRINT_SYSTEM_DIALOG
           ? undefined
           : {
               deviceName: printDevice,
@@ -380,7 +382,7 @@ export function PrintDialog({
                 {t('appPrintHidden')}
               </label>
             </fieldset>
-            <fieldset>
+            {!browserPrintDialog && <fieldset>
               <legend>{t('appPrintPrinter')}</legend>
               <select
                 className="print-select"
@@ -482,7 +484,7 @@ export function PrintDialog({
                   ))}
                 </>
               )}
-            </fieldset>
+            </fieldset>}
             <div className="print-page-count">
               {selected.length > 0 ? t('appPrintPageCount', { n: pageCount }) : ''}
             </div>

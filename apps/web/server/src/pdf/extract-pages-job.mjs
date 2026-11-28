@@ -1,6 +1,7 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
 import {PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
+import {openPdfForInserts} from './insert-form-integrity.mjs'
 import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024
 export const pdfExtractSafetyCodes=new Set([...pdfStampsSafetyCodes,'MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_EXTRACT_PAGES','PDF_EXTRACT_VERIFY_FAILED','OUTPUT_LIMIT'])
@@ -34,18 +35,19 @@ export function createPdfExtractPagesJob(){
   const pages=parsePdfExtractPagesRequest(raw),original=Buffer.from(input),inputSha256=hash(original)
   busy=true
   try{
-   const managed=await capturePdfManagedStamps(original),working=managed.bytes,source=await openEditablePdf(working);check(signal)
+   const managed=await capturePdfManagedStamps(original,{allowAcroForm:true}),working=managed.bytes
+   const source=await openPdfForInserts(working,{planning:true});check(signal)
    if(pages.some(page=>page>source.getPageCount()))fail('INVALID_PDF_EXTRACT_PAGES')
    const {extractPagesBytes}=await import('../../../../pdf/src/main/save-pdf.ts')
    let bytes=Buffer.from(await extractPagesBytes(working,pages.map(page=>page-1)));check(signal)
    if(bytes.length<1||bytes.length>MAX_BYTES)fail('OUTPUT_LIMIT')
-   const reopened=await openEditablePdf(bytes);check(signal)
+   const reopened=await openEditablePdf(bytes,{allowAcroForm:true});check(signal)
    if(reopened.getPageCount()!==pages.length)fail('PDF_EXTRACT_VERIFY_FAILED')
    for(let index=0;index<pages.length;index++){
     const before=source.getPage(pages[index]-1),after=reopened.getPage(index)
     if(JSON.stringify(before.getMediaBox())!==JSON.stringify(after.getMediaBox())||JSON.stringify(before.getCropBox())!==JSON.stringify(after.getCropBox())||before.getRotation().angle!==after.getRotation().angle||JSON.stringify(annotations(before))!==JSON.stringify(annotations(after)))fail('PDF_EXTRACT_VERIFY_FAILED')
    }
-   bytes=await reapplyPdfManagedStamps(bytes,managed.operations);check(signal)
+   bytes=await reapplyPdfManagedStamps(bytes,managed.operations,{allowAcroForm:true,signal});check(signal)
    if(bytes.length>MAX_BYTES)fail('OUTPUT_LIMIT')
    return {bytes,inputSha256,sha256:hash(bytes),size:bytes.length}
   }catch(error){check(signal);if(pdfExtractSafetyCodes.has(error?.code))fail(error.code);fail('NATIVE_FAILED')}

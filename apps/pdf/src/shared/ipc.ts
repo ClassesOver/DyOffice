@@ -4,6 +4,7 @@ import type { AiSettings, AiStreamChunk, AiStreamRequest } from '@genoffice/ai-p
 import type { PrintDuplex, PrintJobOptions, PrinterInfo } from '@genoffice/electron-utils/print-job'
 import type { PrinterOption } from '@genoffice/electron-utils/printer-options'
 export type { PrintDuplex, PrintJobOptions, PrinterInfo }
+export type PdfBrowserPrintPage = { src: string; widthPt: number; heightPt: number }
 export type { PrinterOption }
 
 /** largest slice readFileChunk hands over IPC; the renderer loops over them */
@@ -1105,7 +1106,7 @@ export interface PdfApi {
     { ok: true; name: string; pageCount: number; pages: string[] } | { ok: false; reason: string }
   >
   /** Ask for a file to embed (open dialog); the bytes come back base64-encoded */
-  pickAttachmentFile(): Promise<
+  pickAttachmentFile(pending?: { count: number; bytes: number }): Promise<
     | { ok: true; name: string; bytesBase64: string }
     | { ok: false; cancelled: true }
     | { ok: false; reason: string }
@@ -1237,6 +1238,8 @@ export interface PdfApi {
   onSaveAsFlow(handler: (inFlight: boolean) => void): () => void
   /** Shell menu Print → renderer runs its print flow (save, rasterize, system dialog) */
   onPrintRequest(handler: () => void): () => void
+  /** Browser host prints the selected JPEG pages through its own dialog. */
+  printBrowserPages?(pages: readonly PdfBrowserPrintPage[]): Promise<void>
   /** print this window's print stylesheet output on a named printer ('' = OS default)
    *  without the system dialog; ok=false without error = canceled */
   print(job: PrintJobOptions): Promise<{ ok: boolean; error?: string }>

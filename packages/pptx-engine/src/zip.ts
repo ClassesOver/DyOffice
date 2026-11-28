@@ -11,7 +11,67 @@ import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
 import { createHash } from 'node:crypto'
 import { XMLParser } from 'fast-xml-parser'
 import type { SlideSize } from './types'
-import { asXmlNode, canonicalizeNsPrefixes, xmlArray } from './xml-utils'
+import { asXmlNode, canonicalizeNsPrefixes, xmlArray, type XmlNode } from './xml-utils'
+
+const presentationNamespaces = new Set([
+  'http://schemas.openxmlformats.org/presentationml/2006/main',
+  'http://purl.oclc.org/ooxml/presentationml/main',
+])
+const markupCompatibilityNamespace = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+type PresentationProtection = { writeProtected?: true; modifyVerifier?: Readonly<Record<string, string>> }
+
+function originalPresentationRoot(parsed: XmlNode): XmlNode | undefined {
+  for (const [name, value] of Object.entries(parsed)) {
+    const parts = name.split(':')
+    if (parts.at(-1) !== 'presentation') continue
+    const root = asXmlNode(value)
+    const namespace = root[parts.length === 2 ? `@_xmlns:${parts[0]}` : '@_xmlns']
+    if (typeof namespace === 'string' && presentationNamespaces.has(namespace)) return root
+  }
+}
+
+function presentationProtection(root: XmlNode): PresentationProtection {
+  const namespacesOf = (node: XmlNode): XmlNode =>
+    Object.fromEntries(Object.entries(node).filter(([key]) => key === '@_xmlns' || key.startsWith('@_xmlns:')))
+  const stack = [{ node: root, scope: namespacesOf(root), alternative: false }]
+  let writeProtected = false, ambiguous = false
+  let modifyVerifier: Record<string, string> | undefined
+  while (stack.length) {
+    const {node,scope,alternative} = stack.pop()!
+    for (const [name, raw] of Object.entries(node)) {
+      if (name.startsWith('@_')) continue
+      const parts = name.split(':'), local = parts.at(-1)
+      if (local !== 'modifyVerifier' && local !== 'AlternateContent' && local !== 'Choice' && local !== 'Fallback') continue
+      const xmlns = parts.length === 2 ? `@_xmlns:${parts[0]}` : '@_xmlns'
+      for (const occurrence of Array.isArray(raw) ? raw : [raw]) {
+        const element = asXmlNode(occurrence)
+        const childScope = {...scope,...namespacesOf(element)}
+        const namespace = childScope[xmlns]
+        if (namespace === markupCompatibilityNamespace && (local === 'AlternateContent' || alternative && local !== 'modifyVerifier')) {
+          stack.push({node:element,scope:childScope,alternative:true})
+        } else if (local === 'modifyVerifier' && typeof namespace === 'string' && presentationNamespaces.has(namespace)) {
+          if (writeProtected || alternative) ambiguous = true
+          writeProtected = true
+          modifyVerifier = Object.create(null) as Record<string, string>
+          for (const [attribute, value] of Object.entries(element)) {
+            if (attribute === '@_xmlns' || attribute.startsWith('@_xmlns:')) continue
+            if (!attribute.startsWith('@_') || typeof value !== 'string') {
+              ambiguous = true
+              continue
+            }
+            const fields = attribute.slice(2).split(':')
+            const uri = childScope[`@_xmlns:${fields[0]}`]
+            if (fields.length === 2 && (typeof uri !== 'string' || !presentationNamespaces.has(uri))) continue
+            const key = fields.at(-1)!
+            if (Object.hasOwn(modifyVerifier, key)) ambiguous = true
+            else modifyVerifier[key] = value
+          }
+        }
+      }
+    }
+  }
+  return {...(writeProtected?{writeProtected:true as const}:{}),...(!ambiguous&&modifyVerifier?{modifyVerifier}:{})}
+}
 
 const relsParser = new XMLParser({
   ignoreAttributes: false,
@@ -140,9 +200,11 @@ export class PackageArchive {
   /**
    * Read the presentation's slide size and the slide part paths in order.
    */
-  readPresentation(): { size: SlideSize; slidePaths: string[]; writeProtected?: true } {
-    const presXml = this.readText('ppt/presentation.xml')
-    if (!presXml) throw new Error('pptx: missing ppt/presentation.xml')
+  readPresentation(): { size: SlideSize; slidePaths: string[] } & PresentationProtection {
+    const path = 'ppt/presentation.xml'
+    const bytes = this.readBytes(path)
+    if (!bytes?.length) throw new Error('pptx: missing ppt/presentation.xml')
+    const presXml = Buffer.from(bytes).toString('utf8')
 
     const parser = new XMLParser({
       ignoreAttributes: false,
@@ -153,14 +215,10 @@ export class PackageArchive {
     const rootRaw = pres['p:presentation'] ?? pres.presentation
     if (!rootRaw) throw new Error('pptx: malformed presentation.xml')
     const root = asXmlNode(rootRaw)
-    const writeProtected = Object.entries(root).some(([name, value]) => {
-      const split = name.split(':')
-      if (split.at(-1) !== 'modifyVerifier') return false
-      const xmlns = split.length === 2 ? `@_xmlns:${split[0]}` : '@_xmlns'
-      const namespace = asXmlNode(value)[xmlns] ?? root[xmlns]
-      return namespace === 'http://schemas.openxmlformats.org/presentationml/2006/main' ||
-        namespace === 'http://purl.oclc.org/ooxml/presentationml/main'
-    })
+    // The layout parser uses normalized prefixes. Authorization needs the
+    // lexical namespace scope of the original package bytes.
+    const original = this.bytesForExport(path, bytes)
+    const protectionRoot = original === bytes ? root : originalPresentationRoot(asXmlNode(parser.parse(Buffer.from(original).toString('utf8'))))
 
     // Slide size
     const szRaw = root['p:sldSz'] ?? root.sldSz
@@ -187,7 +245,7 @@ export class PackageArchive {
       if (!rel) continue
       slidePaths.push(resolveTarget('ppt/presentation.xml', rel.target))
     }
-    return { size, slidePaths, ...(writeProtected ? { writeProtected: true as const } : {}) }
+    return { size, slidePaths, ...(protectionRoot ? presentationProtection(protectionRoot) : {writeProtected:true as const}) }
   }
 
   /** Resolve a slide's layout / master part paths (via the rels chain). */

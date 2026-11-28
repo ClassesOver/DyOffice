@@ -1,6 +1,19 @@
-import { PDFDocument } from 'pdf-lib'
+import { PDFDict, PDFDocument, PDFName } from 'pdf-lib'
+import { copyImportedPages } from './copy-imported-pages'
+import { selectPageForm } from './copy-selected-page-form'
+import { readPageLabels, writePageLabels } from './page-labels'
+import { assertNoPdfSignatures } from './pdf-signature-guard'
+import { detachPdfStampManagement } from './managed-page-stamps'
 
-/** Keep the first PDF intact and append each source's pages in order. */
+function validateMergeInput(doc: PDFDocument): void {
+  assertNoPdfSignatures(doc)
+  const form = doc.catalog.lookup(PDFName.of('AcroForm'))
+  if (form instanceof PDFDict && form.has(PDFName.of('XFA'))) {
+    throw new Error('PDFs with XFA forms cannot be merged.')
+  }
+}
+
+/** Append each source's pages in order and retain their visible content. */
 export async function mergePdfBytes(
   first: Uint8Array,
   others: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
@@ -11,6 +24,9 @@ export async function mergePdfBytes(
   const destination = await PDFDocument.load(first, { updateMetadata: false })
   const initialPages = destination.getPageCount()
   if (initialPages > maxPages) throw new Error('PDF exceeds the merge page limit.')
+  validateMergeInput(destination)
+  selectPageForm(destination, destination.getPages(), [], true)
+  const labels = readPageLabels(destination)
   let appended = 0
   for await (const bytes of others) {
     check()
@@ -18,13 +34,18 @@ export async function mergePdfBytes(
     if (initialPages + appended + source.getPageCount() > maxPages) {
       throw new Error('PDF exceeds the merge page limit.')
     }
+    validateMergeInput(source)
     check()
-    const pages = await destination.copyPages(source, source.getPageIndices())
+    detachPdfStampManagement(source)
+    const pages = await copyImportedPages(destination, source, undefined, { copyForm: 'all', copyAttachments: true })
+    if (!appended && pages.length) detachPdfStampManagement(destination)
     for (const page of pages) destination.addPage(page)
+    for (const label of readPageLabels(source)) labels.push(label)
     appended += pages.length
   }
   check()
-  const merged = await destination.save({ useObjectStreams: false })
+  if (appended) writePageLabels(destination, labels)
+  const merged = await destination.save({ useObjectStreams: false, updateFieldAppearances: false })
   check()
   return { merged, appended }
 }

@@ -144,7 +144,7 @@ export interface DocsEditorHandle {
   save(): Promise<boolean>
   isDirty(): boolean
 }
-export interface DocsHostLifecycle {wordSyncActive?():boolean; documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean, incompleteReasons?: readonly string[]): void; aiDocumentCreated?(accepted: boolean): void }
+export interface DocsHostLifecycle {canStartSave?():boolean; wordSyncActive?():boolean; documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean, incompleteReasons?: readonly string[]): void; aiDocumentCreated?(accepted: boolean): void }
 export interface FileActionContext {
   hostLifecycle?: DocsHostLifecycle
   /** Read the latest React state after asynchronous native serialization/write. */
@@ -524,7 +524,9 @@ export async function loadFile(
   }
   const generation = ++openGeneration
   try {
-    const bytes = await fetchDocBytes(result.dataUrl)
+    const bytes = await fetchDocBytes(result.dataUrl).finally(() => {
+      if (result.dataUrl.startsWith('blob:')) URL.revokeObjectURL(result.dataUrl)
+    })
     // a 0-byte .docx (touch, failed download) is not a corrupt archive but an
     // empty document: open the blank template under the file's own path
     const parsed = await parseDocxOffThread(
@@ -906,6 +908,7 @@ export async function suggestedSaveAsName(ctx: FileActionContext, suggest: (inpu
 export async function buildDocBytes(
   ctx: FileActionContext,
   pmOverride?: PmNode,
+  outputSection?: SectionSettings,
 ): Promise<Uint8Array | null> {
   const generation = docGeneration
   if (ctx.settleFontSettings) ctx = await ctx.settleFontSettings()
@@ -988,7 +991,7 @@ export async function buildDocBytes(
     pageCount: ctx.pageCount,
     newPictures: Object.keys(plan.newPictures).length > 0 ? plan.newPictures : undefined,
     trailingSectPrChange: plan.trailingSectPrChange,
-    section: ctx.sectionDirty && ctx.section ? ctx.section : undefined,
+    section: outputSection ?? (ctx.sectionDirty && ctx.section ? ctx.section : undefined),
     sectionStartType: ctx.trailingStartType ?? undefined,
     pgNumType: ctx.pgNumEdit ?? undefined,
     ...hfOptions,
@@ -1241,7 +1244,7 @@ async function saveOnce(
   exportRequest?: SaveAsExportRequest,
 ): Promise<boolean> {
   const { doc, editor } = ctx
-  if (!doc || !editor) return false
+  if (!doc || !editor || ctx.hostLifecycle?.canStartSave?.() === false) return false
   ctx.saveInFlightRef.current = true
   ctx.saveIncompleteRef.current = false
   let nativeSaved = false
@@ -1251,7 +1254,7 @@ async function saveOnce(
     // a mid-stream save would serialize (and write) a truncated document
     await waitForFullContent()
     // the wait ended because another document replaced this one: nothing to write
-    if (docGeneration !== generation) return false
+    if (docGeneration !== generation || ctx.hostLifecycle?.canStartSave?.() === false) return false
     // flush pending in-place table cell / textbox edits into the PM doc first
     window.dispatchEvent(new Event('ai-docs-commit-tables'))
     // identity snapshot: detects edits that arrive while the save is in flight

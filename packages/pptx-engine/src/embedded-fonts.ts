@@ -26,8 +26,8 @@ const EOT_FLAG_XOR = 0x10000000 // TTEMBED_XORENCRYPTDATA (payload XORed with 0x
 const SFNT_MAGICS = [0x00010000, 0x4f54544f, 0x74727565, 0x74746366] // TrueType / 'OTTO' / 'true' / 'ttcf'
 
 /** Unwrap an EOT container to its sfnt payload; null when compressed or malformed. */
-export function eotToSfnt(bytes: Uint8Array): Uint8Array | null {
-  if (bytes.length < 16) return null
+export function eotToSfnt(bytes: Uint8Array, limit = Infinity): Uint8Array | null {
+  if (bytes.length < 16 || bytes.length > limit) return null
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   // Some producers (LibreOffice) store the bare sfnt without an EOT wrapper
   if (SFNT_MAGICS.includes(dv.getUint32(0, false))) return bytes
@@ -40,7 +40,7 @@ export function eotToSfnt(bytes: Uint8Array): Uint8Array | null {
   let sfnt: Uint8Array = bytes.slice(bytes.length - fontDataSize)
   if (flags & EOT_FLAG_XOR) sfnt = sfnt.map((b) => b ^ 0x50)
   if (flags & EOT_FLAG_COMPRESSED) {
-    const inflated = mtxToSfnt(sfnt)
+    const inflated = mtxToSfnt(sfnt, limit)
     if (!inflated) return null
     sfnt = inflated
   }
@@ -333,8 +333,11 @@ export function stripStaleEmbeddedFonts(
   return stale
 }
 
-/** Usable (uncompressed) embedded faces of a package; empty when none are declared. */
-export function listEmbeddedFonts(archive: PackageArchive): EmbeddedFontFace[] {
+/** Usable embedded faces of a package; empty when none are declared. */
+export function listEmbeddedFonts(
+  archive: PackageArchive,
+  limits?: { maxFaces: number; maxFaceBytes: number; maxTotalBytes: number },
+): EmbeddedFontFace[] {
   const presXml = archive.readText('ppt/presentation.xml')
   if (!presXml || !presXml.includes('embeddedFont')) return []
   const parser = new XMLParser({
@@ -351,20 +354,27 @@ export function listEmbeddedFonts(archive: PackageArchive): EmbeddedFontFace[] {
   const lst = asXmlNode(root['p:embeddedFontLst'] ?? {})
   const rels = archive.readRels('ppt/presentation.xml')
   const out: EmbeddedFontFace[] = []
+  let attempts = 0
+  let remaining = limits?.maxTotalBytes ?? Infinity
   for (const ef of xmlArray(lst['p:embeddedFont'])) {
     const typeface = String(asXmlNode(asXmlNode(ef)['p:font'] ?? {})['@_typeface'] ?? '')
-    if (!typeface) continue
+    if (!typeface || (limits && (typeface.length > 200 || /[\u0000-\u001f\u007f]/u.test(typeface)))) continue
     const styles: EmbeddedFontStyle[] = ['regular', 'bold', 'italic', 'boldItalic']
     for (const style of styles) {
       const relId = asXmlNode(asXmlNode(ef)[`p:${style}`] ?? {})['@_r:id']
       if (relId == null) continue
       const rel = rels.get(String(relId))
-      if (!rel) continue
+      if (!rel || (limits && (rel.targetMode === 'External' ||
+          !/^http:\/\/(?:schemas\.openxmlformats\.org\/officeDocument\/2006|purl\.oclc\.org\/ooxml\/officeDocument)\/relationships\/font$/.test(rel.type)))) continue
       const part = resolveTarget('ppt/presentation.xml', rel.target)
       const bytes = archive.readBytes(part)
       if (!bytes) continue
-      const sfnt = eotToSfnt(bytes)
-      if (sfnt) out.push({ typeface, style, sfnt })
+      if (limits && (out.length >= limits.maxFaces || ++attempts > limits.maxFaces * 2)) return out
+      const sfnt = eotToSfnt(bytes, Math.min(limits?.maxFaceBytes ?? Infinity, remaining))
+      if (sfnt) {
+        remaining -= sfnt.length
+        out.push({ typeface, style, sfnt })
+      }
     }
   }
   return out

@@ -326,6 +326,7 @@
     "src/shell/**/*.ts",
     "src/shell/**/*.tsx",
     "src/editors/**/*.ts",
+    "../pdf/src/renderer/env.d.ts",
     "../../packages/pptx-render/src/bidi-js.d.ts"
   ]
 }

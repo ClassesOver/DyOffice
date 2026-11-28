@@ -322,6 +322,7 @@ export interface HtmlExportOptions {
   title: string
   lang?: string
   textWidthPx?: number
+  contentSecurityPolicy?: string
 }
 
 const SCREEN_ONLY_CLASSES = ['page-dark', 'show-marks', 'workspace-dark']
@@ -363,8 +364,12 @@ function serializeDocument(root: HTMLElement, opts: HtmlExportOptions): string {
     opts.textWidthPx && opts.textWidthPx > 0 ? `${Math.round(opts.textWidthPx)}px` : '8.5in'
   const lang = opts.lang ? ` lang="${escHtml(opts.lang)}"` : ''
   const dir = rootCs.direction === 'rtl' ? ' dir="rtl"' : ''
+  const policy = opts.contentSecurityPolicy
+    ? `<meta http-equiv="Content-Security-Policy" content="${escHtml(opts.contentSecurityPolicy)}">\n`
+    : ''
   return (
     `<!DOCTYPE html>\n<html${lang}${dir}>\n<head>\n<meta charset="utf-8">\n` +
+    policy +
     `<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
     `<title>${escText(opts.title)}</title>\n` +
     `<style>\nbody{margin:0;background:#fff}\n` +

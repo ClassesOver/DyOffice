@@ -84,12 +84,29 @@ it('compares the live unsaved document after picking the original DOCX', async (
     setStatus: vi.fn(),
   } as unknown as ReviewContext
 
-  await compareWithFile(ctx)
+  await compareWithFile(() => ctx)
 
   expect(setCompareResult).toHaveBeenCalledWith({
     otherName: 'original.docx',
     entries: expect.arrayContaining([{ kind: 'removed', left: 'Unsaved' }]),
   })
+})
+
+it('ignores a comparison picked after the current document was replaced', async () => {
+  const bytes = await buildDocx({ bodyXml: '<w:p><w:r><w:t>Saved</w:t></w:r></w:p>' })
+  const setCompareResult = vi.fn()
+  const setStatus = vi.fn()
+  const ctx = { doc: { parsed: await parseDocx(bytes) }, setCompareResult, setStatus } as unknown as ReviewContext
+  let active = true
+  vi.stubGlobal('desktop', {
+    pickComparisonDocx: async () => {
+      active = false
+      return { name: 'source.docx', bytes }
+    },
+  })
+  await compareWithFile(() => active ? ctx : null)
+  expect(setCompareResult).not.toHaveBeenCalled()
+  expect(setStatus).not.toHaveBeenCalled()
 })
 
 describe('compareParagraphs', () => {

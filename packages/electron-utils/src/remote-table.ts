@@ -52,6 +52,7 @@ interface ElementNode {
 }
 
 type TreeNode = TextNode | ElementNode
+type TableBudget = { nodes: number; cells: number; characters: number }
 
 function isElement(node: TreeNode): node is ElementNode {
   return node.nodeName !== '#text'
@@ -62,34 +63,40 @@ function childrenOf(node: TreeNode): readonly TreeNode[] {
 }
 
 /** Visible text of a node: text descendants, whitespace collapsed. */
-function textOf(node: TreeNode): string {
-  if (!isElement(node)) return node.value
+function textOf(node: TreeNode, budget?: TableBudget): string {
+  if (budget && --budget.nodes < 0) throw new RangeError('Table exceeds the node limit')
+  if (!isElement(node)) {
+    if (budget && (budget.characters -= node.value.length) < 0) throw new RangeError('Table exceeds the text limit')
+    return node.value
+  }
   let out = ''
-  for (const child of childrenOf(node)) out += textOf(child)
+  for (const child of childrenOf(node)) out += textOf(child, budget)
   return out
 }
 
-function findElements(node: TreeNode, tagName: string): ElementNode[] {
+function findElements(node: TreeNode, tagName: string, budget?: TableBudget): ElementNode[] {
+  if (budget && --budget.nodes < 0) throw new RangeError('Table exceeds the node limit')
   const out: ElementNode[] = []
   if (isElement(node) && node.tagName === tagName) out.push(node)
-  for (const child of childrenOf(node)) out.push(...findElements(child, tagName))
+  for (const child of childrenOf(node)) out.push(...findElements(child, tagName, budget))
   return out
 }
 
-function cellsOf(row: ElementNode): string[] {
+function cellsOf(row: ElementNode, budget?: TableBudget): string[] {
   const cells: string[] = []
   for (const cell of childrenOf(row)) {
     if (!isElement(cell)) continue
     if (cell.tagName !== 'td' && cell.tagName !== 'th') continue
-    cells.push(textOf(cell).replace(/\s+/g, ' ').trim())
+    if (budget && --budget.cells < 0) throw new RangeError('Table exceeds the cell limit')
+    cells.push(textOf(cell, budget).replace(/\s+/g, ' ').trim())
   }
   return cells
 }
 
-function rowsOf(table: ElementNode): string[][] {
+function rowsOf(table: ElementNode, budget?: TableBudget): string[][] {
   const rows: string[][] = []
-  for (const tr of findElements(table, 'tr')) {
-    const cells = cellsOf(tr)
+  for (const tr of findElements(table, 'tr', budget)) {
+    const cells = cellsOf(tr, budget)
     if (cells.length > 0) rows.push(cells)
     if (rows.length >= MAX_REMOTE_TABLE_ROWS) break
   }
@@ -102,17 +109,17 @@ function rowsOf(table: ElementNode): string[][] {
  * whose first table is a one-cell layout wrapper would be useless, so the
  * widest table wins when the first one is empty.
  */
-export function parseHtmlTable(html: string): RemoteTable | null {
+export function parseHtmlTable(html: string, budget?: TableBudget): RemoteTable | null {
   let fragment: TreeNode
   try {
     fragment = parseFragment(html) as unknown as TreeNode
   } catch {
     return null
   }
-  const tables = findElements(fragment, 'table')
+  const tables = findElements(fragment, 'table', budget)
   if (tables.length === 0) return null
   const candidate = tables
-    .map(rowsOf)
+    .map(table => rowsOf(table, budget))
     .filter((rows) => rows.length > 0)
     .sort((a, b) => b.length - a.length)[0]
   if (!candidate || candidate.length === 0) return null
@@ -149,7 +156,7 @@ export function detectDelimiter(text: string): ',' | '\t' | ';' {
 }
 
 /** One delimited row, with the quoting rules Excel writes. */
-export function parseDelimitedRow(line: string, delimiter: string): string[] {
+export function parseDelimitedRow(line: string, delimiter: string, budget?: TableBudget): string[] {
   const cells: string[] = []
   let current = ''
   let inQuotes = false
@@ -177,6 +184,7 @@ export function parseDelimitedRow(line: string, delimiter: string): string[] {
       continue
     }
     if (ch === delimiter) {
+      if (budget && --budget.cells < 0) throw new RangeError('Table exceeds the cell limit')
       cells.push(current)
       current = ''
       i++
@@ -185,6 +193,7 @@ export function parseDelimitedRow(line: string, delimiter: string): string[] {
     current += ch
     i++
   }
+  if (budget && --budget.cells < 0) throw new RangeError('Table exceeds the cell limit')
   cells.push(current)
   return cells
 }
@@ -193,12 +202,12 @@ export function parseDelimitedRow(line: string, delimiter: string): string[] {
  * A delimited file as a table. Excel's web query treats the first row as the
  * header, and so does this.
  */
-export function parseDelimitedTable(text: string, delimiter?: string): RemoteTable | null {
+export function parseDelimitedTable(text: string, delimiter?: string, budget?: TableBudget): RemoteTable | null {
   const body = text.replace(/^\uFEFF/, '')
   const lines = body.split(/\r\n|\n|\r/).filter((line) => line.length > 0)
   if (lines.length === 0) return null
   const sep = delimiter ?? detectDelimiter(body)
-  const parsed = lines.slice(0, MAX_REMOTE_TABLE_ROWS).map((line) => parseDelimitedRow(line, sep))
+  const parsed = lines.slice(0, MAX_REMOTE_TABLE_ROWS).map((line) => parseDelimitedRow(line, sep, budget))
   const width = Math.min(Math.max(...parsed.map((row) => row.length)), MAX_REMOTE_TABLE_COLUMNS)
   const normalized = parsed.map((row) => row.slice(0, width))
   const [headers, ...rows] = normalized
@@ -227,9 +236,16 @@ function finish(table: RemoteTable): RemoteTable {
  */
 export async function fetchRemoteTable(
   rawUrl: string,
-  options: { readonly fetchImpl?: typeof fetch } = {},
+  options: {
+    readonly fetchImpl?: typeof fetch
+    readonly directPublic?: boolean
+    readonly signal?: AbortSignal
+    readonly maxBytes?: number
+    readonly timeoutMs?: number
+  } = {},
 ): Promise<RemoteTable | null> {
   let response: Response | null
+  const deadline = AbortSignal.timeout(options.timeoutMs ?? REMOTE_TABLE_TIMEOUT_MS)
   try {
     response = await fetchWithSsrfGuard(rawUrl, {
       headers: {
@@ -237,15 +253,20 @@ export async function fetchRemoteTable(
         Accept: 'text/html,application/xhtml+xml,text/csv,text/plain;q=0.9,*/*;q=0.5',
       },
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-      signal: AbortSignal.timeout(REMOTE_TABLE_TIMEOUT_MS),
+      ...(options.directPublic ? { directPublic: true } : {}),
+      signal: options.signal ? AbortSignal.any([options.signal,deadline]) : deadline,
     })
   } catch {
     return null
   }
-  if (!response || !response.ok) return null
+  if (!response) return null
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {})
+    return null
+  }
   let bytes: Uint8Array
   try {
-    bytes = await readBodyCapped(response, MAX_REMOTE_TABLE_BYTES)
+    bytes = await readBodyCapped(response, options.maxBytes ?? MAX_REMOTE_TABLE_BYTES)
   } catch {
     return null
   }
@@ -255,10 +276,15 @@ export async function fetchRemoteTable(
   // A CSV answer sometimes arrives as text/html. Falling back to the delimited
   // reader is only safe while the body does not look like markup — otherwise
   // every page on the web would come back as a one-row table.
-  const looksLikeMarkup = /<[a-z!/][\s\S]*>/i.test(text)
-  const table = looksDelimited
-    ? parseDelimitedTable(text)
-    : (parseHtmlTable(text) ?? (looksLikeMarkup ? null : parseDelimitedTable(text)))
-  if (!table) return null
-  return { ...finish(table), url: rawUrl }
+  const markupStart = text.search(/<[a-z!/]/i)
+  const looksLikeMarkup = markupStart >= 0 && markupStart < text.lastIndexOf('>')
+  const budget = options.directPublic ? { nodes: 500_000, cells: 100_000, characters: 2 * 1024 * 1024 } : undefined
+  try {
+    const table = looksDelimited
+      ? parseDelimitedTable(text, undefined, budget)
+      : (parseHtmlTable(text, budget) ?? (looksLikeMarkup ? null : parseDelimitedTable(text, undefined, budget)))
+    return table ? { ...finish(table), url: rawUrl } : null
+  } catch {
+    return null
+  }
 }

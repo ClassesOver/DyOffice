@@ -60,3 +60,18 @@ test('a preference read started before a later uncertain save cannot unlock anot
  await assert.rejects(client.updatePreferences({theme:'dark'}),/尚未确认/)
  assert.equal(writes,1)
 })
+
+test('workspace session and sleep opt-outs round trip and reject malformed preference receipts',async()=>{
+ let value=initial
+ const client=createPreferencesClient(async(_path,method,patch)=>{
+  if(method==='PUT')value={...value,...patch}
+  return value
+ })
+ assert.equal((await client.updatePreferences({restoreSession:false})).restoreSession,false)
+ assert.equal((await client.updatePreferences({sleepInactiveTabs:false})).sleepInactiveTabs,false)
+ const saved=await client.getPreferences()
+ assert.equal(saved.restoreSession,false)
+ assert.equal(saved.sleepInactiveTabs,false)
+ value={...value,sleepInactiveTabs:'false'}
+ await assert.rejects(client.getPreferences(),/无法确认/)
+})

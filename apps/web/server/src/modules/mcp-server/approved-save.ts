@@ -72,7 +72,7 @@ export function createApprovedOfficeSave({ transactions, objects, filePolicy }: 
     })
     const authority = scoped()
     const files = createFileService({ ...filePolicy, transactions: authority, objects })
-    const leases = createLeaseService({ transactions: authority, ttlMs: 60_000, assertOfficeWritable: files.assertOfficeWritable })
+    const leases = createLeaseService({ transactions: authority, ttlMs: 60_000, assertOfficeWritable: file => files.assertOfficeWritable(file) })
     const revisions = createRevisionService({ ...filePolicy, transactions: authority, objects, files })
     async function receipt(): Promise<RevisionRef | undefined> {
       return transactions.withMcpEditTransaction(credential, grant, async (connection, principal) => {

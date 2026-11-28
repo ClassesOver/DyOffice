@@ -42,6 +42,7 @@ export function syncWord(transactions:PrincipalTransactions,token:string,fileId:
     if(p.dshEdit && (p.dshEdit.fileId!==file || p.dshEdit.editorId!==client || p.dshEdit.format!=='docx'))throw authError(403)
     const current=await loadFile(c,p,file,false,steps.length?'UPDATE':'SHARE')
     if(current.format!=='docx')throw authError(415)
+    if(current.office_password_protected)throw authError(423)
     if(steps.length)await assertOfficeWritable(current)
     const start=await baseline(c,p,file,revision)
     const latest=revision===current.current_revision?start:await baseline(c,p,file,current.current_revision)
@@ -65,11 +66,11 @@ export function syncWord(transactions:PrincipalTransactions,token:string,fileId:
 }
 
 // Caller holds the same file lock and commits the checkpoint with the artifact.
-export async function wordCheckpoint(c:PoolClient,p:BusinessPrincipal,file:string,revision:string,version:number|undefined) {
+export async function wordCheckpoint(c:PoolClient,p:BusinessPrincipal,file:string,revision:string,version:number|undefined,resetEpoch=false) {
   const base=await baseline(c,p,file,revision),keys=[...scope(p),file,base.epoch]
   const end=await head(c,keys,base.version)
-  if(version===undefined){
-    if(end>base.version)throw authError(409)
+  if(version===undefined||resetEpoch){
+    if((version??base.version)!==end)throw authError(resetEpoch?422:409)
     await c.query('DELETE FROM word_collab_steps WHERE '+range,keys)
     return null
   }

@@ -47,19 +47,30 @@ export function editorBlockTexts(doc: PmNode, originalBlocks: Block[]): string[]
 export function compareParagraphs(left: string[], right: string[]): CompareEntry[] {
   const n = left.length
   const m = right.length
+  // Paragraph strings can be long. Compare integer IDs inside the quadratic diff.
+  const ids = new Map<string, number>()
+  const encode = (paragraph: string): number => {
+    const existing = ids.get(paragraph)
+    if (existing !== undefined) return existing
+    const id = ids.size
+    ids.set(paragraph, id)
+    return id
+  }
+  const leftIds = left.map(encode)
+  const rightIds = right.map(encode)
   // lcs[i][j] = LCS length of left[i:], right[j:]
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0))
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1))
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       lcs[i][j] =
-        left[i] === right[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+        leftIds[i] === rightIds[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
     }
   }
   const raw: CompareEntry[] = []
   let i = 0
   let j = 0
   while (i < n && j < m) {
-    if (left[i] === right[j]) {
+    if (leftIds[i] === rightIds[j]) {
       raw.push({ kind: 'same', left: left[i], right: right[j] })
       i++
       j++

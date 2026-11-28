@@ -1,6 +1,6 @@
 import './personal-settings-page.css'
 import {useCallback,useEffect,useId,useRef,useState} from 'react'
-import type {WebSettingsPreferences} from '../../../shell/src/renderer/src/SettingsModal'
+import type {PersonalPreferences} from '../../../../packages/browser-host/src/preferences'
 import {LocalPasswordForm} from './LocalPasswordForm'
 import {LocalSessionsPanel} from './LocalSessionsPanel'
 import type {LocalSessionsClient} from './local-sessions-client'
@@ -8,7 +8,7 @@ import type {LoginHistoryClient} from './local-login-history-client'
 import {LoginHistoryPanel} from './LoginHistoryPanel'
 import type {KeyboardEvent,ReactNode} from 'react'
 export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClose,onCloseGuardChange,sessionsClient,historyClient,activeTab,onTabChange}:{
- user:{username:string;displayName:string;roles:string[]};load:()=>Promise<WebSettingsPreferences>;save:(patch:Partial<WebSettingsPreferences>)=>Promise<WebSettingsPreferences>
+ user:{username:string;displayName:string;roles:string[]};load:()=>Promise<PersonalPreferences>;save:(patch:Partial<PersonalPreferences>)=>Promise<PersonalPreferences>
  activeTab?:string;onTabChange?:(tab:string)=>void
  sessionsClient?:LocalSessionsClient;historyClient?:LoginHistoryClient
  security:{changePassword:(current:string,next:string)=>Promise<void>;onCurrentRevoked:()=>void};skills:ReactNode|((registerGuard:(guard:(()=>boolean)|null)=>void)=>ReactNode);onLogout:()=>void;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void
@@ -21,7 +21,7 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  const visitedTabs=useRef(new Set<string>())
  visitedTabs.current.add(selectedTab)
  const tabTitles:Record<string,[string,string]>={account:['资料与安全','查看账号资料，管理密码与登录状态。'],activity:['登录活动','查看有效会话与已保留的登录记录。'],general:['通用偏好','调整外观、语言与编辑习惯。'],skills:['个人技能','管理和扩展你的个人办公技能。']}
- const [baseline,setBaseline]=useState<WebSettingsPreferences|null>(null),[draft,setDraft]=useState<WebSettingsPreferences|null>(null)
+ const [baseline,setBaseline]=useState<PersonalPreferences|null>(null),[draft,setDraft]=useState<PersonalPreferences|null>(null)
  const [sessionVersion,setSessionVersion]=useState(0)
  const [operation,setOperation]=useState<'load'|'save'|null>('load')
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false)
@@ -35,9 +35,9 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  useEffect(()=>{onCloseGuardChange(guard);return()=>onCloseGuardChange(null)},[onCloseGuardChange,dirty])
  async function refresh(){if(lock.current)return;if(dirty&&!window.confirm('重新读取会放弃未保存的个人偏好，是否继续？'))return;lock.current=true;setBusy(true);setOperation('load');setError('');try{const next=await load();if(alive.current){setBaseline(next);setDraft(next);setSaved(false)}}catch(e){if(alive.current)setError((e as Error).message)}finally{lock.current=false;if(alive.current){setBusy(false);setOperation(null)}}}
  useEffect(()=>{alive.current=true;void refresh();return()=>{alive.current=false}},[])
- function edit(patch:Partial<WebSettingsPreferences>){setDraft(current=>current?{...current,...patch}:current);setSaved(false);setError('')}
+ function edit(patch:Partial<PersonalPreferences>){setDraft(current=>current?{...current,...patch}:current);setSaved(false);setError('')}
  function revert(){if(busy||!baseline)return;setDraft(baseline);setSaved(false);setError('')}
- async function commit(){if(lock.current||!draft||!baseline||!dirty)return;const patch=Object.fromEntries(Object.entries(draft).filter(([key,value])=>value!==baseline[key as keyof WebSettingsPreferences])) as Partial<WebSettingsPreferences>;lock.current=true;setBusy(true);setOperation('save');setError('');try{const next=await save(patch);if(!alive.current)return;setBaseline(next);setDraft(next);setSaved(true);if(next.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=next.theme}catch(e){if(alive.current)setError((e as Error).message)}finally{lock.current=false;if(alive.current){setBusy(false);setOperation(null)}}}
+ async function commit(){if(lock.current||!draft||!baseline||!dirty)return;const patch=Object.fromEntries(Object.entries(draft).filter(([key,value])=>value!==baseline[key as keyof PersonalPreferences])) as Partial<PersonalPreferences>;lock.current=true;setBusy(true);setOperation('save');setError('');try{const next=await save(patch);if(!alive.current)return;setBaseline(next);setDraft(next);setSaved(true);if(next.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=next.theme}catch(e){if(alive.current)setError((e as Error).message)}finally{lock.current=false;if(alive.current){setBusy(false);setOperation(null)}}}
  useEffect(()=>{if(!dirty)return;const prevent=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[dirty])
  const account=<div className="personal-page-account-grid">
   <div className="personal-page-account-summary">
@@ -53,12 +53,20 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  const general=<form className="personal-page-general" onSubmit={event=>{event.preventDefault();void commit()}} aria-busy={busy}>
   <fieldset disabled={busy||!draft}>
    <h3 className="personal-page-group-title">外观与语言</h3>
-   <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-language`}>语言</label><select id={`${preferenceId}-language`} aria-label="语言" value={draft?.language??'zh'} onChange={event=>edit({language:event.target.value as WebSettingsPreferences['language']})}><option value="zh">简体中文</option><option value="en">English</option></select></div>
+   <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-language`}>语言</label><select id={`${preferenceId}-language`} aria-label="语言" value={draft?.language??'zh'} onChange={event=>edit({language:event.target.value as PersonalPreferences['language']})}><option value="zh">简体中文</option><option value="en">English</option></select></div>
    <fieldset className="personal-page-theme" aria-label="主题"><legend>主题</legend><div className="personal-page-theme-options">{([{value:'light',label:'浅色'},{value:'dark',label:'深色'},{value:'system',label:'跟随系统'}] as const).map(option=><label key={option.value} className={`personal-page-theme-choice theme-preview-${option.value}`}><input type="radio" name={`${preferenceId}-theme`} value={option.value} checked={draft?.theme===option.value} onChange={()=>edit({theme:option.value})}/><span className="personal-page-theme-preview" aria-hidden="true"><span className="theme-preview-nav"><b>D</b><i/><i/><i/></span><span className="theme-preview-content"><i/><i/><i/></span><span className="theme-preview-check">✓</span></span><span>{option.label}</span></label>)}</div></fieldset>
    <h3 className="personal-page-group-title personal-page-group-divider">编辑偏好</h3>
    <div className="personal-page-preference-row"><label htmlFor={`${preferenceId}-author`}>文档作者</label><div><input id={`${preferenceId}-author`} aria-label="文档作者" aria-describedby={`${preferenceId}-author-hint`} value={draft?.authorName??''} maxLength={100} onChange={event=>edit({authorName:event.target.value})}/><p id={`${preferenceId}-author-hint`} className="personal-page-field-hint">作为文档批注与修订的作者名称。</p></div></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-autosave`}>自动保存</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-autosave`} aria-label="自动保存" aria-checked={!!draft?.autoSave} checked={!!draft?.autoSave} onChange={event=>edit({autoSave:event.target.checked})}/></div>
    <div className="personal-page-preference-row personal-page-switch-row"><label htmlFor={`${preferenceId}-assistant`}>显示 AI 助手</label><input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" aria-checked={!!draft?.showAssistant} checked={!!draft?.showAssistant} onChange={event=>edit({showAssistant:event.target.checked})}/></div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-restore`}>重新打开上次的文档</label><p id={`${preferenceId}-restore-hint`} className="personal-page-field-hint">在此浏览器刷新或从首页重新进入工作区时，恢复上次退出时的文档页签和并排布局。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-restore`} aria-describedby={`${preferenceId}-restore-hint`} checked={draft?.restoreSession!==false} onChange={event=>edit({restoreSession:event.target.checked})}/>
+   </div>
+   <div className="personal-page-preference-row personal-page-switch-row">
+    <div><label htmlFor={`${preferenceId}-sleep`}>休眠不活跃的标签页</label><p id={`${preferenceId}-sleep-hint`} className="personal-page-field-hint">打开较多文档时，释放长时间未查看的后台编辑器。点击页签即可重新打开。</p></div>
+    <input className="personal-page-switch" type="checkbox" role="switch" id={`${preferenceId}-sleep`} aria-describedby={`${preferenceId}-sleep-hint`} checked={draft?.sleepInactiveTabs!==false} onChange={event=>edit({sleepInactiveTabs:event.target.checked})}/>
+   </div>
    <p className="personal-page-field-hint">语言与编辑器偏好保存后，在刷新页面或重新打开文档时生效。</p>
   </fieldset>
  </form>

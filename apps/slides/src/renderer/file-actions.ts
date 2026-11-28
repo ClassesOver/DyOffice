@@ -142,8 +142,8 @@ export async function save(getCtx: () => ActionCtx, quiet = false): Promise<bool
   })
 }
 
-export async function saveAs(getCtx: () => ActionCtx): Promise<void> {
-  await saveAsWithName(getCtx, null)
+export async function saveAs(getCtx: () => ActionCtx, copy?: SlidesNamedCopy['save']): Promise<void> {
+  await saveAsWithName(getCtx, null, copy)
 }
 
 /**
@@ -170,16 +170,7 @@ export async function nameWithAi(getCtx: () => ActionCtx, copy?: SlidesNamedCopy
   const deck = editing ? getCtx() : ctx
   const stem = await modelSaveAsName(deck.slides, copy?.suggest)
   if (!stem) return
-  if (copy) {
-    await runSerialized(async () => {
-      const current = getCtx()
-      if (!await flushActiveEdit(current)) return
-      if (!await flushNotesForSave(current)) return
-      await copy.save(stem)
-    })
-    return
-  }
-  await saveAsWithName(getCtx, `${stem}.pptx`)
+  await saveAsWithName(getCtx, `${stem}.pptx`, copy?.save)
 }
 
 /**
@@ -188,7 +179,9 @@ export async function nameWithAi(getCtx: () => ActionCtx, copy?: SlidesNamedCopy
  * A null name means "the deck's current name", which is read inside the queue:
  * a save that landed while this call was waiting may have changed it.
  */
-export async function saveAsWithName(getCtx: () => ActionCtx, name: string | null): Promise<void> {
+export async function saveAsWithName(
+  getCtx: () => ActionCtx, name: string | null, copy?: SlidesNamedCopy['save'],
+): Promise<void> {
   // Same queue as save(): Save + Save As (or double Save As) write through
   // the same main-process pipe and would interleave without it.
   await runSerialized(async () => {
@@ -196,6 +189,10 @@ export async function saveAsWithName(getCtx: () => ActionCtx, name: string | nul
     if (!await flushActiveEdit(ctx)) return
     if (!await flushNotesForSave(ctx)) return
     const target = name ?? (baseName(ctx.path ?? '') || 'presentation.pptx')
+    if (copy) {
+      await copy(target.replace(/\.pptx$/i, ''))
+      return
+    }
     const r = await window.slidesApi.saveAs(target)
     if (r.ok) {
       if (r.slides) adoptSavedSlides(ctx, r.slides)
@@ -269,6 +266,7 @@ export async function exportVideoFile(
   opts: VideoExportOptions,
   onProgress: (fraction: number) => void,
   signal: AbortSignal,
+  browserDownload = false,
 ): Promise<VideoExportResult> {
   if (!ctx.slides.some((s) => !s.hidden)) {
     ctx.setStatus(t('appExportNoSlides'))
@@ -277,7 +275,7 @@ export async function exportVideoFile(
   const path = await window.slidesApi.pickExportVideoPath(`${exportBaseName(ctx)}.mp4`)
   if (!path) return { ok: false, cancelled: true }
   const r = await exportVideo(
-    { slides: ctx.slides, images: ctx.images, path },
+    { slides: ctx.slides, images: ctx.images, path, requireNarration: browserDownload },
     opts,
     onProgress,
     signal,

@@ -3,7 +3,7 @@ import { XMLValidator } from 'fast-xml-parser'
 import { readWorkbookRedactionSource } from '../../../sheets/src/node/workbook-redactions'
 import { parseSlicerState } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connections'
-import { refreshableQueriesOf } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connection-refresh'
+import { a1RangeToTarget, refreshableQueriesOf } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connection-refresh'
 import { readPivotDefinitionWithSource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-pivot'
 import { workbookPivotDefinitionSchema, workbookSaveRequestSchema } from '../../../sheets/src/shared/desktop-api'
 import { mapWorkbookSaveRequest } from '../../../sheets/src/shared/workbook-save-plan'
@@ -167,6 +167,13 @@ export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, 
   if (query && 'externalLinks' in query) {
     try { return await readWorkbookExternalLinks(source) }
     catch { throw Object.assign(new Error('Invalid external link metadata'), {statusCode:400}) }
+  }
+  if (query && 'webQuery' in query) {
+    const read = async (path: string) => await source.has(path) ? source.readText(path) : undefined
+    const matches = (await refreshableQueriesOf(read)).filter(connection => connection.id === query.webQuery)
+    const connection = matches.length === 1 ? matches[0]! : undefined
+    const range = connection && a1RangeToTarget(connection.range, connection.sheetName)
+    return { source: connection && connection.source.length <= 4096 && range && range.width * range.height <= 100_000 ? connection.source : null }
   }
   const pivot=query
   if (pivot) {

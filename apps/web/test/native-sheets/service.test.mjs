@@ -5,7 +5,35 @@ import {fileFixture,importFile} from '../helpers/files.mjs'
 import {createSheetsService} from '../../server/src/modules/sheets/service.ts'
 import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
+import officeCrypto from 'officecrypto-tool'
+import {password as accountPassword} from '../helpers/identity.mjs'
 const bytes=()=>readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+test('password unlock gates native reads to the current workbook revision and login session',async t=>{
+ const f=await fileFixture(t),plain=await bytes(),password='工作簿密码 fixture',encrypted=Buffer.from(officeCrypto.encrypt(plain,{password}))
+ const staged=await f.files.stageUpload(f.alice.token,{name:'locked.xlsx',size:encrypted.length})
+ await f.files.receiveUpload(f.alice.token,staged.uploadId,encrypted,{password})
+ const {file}=await f.files.finishUpload(f.alice.token,staged.uploadId)
+ const {fileId,revision}=file,owner=f.alice.token,otherLogin=(await f.sessions.login('alice',accountPassword)).token
+ let reads=0
+ const service=createSheetsService({files:f.files,native:{
+  async inspect(actual){reads++;assert.deepEqual(actual,plain);return {sheets:[{id:'1',name:'Acceptance'}]}},
+  async readRange(actual){reads++;assert.deepEqual(actual,plain);return {cells:[{row:0,column:0,value:'Title'}]}},
+ }})
+ await assert.rejects(service.inspect(owner,fileId,revision),{statusCode:423})
+ await assert.rejects(service.unlockWorkbook(owner,fileId,revision,'incorrect'),{statusCode:422})
+ await assert.rejects(service.unlockWorkbook(f.bob.token,fileId,revision,password),{statusCode:404})
+ assert.equal(reads,0)
+ const {unlockId}=await service.unlockWorkbook(owner,fileId,revision,password)
+ const range={startRow:0,endRow:0,startColumn:0,endColumn:0}
+ assert.deepEqual(await service.inspect(owner,fileId,revision,undefined,false,unlockId),{sheets:[{id:'1',name:'Acceptance'}]})
+ assert.deepEqual(await service.readRange(owner,fileId,revision,'Acceptance',range,undefined,unlockId),{cells:[{row:0,column:0,value:'Title'}]})
+ await assert.rejects(service.inspect(otherLogin,fileId,revision,undefined,false,unlockId),{statusCode:423})
+ await assert.rejects(service.inspect(owner,fileId,'00000000-0000-4000-8000-000000000001',undefined,false,unlockId),{statusCode:409})
+ assert.equal(reads,2)
+ await service.lockWorkbook(owner,fileId,revision,unlockId)
+ await assert.rejects(service.inspect(owner,fileId,revision,undefined,false,unlockId),{statusCode:423})
+ assert.deepEqual(await f.files.readFile(owner,fileId,revision),encrypted)
+})
 test('sheets reads enforce ownership before native work and recheck revocation before returning',async t=>{
  const f=await fileFixture(t),input=await bytes(),file=await importFile(f,f.alice.token,input,'acceptance.xlsx')
  let calls=0,release,started

@@ -24,8 +24,9 @@ export function PrintDialog({
   if (!print.printDlg) return null
   return (
     <div className="pdf-modal-mask" onClick={() => print.setPrintDlg(false)}>
-      <div className="pdf-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="pdf-modal" role="dialog" aria-modal="true" aria-label={t('print')} onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-title">{t('print')}</div>
+        {!print.browserPrintDialog && <>
         <label className="pdf-modal-row pdf-print-field">
           <span>{t('printPrinter')}</span>
           <select
@@ -124,6 +125,7 @@ export function PrintDialog({
           </label>
         ))}
         <div className="pdf-print-divider" />
+        </>}
         <label className="pdf-modal-row">
           <input
             type="radio"

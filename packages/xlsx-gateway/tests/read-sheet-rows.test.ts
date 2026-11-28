@@ -84,6 +84,17 @@ describe('readSheetRows', () => {
     ])
   })
 
+  it('charges each occurrence of a shared string toward the worksheet text limit', async () => {
+    const buffer = await sharedStringWorkbook()
+    const limits = {
+      zip: { maxParts: 10, maxPartBytes: 2048, maxTotalBytes: 8192 },
+      rows: 2, columns: 5, cellCharacters: 4, totalCharacters: 10,
+    }
+    await expect(readSheetRows(buffer, undefined, limits)).rejects.toThrow('Worksheet text exceeds its size limit.')
+    await expect(readSheetRows(buffer, undefined, { ...limits, totalCharacters: 11 }))
+      .resolves.toEqual([['Name'], ['Ada', '', '', '', 'Name']])
+  })
+
   it('keeps a cell that holds a comma inside a quoted field', async () => {
     const buffer = await csvToXlsxBuffer('Name,Note\n"Ada","a, b"\n')
     expect(await readSheetRows(buffer)).toEqual([

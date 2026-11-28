@@ -20,6 +20,7 @@ export function PasswordDialog({
   value,
   error,
   busy = false,
+  maxLength,
   submitLabel,
   cancelLabel,
   onChange,
@@ -38,6 +39,7 @@ export function PasswordDialog({
   error: string
   /** a decrypt attempt is in flight: field and submit lock up */
   busy?: boolean
+  maxLength?: number
   submitLabel: string
   cancelLabel: string
   onChange: (value: string) => void
@@ -58,11 +60,13 @@ export function PasswordDialog({
         >
           {label}
           <PasswordInput
+            label={label}
             value={value}
             placeholder={placeholder}
             invalid={!!error}
             autoFocus
             disabled={busy}
+            maxLength={maxLength}
             onChange={onChange}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent)) onSubmit()

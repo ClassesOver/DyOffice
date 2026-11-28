@@ -3,7 +3,8 @@ import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {messages} from './messages.ts'
 import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
-import {printSheetsInBrowser} from './sheets-browser-print.ts'
+import {printInBrowser} from './browser-print.ts'
+import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
   workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,externalLinksUpdateResultSchema,
@@ -11,7 +12,7 @@ import {
   workbookFormulaCellsRequestSchema, workbookFormulaCellsResultSchema, workbookRowOutlineResultSchema,
   workbookRedactionsResultSchema, workbookSlicerStateResultSchema, workbookQueriesResultSchema,
   workbookRecalcRequestSchema,workbookRecalcResultSchema,
-  workbookConnectionsResultSchema, workbookSaveRequestSchema,
+  workbookConnectionsResultSchema, workbookRefreshRequestSchema, workbookRefreshResultSchema, workbookSaveRequestSchema,
   workbookFindCellsRequestSchema, workbookFindCellsResultSchema,
   workbookExportPdfRequestSchema,
   type DesktopApi, type WorkbookFile, type WorkbookSaveRequest, type WorkbookRangeResult,
@@ -23,7 +24,9 @@ type ParentAiWindow = Window & {
   dyofficeCreateAiDoc?: (request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<void>
 }
 type SaveResult = {canceled: false; file: WorkbookFile; touchedEntries: string[]}
-type Recovery = {saved?: Awaited<ReturnType<SessionFileHost['saveSheets']>>; resolve(value: SaveResult): void; reject(error: unknown): void}
+type SavedWorkbook = Awaited<ReturnType<SessionFileHost['saveSheets']>>
+type ApplySavedWorkbook = (saved:SavedWorkbook)=>Promise<WorkbookFile>
+type Recovery = {saved?:SavedWorkbook; apply:ApplySavedWorkbook; resolve(value:SaveResult):void; reject(error:unknown):void}
 type OpeningViewport = {sheetId:string;endRow:number;endColumn:number;result:WorkbookRangeResult}
 type Session = {openingViewport?:OpeningViewport; revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
@@ -55,6 +58,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   let inFlight = 0
   const waiting: (() => void)[] = []
   let csrf: string | undefined, disposed = false, queued = true, pendingEdits = 0
+  let unlockGrant: {revision:string;id:string} | undefined
   const noEvent = () => () => {}
   const unavailable = async (): Promise<never> => { throw new Error(text.unavailable) }
   const session = (id: string) => { const current = sessions.get(id); if (disposed || !current) throw hostError('INVALID_REVISION','workbook session'); return current }
@@ -93,13 +97,39 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
           csrf = body.csrfToken
         }
         const proof=csrf
-        const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${method}`,{method:'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':proof!},body:JSON.stringify({revision,...input})})
+        const grant=method!=='unlock'?unlockGrant?.id:undefined
+        const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${method}`,{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':proof!,...(grant?{'x-dyoffice-workbook-unlock':grant}:{})},body:JSON.stringify({revision,...input})})
         if(response.status===403 && attempt===0){if(csrf===proof)csrf=undefined;continue}
-        if (!response.ok) throw hostError(response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : response.status === 409 ? 'CONFLICT' : 'UNAVAILABLE','workbook read')
+        if(response.status===422&&method==='unlock')throw Error(prefs.language==='en'?'The workbook password is incorrect.':'工作簿密码错误。')
+        if (!response.ok) throw Object.assign(hostError(response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : response.status === 409 ? 'CONFLICT' : 'UNAVAILABLE','workbook read'),{status:response.status})
         if (!response.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE','workbook read')
         return await response.json()
       }
     } finally { controllers.delete(controller) }
+  }
+  async function unlockWorkbook(password:string) {
+    const revision=host.getState(fileId).revision.revision
+    const result=await call(revision,'unlock',{password})
+    if(disposed||host.getState(fileId).revision.revision!==revision||typeof result?.unlockId!=='string'||!workbookId.test(result.unlockId))throw hostError('CONFLICT','workbook unlock')
+    unlockGrant={revision,id:result.unlockId}
+  }
+  function releaseWorkbookUnlock(){
+    const grant=unlockGrant
+    unlockGrant=undefined
+    if(grant&&csrf)void fetchImpl(`/api/v1/files/${fileId}/sheets/lock`,{method:'POST',credentials:'same-origin',keepalive:true,redirect:'error',
+      headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify({revision:grant.revision,unlockId:grant.id})}).catch(()=>{})
+  }
+  async function adoptWorkbookImportUnlock(revision:string,id:string){
+    if(disposed||!workbookId.test(id)||host.getState(fileId).revision.revision!==revision)return false
+    unlockGrant={revision,id}
+    try{
+      await call(revision,'inspect')
+      if(!disposed&&host.getState(fileId).revision.revision===revision)return true
+    }catch{
+      // A stale import grant falls back to the normal password prompt.
+    }
+    releaseWorkbookUnlock()
+    return false
   }
   async function requestAttachment(revision:string,name:string,file:File){
     if(disposed)throw hostError('UNAVAILABLE','disposed')
@@ -149,7 +179,8 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   }
   async function open(withViewport=false) {
     const state = host.getState(fileId), {openingViewport,...raw} = await call(state.revision.revision,'inspect',withViewport?{openingViewport:true}:{})
-    const file = workbookFileSchema.parse({...raw,sessionId:crypto.randomUUID(),name:state.name,sha256:state.revision.sha256,fileBytes:state.revision.size,readOnly:!state.lease,needsSaveAs:false,automaticRecoveryDisabled:true})
+    const file = workbookFileSchema.parse({...raw,sessionId:crypto.randomUUID(),name:state.name,sha256:state.revision.sha256,fileBytes:state.revision.size,readOnly:!state.lease,needsSaveAs:false,automaticRecoveryDisabled:true,...(unlockGrant?{passwordProtected:true}:{})})
+    if(unlockGrant)unlockGrant.revision=state.revision.revision
     if (disposed) throw hostError('UNAVAILABLE','disposed')
     const result=withViewport&&openingViewport&&file.sheets.some(s=>s.id===openingViewport.sheetId)
       &&Number.isInteger(openingViewport.endRow)&&openingViewport.endRow>=0&&openingViewport.endRow<160
@@ -182,6 +213,23 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     }catch{ /* Naming is optional; the revision has already been saved. */ }
     if(disposed)throw hostError('UNAVAILABLE','disposed')
     return current.file
+  }
+  async function persistWorkbook(submit:()=>Promise<SavedWorkbook>,apply:ApplySavedWorkbook):Promise<SaveResult>{
+    const finishSave=beginActiveSave()
+    try{
+      if(saveFence&&!saveFence())throw hostError('UNAVAILABLE','save authorization changed')
+      let saved:SavedWorkbook|undefined
+      try{
+        saved=await submit()
+        committed=saved
+        return {canceled:false,file:await apply(saved),touchedEntries:saved.touchedEntries}
+      }catch(error){
+        if(disposed)throw hostError('UNAVAILABLE','disposed')
+        if(!saved&&host.getState(fileId).status!=='unknown')throw error
+        // Confirmation resumes the original receipt without staging a second revision.
+        return await new Promise<SaveResult>((resolve,reject)=>{recovery={...(saved?{saved}:{}),apply,resolve,reject};onChange()})
+      }
+    }finally{finishSave()}
   }
   function sheet(current: Session, sheetId: string) {
     const value = current.file.sheets.find(value => value.id === sheetId)
@@ -278,14 +326,19 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     onChromePressed:noEvent,onCloseSaveRequest:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,
     onMenuAction(listener: Parameters<DesktopApi['onMenuAction']>[0]){
       const keydown = (event: KeyboardEvent) => {
-        if (disposed || event.isComposing || event.altKey || event.shiftKey ||
-            (!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== 's') return
+        if (disposed || event.isComposing || event.altKey ||
+            (!event.ctrlKey && !event.metaKey)) return
+        const key = event.key.toLowerCase()
+        const action = key === 's' ? event.shiftKey ? 'save-as' : 'save' : key === 'p' && !event.shiftKey ? 'print' : undefined
+        if (!action) return
         event.preventDefault()
         event.stopPropagation()
-        if (!event.repeat) listener('save')
+        if (event.repeat || (action === 'print' && host.getState(fileId).status === 'unauthorized')) return
+        listener(action)
       }
       window.addEventListener('keydown', keydown, true)
-      return () => window.removeEventListener('keydown', keydown, true)
+      const unsubscribe=subscribeBrowserDocumentCommands({print:()=>listener('print'),save:()=>listener('save'),'save-as':()=>listener('save-as')},()=>!disposed&&host.getState(fileId).status!=='unauthorized')
+      return () => {unsubscribe();window.removeEventListener('keydown', keydown, true)}
     },
     onWorkbookRenamed(listener:(name:string)=>void){
       renameListeners.add(listener)
@@ -352,29 +405,14 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async listWorkbookConnections({sessionId}){return workbookConnectionsResultSchema.parse((await extras(sessionId)).connections)},
     async readWorkbookQueries({sessionId}){return workbookQueriesResultSchema.parse((await extras(sessionId)).queries)},
     async saveWorkbookEdits(input){
-      const finishSave=beginActiveSave()
-      try {
-      if(saveFence&&!saveFence())throw hostError('UNAVAILABLE','save authorization changed')
       const request=workbookSaveRequestSchema.parse(input),current=session(request.sessionId)
       if (host.getState(fileId).revision.revision!==current.revision) throw hostError('CONFLICT','workbook base')
-      let saved: Awaited<ReturnType<SessionFileHost['saveSheets']>> | undefined
-      try {
-        saved=await host.saveSheets(fileId,request,saveFence??(()=>true))
-        committed=saved
-        return {canceled:false as const,file:await openSaved(saved.revision),touchedEntries:saved.touchedEntries}
-      } catch(error) {
-        // Teardown cannot undo a dispatched commit. Leave its durable/unknown
-        // state in the host, but never recreate recovery for an unmounted view.
-        if (disposed) throw hostError('UNAVAILABLE','disposed')
-        if (!saved && host.getState(fileId).status !== 'unknown') {
-          if ((error as {code?:string}).code === 'PAYLOAD_TOO_LARGE') throw new Error(prefs.language === 'en' ? 'Web save exceeds the 4 MiB request limit. Your edits are still unsaved; keep this page open.' : '本次保存超过 Web 请求的 4 MiB 限制。更改仍未保存，请保留当前页面，不要关闭或刷新。')
-          throw error
-        }
-        // Keep save-actions' original Promise, journal snapshot and view alive.
-        // Confirmation resumes that exact save, including its late-edit carry.
-        return new Promise<SaveResult>((resolve,reject)=>{recovery={...(saved ? {saved} : {}),resolve,reject};onChange()})
+      try{
+        return await persistWorkbook(()=>host.saveSheets(fileId,request,saveFence??(()=>true),unlockGrant?.id),saved=>openSaved(saved.revision))
+      }catch(error){
+        if((error as {code?:string}).code==='PAYLOAD_TOO_LARGE')throw new Error(prefs.language==='en'?'Web save exceeds the 4 MiB request limit. Your edits are still unsaved; keep this page open.':'本次保存超过 Web 请求的 4 MiB 限制。更改仍未保存，请保留当前页面，不要关闭或刷新。')
+        throw error
       }
-      } finally {finishSave()}
     },
     async autoRenameWorkbook(sessionId:string,candidate:string){
       const current=session(sessionId)
@@ -441,7 +479,19 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         return displayName?{...link,displayName}:link
       })}
     },
-    refreshWorkbookConnection:unavailable,readLocalImage:unavailable,
+    async refreshWorkbookConnection(input){
+      const {sessionId,connectionId}=workbookRefreshRequestSchema.parse(input)
+      const current=session(sessionId), before=host.getState(fileId), lease=before.lease
+      if(current.attachment||!lease||before.revision.revision!==current.revision)throw hostError('CONFLICT','workbook query')
+      const result=await call(current.revision,'web-query',{connectionId,editorId:lease.editorId,leaseEpoch:lease.leaseEpoch})
+      const after=host.getState(fileId)
+      if(disposed||sessions.get(sessionId)!==current||after.revision.revision!==current.revision||
+          after.lease?.editorId!==lease.editorId||after.lease.leaseEpoch!==lease.leaseEpoch){
+        throw hostError('CONFLICT','workbook query')
+      }
+      return workbookRefreshResultSchema.parse(result)
+    },
+    readLocalImage:unavailable,
     async readPivotDefinition(input){
       const request=workbookPivotRequestSchema.parse(input),current=session(request.sessionId)
       if(current.attachment||!current.file.sheets.some(sheet=>sheet.pivotTables.some(pivot=>pivot.path===request.path&&pivot.cachePath===request.cachePath)))throw hostError('INVALID_REVISION','pivot parts')
@@ -456,7 +506,33 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         ...(resumeAt?{resumeAt:{row:resumeAt.row,column:resumeAt.column}}:{}),
       }))
     },
-    updateWorkbookPassword:unavailable,
+    async updateWorkbookPassword(sessionId,newPassword){
+      const current=session(sessionId),grant=unlockGrant
+      if(!grant||current.attachment||!current.file.passwordProtected||current.revision!==host.getState(fileId).revision.revision)throw hostError('CONFLICT','workbook password')
+      const {file}=await persistWorkbook(()=>host.changeSheetsPassword(fileId,newPassword,grant.id,saveFence??(()=>true)),async saved=>{
+        const assertSavedRevision=()=>{
+          if(disposed||session(sessionId)!==current||host.getState(fileId).revision.revision!==saved.revision)throw hostError('CONFLICT','workbook password revision')
+        }
+        assertSavedRevision()
+        try{await call(saved.revision,'inspect')}
+        catch(error){
+          if((error as {status?:number})?.status!==423)throw error
+          // The revision receipt is durable even when the in-memory grant has expired.
+          assertSavedRevision()
+          await unlockWorkbook(newPassword)
+        }
+        assertSavedRevision()
+        // Rotation leaves the underlying package identical. Keep the active
+        // renderer session and point its future reads and saves at the new head.
+        if(unlockGrant)unlockGrant.revision=saved.revision
+        current.revision=saved.revision
+        delete current.extras
+        current.file={...current.file,sha256:saved.sha256,fileBytes:saved.size,passwordProtected:true}
+        return current.file
+      })
+      if(file.fileBytes===undefined)throw hostError('INVALID_RESPONSE','workbook password receipt')
+      return {sha256:file.sha256,fileBytes:file.fileBytes,passwordProtected:true as const}
+    },
     readExternalLinkUsage:unavailable,
     // Browser editors use the typed-range picker for external workbook links.
     async listWorkbookTabs(){return {tabs:[]}},
@@ -465,7 +541,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async printWorkbook(input){
       const request=workbookExportPdfRequestSchema.parse(input)
       try{
-        await printSheetsInBrowser(request.html,request.fileName)
+        await printInBrowser(request.html,request.fileName)
         return {ok:true}
       }catch{
         return {ok:false,error:prefs.language==='en'?'Browser printing is unavailable.':'浏览器打印不可用。'}
@@ -492,7 +568,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       pending.saved ??= await host.reconcileSheets(fileId,saveFence??(()=>true))
       if (disposed) throw hostError('UNAVAILABLE','disposed')
       committed=pending.saved
-      const file=await openSaved(pending.saved.revision)
+      const file=await pending.apply(pending.saved)
       recovery=null
       pending.resolve({canceled:false,file,touchedEntries:pending.saved.touchedEntries})
     } catch(error) {
@@ -544,5 +620,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     supportedMergeExtensions: mergeExtensions,
-    api,workspaceLinks,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+    api,workspaceLinks,unlockWorkbook,adoptWorkbookImportUnlock,guardedSave,waitForSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){releaseWorkbookUnlock();disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

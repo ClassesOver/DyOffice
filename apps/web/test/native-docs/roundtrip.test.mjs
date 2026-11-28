@@ -8,6 +8,8 @@ import { createServer } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
+import officeCrypto from 'officecrypto-tool'
+import { PDFDocument } from 'pdf-lib'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
@@ -16,7 +18,7 @@ import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
 import { hashProtectionPassword, parseDocx, saveDocx } from '../../../../packages/docx-engine/src/index.ts'
 
 const docsDirectory = process.env.DYOFFICE_TEST_NATIVE_DOCS_DIST ?? fileURLToPath(new URL('../../dist-docs/',import.meta.url))
-async function fixture(t, {beforeCleanup = () => {}, beforeHttpRequest = () => {}, assistantChannels = false} = {}) {
+async function fixture(t, {beforeCleanup = () => {}, beforeHttpRequest = () => {}, assistantChannels = false, localShellDirectory, autoSave = false, wordCollaboration} = {}) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-native-docs-'))
   let f, browser, server
   t.after(async () => {
@@ -35,8 +37,8 @@ async function fixture(t, {beforeCleanup = () => {}, beforeHttpRequest = () => {
   })
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
-  f = await fileFixture(t,{ origin,nativeDocsDirectory: docsDirectory,assistantChannels })
-  await f.preferences.update(f.alice.token,{ language: 'en',autoSave: false,showAssistant: false })
+  f = await fileFixture(t,{ origin,nativeDocsDirectory: docsDirectory,localShellDirectory,assistantChannels,wordCollaboration })
+  await f.preferences.update(f.alice.token,{ language: 'en',autoSave,showAssistant: false })
   const zip = await JSZip.loadAsync(await docxBytes())
   zip.file('customXml/dyoffice-preserve.xml','<probe>Untouched custom part</probe>')
   const original = await zip.generateAsync({ type: 'nodebuffer' }), opened = await importFile(f,f.alice.token,original,'native-roundtrip.docx')
@@ -68,6 +70,622 @@ async function expectCleanPersistence(page) {
     throw error
   }
 }
+
+test('native Word Save As creates a workspace copy of the unsaved draft without AI', { timeout: 90_000 }, async t => {
+  const f=await fixture(t), {page}=f, file=f.opened.file
+  const marker='Manual Save As draft'
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+  await expect(editor).toBeVisible({timeout:30000})
+  await editor.click()
+  await page.keyboard.press('ControlOrMeta+Home')
+  await page.keyboard.insertText(marker)
+  await page.keyboard.press('Enter')
+  const persistence=page.locator('.dyoffice-docs-persistence-state')
+  await expect(persistence).toHaveAttribute('data-dirty','true')
+  await page.getByRole('button',{name:'File',exact:true}).click()
+  const saveAs=page.locator('.file-menu').getByRole('button',{name:/^Save As/})
+  await expect(saveAs).toBeEnabled()
+  await saveAs.click()
+  const confirmation=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+  const input=confirmation.getByRole('textbox',{name:'File name'})
+  await expect(input).toHaveValue('native-roundtrip.docx')
+  await confirmation.getByRole('button',{name:'Cancel',exact:true}).click()
+  await expect(confirmation).toHaveCount(0)
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+  await page.keyboard.press('ControlOrMeta+Shift+s')
+  await input.fill('Manual copy')
+  await confirmation.getByRole('button',{name:'Save copy',exact:true}).click()
+  await expect.poll(async()=>(await f.files.listFiles(f.alice.token)).files.length).toBe(2)
+  const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Manual copy.docx')
+  assert.ok(copy)
+  const archive=await JSZip.loadAsync(await f.files.readFile(f.alice.token,copy.id,copy.revision))
+  assert.ok((await archive.file('word/document.xml').async('string')).replace(/<[^>]+>/g,'').includes(marker))
+  assert.equal(await archive.file('customXml/dyoffice-preserve.xml').async('string'),'<probe>Untouched custom part</probe>')
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),f.original)
+  await expect(persistence).toHaveAttribute('data-dirty','true')
+})
+
+test('native Word Save As keeps the original password on a protected draft copy',{timeout:90000},async t=>{
+ const f=await fixture(t),{page}=f,secret='文档复制 password',ciphertext=Buffer.from(officeCrypto.encrypt(f.original,{password:secret}))
+ const stage=await f.files.stageUpload(f.alice.token,{name:'locked-source.docx',size:ciphertext.length})
+ await f.files.receiveUpload(f.alice.token,stage.uploadId,ciphertext,{password:secret,format:'docx'})
+ const {file}=await f.files.finishUpload(f.alice.token,stage.uploadId)
+ const openUrl=id=>f.origin+'/native-docx/?fileId='+id
+ await page.goto(openUrl(file.fileId))
+ const passwordDialog=page.getByRole('dialog').filter({hasText:'Open password-protected document'})
+ const unlock=async value=>{
+  await passwordDialog.getByLabel('Password',{exact:true}).fill(value)
+  await passwordDialog.getByRole('button',{name:'Open',exact:true}).click()
+ }
+ await unlock(secret)
+ const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first(),marker='Unsaved encrypted copy from Chromium'
+ await expect(editor).toBeVisible({timeout:25000})
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(marker)
+ await page.keyboard.press('Enter')
+ const persistence=page.locator('.dyoffice-docs-persistence-state')
+ await expect(persistence).toHaveAttribute('data-dirty','true')
+ await page.getByRole('button',{name:'File',exact:true}).click()
+ const saveAs=page.locator('.file-menu').getByRole('button',{name:/^Save As/})
+ await expect(saveAs).toBeEnabled()
+ await saveAs.click()
+ const confirm=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await confirm.getByRole('textbox',{name:'File name'}).fill('Protected draft copy')
+ const finishes=[]
+ await page.route('**/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(finishes.length!==1)return route.continue()
+  const result=await route.fetch()
+  assert.equal(result.status(),200)
+  await route.abort()
+ })
+ await confirm.getByRole('button',{name:'Save copy',exact:true}).click()
+ const retry=page.getByRole('button',{name:'Confirm copy save',exact:true})
+ await expect(retry).toBeVisible({timeout:20000})
+ await page.getByRole('button',{name:'File',exact:true}).click()
+ await expect(saveAs).toBeDisabled()
+ await page.keyboard.press('Escape')
+ await retry.click()
+ await expect(page.getByText('Saved copy: Protected draft copy.docx',{exact:true})).toBeVisible()
+ assert.equal(finishes.length,2)
+ assert.equal(finishes[0],finishes[1])
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,3)
+ const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Protected draft copy.docx')
+ assert.ok(copy)
+ const opened=await f.files.openFile(f.alice.token,copy.id)
+ assert.equal(opened.documentPasswordProtected,true)
+ const sealed=await f.files.readFile(f.alice.token,copy.id,copy.revision)
+ const archive=await JSZip.loadAsync(await officeCrypto.decrypt(sealed,{password:secret}))
+ assert.match(await archive.file('word/document.xml').async('string'),new RegExp(marker))
+ assert.equal(await archive.file('customXml/dyoffice-preserve.xml').async('string'),'<probe>Untouched custom part</probe>')
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),ciphertext)
+ await expect(persistence).toHaveAttribute('data-dirty','true')
+ const copyPage=await page.context().newPage()
+ await copyPage.goto(openUrl(copy.id))
+ const dialog=copyPage.getByRole('dialog').filter({hasText:'Open password-protected document'})
+ await dialog.getByLabel('Password',{exact:true}).fill('wrong')
+ await dialog.getByRole('button',{name:'Open',exact:true}).click()
+ await expect(dialog).toContainText('The document password is incorrect.')
+ await dialog.getByLabel('Password',{exact:true}).fill(secret)
+ await dialog.getByRole('button',{name:'Open',exact:true}).click()
+ await expect(copyPage.locator('.tiptap.doc-page').first()).toContainText(marker,{timeout:20000})
+})
+
+test('native Word can copy a protected document after autosave advances the source in the naming dialog',{timeout:90000},async t=>{
+ const f=await fixture(t,{autoSave:true}),{page}=f,secret='autosave protected'
+ const ciphertext=Buffer.from(officeCrypto.encrypt(f.original,{password:secret}))
+ const stage=await f.files.stageUpload(f.alice.token,{name:'autosave-locked.docx',size:ciphertext.length})
+ await f.files.receiveUpload(f.alice.token,stage.uploadId,ciphertext,{password:secret,format:'docx'})
+ const {file}=await f.files.finishUpload(f.alice.token,stage.uploadId)
+ await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+ const passwordDialog=page.getByRole('dialog').filter({hasText:'Open password-protected document'})
+ await passwordDialog.getByLabel('Password',{exact:true}).fill(secret)
+ await passwordDialog.getByRole('button',{name:'Open',exact:true}).click()
+ const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first(),marker='Saved while naming the copy'
+ await expect(editor).toBeVisible({timeout:25000})
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(marker)
+ await page.keyboard.press('Enter')
+ await page.keyboard.press('ControlOrMeta+Shift+s')
+ const confirmation=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+ await expect(confirmation).toBeVisible()
+ const commit=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/commits')&&response.status()===200,{timeout:20000})
+ await page.evaluate(()=>window.dispatchEvent(new Event('blur')))
+ await commit
+ const saved=(await f.files.openFile(f.alice.token,file.fileId)).file
+ assert.notEqual(saved.revision,file.revision)
+ await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','false')
+ await confirmation.getByRole('textbox',{name:'File name'}).fill('Copy after autosave')
+ await confirmation.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(page.getByText('Saved copy: Copy after autosave.docx',{exact:true})).toBeVisible({timeout:20000})
+ const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name==='Copy after autosave.docx')
+ assert.ok(copy)
+ const sealed=await f.files.readFile(f.alice.token,copy.id,copy.revision)
+ const archive=await JSZip.loadAsync(await officeCrypto.decrypt(sealed,{password:secret}))
+ assert.match(await archive.file('word/document.xml').async('string'),new RegExp(marker))
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,saved.revision)
+})
+
+test('Word Protect Document saves and rotates the open password, then removes it',{timeout:160000},async t=>{
+ const f=await fixture(t,{wordCollaboration:true,autoSave:true}),{page}=f,file=f.opened.file
+ const address=f.origin+'/native-docx/?fileId='+file.fileId
+ await page.goto(address)
+ const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+ await expect(editor).toBeVisible({timeout:25000})
+ const requestSave=async()=>{
+  const committed=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/commits')&&response.ok(),{timeout:25000})
+  await page.keyboard.press('ControlOrMeta+s')
+  await committed
+  await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','false',{timeout:25000})
+  await expect(editor).toBeVisible({timeout:20000})
+  return (await getHead()).file.revision
+ }
+ const changePassword=async value=>{
+  const protectDocument=page.getByRole('button',{name:'Protect Document',exact:true})
+  if(!await protectDocument.isVisible())await page.getByRole('button',{name:'Review',exact:true}).click()
+  await protectDocument.click()
+  const protect=page.locator('.protect-dialog')
+  await protect.locator('label.fld').filter({hasText:'Password to open this document'}).locator('input').fill(value)
+  await protect.locator('label.fld').filter({hasText:'Confirm password'}).first().locator('input').fill(value)
+  await protect.getByRole('button',{name:'OK',exact:true}).click()
+  await expect(protect).toHaveCount(0)
+  await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
+ }
+ const first='  文档 first 🔑 ',second='rotated password',marker='Saved with the Word protection dialog'
+ const getHead=()=>f.files.openFile(f.alice.token,file.fileId)
+ const read=r=>f.files.readFile(f.alice.token,file.fileId,r)
+ let passwordUploads=0
+ page.on('request',request=>{if(new URL(request.url()).pathname.endsWith('/docx/password/uploads'))passwordUploads++})
+ const copyWithPassword=async(label,secret,sourceRevision)=>{
+  const priorUploads=passwordUploads
+  await page.getByRole('button',{name:'File',exact:true}).click()
+  const saveAs=page.locator('.file-menu').getByRole('button',{name:/^Save As/})
+  await expect(saveAs).toBeEnabled()
+  await saveAs.click()
+  const confirm=page.getByRole('dialog',{name:'Save a copy to your workspace'})
+  await confirm.getByRole('textbox',{name:'File name'}).fill(label)
+  await page.evaluate(()=>window.dispatchEvent(new Event('blur')))
+  await confirm.getByRole('button',{name:'Save copy',exact:true}).click()
+  await expect(page.getByText('Saved copy: '+label+'.docx',{exact:true})).toBeVisible({timeout:20000})
+  const copy=(await f.files.listFiles(f.alice.token)).files.find(item=>item.name===label+'.docx')
+  assert.ok(copy)
+  const copyHead=await f.files.openFile(f.alice.token,copy.id)
+  assert.equal(copyHead.documentPasswordProtected,secret?true:undefined)
+  const bytes=await f.files.readFile(f.alice.token,copy.id,copy.revision)
+  const archive=await JSZip.loadAsync(secret?await officeCrypto.decrypt(bytes,{password:secret}):bytes)
+  assert.match(await archive.file('word/document.xml').async('string'),new RegExp(marker))
+  assert.equal(passwordUploads,priorUploads)
+  assert.equal((await getHead()).file.revision,sourceRevision)
+  await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
+ }
+
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(marker)
+ await page.keyboard.press('Enter')
+ await changePassword(first)
+ await copyWithPassword('New password copy',first,file.revision)
+ assert.equal((await getHead()).file.revision,file.revision)
+ let releaseRenew,notifyRenew
+ const holdRenew=new Promise(resolve=>{releaseRenew=resolve})
+ const renewStarted=new Promise(resolve=>{notifyRenew=resolve})
+ await page.route('**/lease/renew',async route=>{
+  if(!route.request().postDataJSON().docxUnlockId){
+   notifyRenew()
+   await holdRenew
+  }
+  await route.continue()
+ })
+ await page.evaluate(()=>window.dispatchEvent(new Event('focus')))
+ let protectedRevision
+ try{
+  await renewStarted
+  protectedRevision=await requestSave()
+ }catch(error){releaseRenew();throw error}
+ const denied=page.waitForResponse(response=>response.url().endsWith('/lease/renew')&&response.status()===423,{timeout:10000})
+ releaseRenew()
+ await denied
+ await page.unroute('**/lease/renew')
+ await expect(editor).toBeVisible()
+ assert.notEqual(protectedRevision,file.revision)
+ const protectedBytes=await read(protectedRevision)
+ assert.equal((await getHead()).documentPasswordProtected,true)
+ const firstArchive=await JSZip.loadAsync(await officeCrypto.decrypt(protectedBytes,{password:first}))
+ assert.match(await firstArchive.file('word/document.xml').async('string'),new RegExp(marker))
+ await changePassword(second)
+ await copyWithPassword('Rotated password copy',second,protectedRevision)
+ const changedRevision=await requestSave()
+ const rotatedBytes=await read(changedRevision)
+ await assert.rejects(officeCrypto.decrypt(rotatedBytes,{password:first}))
+ const secondArchive=await JSZip.loadAsync(await officeCrypto.decrypt(rotatedBytes,{password:second}))
+ assert.match(await secondArchive.file('word/document.xml').async('string'),new RegExp(marker))
+ await changePassword('')
+ await copyWithPassword('Plain copy',null,changedRevision)
+ const clearedRevision=await requestSave()
+ await page.getByRole('button',{name:'File',exact:true}).click()
+ await expect(page.getByRole('button',{name:'Download unsaved draft copy',exact:true})).toBeEnabled()
+ await page.keyboard.press('Escape')
+ assert.equal((await getHead()).documentPasswordProtected,undefined)
+ const archive=await JSZip.loadAsync(await read(clearedRevision))
+ assert.match(await archive.file('word/document.xml').async('string'),new RegExp(marker))
+ assert.deepEqual(await read(file.revision),f.original)
+ assert.deepEqual(await read(protectedRevision),protectedBytes)
+ assert.deepEqual(await read(changedRevision),rotatedBytes)
+ const peer=await page.context().newPage()
+ await peer.goto(address)
+ const peerBody=peer.locator('.tiptap.doc-page[contenteditable="true"]').first(),peerMarker='Peer collaborator after password removal'
+ await expect(peerBody).toContainText(marker,{timeout:20000})
+ await peerBody.click()
+ await peer.keyboard.press('ControlOrMeta+Home')
+ await peer.keyboard.insertText(peerMarker)
+ await peer.keyboard.press('Enter')
+ await expect(editor).toContainText(peerMarker,{timeout:20000})
+ await expect.poll(async()=>(await getHead()).file.revision,{timeout:20000}).not.toBe(clearedRevision)
+ const collaborated=await JSZip.loadAsync(await read((await getHead()).file.revision))
+ assert.match(await collaborated.file('word/document.xml').async('string'),new RegExp(peerMarker))
+ await peer.close()
+ await page.reload()
+ await expect(editor).toContainText(peerMarker,{timeout:25000})
+})
+
+test('workspace imports encrypted DOCX with one password, saves encrypted edits and reopens',{timeout:150000},async t=>{
+ const shellDirectory=process.env.DYOFFICE_TEST_WORKSPACE_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell/',import.meta.url))
+ const f=await fixture(t,{localShellDirectory:shellDirectory}),{page}=f
+ const name='protected-browser.docx',secret='  文档 🔑 ',encrypted=Buffer.from(officeCrypto.encrypt(f.original,{password:secret}))
+ const opens=[]
+ page.on('request',request=>{
+  const route=new URL(request.url()).pathname
+  if(route.endsWith('/docx/unlock')||route.endsWith('/docx/import-unlock'))opens.push(route.split('/').at(-1))
+ })
+ await f.preferences.update(f.alice.token,{language:'zh'})
+ await page.goto(f.origin)
+ await page.getByRole('button',{name:/^打开本地文件/}).click()
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ await upload.locator('input[type=file]').setInputFiles({name,mimeType:'application/octet-stream',buffer:encrypted})
+ await upload.getByRole('button',{name:'开始上传（1）'}).click()
+ const importPassword=upload.getByLabel(`输入 ${name} 的文档密码`)
+ await importPassword.fill('wrong')
+ const rejectedUpload=page.waitForResponse(response=>response.request().method()==='PUT'&&new URL(response.url()).pathname.endsWith('/content'),{timeout:20000})
+ await upload.getByRole('button',{name:'确认密码'}).click()
+ assert.equal((await rejectedUpload).status(),422)
+ await expect(upload.getByRole('alert')).toContainText('文档密码错误',{timeout:15000})
+ assert.equal((await f.files.listFiles(f.alice.token)).files.filter(file=>file.name===name).length,0)
+ await importPassword.fill(secret)
+ await importPassword.press('Enter')
+ await expect(upload).toContainText('已上传并打开',{timeout:25000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+
+ const frame=page.frameLocator(`iframe[title="${name}"]`),dialog=frame.getByRole('dialog').filter({hasText:'打开受密码保护的文档'})
+ await expect(frame.locator('.tiptap.doc-page').first()).toContainText('A filler 1',{timeout:25000})
+ await expect(dialog).toHaveCount(0)
+ assert.deepEqual(opens,['import-unlock'])
+ const [entry]=(await f.files.listFiles(f.alice.token)).files.filter(file=>file.name===name)
+ const original=await f.files.openFile(f.alice.token,entry.id)
+ const editor=frame.locator('.tiptap.doc-page[contenteditable="true"]').first(),marker='Protected revision from Chromium'
+ await expect(editor).toBeVisible()
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(marker)
+ await page.keyboard.press('Enter')
+ const commits=[]
+ await page.route(`**/files/${entry.id}/commits`,async route=>{
+  commits.push(route.request().postDataJSON())
+  if(commits.length!==1)return route.continue()
+  const result=await route.fetch()
+  assert.equal(result.status(),200)
+  await route.abort()
+ })
+ await page.keyboard.press('ControlOrMeta+s')
+ const confirm=frame.getByRole('button',{name:'确认保存结果',exact:true})
+ await expect(confirm).toBeVisible({timeout:25000})
+ const lateMarker='Unsaved local recovery from Chromium'
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(lateMarker)
+ await page.keyboard.press('Enter')
+ await frame.getByRole('button',{name:'文件',exact:true}).click()
+ const recoveryButton=frame.getByRole('button',{name:'下载未保存草稿副本',exact:true})
+ await expect(recoveryButton).toBeEnabled()
+ let releaseRecovery
+ const holdRecovery=new Promise(resolve=>{releaseRecovery=resolve})
+ await page.route(/\/docx\/recovery-draft\?/,async route=>{
+  const reply=await route.fetch()
+  await holdRecovery
+  await route.fulfill({response:reply})
+ })
+ const recoveryRequest=page.waitForRequest(request=>request.url().includes('/docx/recovery-draft?'),{timeout:15000})
+ const downloaded=page.waitForEvent('download',{timeout:20000})
+ void downloaded.catch(()=>{})
+ await recoveryButton.click()
+ try{
+  await recoveryRequest
+  assert.equal(commits.length,1)
+  await expect(confirm).toBeVisible()
+  await confirm.evaluate(button=>button.click())
+  await expect(confirm).toHaveCount(0)
+ }finally{releaseRecovery()}
+ const recovery=await downloaded
+ assert.match(recovery.suggestedFilename(),/-unsaved-draft\.docx$/)
+ const recoveryBytes=await readFile(await recovery.path())
+ const archive=await JSZip.loadAsync(await officeCrypto.decrypt(recoveryBytes,{password:secret}))
+ assert.match(await archive.file('word/document.xml').async('string'),new RegExp(lateMarker))
+ assert.equal(commits.length,2)
+ assert.deepEqual(commits[1],commits[0])
+ const saved=await f.files.openFile(f.alice.token,entry.id)
+ assert.notEqual(saved.file.revision,original.file.revision)
+ assert.equal(saved.documentPasswordProtected,true)
+ const bytes=await f.files.readFile(f.alice.token,entry.id,saved.file.revision)
+ const zip=await JSZip.loadAsync(await officeCrypto.decrypt(bytes,{password:secret}))
+ assert.match(await zip.file('word/document.xml').async('string'),new RegExp(marker))
+ assert.doesNotMatch(await zip.file('word/document.xml').async('string'),new RegExp(lateMarker))
+ assert.deepEqual(await f.files.readFile(f.alice.token,entry.id,original.file.revision),encrypted)
+ page.once('dialog',leave=>{void leave.accept()})
+ await frame.locator('html').evaluate(element=>{element.ownerDocument.defaultView.location.reload()})
+ await expect(dialog).toBeVisible({timeout:25000})
+ await expect(frame.locator('.tiptap.doc-page')).toHaveCount(0)
+ const submit=async value=>{
+  await dialog.getByLabel('密码',{exact:true}).fill(value)
+  await dialog.getByRole('button',{name:'打开',exact:true}).click()
+ }
+ await submit('wrong')
+ await expect(dialog).toContainText('文档密码错误。',{timeout:15000})
+ const unlockResponse=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/docx/unlock')&&response.status()===200)
+ await submit(secret)
+ const unlocked=await unlockResponse
+ await expect(frame.locator('.tiptap.doc-page').first()).toContainText(marker,{timeout:25000})
+ const match=(await f.files.listFiles(f.alice.token)).files.filter(file=>file.name===name)
+ assert.equal(match.length,1)
+ const opened=await f.files.openFile(f.alice.token,match[0].id)
+ assert.equal(opened.documentPasswordProtected,true)
+ assert.equal(opened.file.revision,saved.file.revision)
+
+ const secondMarker='Draft kept during reunlock'
+ await expect(editor).toBeVisible()
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+Home')
+ await page.keyboard.insertText(secondMarker)
+ await page.keyboard.press('Enter')
+ const revoke=await page.request.delete(unlocked.url(),{
+  headers:{origin:f.origin,'x-csrf-token':await unlocked.request().headerValue('x-csrf-token')},
+  data:{unlockId:await unlocked.headerValue('x-dyoffice-docx-unlock')},
+ })
+ assert.equal(revoke.status(),204)
+ await page.keyboard.press('ControlOrMeta+s')
+ await frame.getByRole('button',{name:'解锁编辑',exact:true}).click({timeout:25000})
+ await expect(frame.locator('.tiptap.doc-page').first()).toContainText(secondMarker)
+ const editUnlock=frame.getByRole('dialog').filter({hasText:'解锁编辑'})
+ await editUnlock.getByLabel('密码',{exact:true}).fill(secret)
+ await editUnlock.getByRole('button',{name:'解锁',exact:true}).click()
+ await expect(editor).toContainText(secondMarker,{timeout:20000})
+ const nextCommit=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/commits')&&response.status()===200,{timeout:25000})
+ await editor.click()
+ await page.keyboard.press('ControlOrMeta+s')
+ const next=await (await nextCommit).json()
+ assert.notEqual(next.revision,saved.file.revision)
+ const sealed=await f.files.readFile(f.alice.token,entry.id,next.revision)
+ const nextZip=await JSZip.loadAsync(await officeCrypto.decrypt(sealed,{password:secret}))
+ assert.match(await nextZip.file('word/document.xml').async('string'),new RegExp(secondMarker))
+ assert.deepEqual(await f.files.readFile(f.alice.token,entry.id,saved.file.revision),bytes)
+})
+
+test('Web Word merges CSV and XLSX recipients into downloadable DOCX files',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f,file=f.opened.file
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+  await expect(editor).toBeVisible({timeout:30000})
+  await editor.click()
+  await page.keyboard.press('ControlOrMeta+End')
+  await page.keyboard.press('Enter')
+  await page.keyboard.insertText('Greeting for ')
+  await page.getByRole('button',{name:'Mailings',exact:true}).click()
+  await page.getByRole('button',{name:'Start Mail Merge',exact:true}).click()
+  const panel=page.locator('.modal-mailmerge')
+  async function pick(name,mimeType,buffer){
+    const chooser=page.waitForEvent('filechooser')
+    await panel.getByRole('button',{name:/Select Recipient List/}).click()
+    await (await chooser).setFiles({name,mimeType,buffer})
+    await expect(panel.locator('.mailmerge-source-name')).toHaveText(name)
+  }
+  async function merge(){
+    const download=page.waitForEvent('download')
+    await panel.getByRole('button',{name:'Finish & Merge',exact:true}).click()
+    return download
+  }
+  async function documentXml(bytes){
+    return (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string')
+  }
+  function expectPaper(xml,width,height){
+    const paper=Array.from(xml.matchAll(/<w:pgSz\b[^>]*>/g)).at(-1)?.[0]??''
+    assert.match(paper,new RegExp(`\\bw:w="${width}"`))
+    assert.match(paper,new RegExp(`\\bw:h="${height}"`))
+  }
+  const csv='Name,Code\nAda,0007\nGrace,0100'
+  await pick('recipients.csv','text/csv',Buffer.from(csv))
+  await panel.getByRole('button',{name:'Name',exact:true}).click()
+  await expect(panel.locator('.mailmerge-preview')).toContainText('Ada')
+  await panel.getByRole('radio',{name:'One document for all records'}).check()
+  const single=await merge()
+  assert.equal(single.suggestedFilename(),'native-roundtrip-merged.docx')
+  const all=await documentXml(await readFile(await single.path()))
+  assert.match(all,/<w:t[^>]*>[^<]*Ada/)
+  assert.match(all,/<w:t[^>]*>[^<]*Grace/)
+  assert.doesNotMatch(all,/MERGEFIELD/)
+
+  const {csvToXlsxBuffer}=await import('@genoffice/xlsx-gateway/gateway/csv-import-xlsx')
+  const xlsx=await csvToXlsxBuffer('Name,Code\nLee,0007\nLee,0100','Recipients')
+  await pick('recipients.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',xlsx)
+  await panel.getByRole('radio',{name:'One document per record'}).check()
+  const batch=await merge()
+  const zip=await JSZip.loadAsync(await readFile(await batch.path()))
+  assert.deepEqual(Object.keys(zip.files),['Lee.docx','Lee-2.docx'])
+  for(const entry of Object.values(zip.files)){
+    const xml=await documentXml(await entry.async('nodebuffer'))
+    assert.match(xml,/<w:t[^>]*>[^<]*Lee/)
+    assert.doesNotMatch(xml,/MERGEFIELD/)
+  }
+
+  await panel.getByRole('radio',{name:'Label sheet',exact:true}).check()
+  const labels=await merge()
+  const labelXml=await documentXml(await readFile(await labels.path()))
+  assert.match(labelXml,/<w:tbl[ >]/)
+  assert.match(labelXml,/<w:t[^>]*>[^<]*Lee/)
+  expectPaper(labelXml,12240,15840)
+
+  await panel.getByRole('radio',{name:'Envelopes',exact:true}).check()
+  const envelopes=await merge()
+  const envelopeZip=await JSZip.loadAsync(await readFile(await envelopes.path()))
+  assert.deepEqual(Object.keys(envelopeZip.files),['Lee.docx','Lee-2.docx'])
+  const envelopeXml=await documentXml(await envelopeZip.file('Lee.docx').async('nodebuffer'))
+  assert.match(envelopeXml,/<w:t[^>]*>[^<]*Lee/)
+  expectPaper(envelopeXml,13680,5940)
+
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+})
+
+test('Web Word compares an unsaved draft with a local DOCX without changing either file',{timeout:120000},async t=>{
+  const f=await fixture(t),{page}=f
+  async function comparisonDoc(paragraphs){
+    const archive=await JSZip.loadAsync(f.original)
+    const xml=await archive.file('word/document.xml').async('string')
+    const body=paragraphs.map(text=>`<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`).join('')
+    archive.file('word/document.xml',xml.replace(/<w:body[\s>][\s\S]*<\/w:body>/,`<w:body>${body}</w:body>`))
+    return archive.generateAsync({type:'nodebuffer'})
+  }
+  const source=await comparisonDoc(['Original title','Shared paragraph','Draft-only paragraph','Shared ending'])
+  const {file}=await importFile(f,f.alice.token,source,'comparison-source.docx')
+  const candidate=await comparisonDoc(['Updated title','Shared paragraph','Shared ending','Added target paragraph'])
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+  await expect(editor.getByText('Original title',{exact:true})).toBeVisible({timeout:30000})
+  await editor.getByText('Original title',{exact:true}).click()
+  await page.keyboard.press('Home')
+  await page.keyboard.insertText('Unsaved ')
+  await expect(editor.getByText('Unsaved Original title',{exact:true})).toBeVisible()
+  await page.getByRole('button',{name:'Review',exact:true}).click()
+  const compare=page.getByRole('button',{name:'Compare',exact:true})
+  await expect(compare).toBeEnabled()
+  const chooser=page.waitForEvent('filechooser')
+  await compare.click()
+  await (await chooser).setFiles({name:'comparison-target.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:candidate})
+  const panel=page.locator('.compare-pane')
+  await expect(panel.locator('.compare-meta')).toContainText('comparison-target.docx',{timeout:15000})
+  await expect(panel.locator('.compare-changed .compare-left')).toHaveText('Unsaved Original title')
+  await expect(panel.locator('.compare-changed .compare-right')).toHaveText('Updated title')
+  await expect(panel.locator('.compare-removed .compare-left')).toHaveText('Draft-only paragraph')
+  await expect(panel.locator('.compare-added .compare-right')).toHaveText('Added target paragraph')
+  await expect(panel.locator('.compare-same')).toHaveCount(2)
+  await panel.getByRole('button',{name:'Close',exact:true}).click()
+  await expect(panel).toHaveCount(0)
+  const canceled=page.waitForEvent('filechooser')
+  await compare.click()
+  await (await canceled).element().dispatchEvent('cancel')
+  await expect(page.locator('input[type="file"][accept=".docx"]')).toHaveCount(0)
+  await expect(panel).toHaveCount(0)
+  const rejected=page.waitForEvent('filechooser')
+  await compare.click()
+  await (await rejected).setFiles({name:'invalid.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:Buffer.from('This is not a Word package')})
+  await expect(page.locator('.status-msg')).toContainText('Compare failed')
+  await expect(panel).toHaveCount(0)
+  await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),source)
+  assert.equal((await f.files.listFiles(f.alice.token)).files.length,2)
+})
+
+test('workspace print shortcut follows the focused document tab', { timeout: 90_000 }, async t => {
+  const localShellDirectory=process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell/',import.meta.url))
+  const f=await fixture(t,{localShellDirectory}), {page}=f
+  const first=f.opened.file
+  const {file:second}=await importFile(f,f.alice.token,f.original,'second-print.docx')
+  const frame=id=>page.frameLocator(`.workspace-document-frame[data-document-id="${id}"]`)
+  await page.goto(f.origin+'/?print-shortcut=1#/file/'+first.fileId)
+  await expect(frame(first.fileId).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:25000})
+  await page.evaluate(id=>{location.hash='#/file/'+id},second.fileId)
+  await expect(frame(second.fileId).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:25000})
+
+  for (const [name,active,inactive] of [
+    ['second-print.docx',second.fileId,first.fileId],
+    ['native-roundtrip.docx',first.fileId,second.fileId],
+  ]) {
+    const tab=page.getByRole('tab',{name,exact:true})
+    await tab.click()
+    await expect(tab).toHaveAttribute('aria-selected','true')
+    await expect(page.locator(`.workspace-document[data-file-id="${active}"] .document-loading-content`)).toHaveAttribute('data-loading','false')
+    await tab.focus()
+    await expect(tab).toBeFocused()
+    await page.keyboard.press('ControlOrMeta+p')
+    const dialog=frame(active).locator('.modal.print-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(frame(inactive).locator('.modal.print-dialog')).toHaveCount(0)
+    await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+    await expect(dialog).toBeHidden()
+  }
+  const home=page.locator('.tab-home')
+  await home.click()
+  await expect(home).toHaveAttribute('aria-selected','true')
+  await home.focus()
+  await page.keyboard.press('ControlOrMeta+p')
+  await expect(page.locator('.file-search input')).toBeFocused()
+})
+
+test('native Word prints mixed paper and keeps bookmark links inside the selected range', { timeout: 90_000 }, async t => {
+  const f = await fixture(t), {page} = f
+  const zip = await JSZip.loadAsync(f.original)
+  const portrait='<w:sectPr><w:type w:val="nextPage"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>'
+  const landscape='<w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/></w:sectPr>'
+  zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+    <w:p><w:pPr>${portrait}</w:pPr><w:bookmarkStart w:id="1" w:name="ExcludedBookmark"/><w:r><w:t>Excluded section</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>
+    <w:p><w:pPr>${portrait}</w:pPr><w:r><w:t xml:space="preserve">Portrait section </w:t></w:r>
+      <w:hyperlink w:anchor="LandscapeBookmark"><w:r><w:t>Go to landscape</w:t></w:r></w:hyperlink>
+      <w:r><w:t xml:space="preserve"> </w:t></w:r>
+      <w:hyperlink w:anchor="ExcludedBookmark"><w:r><w:t>Go to excluded</w:t></w:r></w:hyperlink>
+    </w:p>
+    <w:p><w:bookmarkStart w:id="2" w:name="LandscapeBookmark"/><w:r><w:t>Landscape section</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>${landscape}
+  </w:body></w:document>`)
+  const {file}=await importFile(f,f.alice.token,await zip.generateAsync({type:'nodebuffer'}),'mixed-paper.docx')
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  await expect(page.locator('.tiptap.ProseMirror').first()).toContainText('Landscape section')
+  await page.evaluate(()=>{window.print=()=>window.dispatchEvent(new Event('beforeprint'))})
+  await page.keyboard.press('ControlOrMeta+p')
+  const dialog=page.locator('.modal.print-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(page.locator('.pagination-preview .pv-page')).toHaveCount(3)
+  await dialog.getByRole('radio',{name:'Custom range',exact:true}).check()
+  await dialog.getByPlaceholder('e.g. 1,3,5-8').fill('2-3')
+  await dialog.getByRole('button',{name:'Print',exact:true}).click()
+  await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(1)
+  try {
+    const bytes=await page.pdf({preferCSSPageSize:true,printBackground:true})
+    const printed=await PDFDocument.load(bytes)
+    assert.deepEqual(printed.getPages().map(p=>[Math.round(p.getWidth()),Math.round(p.getHeight())]),[[612,792],[792,612]])
+    const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const task=getDocument({data:Uint8Array.from(bytes)})
+    try {
+      const doc=await task.promise
+      const text=async n=>(await (await doc.getPage(n)).getTextContent()).items.map(item=>item.str??'').join(' ')
+      assert.match(await text(1),/Portrait section/)
+      assert.match(await text(2),/Landscape section/)
+      const links=(await (await doc.getPage(1)).getAnnotations()).filter(annotation=>annotation.subtype==='Link')
+      assert.equal(links.length,1,'Only the bookmark whose destination is printed should be linked')
+      const destination=typeof links[0].dest==='string'?await doc.getDestination(links[0].dest):links[0].dest
+      assert.ok(destination?.[0],'The bookmark must resolve to a PDF destination')
+      assert.equal(await doc.getPageIndex(destination[0]),1,'The bookmark must land on the printed landscape page')
+    } finally {
+      await task.destroy()
+    }
+  } finally {
+    await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')))
+  }
+  await expect(dialog).toBeHidden()
+  await expect(page.locator('style[data-docs-print-paper]')).toHaveCount(0)
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+})
 
 test('native Word shares live draft text only after consent and stops after saving', { timeout: 90_000 }, async t => {
   const f = await fixture(t), fileId = f.opened.file.fileId

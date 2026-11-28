@@ -20,6 +20,8 @@ process.once('message',async message=>{
   else if(command?.action==='updateNotes')job=(await import('./note-update-job.mjs')).createPdfNoteUpdateJob()
   else if(command?.action==='pageOps')job=(await import('./page-ops-job.mjs')).createPdfPageOpsJob()
   else if(command?.action==='extractPages')job=(await import('./extract-pages-job.mjs')).createPdfExtractPagesJob()
+  else if(command?.action==='convertOffice')job=(await import('./convert-office-job.mjs')).createPdfOfficeConversionJob()
+  else if(command?.action==='reduceSize')job=(await import('./reduce-size-job.mjs')).createPdfReductionJob()
   else if(command?.action==='splitPdf')job=(await import('./split-job.mjs')).createPdfSplitJob()
   else if(command?.action==='pageLayout')job=(await import('./page-layout-job.mjs')).createPdfPageLayoutJob()
   else if(command?.action==='formFields')job=(await import('./form-fields-job.mjs')).createPdfFormFieldsJob()

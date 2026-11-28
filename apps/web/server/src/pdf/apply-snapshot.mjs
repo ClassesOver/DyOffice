@@ -1,6 +1,7 @@
 import {validatePdfFormFieldOperations} from '../../../../../packages/web-contracts/src/pdf-form-fields.ts'
 import {validatePdfStampOperation} from '../../../../../packages/web-contracts/src/pdf-stamp-ops.ts'
 import {MAX_PDF_OCR_INSERTS,MAX_PDF_TEXT_INSERTS} from '../../../../../packages/web-contracts/src/pdf-ocr-bake.ts'
+import {isPdfAttachmentName,MAX_PDF_ATTACHMENT_ADDITIONS,MAX_PDF_ATTACHMENT_BASE64,MAX_PDF_ATTACHMENT_BYTES} from '../../../../../packages/web-contracts/src/pdf-attachment-limits.ts'
 import {decodePdfImage} from './image-content-job.mjs'
 import {validatePdfDraftInserts} from './draft-inserts-job.mjs'
 import {isWebPdfLinkUrl} from '../../../../pdf/src/shared/web-link-url.ts'
@@ -155,14 +156,14 @@ export function validatePdfApplySnapshot(input){
  if('attachments'in s){
   const edits=obj(s.attachments,['add','remove'],[]),added=new Set(),removed=new Set()
   let bytes=0
-  for(const file of ('add'in edits?array(edits.add,8):[])){
+  for(const file of ('add'in edits?array(edits.add,MAX_PDF_ATTACHMENT_ADDITIONS):[])){
    obj(file,['name','bytesBase64','description'],['name','bytesBase64'])
-   if(!text(file.name,255)||!file.name.trim()||file.name==='.'||file.name==='..'||/[\\/\u0000-\u001f\u007f]/.test(file.name)||added.has(file.name))fail()
+   if(typeof file.name!=='string'||!isPdfAttachmentName(file.name)||added.has(file.name))fail()
    optional(file,'description',v=>text(v,1000))
-   if(typeof file.bytesBase64!=='string'||!file.bytesBase64.length||file.bytesBase64.length>6990508)fail()
+   if(typeof file.bytesBase64!=='string'||file.bytesBase64.length>MAX_PDF_ATTACHMENT_BASE64)fail()
    const content=Buffer.from(file.bytesBase64,'base64')
    bytes+=content.length
-   if(!content.length||content.length>5*1024*1024||bytes>10*1024*1024||content.toString('base64')!==file.bytesBase64)fail()
+   if(bytes>MAX_PDF_ATTACHMENT_BYTES||content.toString('base64')!==file.bytesBase64)fail()
    added.add(file.name)
   }
   for(const name of ('remove'in edits?array(edits.remove,100):[])){

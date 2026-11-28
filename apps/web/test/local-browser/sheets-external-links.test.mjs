@@ -84,6 +84,10 @@ for(const mode of modes)test(mode!=='node'
  const reference='<externalReference r:id="rIdExternal1"/>'
  const relationship=`<Relationship Id="rIdExternal1" Type="${relationshipNamespace}/externalLink" Target="externalLinks/externalLink1.xml"/>`
  const formula='<c r="G3"><f>[1]Catalog!$A$1</f><v>84</v></c>'
+ const textFormula='<c r="K3" t="str"><f>&quot;[1]Catalog!A1&quot;</f><v>[1]Catalog!A1</v></c>'
+ const shared=mode==='node'
+  ? '<c r="I3" s="1"><f t="shared" ref="I3:J3" si="0">[1]Catalog!A1</f><v>91</v></c><c r="J3"><f t="shared" si="0"/><v>92</v></c>'
+  : ''
  const update=async(path,find,replacement)=>{
   const xml=await zip.file(path).async('string')
   assert.ok(xml.includes(find),path)
@@ -92,8 +96,8 @@ for(const mode of modes)test(mode!=='node'
  await update(book,'</sheets>',`</sheets><externalReferences>${reference}</externalReferences>`)
  await update(bookRelationships,'</Relationships>',relationship+'</Relationships>')
  await update('[Content_Types].xml','</Types>',`<Override PartName="/${link}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/></Types>`)
- await update(worksheet,'A1:F3','A1:G3')
- await update(worksheet,'<row r="3"><c r="A3"><v>7.5</v></c></row>',`<row r="3"><c r="A3"><v>7.5</v></c>${formula}</row>`)
+ await update(worksheet,'A1:F3','A1:K3')
+ await update(worksheet,'<row r="3"><c r="A3"><v>7.5</v></c></row>',`<row r="3"><c r="A3"><v>7.5</v></c>${formula}${shared}${textFormula}</row>`)
  zip.file(link,`<externalLink xmlns="${sheetNamespace}" xmlns:r="${relationshipNamespace}"><externalBook r:id="rId1"><sheetNames><sheetName val="Catalog"/></sheetNames><sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>84</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>`)
  zip.file(linkRelationships,`<Relationships xmlns="${packageRelationshipNamespace}"><Relationship Id="rId1" Type="${relationshipNamespace}/externalLinkPath" Target="${externalTarget.replace('&','&amp;')}" TargetMode="External"/></Relationships>`)
  const original=await zip.generateAsync({type:'nodebuffer'})
@@ -321,11 +325,27 @@ for(const mode of modes)test(mode!=='node'
  assert.equal(broken.file(linkRelationships),null)
  assert.ok(!(await broken.file(book).async('string')).includes(reference))
  assert.ok(!(await broken.file(bookRelationships).async('string')).includes(relationship))
- assert.ok((await broken.file(worksheet).async('string')).includes(`<c r="G3"><v>${expectedValue}</v></c>`))
+ const brokenSheet=await broken.file(worksheet).async('string')
+ assert.ok(brokenSheet.includes(`<c r="G3"><v>${expectedValue}</v></c>`))
+ assert.ok(brokenSheet.replaceAll('&quot;','"').includes(textFormula.replaceAll('&quot;','"')))
+ if(shared){
+  assert.ok(brokenSheet.includes('<c r="I3" s="1"><v>91</v></c>'))
+  assert.ok(brokenSheet.includes('<c r="J3"><v>92</v></c>'))
+ }
  assert.deepEqual(bytes,await f.files.readFile(f.alice.token,initial.fileId,head.revision))
  assert.equal(await revisionCount(),countBeforeBreak+1)
  await page.reload()
  await expect.poll(localAmount,{timeout:30000}).toBe(21.25)
  await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:expectedValue,formula:''})
+ if(shared)await expect.poll(()=>page.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return ['I3','J3'].map(address=>{
+   const range=sheet?.getRange(address)
+   return {value:range?.getRawValues()?.[0]?.[0],display:range?.getValue(),formula:range?.getFormula()??''}
+  })
+ })).toEqual([{value:91,display:'3/31/1900',formula:''},{value:92,display:92,formula:''}])
+ const remainingFormula=()=>page.evaluate(()=>
+  window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('K3').getFormula())
+ await expect.poll(remainingFormula).toBe('="[1]Catalog!A1"')
  assert.equal(externalRequests,0)
 })

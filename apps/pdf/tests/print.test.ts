@@ -63,6 +63,20 @@ describe('printPdf', () => {
     expect(document.querySelector('.pdf-print-root')).toBeNull()
   })
 
+  it('hands the selected raster pages to the browser print host', async () => {
+    const { doc, getPage } = fakeDoc(4)
+    const printInBrowser = vi.fn(async () => {
+      expect(document.querySelector('.pdf-print-root')).toBeNull()
+    })
+    await printPdf(doc, [2, 4], undefined, printInBrowser)
+    expect(getPage.mock.calls).toEqual([[2], [4], [2], [4]])
+    expect(printInBrowser).toHaveBeenCalledExactlyOnceWith([
+      { src: 'data:image/jpeg;base64,FAKE', widthPt: 612, heightPt: 792 },
+      { src: 'data:image/jpeg;base64,FAKE', widthPt: 612, heightPt: 792 },
+    ])
+    expect(window.print).not.toHaveBeenCalled()
+  })
+
   it('renders only the requested pages, sorted, when given a subset', async () => {
     const { doc, getPage, render } = fakeDoc(5)
     let imgsAtPrintTime = 0

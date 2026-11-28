@@ -1,5 +1,6 @@
 import {createLocalShellClient} from '../shell/local-client'
-export type DraftCopyAuthority={current():boolean;verify():Promise<boolean>}
+type BoundRequest=Awaited<ReturnType<ReturnType<typeof createLocalShellClient>['bindSession']>>['request']
+export type DraftCopyAuthority={current():boolean;verify():Promise<boolean>;request?:BoundRequest;proof?:string}
 export type DraftCopyFrame=HTMLIFrameElement&{dyofficeDraftCopySessionActive?:()=>boolean}
 /** Only same-origin embedding with an explicit live Shell grant is accepted. */
 export function draftCopyParentActive(stage:Window){
@@ -18,7 +19,7 @@ export async function createDraftCopyAuthority(active:()=>boolean,send:typeof fe
   if(!current())throw Error('inactive')
   const original=await client.bindSession()
   if(!current())throw Error('inactive')
-  return {current,async verify(){
+  return {current,request:original.request,proof:original.proof,async verify(){
    if(!current())return false
    try{await client.bindSession(original.proof);return current()}
    catch(error){

@@ -240,6 +240,7 @@ export function SlideShowView({
   // shell's WebContentsView the promise can stay pending/reject even though fullscreen engaged, which
   // left the show mounted after Esc (fullscreen gone, show still covering the window).
   useEffect(() => {
+    const browserFullscreen = !!window.slidesApi.requestShowFullScreen
     // already-fullscreen mounts (presenter view handing off to the normal show
     // keeps fullscreen) never get a fullscreenchange, so seed from current state
     let entered = !!document.fullscreenElement
@@ -256,7 +257,7 @@ export function SlideShowView({
     void snapped
       .catch(() => {})
       .then(() => {
-        if (!IS_MAC) void document.documentElement.requestFullscreen?.().catch(() => {})
+        if (!browserFullscreen && !IS_MAC) void document.documentElement.requestFullscreen?.().catch(() => {})
         // Covered = the viewport spans the WHOLE screen, width and height (the
         // bleed-only intermediate differs in height, a full-width window in
         // height too — no partial state passes both). window.screen tracks the
@@ -268,7 +269,7 @@ export function SlideShowView({
           const w = window.innerWidth
           const h = window.innerHeight
           const settled = w >= screen.width && h >= screen.height
-          if (!settled && performance.now() < deadline) {
+          if (!browserFullscreen && !settled && performance.now() < deadline) {
             requestAnimationFrame(reveal)
             return
           }
@@ -297,7 +298,7 @@ export function SlideShowView({
       alive = false
       window.clearTimeout(exitTimer)
       document.removeEventListener('fullscreenchange', onFsChange)
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+      if (!browserFullscreen && document.fullscreenElement) void document.exitFullscreen().catch(() => {})
       void window.slidesApi.setShowFullScreen?.(false)
       liftShowCurtain()
     }

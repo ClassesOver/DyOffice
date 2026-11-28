@@ -77,13 +77,14 @@ class Writer {
   private buf: Uint8Array
   pos = 0
   size = 0
-  constructor(capacity = 1024) {
-    this.buf = new Uint8Array(Math.max(16, capacity))
+  constructor(capacity = 1024, private limit = Infinity) {
+    this.buf = new Uint8Array(Math.min(limit, Math.max(16, capacity)))
   }
   private ensure(n: number): void {
     const need = this.pos + n
+    if (need > this.limit) throw new MtxError('SFNT output limit')
     if (need > this.buf.length) {
-      const next = new Uint8Array(Math.max(need, this.buf.length * 2))
+      const next = new Uint8Array(Math.min(this.limit, Math.max(need, this.buf.length * 2)))
       next.set(this.buf)
       this.buf = next
     }
@@ -271,8 +272,10 @@ function decodeSimpleGlyph(
   for (let i = 0; i < numContours; i++) {
     if (i === 0) totalPoints = 1
     totalPoints += read255UShort(sIn)
+    if (totalPoints > 65536) throw new MtxError('invalid glyph point count')
     out.s16(totalPoints - 1)
   }
+  if (totalPoints > sIn.size - sIn.pos) throw new MtxError('glyph flags truncated')
   const flags = new Uint8Array(totalPoints)
   const xs = new Int16Array(totalPoints)
   const ys = new Int16Array(totalPoints)
@@ -381,10 +384,10 @@ function decodeGlyph(streams: [Reader, Reader, Reader], out: Writer): void {
   decodeSimpleGlyph(numContours, streams, out, bbox)
 }
 
-function unpackCvt(tbl: Table, sIn: Reader): void {
+function unpackCvt(tbl: Table, sIn: Reader, limit: number): void {
   sIn.seek(tbl.offset)
   const n = sIn.u16()
-  const out = new Writer(n * 2)
+  const out = new Writer(n * 2, limit)
   let last = 0
   for (let i = 0; i < n; i++) {
     const code = sIn.u8()
@@ -405,11 +408,12 @@ function populateGlyfAndLoca(
   indexToLocFormat: number,
   numGlyphs: number,
   streams: [Reader, Reader, Reader],
+  limit: number,
 ): number {
   streams[0].seek(glyf.offset)
   streams[1].seek(0)
   streams[2].seek(0)
-  const out = new Writer(Math.max(1024, numGlyphs * 64))
+  const out = new Writer(Math.max(1024, numGlyphs * 64), limit)
   const offsets = [0]
   for (let i = 0; i < numGlyphs; i++) {
     decodeGlyph(streams, out)
@@ -419,7 +423,7 @@ function populateGlyfAndLoca(
   // The rebuilt glyf writes one flag byte per point (no REPEAT runs), so it can outgrow the
   // 128 KB a short loca addresses even when the source used format 0 — promote to long
   const shortLoca = indexToLocFormat === 0 && out.pos <= 0x1fffe
-  const locaOut = new Writer((shortLoca ? 2 : 4) * offsets.length)
+  const locaOut = new Writer((shortLoca ? 2 : 4) * offsets.length, limit - out.size)
   for (const o of offsets) {
     if (shortLoca) locaOut.u16(o / 2)
     else locaOut.u32(o)
@@ -443,7 +447,7 @@ function checksum(data: Uint8Array): number {
   return sum
 }
 
-function dumpContainer(unsorted: Table[]): Uint8Array {
+function dumpContainer(unsorted: Table[], limit: number): Uint8Array {
   // the directory must be in ascending tag order (a synthesized loca would otherwise land last)
   const tables = [...unsorted].sort((a, b) => (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0))
   const n = tables.length
@@ -454,7 +458,7 @@ function dumpContainer(unsorted: Table[]): Uint8Array {
     entrySelector++
   }
   searchRange *= 16
-  const out = new Writer(12 + 16 * n + tables.reduce((a, t) => a + ((t.data?.length ?? 0) + 3), 0))
+  const out = new Writer(12 + 16 * n + tables.reduce((a, t) => a + ((t.data?.length ?? 0) + 3), 0), limit)
   out.u32(0x00010000)
   out.u16(n)
   out.u16(searchRange)
@@ -499,7 +503,7 @@ function dumpContainer(unsorted: Table[]): Uint8Array {
  * Windows-platform format-4/12 subtables carrying a non-zero language. Records that do not
  * fit are dropped, the language field is zeroed; a clean table is returned as is.
  */
-export function sanitizeCmap(data: Uint8Array): Uint8Array {
+export function sanitizeCmap(data: Uint8Array, limit = Infinity): Uint8Array {
   if (data.length < 4) return data
   const r = new Reader(data)
   r.u16()
@@ -537,7 +541,7 @@ export function sanitizeCmap(data: Uint8Array): Uint8Array {
     keep.push({ pid, eid, off, len, langAt })
   }
   if (!dirty) return data
-  const out = new Writer(data.length)
+  const out = new Writer(data.length, limit)
   out.u16(0)
   out.u16(keep.length)
   const placed = new Map<number, number>()
@@ -568,7 +572,7 @@ export function sanitizeCmap(data: Uint8Array): Uint8Array {
 }
 
 /** Rebuild an sfnt from the three inflated CTF streams (parseCTF + dumpContainer). */
-export function ctfToSfnt(streams: [Uint8Array, Uint8Array, Uint8Array]): Uint8Array {
+export function ctfToSfnt(streams: [Uint8Array, Uint8Array, Uint8Array], limit = Infinity): Uint8Array {
   const rs: [Reader, Reader, Reader] = [new Reader(streams[0]), new Reader(streams[1]), new Reader(streams[2])]
   const s0 = rs[0]
   s0.u32() // scaler type
@@ -593,14 +597,16 @@ export function ctfToSfnt(streams: [Uint8Array, Uint8Array, Uint8Array]): Uint8A
   let loca: Table | undefined
   let maxp: Table | undefined
   let head: Table | undefined
+  let remaining = limit
   for (const t of tables) {
     if (t.tag === 'loca') loca = t
     else if (t.tag === 'glyf') glyf = t
-    else if (t.tag === 'cvt ') unpackCvt(t, s0)
+    else if (t.tag === 'cvt ') unpackCvt(t, s0, remaining)
     else {
+      if (t.length > remaining) throw new MtxError('SFNT table limit')
       s0.seek(t.offset)
       t.data = s0.bytes(t.length).slice()
-      if (t.tag === 'cmap') t.data = sanitizeCmap(t.data)
+      if (t.tag === 'cmap') t.data = sanitizeCmap(t.data, remaining)
       if (t.tag === 'maxp') maxp = t
       if (t.tag === 'head') {
         head = t
@@ -608,6 +614,8 @@ export function ctfToSfnt(streams: [Uint8Array, Uint8Array, Uint8Array]): Uint8A
         t.data.fill(0, 8, 12) // checksumAdjustment is recomputed on dump
       }
     }
+    remaining -= t.data?.length ?? 0
+    if (remaining < 0) throw new MtxError('SFNT table limit')
   }
   if (!head || !maxp) throw new MtxError('CTF lacks head/maxp')
   if (glyf && !loca) {
@@ -619,9 +627,9 @@ export function ctfToSfnt(streams: [Uint8Array, Uint8Array, Uint8Array]): Uint8A
     const indexToLocFormat = headView.getInt16(50, false)
     const maxpView = new DataView(maxp.data!.buffer, maxp.data!.byteOffset, maxp.data!.byteLength)
     const numGlyphs = maxpView.getUint16(4, false)
-    const written = populateGlyfAndLoca(glyf, loca, indexToLocFormat, numGlyphs, rs)
+    const written = populateGlyfAndLoca(glyf, loca, indexToLocFormat, numGlyphs, rs, remaining)
     if (written !== indexToLocFormat) headView.setInt16(50, written, false)
   }
   for (const t of tables) if (!t.data) t.data = new Uint8Array(0)
-  return dumpContainer(tables)
+  return dumpContainer(tables, limit)
 }

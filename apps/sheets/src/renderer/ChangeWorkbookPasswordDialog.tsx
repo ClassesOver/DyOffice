@@ -6,16 +6,20 @@ import { useModalDialog } from './modal-dialog'
 export function ChangeWorkbookPasswordDialog({
   onSubmit,
   onClose,
+  maxLength = 1024,
+  confirmSave,
 }: {
   readonly onSubmit: (password: string) => Promise<string | null>
   readonly onClose: () => void
+  readonly maxLength?: number
+  readonly confirmSave?: {label:string; busy:boolean; error?:string; run:()=>void}
 }): React.JSX.Element {
   const { t } = useI18n()
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const modal = useModalDialog(onClose)
+  const modal = useModalDialog(() => { if (!busy) onClose() })
 
   const submit = async (): Promise<void> => {
     if (busy || !password || !confirmation) return
@@ -56,7 +60,7 @@ export function ChangeWorkbookPasswordDialog({
             <input
               autoFocus
               autoComplete="new-password"
-              maxLength={1024}
+              maxLength={maxLength}
               type="password"
               value={password}
               disabled={busy}
@@ -70,7 +74,7 @@ export function ChangeWorkbookPasswordDialog({
             {t('appConfirmPasswordLabel')}
             <input
               autoComplete="new-password"
-              maxLength={1024}
+              maxLength={maxLength}
               type="password"
               value={confirmation}
               disabled={busy}
@@ -80,9 +84,9 @@ export function ChangeWorkbookPasswordDialog({
               }}
             />
           </label>
-          {error && (
+          {(error || confirmSave?.error) && (
             <p className="dialog-note dialog-error" role="alert">
-              {error}
+              {error || confirmSave?.error}
             </p>
           )}
         </section>
@@ -90,14 +94,16 @@ export function ChangeWorkbookPasswordDialog({
           <button className="secondary" type="button" disabled={busy} onClick={onClose}>
             {t('dlgCancel')}
           </button>
-          <button
+          {confirmSave ? <button className="primary-action" type="button" disabled={confirmSave.busy} onClick={confirmSave.run}>
+            {confirmSave.label}
+          </button> : <button
             className="primary-action"
             type="button"
             disabled={busy || !password || !confirmation}
             onClick={() => void submit()}
           >
             {busy ? t('appPasswordUpdating') : t('appUpdatePassword')}
-          </button>
+          </button>}
         </div>
       </div>
     </div>

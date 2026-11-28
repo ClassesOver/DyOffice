@@ -4,6 +4,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { useEscOverlay } from '../esc-overlay'
+import { loadShowData } from '../load-show-data'
 import { useI18n } from '../i18n/locale'
 import type { VideoExportOptions, VideoExportResult } from '../video-export/export-video'
 
@@ -28,22 +29,21 @@ export function ExportVideoDialog({
   const [height, setHeight] = useState<1080 | 720>(1080)
   const [seconds, setSeconds] = useState(String(DEFAULT_SECONDS))
   const [useTimings, setUseTimings] = useState(true)
-  const [hasTimings, setHasTimings] = useState(false)
+  const [hasTimings, setHasTimings] = useState<boolean|null>(null)
   const [progress, setProgress] = useState<number | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    void Promise.all(
-      Array.from({ length: slideCount }, (_, i) => window.slidesApi.getShowTiming(i)),
-    ).then((list) => {
+    void loadShowData(slideCount,i=>window.slidesApi.getShowTiming(i),()=>!cancelled).then((list) => {
       if (!cancelled)
         setHasTimings(list.some((x) => x.advanceMs != null || x.narrationIds.length > 0))
-    })
+    }).catch(()=>{if(!cancelled)setHasTimings(false)})
     return () => {
       cancelled = true
     }
   }, [slideCount])
+  useEffect(()=>()=>abortRef.current?.abort(),[])
 
   const secs = Math.min(600, Math.max(1, Number(seconds) || DEFAULT_SECONDS))
 
@@ -53,7 +53,7 @@ export function ExportVideoDialog({
     setProgress(0)
     try {
       await run(
-        { height, defaultSlideMs: secs * 1000, useTimings: hasTimings && useTimings },
+        { height, defaultSlideMs: secs * 1000, useTimings: hasTimings === true && useTimings },
         setProgress,
         ac.signal,
       )
@@ -98,7 +98,7 @@ export function ExportVideoDialog({
               <input
                 type="checkbox"
                 disabled={!hasTimings}
-                checked={hasTimings && useTimings}
+                checked={hasTimings === true && useTimings}
                 onChange={(e) => setUseTimings(e.target.checked)}
               />
               {t('appExportVideoUseTimings')}
@@ -113,7 +113,7 @@ export function ExportVideoDialog({
         <div className="modal-actions">
           <button onClick={cancel}>{t('appExportVideoCancel')}</button>
           {progress == null && (
-            <button className="primary" onClick={() => void start()}>
+            <button className="primary" disabled={hasTimings===null} onClick={() => void start()}>
               {t('appExportVideoCreate')}
             </button>
           )}

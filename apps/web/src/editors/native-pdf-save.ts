@@ -18,7 +18,7 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
   try{return await mutations.confirm()?{ok:true}:refused}
   catch{return mutations.hasPending()?unknown:refused}
  }
- async function rewrite(action:'page-ops'|'replace-pages'|'insert-pages',operation:PdfPageGeometryOperation|{pages:readonly number[];source:File}|{afterPageIndex:number;source:File},check?:()=>boolean,signal?:AbortSignal):Promise<SavePdfResult>{
+ async function rewrite(action:'page-ops'|'replace-pages'|'insert-pages'|'restore-revision',operation:PdfPageGeometryOperation|{pages:readonly number[];source:File}|{afterPageIndex:number;source:File}|{revision:string},check?:()=>boolean,signal?:AbortSignal):Promise<SavePdfResult>{
   if(mutations.hasPending())return unknown
   try{return await mutations.mutate(action,[operation],signal,check)?{ok:true}:refused}
   catch{return mutations.hasPending()?confirm():refused}
@@ -28,7 +28,8 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
   pageGeometry:(operation:PdfPageGeometryOperation,check:()=>boolean,signal?:AbortSignal)=>rewrite('page-ops',operation,check,signal),
   replacePages:(pages:readonly number[],source:File,check:()=>boolean,signal?:AbortSignal)=>rewrite('replace-pages',{pages,source},check,signal),
   insertPdf:(afterPageIndex:number,source:File,check:()=>boolean,signal?:AbortSignal)=>rewrite('insert-pages',{afterPageIndex,source},check,signal),
-  async save(draft:SavePdfRequest,check?:()=>boolean,stamps?:StampConfig|null,imageBakes:readonly PdfHostImageBake[]=[]):Promise<SavePdfResult>{
+  restoreRevision:(revision:string,check:()=>boolean,signal?:AbortSignal)=>rewrite('restore-revision',{revision},check,signal),
+  async save(draft:SavePdfRequest,check?:()=>boolean,stamps?:StampConfig|null,imageBakes:readonly PdfHostImageBake[]=[],publishCopy?:(snapshot:PdfPendingSnapshot)=>Promise<void>):Promise<SavePdfResult>{
    if(mutations.hasPending())return unknown
    if(draft.path!==path||draft.targetPath!==undefined||draft.protectionDirty||draft.encryption||draft.decryption||
     [draft.stamps,draft.redactions].some(items=>items?.length)||
@@ -83,6 +84,10 @@ export function createNativePdfSave({fileId,path,request,getRevision,getPageCoun
     formEdits:Object.fromEntries(draft.formValues.map(input=>[input.name,input])),
     formFields:(draft.formFields??[]).map((input,index)=>({id:'F'+index,input})),
     rotations,deleted,order:order?[...order,...pages.filter(page=>removed.has(page))]:null,metadata:draft.metadata??null,
+   }
+   if(publishCopy){
+    await publishCopy(snapshot)
+    return {ok:true}
    }
    try{return await mutations.mutate('apply-ops',[snapshot],undefined,check)?{ok:true}:refused}
    catch{return mutations.hasPending()?confirm():refused}

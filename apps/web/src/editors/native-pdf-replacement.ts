@@ -1,4 +1,4 @@
-function selectPdfSource(titleText:string,hintText:string,confirmText:string,signal?:AbortSignal):Promise<File|null>{
+function selectPdfSource(titleText:string,hintText:string,confirmText:string,signal?:AbortSignal,english=false):Promise<File|null>{
  signal?.throwIfAborted()
  const dialog=document.createElement('dialog')
  dialog.className='pdf-modal'
@@ -13,7 +13,7 @@ function selectPdfSource(titleText:string,hintText:string,confirmText:string,sig
  const input=document.createElement('input')
  input.type='file'
  input.accept='application/pdf,.pdf'
- input.setAttribute('aria-label','选择来源 PDF')
+ input.setAttribute('aria-label',english?'Choose source PDF':'选择来源 PDF')
  const error=document.createElement('p')
  error.setAttribute('role','alert')
  error.hidden=true
@@ -22,7 +22,7 @@ function selectPdfSource(titleText:string,hintText:string,confirmText:string,sig
  const cancel=document.createElement('button')
  cancel.type='button'
  cancel.className='pdf-modal-btn'
- cancel.textContent='取消'
+ cancel.textContent=english?'Cancel':'取消'
  const confirm=document.createElement('button')
  confirm.type='submit'
  confirm.className='pdf-modal-btn primary'
@@ -45,7 +45,7 @@ function selectPdfSource(titleText:string,hintText:string,confirmText:string,sig
    selected=file&&/\.pdf$/i.test(file.name)&&file.size>0&&file.size<=64*1024*1024?file:null
    confirm.disabled=!selected
    error.hidden=!file||!!selected
-   error.textContent='请选择不超过 64 MiB 的 PDF 文件。'
+   error.textContent=english?'Choose a PDF file up to 64 MiB.':'请选择不超过 64 MiB 的 PDF 文件。'
   }
   cancel.onclick=()=>finish(null)
   dialog.oncancel=event=>{event.preventDefault();finish(null)}
@@ -57,10 +57,18 @@ function selectPdfSource(titleText:string,hintText:string,confirmText:string,sig
  })
 }
 
-export function selectReplacementPdf(pages:readonly number[],signal?:AbortSignal):Promise<File|null>{
+export function selectReplacementPdf(pages:readonly number[],signal?:AbortSignal,language='zh'):Promise<File|null>{
+ if(language==='en'){
+  return selectPdfSource(`Replace pages ${pages.join(', ')}`,'All pages from the source PDF will be inserted at the first selected position and saved as a new version.','Replace and save',signal,true)
+ }
  return selectPdfSource(`替换第 ${pages.join('、')} 页`,'来源 PDF 的全部页面将插入首个被替换的位置，确认后保存为新版本。','确认替换并保存',signal)
 }
 
-export function selectPdfToInsert(afterPageIndex:number,signal?:AbortSignal):Promise<File|null>{
- return selectPdfSource('导入 PDF 页面',`来源 PDF 的全部页面将插入第 ${afterPageIndex+1} 页之后，并保存为新版本。`,'确认导入并保存',signal)
+export function selectPdfToInsert(afterPageIndex:number,signal?:AbortSignal,language='zh'):Promise<File|null>{
+ if(language==='en'){
+  const position=afterPageIndex===-1?'before the first page':`after page ${afterPageIndex+1}`
+  return selectPdfSource('Import PDF pages',`All pages from the source PDF will be inserted ${position} and saved as a new version.`,'Import and save',signal,true)
+ }
+ const position=afterPageIndex===-1?'第一页之前':`第 ${afterPageIndex+1} 页之后`
+ return selectPdfSource('导入 PDF 页面',`来源 PDF 的全部页面将插入${position}，并保存为新版本。`,'确认导入并保存',signal)
 }

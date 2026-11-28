@@ -15,6 +15,7 @@ export interface Mp4WriterOptions {
   fps: number
   /** Add a mono AAC track */
   audio: boolean
+  audioRequiredMessage?: string
 }
 
 export class EncoderUnsupportedError extends Error {}
@@ -63,7 +64,7 @@ export class Mp4Writer {
     const w = new Mp4Writer(opts)
     const videoConfig = await pickVideoConfig(opts.width, opts.height, opts.fps)
     let audioConfig: AudioEncoderConfig | null = null
-    if (opts.audio) {
+    if (opts.audio && typeof AudioEncoder === 'function') {
       audioConfig = {
         codec: 'mp4a.40.2',
         sampleRate: AUDIO_SAMPLE_RATE,
@@ -73,6 +74,7 @@ export class Mp4Writer {
       const r = await AudioEncoder.isConfigSupported(audioConfig).catch(() => null)
       if (!r?.supported) audioConfig = null
     }
+    if (opts.audio && !audioConfig && opts.audioRequiredMessage) throw Error(opts.audioRequiredMessage)
     w.fileId = await window.slidesApi.videoFileOpen(opts.path)
     try {
       w.openPipeline(videoConfig, audioConfig)
@@ -184,7 +186,7 @@ export class Mp4Writer {
     return this.audioSamples / AUDIO_SAMPLE_RATE
   }
 
-  async finish(): Promise<void> {
+  async finish(signal?: AbortSignal): Promise<void> {
     await this.video.flush()
     if (this.audio) await this.audio.flush()
     this.throwIfFailed()
@@ -193,6 +195,7 @@ export class Mp4Writer {
     this.audio?.close()
     await this.writes
     this.throwIfFailed()
+    signal?.throwIfAborted()
     await window.slidesApi.videoFileClose(this.fileId, false)
   }
 

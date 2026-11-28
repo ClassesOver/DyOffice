@@ -1,12 +1,14 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
-import {PDFDocument,PDFHexString,PDFName,degrees} from 'pdf-lib'
+import {PDFArray,PDFDict,PDFDocument,PDFHexString,PDFName,PDFString,degrees} from 'pdf-lib'
 import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs'
 import {createPdfAnnotationJob} from '../server/src/pdf/annotation-job.mjs'
 import {noteAppearance} from '../../pdf/src/main/save-pdf.ts'
 import {createPdfPageOpsJob,validatePdfPageOperations} from '../server/src/pdf/page-ops-job.mjs'
 import {createIsolatedPdfPageOpsJob} from '../server/src/pdf/page-ops-isolated.mjs'
+import {pdfInsertFormState} from '../server/src/pdf/insert-form-integrity.mjs'
+import {createPdfStampsJob} from '../server/src/pdf/stamps-job.mjs'
 const command=operations=>JSON.stringify({version:1,action:'pageOps',operations})
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 test('PDF metadata patches merge, clear and reset atomically while preserving page content',async()=>{
@@ -52,6 +54,39 @@ test('PDF page batch rotates, deletes and reorders original revision pages witho
  assert.deepEqual((await read(bytes)).map(page=>page.text),['Page 1','Page 2','Page 3'])
 })
 
+test('PDF page operations keep internal jumps on retained pages and remove jumps to deleted pages',async()=>{
+ const doc=await PDFDocument.load(await fixture()),[first,deleted,kept]=doc.getPages()
+ const key=PDFName.of
+ const add=entry=>first.node.addAnnot(doc.context.register(doc.context.obj({
+  Type:'Annot',Subtype:'Link',Rect:[20,30,100,50],...entry,
+ })))
+ add({Dest:[2,'XYZ',10,120,null]})
+ add({A:{S:'GoTo',D:[deleted.ref,'Fit']}})
+ add({Dest:PDFString.of('Removed chapter')})
+ doc.catalog.set(key('Names'),doc.context.obj({Dests:{Names:[
+  PDFString.of('Kept chapter'),[2,'Fit'],
+  PDFString.of('Removed chapter'),[deleted.ref,'Fit'],
+ ]}}))
+ doc.catalog.set(key('OpenAction'),doc.context.obj([2,'Fit']))
+ const bytes=Buffer.from(await doc.save())
+ const operations=[{op:'deletePage',page:2},{op:'setPageOrder',order:[3,1]},{op:'insertBlankPage',afterPage:0}]
+ const output=await PDFDocument.load((await createIsolatedPdfPageOpsJob().execute(bytes,command(operations))).bytes)
+ const [blank,reordered,from]=output.getPages()
+ const [,direct,removed,named]=from.node.Annots().asArray().map(ref=>output.context.lookup(ref,PDFDict))
+ assert.equal(blank.node.Annots(),undefined)
+ assert.equal(String(reordered.ref),String(kept.ref))
+ assert.deepEqual(direct.lookup(key('Dest'),PDFArray).asArray().map(String),[String(reordered.ref),'/XYZ','10','120','null'])
+ assert.equal(removed.has(key('A')),false)
+ assert.equal(named.lookup(key('Dest'),PDFString).decodeText(),'Removed chapter')
+ const names=output.catalog.lookup(key('Names'),PDFDict).lookup(key('Dests'),PDFDict).lookup(key('Names'),PDFArray)
+ assert.equal(names.size(),2)
+ assert.equal(String(names.lookup(1,PDFArray).get(0)),String(reordered.ref))
+ assert.equal(String(output.catalog.lookup(key('OpenAction'),PDFArray).get(0)),String(reordered.ref))
+ const inserted=await createPdfPageOpsJob().execute(bytes,command([{op:'insertBlankPage',afterPage:0}]))
+ const document=await PDFDocument.load(inserted.bytes)
+ const link=document.getPage(1).node.Annots().lookup(1,PDFDict)
+ assert.equal(String(link.lookup(key('Dest'),PDFArray).get(0)),String(document.getPage(3).ref))
+})
 test('PDF inserts blank pages at original anchors after reorder, preserving neighboring size and rotation',async()=>{
  const bytes=await fixture(),result=await createPdfPageOpsJob().execute(bytes,command([{op:'rotatePages',pages:[3],dir:90},{op:'setPageOrder',order:[3,1,2]},{op:'insertBlankPage',afterPage:0},{op:'insertBlankPage',afterPage:3},{op:'insertBlankPage',afterPage:3}]))
  const pages=await read(result.bytes)
@@ -101,8 +136,41 @@ test('PDF page operations refuse signed, encrypted and form documents',async()=>
  await assert.rejects(job.execute(Buffer.from(await signed.save()),raw),{code:'SIGNATURE_EDIT_REFUSED'})
  const form=await PDFDocument.load(bytes);form.getForm().createTextField('x')
  await assert.rejects(job.execute(Buffer.from(await form.save()),raw),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})
+ form.getForm().acroForm.dict.set(PDFName.of('XFA'),form.context.register(form.context.flateStream('<xdp/>')))
+ await assert.rejects(job.execute(Buffer.from(await form.save({updateFieldAppearances:false})),command([{op:'setPageSize',width:600,height:800}])),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})
  const encrypted=await PDFDocument.load(bytes);encrypted.context.trailerInfo.Encrypt=encrypted.context.register(encrypted.context.obj({Filter:'Standard',V:1,R:2,Length:40,O:'x',U:'y',P:-4}))
  await assert.rejects(job.execute(Buffer.from(await encrypted.save()),raw),{code:'PASSWORD'})
+})
+
+test('PDF page geometry preserves filled fields and scales their widgets only for resize',async()=>{
+ const pdf=await PDFDocument.create()
+ const page=pdf.addPage([300,400]),rotated=pdf.addPage([300,400]);rotated.setRotation(degrees(90))
+ const form=pdf.getForm(),text=form.createTextField('customer'),agree=form.createCheckBox('confirmed')
+ text.setText('Ada Lovelace');text.addToPage(page,{x:70,y:200,width:130,height:30})
+ agree.addToPage(rotated,{x:80,y:120,width:24,height:24});agree.check()
+ const rect=PDFName.of('Rect'),textWidget=text.acroField.getWidgets()[0].dict
+ const sharedRect=pdf.context.register(textWidget.lookup(rect))
+ textWidget.set(rect,sharedRect)
+ agree.acroField.getWidgets()[0].dict.set(rect,sharedRect)
+ const source=Buffer.from(await pdf.save()),original=await PDFDocument.load(source)
+ const stamped=await createPdfStampsJob({allowAcroForm:true}).execute(source,
+  JSON.stringify({version:1,action:'stamps',operation:{op:'set_header_footer',page_number:true}}))
+ const job=createIsolatedPdfPageOpsJob()
+ const crop=await job.execute(stamped.bytes,command([{op:'cropPages',pages:[1],left:.1,top:.1,right:.9,bottom:.9}]))
+ const cropped=await PDFDocument.load(crop.bytes)
+ assert.equal(pdfInsertFormState(cropped),pdfInsertFormState(original))
+ for(const [key,value] of Object.entries({x:30,y:40,width:240,height:320}))assert.ok(Math.abs(cropped.getPage(0).getCropBox()[key]-value)<1e-7)
+ const size=await job.execute(crop.bytes,command([{op:'setPageSize',width:600,height:800}]))
+ const resized=await PDFDocument.load(size.bytes)
+ assert.ok(resized.getPages().every(page=>page.node.has(PDFName.of('DyOfficeStamps'))))
+ assert.equal(resized.getForm().getTextField('customer').getText(),'Ada Lovelace')
+ assert.equal(resized.getForm().getCheckBox('confirmed').isChecked(),true)
+ for(const [name,scale] of [['customer',2],['confirmed',1.5]]){
+  const widget=doc=>doc.getForm().getField(name).acroField.getWidgets()[0]
+  const expected=Object.fromEntries(Object.entries(widget(original).getRectangle()).map(([key,value])=>[key,value*scale]))
+  assert.deepEqual(widget(resized).getRectangle(),expected)
+  assert.equal(String(widget(resized).dict.get(PDFName.of('AP'))),String(widget(original).dict.get(PDFName.of('AP'))))
+ }
 })
 
 test('isolated PDF page ops return bound real bytes and terminate cancelled work',async()=>{

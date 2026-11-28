@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {execFileSync} from 'node:child_process'
+import {createServer} from 'node:http'
 import {Readable} from 'node:stream'
 import {fileURLToPath} from 'node:url'
 import {PDFDocument} from 'pdf-lib'
@@ -14,6 +15,71 @@ import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
 const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
+test('native PDF ribbon extracts and reopens a fillable form copy',{skip:!nativePdfDirectory,timeout:90000},async t=>{
+ let app
+ const server=createServer((req,res)=>app.routing(req,res))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve))})
+ const origin='http://localhost:'+server.address().port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'zh',autoSave:false,showAssistant:false})
+ const doc=await PDFDocument.create(),first=doc.addPage([400,300]),second=doc.addPage([400,300]),form=doc.getForm()
+ const shared=form.createTextField('customer'),excluded=form.createTextField('firstPageOnly')
+ for(const page of [first,second])shared.addToPage(page,{x:30,y:230,width:160,height:22})
+ shared.setText('Ada Lovelace')
+ excluded.addToPage(first,{x:30,y:190,width:160,height:22});excluded.setText('Original only')
+ const delivery=form.createRadioGroup('delivery')
+ delivery.addOptionToPage('Pickup',first,{x:30,y:140,width:20,height:20})
+ delivery.addOptionToPage('Courier',second,{x:30,y:140,width:20,height:20})
+ delivery.select('Pickup')
+ const original=Buffer.from(await doc.save()),{file}=await importFile(f,f.alice.token,original,'fillable.pdf')
+ app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),
+ })
+ f.cleanup.unshift(()=>app.close())
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ const source=frame(file.fileId)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await source.getByRole('button',{name:'页面',exact:true}).click()
+ await source.getByRole('button',{name:'抽取本页',exact:true}).click()
+ const range=source.getByPlaceholder(/页码或范围/)
+ const prepared=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${file.fileId}/pdf/extract-pages/uploads`)
+ await range.fill('2');await range.press('Enter')
+ const response=await prepared
+ assert.ok(response.ok(),await response.text())
+ const {fileId:copyId}=await response.json()
+ await expect(page).toHaveURL(origin+'/#/file/'+copyId)
+ const copy=frame(copyId)
+ await expect(copy.locator('html')).toHaveAttribute('data-document-loading','ready')
+ const field=copy.locator('.pdf-form-layer input[title="customer"]')
+ const option=copy.locator('.pdf-form-layer input[type="radio"][title="delivery"]')
+ await expect(field).toHaveValue('Ada Lovelace')
+ await expect(option).toBeVisible()
+ await expect(option).not.toBeChecked()
+ const head=async id=>(await f.files.openFile(f.alice.token,id)).file.revision
+ const copiedRevision=await head(copyId)
+ await field.fill('Grace Hopper')
+ await option.check()
+ await expect(copy.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
+ await page.keyboard.press('Control+s')
+ await expect.poll(()=>head(copyId),{timeout:18000}).not.toBe(copiedRevision)
+ const saved=await PDFDocument.load(await f.files.readFile(f.alice.token,copyId,await head(copyId)))
+ assert.equal(saved.getPageCount(),1)
+ assert.deepEqual(saved.getForm().getFields().map(value=>value.getName()),['customer','delivery'])
+ assert.equal(saved.getForm().getTextField('customer').getText(),'Grace Hopper')
+ const savedDelivery=saved.getForm().getRadioGroup('delivery')
+ assert.deepEqual(savedDelivery.getOptions(),['Courier'])
+ assert.equal(savedDelivery.getSelected(),'Courier')
+ assert.equal(await head(file.fileId),file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
+
 const cases=[
  ['extract_pages',{pages:'3,1'},[['source-提取.pdf',[400,600]]]],
  ['split_pdf',{pages_per_file:2},[]],

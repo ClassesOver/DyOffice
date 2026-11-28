@@ -174,10 +174,20 @@ export function renamedFileName(currentPath: string, typedName: string): string 
   return ext ? `${typedName}.${ext}` : typedName
 }
 
-export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTabList?:boolean;hideAppMenu?:boolean}={}) {
-  const { t } = useI18n()
+export function TabBar({hideSingleTabList=false,hideAppMenu=false,allowHomeTabMenu=false,renameTabFile,closeTabWithKeyboard,detachTabOnDrop}:{hideSingleTabList?:boolean;hideAppMenu?:boolean;allowHomeTabMenu?:boolean;renameTabFile?:(id:string,name:string)=>Promise<void>;closeTabWithKeyboard?:(id:string)=>Promise<boolean>;detachTabOnDrop?:(id:string)=>void}={}) {
+  const { t, lang } = useI18n()
   const [tabs, setTabs] = useState<TabSummary[]>([])
   const stripRef = useRef<HTMLDivElement>(null)
+  const pendingKeyboardClose = useRef<{id:string}|null>(null)
+  useEffect(() => {
+    const pending = pendingKeyboardClose.current
+    if (!pending || tabs.some(tab => tab.id === pending.id)) return
+    pendingKeyboardClose.current = null
+    if (document.activeElement === document.body) {
+      stripRef.current?.querySelector<HTMLElement>('.tab-item.active')?.focus()
+    }
+  }, [tabs])
+
 
   // Double-click a file tab to rename the underlying file inline (Home's row
   // rename, one tab over): the input prefills the base name, Enter/blur commits
@@ -188,9 +198,10 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
   renamingRef.current = renaming
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
+  const canRename = (tab: TabSummary) => tab.id !== 'home' && !!(renameTabFile || tab.filePath)
   /** open the inline rename box on a file tab (double-click, or "Rename" in the tab menu) */
   const beginRename = (tab: TabSummary) => {
-    if (tab.id === 'home' || !tab.filePath) return
+    if (!canRename(tab)) return
     // whole name, extension included: only the shell may change an extension
     setRenaming({ id: tab.id, value: tab.title })
   }
@@ -211,10 +222,16 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
     if (!r) return
     const tab = tabsRef.current.find((tb) => tb.id === r.id)
     const value = r.value.trim()
-    if (!tab?.filePath || !value) return
-    const newName = renamedFileName(tab.filePath, value)
+    if (!tab || tab.id === 'home' || !value) return
+    const source = renameTabFile ? tab.title : tab.filePath
+    if (!source) return
+    const newName = renamedFileName(source, value)
     if (newName === tab.title) return
-    void window.aiOffice.renameFile(tab.filePath, newName).then((result) => {
+    if (renameTabFile) {
+      void renameTabFile(tab.id, newName)
+      return
+    }
+    void window.aiOffice.renameFile(source, newName).then((result) => {
       if (!result.ok) window.alert(result.error ?? t('renameFailed'))
       // Home shares this renderer and only re-pulls on window focus, which the
       // rename input already holds: tell it the recents / folder rows moved.
@@ -262,7 +279,7 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
       return { left: r.left, width: r.width }
     })
 
-  const finishDrag = (pointerId: number, commit: boolean) => {
+  const finishDrag = (pointerId: number, commit: boolean, clientY?: number) => {
     const drag = dragRef.current
     if (!drag || pointerId !== drag.pointerId) return
     dragRef.current = null
@@ -283,6 +300,12 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
       return
     }
     setDragVisual(null)
+    if (commit && detachTabOnDrop && clientY !== undefined &&
+        isBeyondBand(clientY, drag.stripTop, drag.stripBottom, TEAR_OFF_SLACK)) {
+      // Web opens the popup synchronously while the release gesture is active.
+      detachTabOnDrop(drag.id)
+      return
+    }
     if (commit && drag.target !== drag.from) {
       // optimistic local reorder so clearing the transforms causes no flash;
       // the main-process broadcast arrives with the identical order
@@ -372,6 +395,10 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
     }
     // far enough above or below the strip: tear the tab off into its own window
     if (isBeyondBand(event.clientY, drag.stripTop, drag.stripBottom, TEAR_OFF_SLACK)) {
+      if (detachTabOnDrop) {
+        setDragVisual(null)
+        return
+      }
       drag.tearing = true
       const { screenX, screenY, pointerId } = event
       void window.aiOfficeTabs.tearOff(drag.id, screenX, screenY).then((ok) => {
@@ -481,7 +508,7 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
         // the strip, not the grabbed tab, owns the pointer capture: a torn-off
         // tab's element unmounts mid-gesture, and the moves must keep coming
         onPointerMove={handleDragMove}
-        onPointerUp={(event) => finishDrag(event.pointerId, true)}
+        onPointerUp={(event) => finishDrag(event.pointerId, true, event.clientY)}
         onPointerCancel={(event) => finishDrag(event.pointerId, false)}
         onLostPointerCapture={(event) => finishDrag(event.pointerId, false)}
       >
@@ -506,10 +533,23 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
               key={tab.id}
               role="tab"
               aria-label={tab.title}
+              aria-description={tab.pinned ? (lang === 'zh' ? '已固定' : 'Pinned') : undefined}
               aria-selected={tab.active}
+              aria-keyshortcuts={tab.closable && closeTabWithKeyboard ? 'Delete' : undefined}
               tabIndex={tab.active ? 0 : -1}
               onKeyDown={(event) => {
                 if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey) return
+                if (event.key === 'Delete' && tab.closable && closeTabWithKeyboard && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (event.repeat || pendingKeyboardClose.current) return
+                  const pending = {id:tab.id}
+                  pendingKeyboardClose.current = pending
+                  void closeTabWithKeyboard(tab.id).then(closed => {
+                    if (!closed && pendingKeyboardClose.current === pending) pendingKeyboardClose.current = null
+                  })
+                  return
+                }
                 let target = index
                 if (event.key === 'ArrowRight') target = (index + 1) % tabs.length
                 else if (event.key === 'ArrowLeft') target = (index + tabs.length - 1) % tabs.length
@@ -531,7 +571,7 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
               style={dragStyle}
               onContextMenu={(event) => {
                 event.preventDefault()
-                if (tab.id === 'home') return
+                if (tab.id === 'home' && !allowHomeTabMenu) return
                 void window.aiOfficeTabs.showTabMenu(
                   tab.id,
                   Math.round(event.clientX),
@@ -554,7 +594,7 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
                 // the derived dblclick to the strip; pointer events carry no
                 // click count either, so read it off the compat mousedown
                 if (event.button !== 0 || event.detail !== 2) return
-                if (tab.id === 'home' || !tab.filePath) return
+                if (!canRename(tab)) return
                 if ((event.target as HTMLElement).closest('.tab-close')) return
                 if ((event.target as HTMLElement).closest('.tab-rename-input')) return
                 // the input mounts and autofocuses inside this dispatch; the
@@ -619,6 +659,7 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
               ) : (
                 <span className="tab-title">{tab.title}</span>
               )}
+              {tab.pinned && <span className="tab-pin-indicator" aria-hidden="true">📌</span>}
               {tab.closable && (
                 <button
                   className="tab-close"

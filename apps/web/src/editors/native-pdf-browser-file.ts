@@ -1,6 +1,6 @@
 import {createSessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 import {createPreferencesClient} from '../../../../packages/browser-host/src/preferences'
-import {PDF_READ_CHUNK_BYTES,type PageImageRef,type PagePreviewResult,type PdfApi,type TextEditInput,type TextEditValidation} from '../../../pdf/src/shared/ipc'
+import {PDF_READ_CHUNK_BYTES,type PageImageRef,type PagePreviewResult,type PdfApi,type PdfConvertFormat,type TextEditInput,type TextEditValidation} from '../../../pdf/src/shared/ipc'
 import {createLocalShellClient} from '../shell/local-client'
 import {createNativePdfSave} from './native-pdf-save'
 import {isRevisionRef,type OpenFileResult,type RevisionRef} from '../../../../packages/web-contracts/src/api'
@@ -10,6 +10,8 @@ import type {PdfHostImageBake,PdfOcrLine,PdfSignatureInfo} from '../../../pdf/sr
 import type {PreparedAiDocumentCreator} from '../shell/pdf-create-document-skill'
 import {createPdfExtraction} from './pdf-extraction'
 import {queryPdfRedactions} from './pdf-redactions'
+import type {PdfHostConversionDraft} from '../../../pdf/src/renderer/App'
+import type {PdfPendingSnapshot} from './pdf-pending-ops'
 
 const byteRangeMarker=new TextEncoder().encode('/ByteRange')
 function hasSignatureMarker(bytes:Uint8Array){
@@ -151,6 +153,33 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
    return galleryAccount
   },inspectSignatureMarker(bytes:Uint8Array,encrypted:boolean){
    signatureRevision=!encrypted&&hasSignatureMarker(bytes)?current:undefined
+ },async reduceSize(signal:AbortSignal){
+   assertActive()
+   const base=current
+   const blob=await session.download(`/api/v1/files/${fileId}/pdf/reduce-size`,{body:{revision:base.revision},signal})
+   assertActive()
+   signal.throwIfAborted()
+   if(base!==current||blob.size>=base.size)throw Error('PDF reduction is no longer available.')
+   return {blob,bytesBefore:base.size}
+ },async convertOffice(format:PdfConvertFormat,password:string|undefined,signal:AbortSignal,draft?:PdfHostConversionDraft){
+   assertActive()
+   const base=current
+   const convert=(snapshot?:PdfPendingSnapshot)=>session.download(`/api/v1/files/${fileId}/pdf/convert-office`,{
+    body:{revision:base.revision,format,password,snapshot},signal,
+   })
+   let blob:Blob|undefined
+   if(draft){
+    pageCount=draft.pageCount
+    const result=await writer.save(draft.draft,undefined,draft.stamps,draft.imageBakes,async snapshot=>{
+     blob=await convert(snapshot)
+    })
+    if(!result.ok)throw Error(result.error)
+   }else{
+    blob=await convert()
+   }
+   assertActive()
+   if(current!==base||!blob?.size||blob.size>64*1024*1024)throw Error('The PDF conversion is no longer available.')
+   return blob
   },async recognizeOcr(png:string,signal?:AbortSignal){
    const base=current
    const reply=await session.request<{revision:string;lines:PdfOcrLine[]|null}>(`/api/v1/files/${fileId}/pdf/ocr`,'POST',{revision:base.revision,png},signal)
@@ -226,7 +255,39 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedR
     pageCount=count
     return writer.save(draft,check,stamps,imageBakes)
    },
+   async saveCopy(draft:Parameters<typeof writer.save>[0],count:number,name:string,modified:boolean,stamps:Parameters<typeof writer.save>[2],imageBakes:Parameters<typeof writer.save>[3],signal:AbortSignal){
+    const base=current
+    const check=()=>{
+     assertActive()
+     signal.throwIfAborted()
+     if(editorId||expectedRevision||base!==current)throw Error('PDF copy authorization changed.')
+    }
+    check()
+    await assertSession()
+    check()
+    pageCount=count
+    return writer.save(draft,undefined,stamps,imageBakes,async snapshot=>{
+     const bytes=modified?(await queryPdfPendingPreview(session.request,snapshot,signal)).bytes:await load()
+     check()
+     const blob=new Blob([bytes.slice().buffer as ArrayBuffer],{type:'application/pdf'})
+     let upload:string|undefined,finishStarted=false
+     try{
+      const {uploadId}=await session.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
+      upload='/api/v1/uploads/'+encodeURIComponent(uploadId)
+      check()
+      await session.request(upload+'/content','PUT',blob,signal)
+      check()
+      finishStarted=true
+      await session.request(upload+'/finish','POST',undefined,signal)
+     }catch(error){
+      if(upload&&!finishStarted&&!signal.aborted)await session.request(upload,'DELETE',undefined,signal).catch(()=>{})
+      if(finishStarted)throw Error('Could not confirm the copy. Check your workspace before retrying.')
+      throw error
+     }
+    })
+   },
    confirm:writer.confirm,
+   restoreRevision:writer.restoreRevision,
    pageGeometry:writer.pageGeometry,
    replacePages:writer.replacePages,
    insertPdf:writer.insertPdf,
