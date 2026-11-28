@@ -23,9 +23,11 @@ type PickerOptions = {
   localAccept?: string
   allowLocal?: boolean
   readAsAttachment?: boolean
+  excludeFileId?: string
 }
+type SourceListOptions = Pick<PickerOptions, 'title' | 'formats' | 'language' | 'allowLocal' | 'excludeFileId'>
 
-function selectSource(request: SettingsRequest, { title: heading, formats, language, allowLocal = true }: PickerOptions, signal: AbortSignal, maxFiles: number): Promise<Choice | null> {
+function selectSource(request: SettingsRequest, { title: heading, formats, language, allowLocal = true, excludeFileId }: SourceListOptions, signal: AbortSignal, maxFiles: number): Promise<Choice | null> {
   signal.throwIfAborted()
   const en = language === 'en'
   const multiple = maxFiles > 1
@@ -114,7 +116,7 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
       .then(([paths, result]) => {
         if (controller.signal.aborted) return
         for (const file of result.files) {
-          if (file.format !== format.value) continue
+          if (file.format !== format.value || file.id === excludeFileId) continue
           const folder = file.folderId && paths.get(file.folderId)
           files.add(new Option(folder ? folder + ' / ' + file.name : file.name, file.id))
         }
@@ -184,6 +186,26 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
   })
 }
 
+async function readSourceMetadata(request: SettingsRequest, {id, format}: WorkspaceChoice, en: boolean, signal: AbortSignal) {
+  const source = await request<OpenFileResult>('/api/v1/files/' + encodeURIComponent(id), 'GET', undefined, signal)
+  if (source.format !== format || !isRevisionRef(source.file) || source.file.fileId !== id || !source.name) {
+    throw new Error(en ? 'The selected file is unavailable.' : '所选文件不可用。')
+  }
+  return {...source, name: source.name}
+}
+
+export async function pickWorkspaceSourceRevision(
+  access: Pick<WorkspaceSourceAccess, 'request' | 'verify'>, options: Omit<SourceListOptions, 'allowLocal'>, signal: AbortSignal,
+) {
+  const choice = await selectSource(access.request, {...options, allowLocal: false}, signal, 1)
+  if (!choice || choice === 'local') return null
+  const en = options.language === 'en'
+  const source = await readSourceMetadata(access.request, choice[0]!, en, signal)
+  if (!await access.verify()) throw new Error(en ? 'The workspace session changed.' : '工作区会话已变更。')
+  signal.throwIfAborted()
+  return source.file
+}
+
 export async function pickWorkspaceSourceFile(
   access: WorkspaceSourceAccess, options: PickerOptions, signal: AbortSignal,
 ): Promise<File | null> {
@@ -212,11 +234,8 @@ export async function pickWorkspaceSourceFiles(
   await check()
   const sources: {file: OpenFileResult['file']; name: string}[] = []
   let total = 0
-  for (const {id, format} of choice) {
-    const source = await access.request<OpenFileResult>('/api/v1/files/' + encodeURIComponent(id), 'GET', undefined, signal)
-    if (source.format !== format || !isRevisionRef(source.file) || source.file.fileId !== id || !source.name) {
-      throw new Error(en ? 'The selected file is unavailable.' : '所选文件不可用。')
-    }
+  for (const selectedFile of choice) {
+    const source = await readSourceMetadata(access.request, selectedFile, en, signal)
     if (!options.readAsAttachment && (source.workbookPasswordProtected || source.documentPasswordProtected)) {
       throw new Error(en ? 'Choose a file without an open password.' : '请选择未设置打开密码的文件。')
     }

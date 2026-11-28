@@ -690,7 +690,7 @@ export interface SheetsEditorHost {
   inPlaceSave?: boolean
   saveCsvContent?: SaveContext['saveCsvContent']
   workspaceLinks?: {
-    listSources(): Promise<readonly {id:string;name:string;revision:string}[]>
+    pickSource(signal: AbortSignal): Promise<{id:string;revision:string}|null>
     sourceTarget(id: string, revision: string): string
     revealSource?(sessionId: string, index: number): Promise<void>
     refresh(sessionId: string): Promise<{links:ExternalLinkRow[];cells:import('../shared/desktop-api').ExternalLinksUpdateResult['cells']}>
@@ -1142,8 +1142,8 @@ export function App({
   const [linksBusy, setLinksBusy] = useState(false)
   const [linksNotice, setLinksNotice] = useState<'unsaved' | 'unavailable' | null>(null)
   const [workspaceLinksAvailable,setWorkspaceLinksAvailable]=useState(false)
-  const [workspaceLinkPicker,setWorkspaceLinkPicker]=useState<{index:number;sessionId:string;files:readonly {id:string;name:string;revision:string}[]}|null>(null)
-  const workspacePickerRequest=useRef(0)
+  const workspacePickerRequest=useRef<AbortController|null>(null)
+  useEffect(()=>()=>workspacePickerRequest.current?.abort(),[])
   // Load the workbook's links when the panel opens: the listing carries
   // identity fields only and never probes the sources on disk, so it is cheap
   // and reachability stays unknown (the panel's "—") until Update answers it.
@@ -1227,29 +1227,22 @@ export function App({
       if(saved.ok)analysisSaveConsent.current.confirmClean()
     })
   }
-  async function saveWorkspaceExternalLink(id:string) {
-    const picker=workspaceLinkPicker, workspace=hostRef.current?.workspaceLinks
-    const source=picker?.files.find(file=>file.id===id)
-    if(!picker||!workspace||linksBusy||!source)return
-    setWorkspaceLinkPicker(null)
-    setLinksBusy(true)
-    try {
-      await saveGateRef.current.run(async()=>{
-        if(lazyWorkbookRef.current?.file.sessionId!==picker.sessionId||hostRef.current?.readOnly||
-          !userMutationAllowed()||!analysisSaveConsent.current.allowed(false)||!(await commitActiveEditor()))return
-        if(editorIsDirty()){
-          const saved=await handleSaveImpl(saveContext(),'save',true)
-          if(!saved.ok||editorIsDirty())return
-        }
-        pendingExternalLinkOpsRef.current={broken:[],retargets:[{index:picker.index,target:workspace.sourceTarget(id,source.revision)}]}
-        try {
-          const saved=await handleSaveImpl(saveContext(),'save')
-          if(saved.ok)analysisSaveConsent.current.confirmClean()
-        }finally{pendingExternalLinkOpsRef.current=null}
-      })
-      await refreshLinkStatuses()
-    }catch(error){setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
-    finally{setLinksBusy(false)}
+  async function saveWorkspaceExternalLink(index:number,sessionId:string,target:string,signal:AbortSignal) {
+    await saveGateRef.current.run(async()=>{
+      if(signal.aborted||lazyWorkbookRef.current?.file.sessionId!==sessionId||hostRef.current?.readOnly||
+        !userMutationAllowed()||!analysisSaveConsent.current.allowed(false)||!(await commitActiveEditor()))return
+      if(editorIsDirty()){
+        const saved=await handleSaveImpl(saveContext(),'save',true)
+        if(!saved.ok||editorIsDirty())return
+      }
+      if(signal.aborted)return
+      pendingExternalLinkOpsRef.current={broken:[],retargets:[{index,target}]}
+      try {
+        const saved=await handleSaveImpl(saveContext(),'save')
+        if(saved.ok)analysisSaveConsent.current.confirmClean()
+      }finally{pendingExternalLinkOpsRef.current=null}
+    })
+    await refreshLinkStatuses()
   }
   const [watchCells, setWatchCells] = useState<readonly WatchCell[]>([])
   const [calcManual, setCalcManual] = useState(false)
@@ -7040,7 +7033,6 @@ export function App({
           sourceActions={!host?.inPlaceSave}
           workspaceActions={Boolean(host?.workspaceLinks&&workspaceLinksAvailable&&!host.readOnly)}
           canRevealWorkspaceSource={!!host?.workspaceLinks?.revealSource}
-          workspacePicker={host?.readOnly?undefined:workspaceLinkPicker?.files}
           canBreak={!host?.readOnly}
           notice={linksNotice}
           onUpdate={() => {
@@ -7151,15 +7143,17 @@ export function App({
               if (sessionId === null || linksBusy) return
               const workspace=hostRef.current?.workspaceLinks
               if(workspace){
-                if(!workspaceLinksAvailable||hostRef.current?.readOnly)return
+                if(!workspaceLinksAvailable||hostRef.current?.readOnly||workspacePickerRequest.current)return
+                const attempt=new AbortController()
+                workspacePickerRequest.current=attempt
                 setLinksBusy(true)
-                setWorkspaceLinkPicker(null)
-                const attempt=++workspacePickerRequest.current
                 try{
-                  const files=await workspace.listSources()
-                  if(workspacePickerRequest.current===attempt&&lazyWorkbookRef.current?.file.sessionId===sessionId)setWorkspaceLinkPicker({index,sessionId,files})
-                }catch(error){setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
-                finally{setLinksBusy(false)}
+                  const source=await workspace.pickSource(attempt.signal)
+                  if(source&&!attempt.signal.aborted){
+                    await saveWorkspaceExternalLink(index,sessionId,workspace.sourceTarget(source.id,source.revision),attempt.signal)
+                  }
+                }catch(error){if(!attempt.signal.aborted)setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
+                finally{workspacePickerRequest.current=null;setLinksBusy(false)}
                 return
               }
               // a web source has no local file to point at
@@ -7191,9 +7185,7 @@ export function App({
                 .finally(()=>setLinksBusy(false))
             } else window.desktopApi.revealLinkSource({ sessionId: file.sessionId, index })
           }}
-          onSaveWorkspaceSource={(id)=>void saveWorkspaceExternalLink(id)}
-          onCancelWorkspaceSource={()=>setWorkspaceLinkPicker(null)}
-          onClose={() => {workspacePickerRequest.current++;setWorkspaceLinkPicker(null);setLinksOpen(false)}}
+          onClose={() => {workspacePickerRequest.current?.abort();setLinksOpen(false)}}
         />
       )}
     </>

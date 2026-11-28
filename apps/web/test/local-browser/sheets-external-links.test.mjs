@@ -17,6 +17,7 @@ import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
 import {objectTransferAdmission} from '../../server/src/modules/files/transfer-admission.ts'
+import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 const hostManifest=process.env.DYOFFICE_TEST_HOST_MANIFEST
@@ -110,7 +111,16 @@ for(const mode of modes)test(mode!=='node'
  const sourceBytes=await sourceZip.generateAsync({type:'nodebuffer'})
  const macroSourceBytes=refreshAvailable?await macroWorkbook(sourceBytes):null
  const source=macroSourceBytes?(await importFile(f,f.alice.token,macroSourceBytes,'Source catalog.xlsm')).file:null
- if(refreshAvailable)await importFile(f,f.alice.token,sourceBytes,'Source catalog.xlsx')
+ if(refreshAvailable){
+  const workspace=createWorkspaceService(f.transactions)
+  const archive=await workspace.createFolder(f.alice.token,{name:'Archive',parentId:null})
+  const sales=await workspace.createFolder(f.alice.token,{name:'Sales',parentId:null})
+  const distractor=(await importFile(f,f.alice.token,macroSourceBytes,'Source catalog.xlsm')).file
+  await workspace.moveFile(f.alice.token,distractor.fileId,{folderId:archive.id})
+  await workspace.moveFile(f.alice.token,source.fileId,{folderId:sales.id})
+  await importFile(f,f.alice.token,sourceBytes,'Source catalog.xlsx')
+  await importFile(f,f.bob.token,macroSourceBytes,'Private catalog.xlsm')
+ }
  app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,
   csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,
@@ -214,11 +224,28 @@ for(const mode of modes)test(mode!=='node'
  if(refreshAvailable){
   const beforeSourceChange=await revisionCount()
   await reopenedPanel.getByRole('button',{name:'Change Source',exact:true}).click()
-  const choices=reopenedPanel.getByRole('combobox',{name:'Source',exact:true})
+  const picker=page.getByRole('dialog',{name:'Choose a workbook source',exact:true})
+  const choices=picker.getByRole('listbox',{name:'Workspace files',exact:true})
   await expect(choices.getByRole('option',{name:'Source catalog.xlsx',exact:true})).toHaveCount(1)
-  await choices.selectOption({label:'Source catalog.xlsm'},{timeout:5000})
-  await reopenedPanel.getByRole('button',{name:'Save',exact:true}).click()
+  await expect(choices.getByRole('option',{name:'external-reference.xlsx',exact:true})).toHaveCount(0)
+  await picker.getByRole('button',{name:'Cancel',exact:true}).click()
+  assert.equal(await revisionCount(),beforeSourceChange)
+  await reopenedPanel.getByRole('button',{name:'Change Source',exact:true}).click()
+  await picker.getByRole('combobox',{name:'File type',exact:true}).selectOption('xlsm')
+  await picker.getByRole('searchbox',{name:'Search files',exact:true}).fill('catalog')
+  await expect(choices.getByRole('option',{name:'Archive / Source catalog.xlsm',exact:true})).toHaveCount(1)
+  await expect(choices.getByRole('option',{name:'Sales / Source catalog.xlsm',exact:true})).toHaveCount(1)
+  await expect(choices.getByRole('option',{name:'Private catalog.xlsm',exact:true})).toHaveCount(0)
+  const prematureSourceReads=[]
+  const trackSource=request=>{
+   if(new URL(request.url()).pathname===`/api/v1/files/${source.fileId}/content`)prematureSourceReads.push(request.url())
+  }
+  page.on('request',trackSource)
+  await choices.selectOption({label:'Sales / Source catalog.xlsm'})
+  await picker.getByRole('button',{name:'Use selected file',exact:true}).click()
   await expect.poll(revisionCount,{timeout:20000}).toBe(beforeSourceChange+1)
+  page.off('request',trackSource)
+  assert.deepEqual(prematureSourceReads,[])
   const changed=(await f.files.openFile(f.alice.token,initial.fileId)).file
   const savedSource=await JSZip.loadAsync(await f.files.readFile(f.alice.token,initial.fileId,changed.revision))
   const sourceTarget=origin+'/api/v1/files/'+source.fileId+'/content?revision='+source.revision

@@ -349,7 +349,15 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     catch { return undefined }
   })()
   const workspaceLinks = {
-    listSources:listWorkspaceWorkbooks,
+    async pickSource(signal:AbortSignal) {
+      if(!workspaceSources)throw hostError('UNAVAILABLE','workspace source')
+      const {pickWorkspaceSourceRevision}=await import('./workspace-source-picker')
+      const source=await pickWorkspaceSourceRevision(workspaceSources,{
+        title:prefs.language==='en'?'Choose a workbook source':'选择来源工作簿',
+        formats:['xlsx','xlsm'],language:prefs.language,excludeFileId:fileId,
+      },signal)
+      return source?{id:source.fileId,revision:source.revision}:null
+    },
     sourceTarget:workspaceSourceTarget,
     ...(workspaceHome?.revealPath ? {async revealSource(sessionId:string,index:number){
       const current=session(sessionId), revision=current.revision

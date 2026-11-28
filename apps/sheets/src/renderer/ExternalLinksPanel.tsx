@@ -19,15 +19,12 @@ export function ExternalLinksPanel({
   sourceActions = true,
   workspaceActions = false,
   canRevealWorkspaceSource = false,
-  workspacePicker,
   canBreak = true,
   notice,
   onUpdate,
   onReveal,
   onBreak,
   onChangeSource,
-  onSaveWorkspaceSource,
-  onCancelWorkspaceSource,
   onClose,
 }: {
   readonly links: readonly ExternalLinkRow[]
@@ -35,7 +32,6 @@ export function ExternalLinksPanel({
   readonly sourceActions?: boolean
   readonly workspaceActions?: boolean
   readonly canRevealWorkspaceSource?: boolean
-  readonly workspacePicker?: readonly {id:string;name:string}[] | undefined
   readonly canBreak?: boolean
   /** why the listing is empty when it is not simply "no links" */
   readonly notice?: 'unsaved' | 'unavailable' | null
@@ -44,13 +40,10 @@ export function ExternalLinksPanel({
   readonly onReveal: (index: number) => void
   readonly onBreak: (index: number) => void
   readonly onChangeSource: (index: number) => void
-  readonly onSaveWorkspaceSource?: (id: string) => void
-  readonly onCancelWorkspaceSource?: () => void
   readonly onClose: () => void
 }): ReactElement {
   const { t } = useI18n()
   const [confirming, setConfirming] = useState<number | null>(null)
-  const [sourceId, setSourceId] = useState('')
   const canUpdate = sourceActions || workspaceActions
   const hasActions = canUpdate || canBreak || canRevealWorkspaceSource
   return (
@@ -66,20 +59,6 @@ export function ExternalLinksPanel({
           ✕
         </button>
       </header>
-      {workspacePicker && (
-        <div className="watch-link-picker">
-          <label>
-            {t('appLinksSource')}
-            <select value={sourceId} onChange={(event) => setSourceId(event.currentTarget.value)}>
-              <option value="">—</option>
-              {workspacePicker.map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}
-            </select>
-          </label>
-          <button className="watch-remove" disabled={busy || !workspacePicker.some(file=>file.id===sourceId)}
-            onClick={()=>{onSaveWorkspaceSource?.(sourceId);setSourceId('')}}>{t('appThreadSave')}</button>
-          <button className="watch-remove" onClick={()=>{onCancelWorkspaceSource?.();setSourceId('')}}>{t('appCancel')}</button>
-        </div>
-      )}
       {links.length === 0 ? (
         <p className="watch-empty">
           {notice === 'unavailable'
