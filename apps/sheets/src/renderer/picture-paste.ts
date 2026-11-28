@@ -6,6 +6,7 @@
  * window-capture listener claims image-only transfers before it runs.
  */
 import { isGridKeyTarget } from './clear-selection-keyboard'
+import { websitePictureSource } from '../../../../packages/ui/src/clipboard-picture'
 export const PICTURE_MAX_BYTES = 20 * 1024 * 1024
 const PICTURE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif'])
 
@@ -78,18 +79,6 @@ export function pickTransferImage(data: TransferLike): File | null {
   return null
 }
 
-/** A browser may provide just the HTML fragment and URL for a copied picture. */
-export function pickTransferPictureSource(data: TransferLike): string | null {
-  const html = data.getData('text/html')
-  if (!/<img\b/i.test(html)) return null
-  const fragment = document.createElement('template')
-  fragment.innerHTML = html
-  const images = fragment.content.querySelectorAll('img')
-  if (images.length !== 1 || fragment.content.textContent?.trim() || fragment.content.querySelector('table')) return null
-  const source = images[0]?.getAttribute('src')?.trim()
-  return source && /^https?:\/\//i.test(source) ? source : null
-}
-
 export function pictureMediaType(fileType: string): string {
   return fileType === 'image/jpg' ? 'image/jpeg' : fileType
 }
@@ -139,7 +128,7 @@ export function installPictureTransfer(
     if (host.isCellEditing() || !isGridKeyTarget(event.target)) return
     const file = pickTransferImage(event.clipboardData)
     if (!file) {
-      const source = host.insertRemote && pickTransferPictureSource(event.clipboardData)
+      const source = host.insertRemote && websitePictureSource(event.clipboardData.getData('text/html'))
       if (!source || !host.insertRemote?.(source)) return
     }
     event.preventDefault()

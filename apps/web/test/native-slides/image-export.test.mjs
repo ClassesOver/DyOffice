@@ -577,6 +577,64 @@ test('Web PowerPoint pastes a native clipboard picture when async clipboard read
   await expect.poll(async()=> (await nodes()).slice(count).map(node=>node.type)).toEqual(['picture'])
 })
 
+test('Web PowerPoint saves a website picture pasted from HTML without a bitmap',{timeout:120000},async t=>{
+  const f=await fixture(t),{page,origin}=f
+  await f.preferences.update(f.alice.token,{theme:'light',showAssistant:false})
+  const original=await readFile(deckFixture)
+  const {file}=await importFile(f,f.alice.token,original,'Website picture.pptx')
+  const url='https://clipboard-images.example/slide-picture.png'
+  const html=`<img src="${url}" alt="Website picture">`
+  const png=new PNG({width:7,height:5});png.data.fill(208)
+  const bytes=PNG.sync.write(png)
+  const requests=[]
+  await page.route(url,route=>route.fulfill({status:403}))
+  await page.route('**/api/v1/ai/media',async route=>{
+    requests.push({body:route.request().postDataJSON(),csrf:!!route.request().headers()['x-csrf-token']})
+    await route.fulfill({json:{mime:'image/png',base64:bytes.toString('base64')}})
+  })
+  await openDeck(f,file.fileId,'light')
+  const nodes=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides())[0].nodes)
+  const count=(await nodes()).length
+  const pastes=async()=> (await nodes()).slice(count).map(node=>node.type)
+  await page.locator('.thumb').first().click()
+  await page.evaluate(({html,url})=>{
+    const transfer=new DataTransfer()
+    transfer.setData('text/html',html)
+    transfer.setData('text/plain',url)
+    document.activeElement.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}))
+  },{html,url})
+  await expect.poll(pastes,{timeout:12000}).toEqual(['picture'])
+
+  await page.getByRole('button',{name:'Home',exact:true}).click()
+  await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin})
+  await page.evaluate(({html,url})=>navigator.clipboard.write([new ClipboardItem({
+    'text/html':new Blob([html],{type:'text/html'}),
+    'text/plain':new Blob([url],{type:'text/plain'}),
+  })]),{html,url})
+  await page.getByRole('button',{name:'Paste',exact:true}).click()
+  await expect.poll(pastes,{timeout:12000}).toEqual(['picture','picture'])
+
+  await page.evaluate(html=>{
+    const transfer=new DataTransfer()
+    transfer.setData('text/html',`<p>Text with a picture ${html}</p>`)
+    transfer.setData('text/plain','Text with a picture')
+    document.activeElement.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}))
+  },html)
+  await expect.poll(pastes,{timeout:12000}).toEqual(['picture','picture','text'])
+  assert.deepEqual(requests,Array.from({length:2},()=>({body:{action:'fetch_image',url},csrf:true})))
+
+  await page.keyboard.press('ControlOrMeta+s')
+  const revision=async()=> (await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await expect.poll(revision).not.toBe(file.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,await revision()))
+  const media=await Promise.all(saved.file(/^ppt\/media\/.*\.png$/).map(part=>part.async('nodebuffer')))
+  assert.ok(media.some(image=>image.equals(bytes)))
+  assert.doesNotMatch(await saved.file('ppt/slides/slide1.xml').async('string'),/clipboard-images\.example/)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+  await openDeck(f,file.fileId,'light')
+  await expect.poll(pastes).toEqual(['picture','picture','text'])
+})
+
 test('PPTX prints named PDF notes for a selected hidden slide',{timeout:120000},async t=>{
   const f=await fixture(t),{page}=f
   const archive=await JSZip.loadAsync(await readFile(deckFixture))

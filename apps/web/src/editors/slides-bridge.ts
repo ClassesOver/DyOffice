@@ -2,6 +2,7 @@ import {WEB_EMBEDDED_FONT_LIMITS} from '../../../slides/src/shared/embedded-font
 import {isSelfContainedGlb,WEB_MODEL3D_MAX_BYTES} from '../../../slides/src/shared/model3d-glb'
 import type {SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
+import {websitePictureSource} from '../../../../packages/ui/src/clipboard-picture'
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {mapScriptOpsForWidth} from '../../../../packages/pptx-ops/src/ops/script-map.ts'
 import {parsePageSpec} from '../../../../packages/pipelines/src/slides/page-spec-parser.ts'
@@ -16,6 +17,7 @@ import {normalizeLang} from '@genoffice/i18n'
 import {tMain} from '../../../slides/src/main/i18n-main.ts'
 import {messages} from './messages.ts'
 import {browserFileName, decodeBrowserBase64, downloadBrowserFile} from './browser-download'
+import {fetchClipboardImage, type ClipboardImageFetcher} from './docs-image-clipboard'
 import {printInBrowser} from './browser-print.ts'
 import {createBrowserVideoFiles} from './slides-browser-video'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
@@ -121,7 +123,9 @@ async function readClipboardPng(item:ClipboardItem):Promise<string> {
   })
 }
 
-async function readSystemClipboard():ReturnType<SlidesApi['clipboardExternal']> {
+type ReadClipboardPicture = (html:string)=>Promise<{kind:'image';base64:string;ext:string}|null>
+
+async function readSystemClipboard(readPicture?:ReadClipboardPicture):ReturnType<SlidesApi['clipboardExternal']> {
   const {marker,items}=await readClipboard()
   if(marker?.kind==='slides')return {kind:'slide'}
   if(marker?.kind==='elements')return {kind:'internal',elementReference:marker.id}
@@ -129,6 +133,11 @@ async function readSystemClipboard():ReturnType<SlidesApi['clipboardExternal']> 
     for(const item of items){
       const data=await readClipboardPng(item)
       if(data)return {kind:'image',base64:data,ext:'png'}
+      if(readPicture&&item.types.includes('text/html')){
+        const blob=await item.getType('text/html')
+        const picture=blob.size<=4*1024*1024?await readPicture(await blob.text()):null
+        if(picture)return picture
+      }
       if(item.types.includes('text/plain')){
         const blob=await item.getType('text/plain')
         const text=await blob.slice(0,4*1024*1024).text()
@@ -138,9 +147,10 @@ async function readSystemClipboard():ReturnType<SlidesApi['clipboardExternal']> 
   }catch{ /* The clipboard data is unavailable. */ }
   return {kind:'none'}
 }
-async function readBrowserPaste(transfer: DataTransfer): ReturnType<SlidesApi['clipboardExternal']> {
+async function readBrowserPaste(transfer:DataTransfer,readPicture?:ReadClipboardPicture):ReturnType<SlidesApi['clipboardExternal']> {
   // Event data is readable only while the paste handler is running.
   const text = transfer.getData('text/plain').slice(0, 4 * 1024 * 1024)
+  const html = readPicture ? transfer.getData('text/html') : ''
   const images = Array.from(transfer.files).filter(file =>
     ['image/png', 'image/jpeg', 'image/gif'].includes(file.type),
   )
@@ -158,9 +168,11 @@ async function readBrowserPaste(transfer: DataTransfer): ReturnType<SlidesApi['c
       if (ext) return { kind: 'image', base64: bytesToBase64(bytes), ext }
     } catch { /* Try the next readable format. */ }
   }
+  const picture=html&&await readPicture?.(html)
+  if(picture)return picture
   if (text.trim()) return { kind: 'text', text }
   // The browser paste event may omit app clipboard formats entirely.
-  return readSystemClipboard()
+  return readSystemClipboard(html?undefined:readPicture)
 }
 
 const isGeneratedImage = (url: string) => url.startsWith('https://generated-image.invalid/')
@@ -203,7 +215,7 @@ function chooseLocalFile(signal: AbortSignal,accept:string): Promise<File | null
 }
 const choosePicture=(signal:AbortSignal)=>chooseLocalFile(signal,'.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff')
 
-export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {}, searchApi, mediaApi, skillsApi, pickPicture = choosePicture, confirmImportedChart = () => typeof window !== 'undefined' && window.confirm('Editing this imported chart may remove number formats, trendlines, error bars, and per-point styles. Continue?')}: {fetchImpl?: typeof fetch; onChange?: () => void; searchApi?: {webSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['webSearch']>>>; imageSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['imageSearch']>>>}; mediaApi?: {generateImage: SlidesApi['generateImage']; analyzeMedia: SlidesApi['analyzeMedia'];fetchImage?:(url:string)=>Promise<{base64:string;mime:string}|null>}; skillsApi?: Pick<SlidesApi, 'skillsList' | 'skillText'>; pickPicture?: (signal: AbortSignal) => Promise<File|null>; confirmImportedChart?:()=>boolean} = {}) {
+export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {}, searchApi, mediaApi, clipboardImageFetcher, skillsApi, pickPicture = choosePicture, confirmImportedChart = () => typeof window !== 'undefined' && window.confirm('Editing this imported chart may remove number formats, trendlines, error bars, and per-point styles. Continue?')}: {fetchImpl?: typeof fetch; onChange?: () => void; searchApi?: {webSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['webSearch']>>>; imageSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['imageSearch']>>>}; mediaApi?: {generateImage: SlidesApi['generateImage']; analyzeMedia: SlidesApi['analyzeMedia'];fetchImage?:(url:string)=>Promise<{base64:string;mime:string}|null>}; clipboardImageFetcher?: ClipboardImageFetcher; skillsApi?: Pick<SlidesApi, 'skillsList' | 'skillText'>; pickPicture?: (signal: AbortSignal) => Promise<File|null>; confirmImportedChart?:()=>boolean} = {}) {
   let saveFence:(()=>boolean)|null=null,applyFence:(()=>boolean)|null=null
   let committed:import('../../../../packages/web-contracts/src/api').RevisionRef|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
@@ -249,6 +261,22 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   let sections: SectionInfo[] = []
   let csrf: string | undefined, disposed = false
   let pendingOpen: Promise<OpenResult> | null = null
+  const readClipboardPicture:ReadClipboardPicture|undefined=clipboardImageFetcher?async html=>{
+    const source=websitePictureSource(html)
+    const captured=session
+    if(!source||disposed||opening||!captured||captured.writeProtected)return null
+    const stillCurrent=captureImageTarget(captured)
+    if(!stillCurrent())return null
+    const controller=new AbortController()
+    controllers.add(controller)
+    try{
+      const picture=await fetchClipboardImage(source,clipboardImageFetcher,controller.signal)
+      if(opening||!stillCurrent()||picture.base64.length>SLIDE_IMAGE_LIMIT)return null
+      const ext=picture.mime==='image/jpeg'?'jpg':picture.mime==='image/gif'?'gif':'png'
+      return {kind:'image',base64:picture.base64,ext}
+    }catch{return null}
+    finally{controllers.delete(controller)}
+  }:undefined
   const noEvent = () => () => {}
   const mediaUrls = new Set<string>()
   const unavailable = async (): Promise<never> => { throw new Error(text.unavailable) }
@@ -853,7 +881,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     },
     getRecentFiles: async () => <string[]>[],
     setShowFullScreen: async () => {}, nativeClipboard: async () => {},
-    clipboardExternal:readSystemClipboard,
+    clipboardExternal:()=>readSystemClipboard(readClipboardPicture),
     clipboardProbe:async()=>clipboardMarker()!==null||Boolean(globalThis.navigator?.clipboard?.read),
     hasSlideClipboard:async()=>(await readClipboard(false)).marker?.kind==='slides',
     async copySlides({slideIndexes,pngs,cut}) {
@@ -1753,7 +1781,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     }finally{releaseSlot()}
   }
   return {
-    api,readBrowserPaste,guardedSave,guardedApply,waitForSave,getReceipt:()=>committed,getAnalysisGeneration:()=>session?.generation??null,
+    api,readBrowserPaste:(transfer:DataTransfer)=>readBrowserPaste(transfer,readClipboardPicture),guardedSave,guardedApply,waitForSave,getReceipt:()=>committed,getAnalysisGeneration:()=>session?.generation??null,
     confirmSave,
     prepareDownload,exportDraftCopy,hasGeneratedName:()=>Boolean(session?.nameCandidate&&session.dirty&&host.getState(fileId).autoNamePending),
     takeover,unlockEditing,

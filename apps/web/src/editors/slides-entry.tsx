@@ -17,6 +17,7 @@ import {createBrowserSlideFullscreen} from './slides-browser-fullscreen'
 import {messages} from './messages.ts'
 import {mountEditorRealtime} from './editor-realtime.ts'
 import {editorAssistantNotice,loadEditorAssistant} from './editor-assistant-status'
+import {createWebAiMediaApi} from './web-ai-media-api'
 import {confirmWorkspaceCopy,suggestWebFileName} from './web-ai-naming'
 import {printInBrowser} from './browser-print'
 import {browserFileName} from './browser-download'
@@ -81,6 +82,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   let installedDesktop: typeof stage.desktop | undefined
   let downloading = false, takingOver = false, confirming = false, actionError = ''
   const copyLifetime=new AbortController()
+  const clipboardMedia=copyAuthority?.request?createWebAiMediaApi(copyAuthority.request):undefined
   let naming=false,copying=false,copyNotice='',recoveryDownload:'idle'|'sent'|'failed'='idle'
   const searchApi = {
     webSearch: (query: string, maxResults?: number) => sharedAssistant?.searchApi.webSearch(query, maxResults) ?? Promise.reject(new Error(text.unavailable)),
@@ -93,6 +95,8 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   }
   const bridge = createSlidesBridge(host, fileId, prefs, {
     onChange: () => changed(), searchApi, mediaApi,
+    clipboardImageFetcher:clipboardMedia?(url,signal)=>copyAuthority?.current()&&!closing
+      ?clipboardMedia.fetchImage(url,signal):Promise.resolve(null):undefined,
     skillsApi: {
       skillsList: async () => (await sharedAssistant?.api.skillsList() ?? []).map(skill => ({
         name: skill.name,

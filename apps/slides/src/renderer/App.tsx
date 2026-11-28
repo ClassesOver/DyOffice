@@ -2001,7 +2001,10 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     [],
   )
 
-  const pasteClipboard = useCallback(() => clipboardActions.pasteClipboard(ctxRef.current), [])
+  const pasteClipboard = useCallback(() => {
+    const { target, canInsert } = slideInputTarget()
+    return clipboardActions.pasteClipboard(target, undefined, canInsert)
+  }, [slideInputTarget])
   const duplicateSelected = useCallback(
     (ids: string[], dxPx = 16, dyPx = 16) =>
       clipboardActions.duplicateSelected(ctxRef.current, ids, dxPx, dyPx),
