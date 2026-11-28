@@ -490,7 +490,7 @@ for(const encrypted of [false,true])test(`Web XLSX Save As copies unsaved cells 
  await expect.poll(()=>cell(copyPage),{timeout:30000}).toBe(21.25)
 })
 
-test('Web XLSX File menu and shortcut open Print preview and print without saving',{timeout:90000},async t=>{
+test('Web XLSX prints and exports a named PDF for the selected pages without saving the workbook',{timeout:120000},async t=>{
  const f=await fixture(t,{nodeEngine:true})
  const original=f.opened.file
  await f.page.goto(f.origin+'/native-xlsx/?fileId='+original.fileId)
@@ -498,6 +498,7 @@ test('Web XLSX File menu and shortcut open Print preview and print without savin
  await f.page.evaluate(()=>{
   const sheet=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
   sheet.getRange('A1').setValue('Draft revenue')
+  sheet.getRange('A120').setValue('Audit120')
  })
 
  await f.page.getByRole('button',{name:'File',exact:true}).click()
@@ -510,10 +511,14 @@ test('Web XLSX File menu and shortcut open Print preview and print without savin
  await expect(dialog).toBeHidden()
  await f.page.keyboard.press('ControlOrMeta+p')
  await expect(dialog).toBeVisible()
- const print=dialog.getByRole('button',{name:'Print / Print to PDF',exact:true})
+ const print=dialog.getByRole('button',{name:'Print',exact:true})
+ const fileName=dialog.getByRole('textbox',{name:'File Name',exact:true})
  const preview=dialog.frameLocator('iframe[title="Print"]')
  await expect(preview.getByText('Draft revenue',{exact:true})).toBeVisible()
+ await expect(fileName).toHaveValue('acceptance',{timeout:5000})
  const previewPageCount=await preview.locator('.page').count()
+ const auditPage=await preview.locator('.page').evaluateAll(pages=>pages.findIndex(page=>page.textContent.includes('Audit120'))+1)
+ assert.ok(auditPage>1,'The audit marker must appear after the first rendered page')
  await expect(print).toBeEnabled()
  await f.page.evaluate(()=>{
   const append=document.body.append
@@ -541,17 +546,29 @@ test('Web XLSX File menu and shortcut open Print preview and print without savin
  const printed=await f.page.evaluate(()=>window.printedWorkbook)
  assert.equal(printed?.title,'acceptance')
  assert.equal(printed.pages,previewPageCount)
+ await f.page.keyboard.press('ControlOrMeta+p')
+ await expect(preview.getByText('Draft revenue',{exact:true})).toBeVisible()
+ await dialog.getByRole('combobox',{name:'Pages',exact:true}).selectOption('range')
+ await dialog.getByRole('spinbutton',{name:'From',exact:true}).fill(String(auditPage))
+ await dialog.getByRole('spinbutton',{name:'To',exact:true}).fill(String(auditPage))
+ await fileName.fill('Quarterly audit.pdf')
+ await dialog.getByRole('button',{name:'Print to PDF',exact:true}).click()
+ await expect(dialog).toBeHidden()
+ const exported=await f.page.evaluate(()=>window.printedWorkbook)
+ assert.equal(exported?.title,'Quarterly audit')
+ assert.equal(exported.pages,1)
  const pdfPage=await f.context.newPage()
  try {
-  await pdfPage.setContent(printed.html)
+  await pdfPage.setContent(exported.html)
   const bytes=await pdfPage.pdf({preferCSSPageSize:true,printBackground:true})
   const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
   const task=getDocument({data:Uint8Array.from(bytes)})
   try {
    const pdf=await task.promise
-   assert.equal(pdf.numPages,printed.pages)
+   assert.equal(pdf.numPages,1)
    const content=await (await pdf.getPage(1)).getTextContent()
-   assert.ok(content.items.some(item=>item.str==='Draft revenue'))
+   assert.ok(content.items.some(item=>item.str==='Audit120'),JSON.stringify(content.items.map(item=>item.str)))
+   assert.ok(content.items.every(item=>item.str!=='Draft revenue'))
   } finally {
    await task.destroy()
   }
@@ -559,6 +576,7 @@ test('Web XLSX File menu and shortcut open Print preview and print without savin
   await pdfPage.close()
  }
  assert.equal((await f.files.openFile(f.alice.token,original.fileId)).file.revision,original.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,original.fileId,original.revision),f.original)
 })
 
 test('Node XLSX preserves existing cell notes when adding a note and saving in Chromium',{timeout:90000},async t=>{

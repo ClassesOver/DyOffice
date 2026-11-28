@@ -524,7 +524,7 @@ export interface PrintPreviewHost {
   listPrinters(): Promise<PrinterInfo[]>
   /// Resolve with the status message to show.
   print(job: PrintJob, output: PrintOutputSettings): Promise<string>
-  exportPdf(job: PrintJob, pages: PrintOutputSettings['pages']): Promise<string>
+  exportPdf(job: PrintJob, pages: PrintOutputSettings['pages'], fileName?: string): Promise<string>
   /// Persists one dialog setting as a Page Layout command (`orientation:landscape`).
   applySetting(rest: string): void
   setMessage(message: string): void
@@ -615,10 +615,13 @@ export function createPrintPreviewHost(ctx: PageLayoutContext): PrintPreviewHost
       if (result.ok) return browserPrintDialog ? t('dlgPrintSystemDialog') : t('appPrintSent')
       return result.error === undefined ? t('appPrintCanceled') : t('appPrintFailed')
     },
-    async exportPdf(job, pages) {
-      const result = await window.desktopApi.exportPdf(
-        printRequest(job.documents, job.fileName, include(pages)),
-      )
+    async exportPdf(job, pages, fileName = job.fileName) {
+      const request = printRequest(job.documents, fileName, include(pages))
+      if (browserPrintDialog) {
+        const result = await window.desktopApi.printWorkbook(request)
+        return result.ok ? t('dlgPrintSystemDialog') : t('appPdfExportFailed')
+      }
+      const result = await window.desktopApi.exportPdf(request)
       return result.canceled ? t('appPdfCanceled') : t('appPdfExported', { path: result.path })
     },
     applySetting: (rest) => handlePageLayoutCommand(ctx, rest),

@@ -116,6 +116,7 @@ export function PrintDialog({
   const [pagesMode, setPagesMode] = useState<'all' | 'range'>('all')
   const [from, setFrom] = useState(1)
   const [to, setTo] = useState(1)
+  const [pdfName, setPdfName] = useState<string>()
   const request = useMemo(() => ({ host, range, settings, revision }), [host, range, settings, revision])
   const [preview, setPreview] = useState<{ request: typeof request; job: PrintJob } | null>(null)
   const job = preview?.request === request ? preview.job : null
@@ -241,6 +242,7 @@ export function PrintDialog({
     pagesMode === 'range' &&
     (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from || to > pageCount)
   const canOutput = job !== null && !busy && !rangeInvalid
+  const pdfFileName = (pdfName ?? job?.fileName.replace(/\.pdf$/i, '') ?? '').trim()
 
   const run = async (action: (built: PrintJob) => Promise<string>): Promise<void> => {
     if (!job || !canOutput) return
@@ -321,6 +323,7 @@ export function PrintDialog({
               {t('dlgPrintPages')}
               <span className="print-pages-row">
                 <select
+                  aria-label={t('dlgPrintPages')}
                   value={pagesMode}
                   onChange={(event) => setPagesMode(event.target.value as 'all' | 'range')}
                 >
@@ -347,6 +350,17 @@ export function PrintDialog({
                 />
               </span>
             </label>
+            {host.browserPrintDialog && (
+              <label className="dialog-span">
+                {t('dlgHfFileName')}
+                <input
+                  value={pdfName ?? job?.fileName.replace(/\.pdf$/i, '') ?? ''}
+                  maxLength={180}
+                  disabled={busy}
+                  onChange={(event) => setPdfName(event.target.value)}
+                />
+              </label>
+            )}
             <label>
               {t('dlgPrintOrientation')}
               <select
@@ -535,15 +549,17 @@ export function PrintDialog({
           <button className="secondary" onClick={onClose}>
             {t('dlgCancel')}
           </button>
-          {!host.browserPrintDialog && (
-            <button
-              className="secondary"
-              disabled={!canOutput}
-              onClick={() => void run((built) => host.exportPdf(built, pages))}
-            >
-              {t('dlgPrintToPdf')}
-            </button>
-          )}
+          <button
+            className="secondary"
+            disabled={!canOutput || (host.browserPrintDialog && !pdfFileName)}
+            onClick={() =>
+              void run((built) => host.browserPrintDialog
+                ? host.exportPdf(built, pages, pdfFileName)
+                : host.exportPdf(built, pages))
+            }
+          >
+            {t('dlgPrintToPdf')}
+          </button>
           <button
             className="primary-action"
             disabled={!canOutput}
@@ -558,7 +574,7 @@ export function PrintDialog({
               )
             }
           >
-            {host.browserPrintDialog ? `${t('dlgPrintButton')} / ${t('dlgPrintToPdf')}` : t('dlgPrintButton')}
+            {t('dlgPrintButton')}
           </button>
         </div>
       </div>

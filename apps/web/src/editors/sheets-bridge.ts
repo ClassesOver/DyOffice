@@ -7,6 +7,7 @@ import {pickLocalFiles} from './pick-local-files.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
 import {downloadWebCsv} from './web-ai-document-api'
 import {printInBrowser} from './browser-print.ts'
+import {browserFileName} from './browser-download'
 import {subscribeBrowserDocumentCommands} from './browser-document-command'
 import {draftCopyParentActive} from './draft-copy-authority'
 import type {RegisterWorkbookPicker} from './workbook-tab-picker'
@@ -643,7 +644,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async printWorkbook(input){
       const request=workbookExportPdfRequestSchema.parse(input)
       try{
-        await printInBrowser(request.html,request.fileName)
+        await printInBrowser(request.html,browserFileName(request.fileName.replace(/\.pdf$/i,''),'Workbook'))
         return {ok:true}
       }catch{
         return {ok:false,error:prefs.language==='en'?'Browser printing is unavailable.':'浏览器打印不可用。'}
