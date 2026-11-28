@@ -1,5 +1,7 @@
 .dyoffice-native-docs { height: 100vh; display: flex; flex-direction: column; color: var(--text); background: var(--surface); }
 .dyoffice-native-docs > .app { flex: 1; min-height: 0; }
+/* Keep editor dialogs above the Web document notification stack. */
+.dyoffice-native-docs .modal-backdrop { z-index: 201; }
 .dyoffice-docs-persistence-state { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; color: var(--text-secondary); font: 12px/1.5 var(--gs-font-sans); }
 .dyoffice-docs-persistence-state::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); }
 .dyoffice-docs-persistence-state[data-dirty='true']::before { background: var(--accent); }

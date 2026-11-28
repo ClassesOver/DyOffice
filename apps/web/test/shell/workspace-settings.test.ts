@@ -12,13 +12,16 @@ test('preference labels associate with their controls and switch labels toggle o
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save,sessionsClient:{listPage:async()=>({sessions:[],nextCursor:null}),list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{},activeTab:'general'})))
   const pane=document.querySelector('.personal-page-general')!
   const label=(name:string)=>[...pane.querySelectorAll<HTMLLabelElement>('label')].find(element=>element.textContent===name)!
-  for(const name of ['语言','文档作者','自动保存','显示 AI 助手']){
+  for(const name of ['语言','文档作者','自动保存']){
    const control=pane.querySelector<HTMLElement>(`[aria-label="${name}"]`)!
    expect(label(name).control,name).toBe(control)
   }
-  for(const [name,checked] of [['自动保存','true'],['显示 AI 助手','false']]){
+  const assistant=label('显示 AI 助手').control as HTMLInputElement
+  expect(assistant.getAttribute('role')).toBe('switch')
+  expect(document.getElementById(assistant.getAttribute('aria-describedby')!)?.textContent).toContain('仍可从功能区打开助手')
+  for(const [name,checked] of [['自动保存',true],['显示 AI 助手',false]] as const){
    await act(async()=>label(name).click())
-   expect(label(name).control?.getAttribute('aria-checked')).toBe(checked)
+   expect((label(name).control as HTMLInputElement).checked).toBe(checked)
   }
   expect(save).not.toHaveBeenCalled()
  }finally{await act(async()=>root.unmount());document.body.innerHTML=''}

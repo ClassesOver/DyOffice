@@ -238,7 +238,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await expect(editorHtml(file)).toHaveAttribute('data-web-ai-show-sidebar','false')
    await page.evaluate(id=>{location.hash='#/file/'+id},file.fileId)
    const editor=frame(file)
-   const entry=editor.getByRole('button',{name:'AI 助手',exact:true})
+   const entry=editor.locator('[data-ribbon-body]').getByRole('button',{name:'AI 助手',exact:true})
    await expect(entry).toBeEnabled()
    await expect(railFor(format,file)).toBeHidden()
    await expect(composer(file)).toBeHidden()
@@ -587,7 +587,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
  }
  await f.preferences.update(f.alice.token,{showAssistant:false})
  await page.reload()
- const hiddenPdfEntry=page.getByRole('button',{name:'AI 助手',exact:true})
+ const hiddenPdfEntry=page.locator('[data-ribbon-body]').getByRole('button',{name:'AI 助手',exact:true})
  await expect(hiddenPdfEntry).toBeEnabled({timeout:15000})
  await expect(page.locator('.shared-assistant-dock')).toHaveClass(/ai-dock-off/)
  await expect(page.locator('.shared-assistant-dock .ai-rail')).toBeHidden()

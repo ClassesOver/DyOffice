@@ -651,6 +651,7 @@ test('native Word prints mixed paper and keeps bookmark links inside the selecte
   const {file}=await importFile(f,f.alice.token,await zip.generateAsync({type:'nodebuffer'}),'mixed-paper.docx')
   await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
   await expect(page.locator('.tiptap.ProseMirror').first()).toContainText('Landscape section')
+  await expect(page.getByRole('complementary',{name:'Document notifications'}).getByText(/No model is available/)).toBeVisible()
   await page.evaluate(()=>{window.print=()=>window.dispatchEvent(new Event('beforeprint'))})
   await page.keyboard.press('ControlOrMeta+p')
   const dialog=page.locator('.modal.print-dialog')
