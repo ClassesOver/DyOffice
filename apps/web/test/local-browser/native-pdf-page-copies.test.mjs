@@ -473,7 +473,19 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  const replacement=await PDFDocument.create()
  replacement.addPage([710,300]).drawText('Replacement marker',{x:25,y:260})
  await addStaticFills(replacement,[{...retained,pageIndex:0,text:'New entry'}])
- await dialog.getByLabel('选择来源 PDF',{exact:true}).setInputFiles({name:'replacement.pdf',mimeType:'application/pdf',buffer:Buffer.from(await replacement.save())})
+ const replacementBytes=Buffer.from(await replacement.save())
+ const {file:workspaceReplacement}=await importFile(f,f.alice.token,replacementBytes,'replacement.pdf')
+ await dialog.getByRole('button',{name:'从工作区选择…',exact:true}).click()
+ const picker=frame.getByRole('dialog',{name:'选择来源 PDF',exact:true})
+ await picker.getByRole('listbox',{name:'工作区文件',exact:true}).selectOption(workspaceReplacement.fileId)
+ const [readSource]=await Promise.all([
+  page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${workspaceReplacement.fileId}/content`),
+  picker.getByRole('button',{name:'使用所选文件',exact:true}).click(),
+ ])
+ assert.ok(readSource.ok())
+ assert.equal(new URL(readSource.url()).searchParams.get('revision'),workspaceReplacement.revision)
+ await expect(confirm).toBeEnabled()
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  const stage=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/files/'+file.fileId+'/pdf/replace-pages/uploads')
  await confirm.click()
  const staged=await stage
@@ -495,7 +507,7 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  await send('每两页另存为副本')
  await expect(assistant.getByText('已保存两个副本',{exact:true})).toBeAttached({timeout:30000})
  const files=(await f.files.listFiles(f.alice.token)).files
- assert.equal(files.length,3)
+ assert.equal(files.length,4)
  for(const [part,widths] of [[1,[400,710]],[2,[600]]]){
   const copy=files.find(entry=>entry.name===`replace-source-part-${part}.pdf`)
   assert.ok(copy)
@@ -506,6 +518,8 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  }
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,replaced.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,replaced.revision),bytes)
+ assert.equal((await f.files.openFile(f.alice.token,workspaceReplacement.fileId)).file.revision,workspaceReplacement.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,workspaceReplacement.fileId,workspaceReplacement.revision),replacementBytes)
  recordVerifiedOfficeEffect('pdf','replace_pages')
  recordVerifiedOfficeEffect('pdf','split_pdf')
 })

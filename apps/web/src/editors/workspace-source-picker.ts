@@ -20,9 +20,10 @@ type PickerOptions = {
   language: string
   maxBytes: number
   localAccept?: string
+  allowLocal?: boolean
 }
 
-function selectSource(request: SettingsRequest, { title: heading, formats, language }: PickerOptions, signal: AbortSignal): Promise<Choice | null> {
+function selectSource(request: SettingsRequest, { title: heading, formats, language, allowLocal = true }: PickerOptions, signal: AbortSignal): Promise<Choice | null> {
   signal.throwIfAborted()
   const en = language === 'en'
   const dialog = document.createElement('dialog')
@@ -117,8 +118,8 @@ function selectSource(request: SettingsRequest, { title: heading, formats, langu
       resolve(choice)
     }
     const cancel = () => finish(null)
-    actions.append(button(en ? 'Choose local file…' : '选择本机文件…', () => finish('local')),
-      button(en ? 'Cancel' : '取消', cancel), use)
+    if (allowLocal) actions.append(button(en ? 'Choose local file…' : '选择本机文件…', () => finish('local')))
+    actions.append(button(en ? 'Cancel' : '取消', cancel), use)
     form.onsubmit = event => {
       event.preventDefault()
       if (files.value && !use.disabled) finish({ id: files.value, format: format.value as SourceFormat })

@@ -323,6 +323,14 @@ async function mount(){
   return !disposed&&editor?.status==='ready'&&!!state&&!state.dirty&&!state.blocked
  }
  const canRewritePages=()=>!disposed&&!ribbonBusy&&!ribbonPending&&!redacting&&!review?.candidates.length
+ const pickPageWorkspaceSource=params.has('sourceRevision')||params.get('guest')==='1'?undefined:async(signal:AbortSignal)=>{
+  const {pickWorkspaceSourceFile}=await import('./workspace-source-picker')
+  const language=prefs?.language??'zh'
+  return pickWorkspaceSourceFile(grant.workspaceSources,{
+   title:language==='en'?'Select a source PDF':'选择来源 PDF',formats:['pdf'],language,
+   maxBytes:MAX_WORKSPACE_COPY_BYTES,allowLocal:false,
+  },signal)
+ }
  async function preparePageSource(selection:{pages:readonly number[]}|{afterPageIndex:number}){
   if(!canRewritePages()||!isClean())return null
   const revision=grant.current(),signal=browserActions.signal
@@ -330,10 +338,10 @@ async function mount(){
   ribbonBusy=true
   try{
    if('pages' in selection){
-    const source=await selectReplacementPdf(selection.pages,signal,prefs?.language)
+    const source=await selectReplacementPdf(selection.pages,signal,prefs?.language,pickPageWorkspaceSource)
     return source?()=>grant.writer.replacePages(selection.pages,source,check,signal):null
    }
-   const source=await selectPdfToInsert(selection.afterPageIndex,signal,prefs?.language)
+   const source=await selectPdfToInsert(selection.afterPageIndex,signal,prefs?.language,pickPageWorkspaceSource)
    return source?()=>grant.writer.insertPdf(selection.afterPageIndex,source,check,signal):null
   }finally{
    ribbonBusy=false
@@ -621,8 +629,9 @@ async function mount(){
     if(!current.canAppendReport())return invalid('Save or discard PDF changes before replacing pages.')
     const revision=grant.current()
     const check=()=>!disposed&&!signal?.aborted&&view?.doc===doc&&grant.current()===revision
-    const source=await selectReplacementPdf(pages,signal)
-    signal?.throwIfAborted()
+    const pickerSignal=signal?AbortSignal.any([signal,browserActions.signal]):browserActions.signal
+    const source=await selectReplacementPdf(pages,pickerSignal,prefs?.language,pickPageWorkspaceSource)
+    pickerSignal.throwIfAborted()
     if(!source)return invalid('The user canceled PDF page replacement.')
     if(!await view?.savePageRewrite(()=>grant.writer.replacePages(pages,source,check,signal),check))return invalid('PDF page replacement was not confirmed. Check the editor save status before retrying.')
     return {output:'Replaced the selected pages and saved a new revision. Re-read the updated page order.',summary:'Replace PDF pages',mutated:true}

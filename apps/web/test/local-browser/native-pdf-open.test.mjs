@@ -258,7 +258,7 @@ test('native Web PDF ribbon imports fillable pages with duplicate field names',{
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
 })
 
-test('native Web PDF ribbon replaces and imports local pages with revision undo',{skip:!directory,timeout:90000},async t=>{
+test('native Web PDF ribbon replaces and imports workspace and local pages with revision undo',{skip:!directory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -285,6 +285,8 @@ test('native Web PDF ribbon replaces and imports local pages with revision undo'
  })))
  const original=Buffer.from(await pdf.save())
  const {file}=await importFile(f,f.alice.token,original,'replace-ribbon.pdf')
+ const replacementBytes=Buffer.from(await replacement.save())
+ const {file:workspaceReplacement}=await importFile(f,f.alice.token,replacementBytes,'replacement.pdf')
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory})
  f.cleanup.unshift(()=>app.close())
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
@@ -323,6 +325,17 @@ test('native Web PDF ribbon replaces and imports local pages with revision undo'
   await targets.press('Enter')
   return page.getByRole('dialog',{name:`Replace pages ${range.replace(',', ', ')}`,exact:true})
  }
+ async function chooseWorkspaceSource(dialog,source){
+  await dialog.getByRole('button',{name:'Choose from workspace…',exact:true}).click()
+  const picker=page.getByRole('dialog',{name:'Select a source PDF',exact:true})
+  await picker.getByRole('listbox',{name:'Workspace files',exact:true}).selectOption(source.fileId)
+  const [response]=await Promise.all([
+   page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${source.fileId}/content`),
+   picker.getByRole('button',{name:'Use selected file',exact:true}).click(),
+  ])
+  assert.ok(response.ok())
+  assert.equal(new URL(response.url()).searchParams.get('revision'),source.revision)
+ }
  const canceled=await chooseTargets('2')
  try{await expect(canceled).toBeVisible({timeout:10000})}
  catch(error){
@@ -346,7 +359,12 @@ test('native Web PDF ribbon replaces and imports local pages with revision undo'
  await verifySavedJump(flushed,0,1)
  const confirm=dialog.getByRole('button',{name:'Replace and save',exact:true})
  await expect(confirm).toBeDisabled()
- await dialog.getByLabel('Choose source PDF').setInputFiles({name:'replacement.pdf',mimeType:'application/pdf',buffer:Buffer.from(await replacement.save())})
+ await dialog.getByRole('button',{name:'Choose from workspace…',exact:true}).click()
+ await page.getByRole('dialog',{name:'Select a source PDF',exact:true}).getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(confirm).toBeDisabled()
+ await chooseWorkspaceSource(dialog,workspaceReplacement)
+ await expect(confirm).toBeEnabled()
+ assert.equal(await head(),flushed)
  await confirm.click()
  await expect.poll(head,{timeout:12000}).not.toBe(flushed)
  assert.deepEqual(await widths(await head()),[500,310,320,700])
@@ -382,7 +400,9 @@ test('native Web PDF ribbon replaces and imports local pages with revision undo'
   Type:'Annot',Subtype:'Link',Rect:[30,236,190,274],Dest:importName,
  })))
  const sourceFile={name:'import.pdf',mimeType:'application/pdf',buffer:Buffer.from(await source.save())}
- await importDialog.getByLabel('Choose source PDF').setInputFiles(sourceFile)
+ const {file:workspaceImport}=await importFile(f,f.alice.token,sourceFile.buffer,sourceFile.name)
+ await chooseWorkspaceSource(importDialog,workspaceImport)
+ assert.equal(await head(),importBase)
  await importDialog.getByRole('button',{name:'Import and save',exact:true}).click()
  await expect.poll(head,{timeout:12000}).not.toBe(importBase)
  assert.deepEqual(await widths(await head()),[310,210,220,320,700])
@@ -440,6 +460,10 @@ test('native Web PDF ribbon replaces and imports local pages with revision undo'
  await page.locator('.pdf-page[data-page="1"] .pdf-link').click()
  await expect(page.locator('.tb-page-input')).toHaveValue('3')
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ assert.deepEqual(await f.files.readFile(f.alice.token,workspaceReplacement.fileId,workspaceReplacement.revision),replacementBytes)
+ assert.deepEqual(await f.files.readFile(f.alice.token,workspaceImport.fileId,workspaceImport.revision),sourceFile.buffer)
+ assert.equal((await f.files.openFile(f.alice.token,workspaceReplacement.fileId)).file.revision,workspaceReplacement.revision)
+ assert.equal((await f.files.openFile(f.alice.token,workspaceImport.fileId)).file.revision,workspaceImport.revision)
  assert.deepEqual(errors,[])
 })
 
