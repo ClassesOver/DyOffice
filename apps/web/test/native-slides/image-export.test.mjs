@@ -580,6 +580,12 @@ test('Web PowerPoint pastes a native clipboard picture when async clipboard read
 test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{timeout:120000},async t=>{
   const f=await fixture(t),{page,origin}=f
   const archive=await JSZip.loadAsync(await readFile(deckFixture))
+  const link='https://例子.example/报价?q=季度#页'
+  const first='ppt/slides/slide1.xml',rels='ppt/slides/_rels/slide1.xml.rels'
+  archive.file(first,(await archive.file(first).async('string')).replace('<p:cNvPr id="3" name="Shape 3">',
+    '<p:cNvPr id="3" name="Shape 3"><a:hlinkClick r:id="rId99"/>'))
+  archive.file(rels,(await archive.file(rels).async('string')).replace('</Relationships>',
+    `<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${link}" TargetMode="External"/></Relationships>`))
   const second='ppt/slides/slide2.xml'
   archive.file(second,(await archive.file(second).async('string')).replace(/<p:sld(?=\s)/,'<p:sld show="0"'))
   const initial=(await importFile(f,f.alice.token,await archive.generateAsync({type:'nodebuffer'}),'Web export.pptx')).file
@@ -591,10 +597,14 @@ test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{
     page.getByRole('button',{name:'Export as PDF…',exact:true}).click(),
   ])
   assert.equal(file.suggestedFilename(),'Web export.pdf')
-  const {PDFDocument}=await import('pdf-lib')
+  const {PDFDict,PDFDocument,PDFHexString,PDFName}=await import('pdf-lib')
   const pdf=await PDFDocument.load(await readFile(await file.path()))
   assert.equal(pdf.getPageCount(),1)
   assert.equal(pdf.getPage(0).getWidth()/pdf.getPage(0).getHeight(),16/9)
+  const links=pdf.getPage(0).node.Annots()
+  assert.equal(links?.size(),1)
+  const action=links.lookup(0,PDFDict).lookup(PDFName.of('A'),PDFDict)
+  assert.equal(action.lookup(PDFName.of('URI'),PDFHexString).decodeText(),new URL(link).href)
   assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,initial.revision)
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin})
   await page.locator('.thumb').first().click({button:'right'})

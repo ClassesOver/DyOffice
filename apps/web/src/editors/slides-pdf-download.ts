@@ -1,6 +1,16 @@
 import {PDFDocument, PDFHexString} from 'pdf-lib'
 import type {ExportPdfLink} from '../../../slides/src/shared/ipc'
+import {DECK_LINK_PROTOCOLS} from '../../../slides/src/shared/run-link'
 import {browserFileName, decodeBrowserBase64, downloadBrowserFile} from './browser-download'
+
+function externalPdfUri(href: string): PDFHexString | undefined {
+  let url: URL
+  try { url = new URL(href) } catch { return }
+  if (!DECK_LINK_PROTOCOLS.includes(url.protocol)) return
+  // Opaque URL paths, including mailto addresses, can retain non-ASCII text.
+  const uri = url.href.replace(/[^\x00-\x7f]+/g, part => encodeURI(part))
+  return PDFHexString.of(Array.from(new TextEncoder().encode(uri),byte=>byte.toString(16).padStart(2,'0')).join(''))
+}
 
 export async function buildSlidesPdf(
   pages: string[], widthPx: number, heightPx: number, links: ExportPdfLink[][], signal: AbortSignal,
@@ -18,8 +28,8 @@ export async function buildSlidesPdf(
       if (!(left<right && top<bottom)) continue
       const anchor = /^#pg(\d+)$/.exec(link.href)
       const destination = anchor && output[Number(anchor[1])-1]
-      if (!destination && !/^(https?:\/\/|mailto:)/i.test(link.href)) continue
-      const uri = destination ? undefined : PDFHexString.of(Array.from(new TextEncoder().encode(link.href),byte=>byte.toString(16).padStart(2,'0')).join(''))
+      const uri = destination ? undefined : externalPdfUri(link.href)
+      if (!destination && !uri) continue
       const annotation = pdf.context.obj({
         Type:'Annot',Subtype:'Link',Border:[0,0,0],
         Rect:[left*width,(1-bottom)*height,right*width,(1-top)*height],

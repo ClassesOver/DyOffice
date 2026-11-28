@@ -158,7 +158,9 @@ test('lease takeover while native save runs fences the output before staging',as
  let entered,release,calls=0
  const started=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{release=resolve})
  const native={async inspect(){return {sheets:[{id:'1',name:'Acceptance'}]}},async savePlan(){calls++;entered();await gate;return {bytes:f.bytes}}}
- const service=createSheetsSaveService({files:f.files,leases:f.leases,revisions:f.revisions,native,plan:async()=>({})})
+ const service=createSheetsSaveService({files:f.files,leases:f.leases,revisions:f.revisions,native,
+  plan:async()=>({replaced:new Map(),added:new Map(),addedBinary:new Map(),removedEntries:[]}),
+ })
  const input={...f.input,request:sheetsSaveRequest('1',[{row:1,column:0,writeValue:true,value:23}])}
  await assert.rejects(()=>service.prepare(f.bob.token,f.initial.fileId,input))
  assert.equal(calls,0)

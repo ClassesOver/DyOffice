@@ -56,6 +56,7 @@ test('native Sheets gate builds original renderer and Rust and runs real edit-sa
  assert.match(job,/node-version: '22\.23\.5'/)
  assert.match(job,/playwright install chromium --with-deps/)
  assert.match(job,/PLAYWRIGHT_BROWSERS_PATH:.*github.workspace/)
+ assert.match(job,/run: npm run build:web:shell\n\s+- name: Test real native editor and authorized save-reopen path/)
  assert.match(job,/sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,PLAYWRIGHT_BROWSERS_PATH/)
  assert.match(job,/ci-host-services\.sh/)
  assert.match(job,/rustup toolchain install 1\.93\.0/)
