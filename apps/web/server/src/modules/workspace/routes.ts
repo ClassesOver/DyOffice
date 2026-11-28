@@ -26,7 +26,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, workspace: Workspa
       await sessions.authenticate(credential)
     })
     api.get('/api/v1/workspace/files', { schema: { querystring: { type: 'object', additionalProperties: false, properties: {
-      ext: { type: 'string', enum: ['docx','xlsx','pptx','pdf'] },
+      ext: { type: 'string', enum: ['docx','xlsx','pptx','pdf','csv'] },
       q: { type: 'string', maxLength: 200 },
       group: groupName,
       id,

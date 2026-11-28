@@ -49,3 +49,24 @@ test('authenticated Sheets routes use real Rust and reject foreign owners and br
  assert.equal((await f.app.inject({method:'POST',url:url+'inspect',headers:missingCsrf,payload})).statusCode,403)
  assert.equal((await f.app.inject({method:'POST',url:url+'inspect',headers:{...headers(),origin:'https://foreign.example'},payload})).statusCode,403)
 })
+
+test('CSV save route stages binary bytes with the authenticated revision and lease',async t=>{
+ const f=await fileFixture(t,{sheetsNative:{savePlan:async()=>assert.fail('unexpected XLSX writer')},sheetsPlanner:async()=>assert.fail('unexpected XLSX planner')})
+ const token=f.alice.token,original=Buffer.from('Item,Code\r\nA,007\r\n')
+ const {file}=await importFile(f,token,original,'ledger.csv')
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+ const headers={cookie:'__Host-dyoffice-session='+token,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(token),'content-type':'application/octet-stream'}
+ const editorId=randomUUID(),leases=createLeaseService({transactions:f.transactions})
+ const {leaseEpoch}=await leases.acquireLease(token,file.fileId,{editorId})
+ const query=new URLSearchParams({baseRevision:file.revision,editorId,leaseEpoch:String(leaseEpoch)})
+ const url='/api/v1/files/'+file.fileId+'/sheets/csv-uploads?'+query
+ const payload=Buffer.from('\ufeffItem,Code\r\nB,007\r\n')
+ const missingCsrf={...headers};delete missingCsrf['x-csrf-token']
+ assert.equal((await f.app.inject({method:'POST',url,headers:missingCsrf,payload})).statusCode,403)
+ const response=await f.app.inject({method:'POST',url,headers,payload})
+ assert.equal(response.statusCode,200,response.body)
+ assert.equal(response.json().size,payload.length)
+ assert.equal(response.json().baseRevision,file.revision)
+ assert.deepEqual(response.json().touchedEntries,[])
+ assert.deepEqual((await f.files.openFile(token,file.fileId)).file,file)
+})

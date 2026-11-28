@@ -60,7 +60,7 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
       const input = record(options, ['view','sort','folderId','limit','offset','ext','q','id','group'])
       const view = input.view ?? 'all', limit = input.limit ?? 50, offset = input.offset ?? 0
       if (!['all','recent','starred','trash'].includes(view as string) || !Number.isSafeInteger(limit) || (limit as number) < 0 || (limit as number) > 100 || !Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > 1_000_000) throw authError(400)
-      if (input.ext !== undefined && !['docx','xlsx','pptx','pdf'].includes(input.ext as string)) throw authError(400)
+      if (input.ext !== undefined && !['docx','xlsx','pptx','pdf','csv'].includes(input.ext as string)) throw authError(400)
       if (input.sort !== undefined && !['modified-asc','modified-desc'].includes(input.sort as string)) throw authError(400)
       if (input.q !== undefined && (typeof input.q !== 'string' || [...input.q].length > 200 || /[\u0000-\u001f\u007f]/u.test(input.q))) throw authError(400)
       const group = input.group === undefined ? null : starredGroupName(input.group)

@@ -1,4 +1,5 @@
 import {editorFileToken,authenticateEditorFile} from '../dsh-edit/http.ts'
+import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type {FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
@@ -23,7 +24,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       // behind its own edit-triggered reads (503 starved chart edits, see
       // shared-object-admission evidence). Read routes keep the immediate 503.
       const path=request.routeOptions.url
-      const saving = path?.endsWith('/sheets/uploads') || path?.endsWith('/sheets/password-uploads') || path?.endsWith('/sheets/copy/uploads')
+      const saving = path?.endsWith('/sheets/uploads') || path?.endsWith('/sheets/csv-uploads') || path?.endsWith('/sheets/password-uploads') || path?.endsWith('/sheets/copy/uploads')
       await admission.admit(request, reply, saving ? { waitMs: 10_000 } : undefined)
     })
     api.addHook('onResponse', async request => admission.close(request))
@@ -42,6 +43,17 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     if (saves) route<SheetsSaveInput>('/api/v1/files/:id/sheets/uploads', {
       baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER}, request: {type: 'object'},unlockId:uuidSchema,
     }, (token,id,body,signal) => saves.prepare(token,id,body,signal), 4 * 1024 * 1024,['unlockId'])
+    if (saves) api.post<{Params:{id:string};Querystring:{baseRevision:string;editorId:string;leaseEpoch:string}}>('/api/v1/files/:id/sheets/csv-uploads',{
+      bodyLimit:MAX_OBJECT_BYTES,
+      schema:{params:fileParamsSchema,querystring:{
+        type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch'],
+        properties:{baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'string',pattern:'^[1-9][0-9]{0,15}$'}},
+      }},
+    }, (request,reply)=>withDisconnect(request,reply,signal=>admission.transfer(request,reply,()=>{
+      if(request.headers['content-type']!=='application/octet-stream'||!Buffer.isBuffer(request.body))throw authError(415)
+      const {baseRevision,editorId,leaseEpoch}=request.query
+      return saves.prepareCsv(editorFileToken(request),request.params.id,{baseRevision,editorId,leaseEpoch:Number(leaseEpoch)},request.body,signal)
+    })))
     if (saves) route<SheetsPasswordInput>('/api/v1/files/:id/sheets/password-uploads', {
       baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER},
       unlockId:uuidSchema,newPassword:{type:'string',minLength:1,maxLength:255},

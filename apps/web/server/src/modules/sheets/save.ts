@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import type { FileService } from '../files/service.ts'
 import type { LeaseService } from '../leases/service.ts'
 import type { RevisionService } from '../revisions/service.ts'
@@ -16,6 +17,7 @@ export interface SheetsSaveNative {
   savePlan(input: Uint8Array, plan: XlsxMutationPlan, signal?: AbortSignal): Promise<{ bytes: Buffer }>
 }
 type SheetsRevisionInput = { baseRevision: string; leaseEpoch: number; editorId: string; unlockId?:string }
+export type CsvSaveInput = Omit<SheetsRevisionInput,'unlockId'>
 export interface SheetsSaveInput extends SheetsRevisionInput { request: unknown }
 export interface SheetsPasswordInput extends SheetsRevisionInput { unlockId: string; newPassword: string }
 export type SheetsExportInput = Omit<SheetsSaveInput, 'request'> & { phases: unknown[] }
@@ -29,10 +31,10 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
 }) {
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
-  async function assertSource(token: string, fileId: string, input: SheetsRevisionInput) {
+  async function assertSource(token: string, fileId: string, input: SheetsRevisionInput, format: 'xlsx'|'csv' = 'xlsx') {
     await leases.renewLease(token, fileId, { editorId: input.editorId, leaseEpoch: input.leaseEpoch })
     const head = await files.openFile(token, fileId)
-    if (head.format !== 'xlsx') throw authError(415)
+    if (head.format !== format) throw authError(415)
     if (head.file.revision !== input.baseRevision) throw authError(409)
     return head
   }
@@ -74,6 +76,18 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
     }
   }
   return {
+    async prepareCsv(token: string, fileId: string, input: CsvSaveInput, bytes: Buffer, signal?: AbortSignal) {
+      if (active >= maxConcurrent) throw Object.assign(authError(429), { retryAfter: 1 })
+      if (bytes.length > MAX_OBJECT_BYTES) throw authError(413)
+      // The renderer writes UTF-8 with BOM, including a BOM-only empty sheet.
+      if (bytes.subarray(0,3).toString('hex') !== 'efbbbf') throw authError(400)
+      active++
+      try {
+        signal?.throwIfAborted()
+        await assertSource(token, fileId, input, 'csv')
+        return await stageOutput(token, fileId, input, bytes, [], undefined, signal)
+      } finally { active-- }
+    },
     async exportDraft(token: string, fileId: string, input: SheetsExportInput, signal?: AbortSignal) {
       if (active >= maxConcurrent) throw Object.assign(authError(429), { retryAfter: 1 })
       active++

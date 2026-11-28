@@ -186,3 +186,36 @@ test('lease takeover while native save runs fences the output before staging',as
  assert.equal((await f.files.usage(f.alice.token)).reservedBytes,0)
  assert.equal((await f.files.openFile(f.alice.token,f.initial.fileId)).file.revision,f.initial.revision)
 })
+
+test('CSV edits publish a CSV revision while earlier versions keep their original bytes',async t=>{
+ const f=await fileFixture(t,{buildApp:false}),token=f.alice.token
+ const original=Buffer.from('Name;Code\r\nAlpha;007\r\n','utf16le')
+ const bytes=Buffer.concat([Buffer.from([0xff,0xfe]),original])
+ const {file,format,name}=await importFile(f,token,bytes,'Ledger.CSV')
+ assert.equal(format,'csv')
+ assert.equal(name,'Ledger.CSV')
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),bytes)
+ await assert.rejects(f.files.openFile(f.bob.token,file.fileId),{statusCode:404})
+
+ const leases=createLeaseService({transactions:f.transactions,assertOfficeWritable:f.files.assertOfficeLeaseAllowed})
+ const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
+ const editorId=randomUUID(),{leaseEpoch}=await leases.acquireLease(token,file.fileId,{editorId})
+ const saves=createSheetsSaveService({files:f.files,leases,revisions,native:{},plan:async()=>assert.fail('CSV saves must not invoke the XLSX mutation planner')})
+ const input={baseRevision:file.revision,leaseEpoch,editorId}
+ await assert.rejects(saves.prepare(token,file.fileId,{...input,request:{}}),{statusCode:415})
+ const csvContent='Name,Code\r\nBeta,007\r\n'
+ const encoded=Buffer.from('\ufeff'+csvContent)
+ await assert.rejects(saves.prepareCsv(token,file.fileId,input,Buffer.from(csvContent)),{statusCode:400})
+ const draft=await saves.prepareCsv(token,file.fileId,input,encoded)
+ assert.equal((await f.files.openFile(token,file.fileId)).file.revision,file.revision)
+ const commit={fileId:file.fileId,uploadId:draft.uploadId,baseRevision:file.revision,leaseEpoch,idempotencyKey:randomUUID()}
+ const saved=await revisions.commitRevision(token,commit)
+ assert.deepEqual(await revisions.commitRevision(token,commit),saved)
+ const head=await f.files.openFile(token,file.fileId)
+ assert.equal(head.name,'Ledger.CSV')
+ assert.equal(head.format,'csv')
+ assert.deepEqual(head.file,saved)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),bytes)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,saved.revision),Buffer.from('\ufeff'+csvContent))
+ await assert.rejects(saves.prepareCsv(token,file.fileId,input,encoded),{statusCode:409})
+})

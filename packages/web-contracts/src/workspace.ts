@@ -1,4 +1,4 @@
-import type { OfficeFormat } from './api.ts'
+import type { WorkspaceFileFormat } from './api.ts'
 
 export type WorkspaceView = 'all' | 'recent' | 'starred' | 'trash'
 export type WorkspaceFileSort = 'modified-asc' | 'modified-desc'
@@ -6,7 +6,7 @@ export type WorkspaceFileSort = 'modified-asc' | 'modified-desc'
 export interface WorkspaceFile {
   id: string
   name: string
-  format: OfficeFormat
+  format: WorkspaceFileFormat
   size: number
   updatedAt: string
   starred: boolean
@@ -16,7 +16,7 @@ export interface WorkspaceFile {
 }
 
 export interface WorkspaceFileQuery {
-  ext?: OfficeFormat
+  ext?: WorkspaceFileFormat
   q?: string
   /** Direct identity lookup; totalAll is limited to this identity, not the entire workspace. */
   id?: string
