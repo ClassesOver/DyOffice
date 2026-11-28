@@ -22,6 +22,65 @@ const built=Boolean(process.env.DYOFFICE_TEST_OFFICE_ASSETS||(
  process.env.DYOFFICE_TEST_SHEETS_DIST&&process.env.DYOFFICE_TEST_SLIDES_DIST&&process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 ))
 
+test('workspace opens TSV and empty TSV uploads as editable XLSX copies',{skip:!built,timeout:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+9
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
+ const gateway=fileURLToPath(new URL('../../dist-sheets-server/',import.meta.url))
+ const sheets=await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  DYOFFICE_XLSX_NODE_ENGINE:join(gateway,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(gateway,'gateway-process.mjs'),DYOFFICE_NATIVE_XLSX_DIRECTORY:officeBrowserAsset('sheets'),
+ },{enabled:true})
+ f.cleanup.unshift(()=>sheets.close())
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),...sheets})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.keyboard.press('ControlOrMeta+o')
+ const upload=page.getByRole('dialog',{name:'上传文件',exact:true})
+ await expect(upload.locator('input[type=file]')).toHaveAttribute('accept',/\.tsv/)
+ await upload.locator('input[type=file]').setInputFiles([
+  {name:'Quarter.TSV',mimeType:'text/tab-separated-values',buffer:Buffer.from('\ufeffName\tAmount\r\nA, B, C, D, E\t42\r\n=1+2\t5')},
+  {name:'Blank.tsv',mimeType:'text/tab-separated-values',buffer:Buffer.alloc(0)},
+ ])
+ await upload.getByRole('button',{name:'开始上传（2）',exact:true}).click()
+ await expect(upload).toContainText('已完成 2',{timeout:60000})
+ await upload.getByRole('button',{name:'完成',exact:true}).click()
+ const {files}=await f.files.listFiles(f.alice.token)
+ assert.deepEqual(files.map(file=>file.name).sort(),['Blank.xlsx','Quarter.xlsx'])
+ const [quarter,blank]=['Quarter.xlsx','Blank.xlsx'].map(name=>files.find(file=>file.name===name))
+ const frame=file=>page.frameLocator(`iframe[data-document-id="${file.id}"]`)
+ await expect(frame(blank).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const tab=page.getByRole('tab',{name:'Quarter.xlsx',exact:true})
+ await tab.click()
+ const workbook=frame(quarter).locator('html')
+ await expect(workbook).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const values=()=>workbook.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return sheet&&['A1','A2','B2','A3'].map(cell=>sheet.getRange(cell).getValue())
+ })
+ await expect.poll(values).toEqual(['Name','A, B, C, D, E',42,'=1+2'])
+ await workbook.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').setValue(51))
+ const head=async()=>(await f.files.openFile(f.alice.token,quarter.id)).file.revision
+ const base=await head()
+ await tab.focus()
+ await page.keyboard.press('ControlOrMeta+s')
+ await expect.poll(head,{timeout:30000}).not.toBe(base)
+ const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,quarter.id,await head()))
+ const sheet=await zip.file('xl/worksheets/sheet1.xml').async('string')
+ assert.match(sheet,/<c\b[^>]*\br="B2"[^>]*>\s*<v>51<\/v>/)
+ await page.reload()
+ await expect.poll(values,{timeout:30000}).toEqual(['Name','A, B, C, D, E',51,'=1+2'])
+})
+
 test('workspace document theme updates the open Word and Excel canvases without saving either file',{skip:!built,timeout:120000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+6
  const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})

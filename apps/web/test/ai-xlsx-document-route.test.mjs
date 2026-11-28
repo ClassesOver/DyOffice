@@ -27,3 +27,25 @@ test('XLSX create route refuses when the runtime does not advertise XLSX editing
  const response=await app.inject({method:'POST',url:'/api/v1/ai/xlsx-documents',headers:{cookie:'__Host-dyoffice-session='+'a'.repeat(43)},payload:{title:'Report',content:'A\n1'}})
  assert.equal(response.statusCode,415)
 })
+
+test('workspace TSV conversion is authenticated, uses the isolated converter and returns workbook bytes',async t=>{
+ const app=await createApiShell(),calls=[]
+ const table=Buffer.from('Label\tAmount\nA, B, C\t42'),workbook=Buffer.from('PK\x03\x04workbook')
+ const cookie='__Host-dyoffice-session='+'a'.repeat(43)
+ registerFileRoutes(app,{capabilities:{xlsx:'editable'}},{authenticate:async()=>({})},{originCheck(){},requireSession(request){
+  if(request.headers['x-csrf-token']!=='proof')throw Object.assign(Error('Forbidden'),{statusCode:403})
+ }},undefined,async(bytes,signal)=>{calls.push({bytes,signal});return workbook})
+ t.after(()=>app.close());await app.ready()
+ const request={method:'POST',url:'/api/v1/files/convert-tsv',headers:{'content-type':'application/octet-stream'},payload:table}
+ assert.equal((await app.inject(request)).statusCode,401)
+ assert.equal((await app.inject({...request,headers:{...request.headers,cookie}})).statusCode,403)
+ assert.equal(calls.length,0)
+ const capabilities=await app.inject({url:'/api/v1/capabilities',headers:{cookie}})
+ assert.equal(capabilities.json().tsvImport,'editable')
+ const result=await app.inject({...request,headers:{...request.headers,cookie,'x-csrf-token':'proof'}})
+ assert.equal(result.statusCode,200,result.body)
+ assert.equal(result.headers['content-type'],'application/octet-stream')
+ assert.deepEqual(result.rawPayload,workbook)
+ assert.deepEqual(calls[0].bytes,table)
+ assert.ok(calls[0].signal instanceof AbortSignal)
+})

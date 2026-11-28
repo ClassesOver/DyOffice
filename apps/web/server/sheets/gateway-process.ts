@@ -51,12 +51,14 @@ async function execute(packet:Record<string,unknown>) {
   const bytes=await readBounded(resolveWorkPath('/work/input.xlsx'),MAX)
   let result:unknown
   if(packet.command==='gateway_convert_merge_source'){
-    if(Object.keys(request).join(',')!=='format'||(request.format!=='csv'&&request.format!=='tsv'&&request.format!=='xls'))throw invalidInput()
+    const keys=Object.keys(request).sort().join(',')
+    const allowEmpty=keys==='allowEmpty,format'&&request.format==='tsv'&&request.allowEmpty===true
+    if((keys!=='format'&&!allowEmpty)||(request.format!=='csv'&&request.format!=='tsv'&&request.format!=='xls'))throw invalidInput()
     try{
       if(request.format==='xls')result=convertLegacyXls(bytes)
       else{
         const converted=await csvToXlsxBufferForOpen(decodeCsvBuffer(bytes),'Sheet1',request.format==='tsv'?'\t':undefined)
-        if(converted.empty)throw invalidInput()
+        if(converted.empty&&!allowEmpty)throw invalidInput()
         result=converted.buffer
       }
     }catch{throw invalidInput()}

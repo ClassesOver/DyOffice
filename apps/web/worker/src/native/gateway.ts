@@ -89,5 +89,6 @@ export function createGatewayAdapter(process:NativeProcess) {
     planFromWorkbook:(bytes:Buffer,request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{request},signal) as Promise<XlsxMutationPlan>,
     readWorkbookPackage:(bytes:Buffer,signal?:AbortSignal,query?:WorkbookPackageQuery)=>run(bytes,'gateway_package',query??{},signal),
     convertMergeSource:(bytes:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal)=>run(bytes,'gateway_convert_merge_source',{format},signal) as Promise<Buffer>,
+    convertTsvImport:(bytes:Buffer,signal?:AbortSignal)=>run(bytes.length?bytes:Buffer.from('\n'),'gateway_convert_merge_source',{format:'tsv',allowEmpty:true},signal) as Promise<Buffer>,
   }
 }

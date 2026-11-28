@@ -77,7 +77,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
      await verifySession(requestSignal)
      return result
     },
-    async download(path:string,options?:{body:unknown;signal:AbortSignal}){
+    async download(path:string,options?:{body:unknown;signal?:AbortSignal}){
      const blob=await perform<Blob>(path,options?'POST':'GET',options?.body,stamp,csrfToken,options?.signal,async response=>{
       if(response.headers.get('content-type')?.split(';',1)[0]!=='application/octet-stream'){
        await response.body?.cancel()
@@ -139,9 +139,11 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    const encryptedFormat=password!==undefined&&(extension==='docx'||extension==='xlsx')?extension:undefined
    if(password!==undefined&&(!encryptedFormat||!password.length||password.length>255))throw new Error('请输入有效的打开密码。')
    const bound=await bindSession(expectedProof)
-   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size,...(autoName?{autoName:true}:{})})
    // Files dragged onto a native editor are created in the iframe's realm.
    let content=file instanceof Blob?file:new Blob([file])
+   const tsv=extension==='tsv'
+   if(tsv)content=await bound.download('/api/v1/files/convert-tsv',{body:content})
+   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:tsv?file.name.slice(0,-4)+'.xlsx':file.name,size:tsv?content.size:file.size,...(autoName?{autoName:true}:{})})
    const path=`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}`
    if(password!==undefined){
     const encoded=new TextEncoder().encode(password)

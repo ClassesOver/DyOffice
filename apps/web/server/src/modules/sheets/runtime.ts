@@ -77,6 +77,7 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
       recalculate:refresh?.recalculate ?? (!nodeEngine ? native.recalculate : undefined),
       refreshExternalLinks:refresh?.refreshExternalLinks,
       convertMergeSource:gateway.convertMergeSource,
+      convertTsvImport:gateway.convertTsvImport,
     },sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsWorkbookPlanner:gateway.planFromWorkbook,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
     nativeSheetsDirectory:resolve(environment.DYOFFICE_NATIVE_XLSX_DIRECTORY ?? fileURLToPath(new URL('../../../../dist-sheets/',import.meta.url))),
     async close(){controller.abort();await Promise.allSettled([...active])},

@@ -119,6 +119,34 @@ test('queued files can be removed before uploading',async()=>{
  expect(upload).not.toHaveBeenCalled()
 })
 
+test('TSV uploads convert within the bound session and stage the XLSX copy',async()=>{
+ const proof='p'.repeat(43),staged:string[]=[]
+ const input=new File(['Name\tValue\nA, B\t42'],'Report.TSV')
+ const converted=new Blob(['converted workbook'],{type:'application/octet-stream'})
+ const client=createLocalShellClient(async(request,options)=>{
+  const path=String(request)
+  if(path.endsWith('/session-proof'))return Response.json({csrfToken:proof})
+  expect(new Headers(options?.headers).get('x-csrf-token')).toBe(proof)
+  if(path.endsWith('/convert-tsv')){
+   expect(await (options?.body as Blob).text()).toBe(await input.text())
+   return Object.assign(new Response(null,{headers:{'content-type':'application/octet-stream'}}),{blob:async()=>converted})
+  }
+  if(path.endsWith('/uploads')){
+   const {name,size}=JSON.parse(String(options?.body));staged.push(name)
+   expect(size).toBe(converted.size)
+   return Response.json({uploadId:'upload'})
+  }
+  if(path.endsWith('/content')){
+   expect(await (options?.body as Blob).text()).toBe(await converted.text())
+   return Response.json({})
+  }
+  if(path.endsWith('/finish'))return Response.json({file:{fileId:'file'},format:'xlsx'})
+  throw new Error('Unexpected request '+path)
+ })
+ await client.upload(input,proof)
+ expect(staged).toEqual(['Report.xlsx'])
+})
+
 test('the multi-file picker appends queued files and rejects oversized files before sending',async()=>{
  const upload=vi.fn(async(_file:File)=>{})
  const oversized=new File(['x'],'large.pdf');Object.defineProperty(oversized,'size',{value:32*1024*1024+1})

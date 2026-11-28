@@ -45,9 +45,10 @@ const sheetSizes = (maxIndex:number) => ({type:'array',maxItems:maxIndex,items:{
 const sheetLayout = {type:'object',additionalProperties:false,required:['defaultRowHeight','defaultColumnWidth','rows','columns'],properties:{
   defaultRowHeight:{type:'number',exclusiveMinimum:0},defaultColumnWidth:{type:'number',exclusiveMinimum:0},rows:sheetSizes(1048576),columns:sheetSizes(16384),
 }}
-export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }) {
+export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }, convertTsv?: (bytes: Buffer, signal: AbortSignal) => Promise<Buffer>) {
   const admission = objectTransferAdmission(app)
   const { transfer } = admission
+  const tsvConverter = files.capabilities?.xlsx === 'editable' ? convertTsv : undefined
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
@@ -55,7 +56,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       const credential = await authenticateEditorFile(request,sessions,csrf,mutation)
       // Hold admission through processing AND response completion. A client
       // disconnect cannot free capacity while object work still owns buffers.
-      if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/uploads') || request.routeOptions.url?.endsWith('/purge') || request.routeOptions.url?.endsWith('/finish') || request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads') || request.routeOptions.url?.endsWith('/ai/xlsx-documents') || request.routeOptions.url?.endsWith('/docx/unlock') || request.routeOptions.url?.endsWith('/docx/import-unlock') || request.routeOptions.url?.endsWith('/docx/recovery-draft') || request.routeOptions.url?.endsWith('/files/new-pdf')))) {
+      if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/uploads') || request.routeOptions.url?.endsWith('/purge') || request.routeOptions.url?.endsWith('/finish') || request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads') || request.routeOptions.url?.endsWith('/ai/xlsx-documents') || request.routeOptions.url?.endsWith('/docx/unlock') || request.routeOptions.url?.endsWith('/docx/import-unlock') || request.routeOptions.url?.endsWith('/docx/recovery-draft') || request.routeOptions.url?.endsWith('/files/new-pdf') || request.routeOptions.url==='/api/v1/files/convert-tsv'))) {
         if (request.method === 'PUT') {
           const format = encryptedFormat(contentType(request.headers['content-type']))
           const upload = await files.preflightUpload(credential, (request.params as { id: string }).id, format)
@@ -82,7 +83,12 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_OBJECT_BYTES }, (_request, body, done) => done(null, body))
     api.addContentTypeParser(encryptedWorkbookMime, { parseAs: 'buffer' }, (_request, body, done) => done(null, body))
     api.addContentTypeParser([encryptedDocumentMime,documentPasswordChangeMime], { parseAs: 'buffer' }, (_request, body, done) => done(null, body))
-    api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => files.capabilities)
+    api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => ({...files.capabilities,...(tsvConverter?{tsvImport:'editable'}:{})}))
+    if(tsvConverter)api.post('/api/v1/files/convert-tsv', {bodyLimit:MAX_OBJECT_BYTES,schema:{querystring:emptyQuery}}, (request,reply)=>withDisconnect(request,reply,signal=>transfer(request,reply,async()=>{
+      if(contentType(request.headers['content-type'])!=='application/octet-stream')throw authError(415)
+      const bytes=await tsvConverter(Buffer.isBuffer(request.body)?request.body:Buffer.alloc(0),signal)
+      return reply.header('Content-Security-Policy',"sandbox; default-src 'none'").type('application/octet-stream').send(bytes)
+    })))
     api.get('/api/v1/storage/usage', { schema: { querystring: emptyQuery } }, request => files.usage(token(request)))
     api.post('/api/v1/files/new-pdf', { bodyLimit:4096, schema:{querystring:emptyQuery} }, (request,reply)=>transfer(request,reply,async()=>{
       if(request.body!==undefined)throw authError(400)
