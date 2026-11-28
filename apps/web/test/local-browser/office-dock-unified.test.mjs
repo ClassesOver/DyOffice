@@ -242,7 +242,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
     const menu=page.getByRole('group',{name:'文件',exact:true})
     await expect(menu).toBeVisible()
     await page.keyboard.press('Tab')
-    await expect(menu.getByRole('button').first()).toBeFocused()
+    await expect(menu.getByRole('button').and(menu.locator('button:enabled')).first()).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
     await expect(fileButton).toBeFocused()
