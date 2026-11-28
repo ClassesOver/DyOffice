@@ -491,7 +491,7 @@ import {
   type PageLayoutContext,
 } from './page-layout-actions'
 import { resolveEffectivePrintFit } from './print-settings'
-import { handleExportCsv as handleExportCsvImpl, type CsvExportContext } from './csv-export'
+import { captureActiveSheetCsv, handleExportCsv as handleExportCsvImpl, type CsvExportContext } from './csv-export'
 import { effectivePageBreaks, installPageBreakPreview } from './page-break-preview'
 import { mapProtectedRanges } from './protected-ranges'
 import { settleFormulas } from './formula-settle'
@@ -669,7 +669,11 @@ export interface SheetsEditorHost {
   confirmWorkbookPasswordSave?: {label:string; busy:boolean; error?:string; run:()=>void}
   workspaceCopy?: {
     suggest?(content: string): Promise<string>
-    save(stem: string, capture: (exportCopy: WorkbookDraftExporter) => Promise<SaveOutcome>): Promise<void>
+    save(
+      stem: string,
+      capture: (exportCopy: WorkbookDraftExporter) => Promise<SaveOutcome>,
+      captureCsv?: () => Promise<string | null>,
+    ): Promise<void>
   } | undefined
   assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
   harnessRecovery?: {
@@ -813,24 +817,7 @@ export function App({
       nameWithAi,
       openPrintPreview: () => menuActionRef.current('print'),
       exportCsv: async () => {
-        const context = csvExportContext()
-        const runtime = univerRef.current
-        const state = lazyWorkbookRef.current
-        if (runtime && state && !state.flags.preloadComplete) {
-          if (!fitsFullLoad(workbookCellCounts(state.file.sheets))) {
-            setMessage(t('appCsvExportTooLarge'))
-            return
-          }
-          setMessage(t('appFullLoadRunning'))
-          try {
-            await startFullLoad(runtime, lazyWorkbookRef, setMessage)
-          } catch {
-            setMessage(t('appCsvExportFailed'))
-            return
-          }
-          if (lazyWorkbookRef.current !== state) return
-        }
-        await handleExportCsvImpl(context)
+        if (await prepareCsvExport()) await handleExportCsvImpl(csvExportContext())
       },
       reload: () => saveGateRef.current.run(async () => {
         if (editorIsDirty()) return false
@@ -1466,12 +1453,33 @@ export function App({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per renderer; reads the latest state through refs
   }, [])
 
+  async function prepareCsvExport(): Promise<boolean> {
+    const runtime = univerRef.current
+    const state = lazyWorkbookRef.current
+    if (!runtime || !state || state.flags.preloadComplete) return true
+    if (!fitsFullLoad(workbookCellCounts(state.file.sheets))) {
+      setMessage(t('appCsvExportTooLarge'))
+      return false
+    }
+    setMessage(t('appFullLoadRunning'))
+    try {
+      await startFullLoad(runtime, lazyWorkbookRef, setMessage)
+    } catch {
+      setMessage(t('appCsvExportFailed'))
+      return false
+    }
+    return lazyWorkbookRef.current === state && univerRef.current === runtime
+  }
+
   function csvExportContext(): CsvExportContext {
     return {
       univerRef,
       lazyWorkbookRef,
       setMessage,
-      requestSaveAs: () => void handleSaveRef.current('save-as'),
+      requestSaveAs: () => {
+        if (hostRef.current?.inPlaceSave) void saveWorkspaceCopy(false, true)
+        else void handleSaveRef.current('save-as')
+      },
     }
   }
 
@@ -1504,7 +1512,7 @@ export function App({
         },
       } : {}),
       ...(hostRef.current?.saveCsvContent ? { saveCsvContent: hostRef.current.saveCsvContent } : {}),
-      ...(hostRef.current?.inPlaceSave ? { exportCsvAsWorkbook: () => saveWorkspaceCopyUnderGate(false) } : {}),
+      ...(hostRef.current?.inPlaceSave ? { exportCsvAsWorkbook: () => saveWorkspaceCopyUnderGate(false, true) } : {}),
       flushPendingChanges: async () => {
         flushPendingChartDataSync(visualSyncContext())
         await flushChartDataSync(visualSyncContext())
@@ -6171,13 +6179,13 @@ export function App({
    * empty answer leaves the dialog on the workbook's current name, so this is a
    * no-op rather than a failure.
    */
-  async function saveWorkspaceCopy(namedByAi: boolean): Promise<void> {
+  async function saveWorkspaceCopy(namedByAi: boolean, xlsxOnly = false): Promise<void> {
     const gate = saveGateRef.current
     if (gate.busy) return
-    await gate.run(() => saveWorkspaceCopyUnderGate(namedByAi))
+    await gate.run(() => saveWorkspaceCopyUnderGate(namedByAi, xlsxOnly))
   }
 
-  async function saveWorkspaceCopyUnderGate(namedByAi: boolean): Promise<void> {
+  async function saveWorkspaceCopyUnderGate(namedByAi: boolean, xlsxOnly: boolean): Promise<void> {
     const web = hostRef.current
     const copy = web?.workspaceCopy
     if (!copy || web.readOnly || (namedByAi && !copy.suggest)) return
@@ -6192,6 +6200,10 @@ export function App({
     await copy.save(stem, async (exportCopy) => {
       if (hostRef.current?.readOnly || lazyWorkbookRef.current !== state || !(await commitActiveEditor())) return { ok: false }
       return exportWorkbookDraft(saveContext(), exportCopy)
+    }, xlsxOnly ? undefined : async () => {
+      if (!(await commitActiveEditor()) || !(await prepareCsvExport()) ||
+          hostRef.current?.readOnly || lazyWorkbookRef.current !== state) return null
+      return (await captureActiveSheetCsv(csvExportContext()))?.content ?? null
     })
   }
 

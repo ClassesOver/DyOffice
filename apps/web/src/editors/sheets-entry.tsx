@@ -155,36 +155,56 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       try { return await suggestWebFileName(content,{modelId,proof:assistant.sessionProof,format:'xlsx',locale,signal:copyLifetime.signal}) }
       finally { naming = false }
     }} : {}),
-    async save(stem,capture) {
+    async save(stem,capture,captureCsv) {
       if (copying || !canCopy()) return
       const signal = copyLifetime.signal
       copying = true; changed()
       let upload: string | undefined, finishStarted = false
+      const uploadBlob = async (name:string,blob:Blob) => {
+        if (!canCopy()) throw Error('Draft session ended')
+        const {uploadId} = await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
+        upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
+        if (!canCopy()) throw Error('Draft session ended')
+        await request(upload+'/content','PUT',blob,signal)
+      }
+      const finishCopy = async () => {
+        if (!upload || !canCopy()) throw Error('Draft session ended')
+        finishStarted = true
+        await request(upload+'/finish','POST',undefined,signal)
+      }
       try {
         if (!await copyAuthority?.verify() || !canCopy()) throw Error('Draft session ended')
-        const chosen = await confirmWebFileName(stem+'.xlsx',{locale,signal})
-        const base = chosen?.trim().replace(/\.xlsx$/i,'').trim()
-        if (!base || !canCopy()) return
-        const name = base+'.xlsx'
+        const csv = captureCsv && (await request<Record<string,string>>('/api/v1/capabilities','GET',undefined,signal)).csvImport==='editable'
+          ? captureCsv : undefined
+        if (!canCopy()) return
+        const csvNotice = locale === 'en'
+          ? 'CSV saves the current sheet as displayed values. Formulas, formatting, and other sheets are omitted.'+(passwordProtected?' The CSV copy is unencrypted.':'')
+          : 'CSV 只保存当前工作表的显示值。公式、格式和其他工作表会丢失。'+(passwordProtected?' CSV 副本未加密。':'')
+        const chosen = await confirmWebFileName(stem+'.xlsx',{locale,signal,...(csv?{csvNotice}:{})})
+        if (!chosen || !canCopy()) return
+        const csvCopy = csv && /\.csv$/i.test(chosen) ? csv : undefined
+        const base = chosen.replace(csvCopy?/\.csv$/i:/\.xlsx$/i,'').trim()
+        if (!base) return
+        const name = base+(csvCopy?'.csv':'.xlsx')
         copyNotice = ''; actionError = ''; changed()
-        const result = await capture(async (sessionId,phases) => {
+        if (csvCopy) {
+          const content = await csvCopy()
+          if (content === null) return
           if (!await copyAuthority?.verify() || !canCopy()) throw Error('Draft session ended')
-          const draft = await bridge.prepareDraftCopy(sessionId,phases,name,proof,signal)
-          if ('uploadId' in draft) {
-            upload = '/api/v1/uploads/'+encodeURIComponent(draft.uploadId)
-            draft.check()
-          } else {
-            if (!canCopy()) throw Error('Draft session ended')
-            const {uploadId} = await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:draft.blob.size},signal)
-            upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
-            if (!canCopy()) throw Error('Draft session ended')
-            await request(upload+'/content','PUT',draft.blob,signal)
-          }
-          if (!canCopy()) throw Error('Draft session ended')
-          finishStarted = true
-          await request(upload+'/finish','POST',undefined,signal)
-        })
-        if (!result.ok) throw new Error('Copy failed')
+          await uploadBlob(name,new Blob(['\ufeff',content]))
+          await finishCopy()
+        } else {
+          const result = await capture(async (sessionId,phases) => {
+            if (!await copyAuthority?.verify() || !canCopy()) throw Error('Draft session ended')
+            const draft = await bridge.prepareDraftCopy(sessionId,phases,name,proof,signal)
+            if ('uploadId' in draft) {
+              upload = '/api/v1/uploads/'+encodeURIComponent(draft.uploadId)
+              draft.check()
+            } else await uploadBlob(name,draft.blob)
+            await finishCopy()
+          })
+          if (!result.ok) throw new Error('Copy failed')
+        }
         copyNotice = locale==='zh'?`已保存副本：${name}`:`Saved copy: ${name}`
       } catch {
         if (upload && !finishStarted && !signal.aborted) await request(upload,'DELETE',undefined,signal).catch(()=>{})

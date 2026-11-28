@@ -3,8 +3,8 @@ import type {AssistantDocumentFormat} from '../../../../packages/web-contracts/s
 import {buildNamingInstruction,excerptForNaming,sanitizeFileStem} from '../../../shell/src/main/ai-naming.ts'
 import './web-ai-naming.css'
 
-export function confirmWebFileName(proposed:string,{locale,signal,document:doc=window.document}:{
- locale:'zh'|'en';signal:AbortSignal;document?:Document
+export function confirmWebFileName(proposed:string,{locale,signal,document:doc=window.document,csvNotice}:{
+ locale:'zh'|'en';signal:AbortSignal;document?:Document;csvNotice?:string
 }):Promise<string|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
@@ -17,13 +17,42 @@ export function confirmWebFileName(proposed:string,{locale,signal,document:doc=w
  actions.className='web-ai-naming-actions'
  cancel.type='button';cancel.textContent=en?'Cancel':'取消'
  save.type='submit';save.textContent=en?'Save copy':'保存副本'
- actions.append(cancel,save);form.append(title,label,actions);dialog.append(form)
+ form.append(title,label)
+ let format:HTMLSelectElement|undefined
+ if(csvNotice){
+  const select=doc.createElement('select'),formatLabel=doc.createElement('label'),notice=doc.createElement('p')
+  format=select
+  formatLabel.className='web-ai-naming-format'
+  formatLabel.textContent=en?'File format':'文件格式'
+  select.setAttribute('aria-label',formatLabel.textContent)
+  for(const [value,text] of [['xlsx',en?'Excel workbook (.xlsx)':'Excel 工作簿（.xlsx）'],['csv',en?'CSV (.csv)':'CSV（.csv）']] as const){
+   const option=doc.createElement('option');option.value=value;option.textContent=text;select.append(option)
+  }
+  notice.hidden=true;notice.textContent=csvNotice
+  select.onchange=()=>{
+   const stem=input.value.trim().replace(/\.(xlsx|csv)$/i,'')
+   input.value=stem?stem+'.'+select.value:''
+   notice.hidden=select.value!=='csv'
+  }
+  input.oninput=()=>{
+   const extension=/\.(xlsx|csv)$/i.exec(input.value.trim())?.[1]?.toLowerCase()
+   if(extension)select.value=extension
+   notice.hidden=select.value!=='csv'
+  }
+  formatLabel.append(select);form.append(formatLabel,notice)
+ }
+ actions.append(cancel,save);form.append(actions);dialog.append(form)
  return new Promise((resolve,reject)=>{
   const finish=(name:string|null)=>{signal.removeEventListener('abort',abort);dialog.close();dialog.remove();resolve(name)}
   const abort=()=>finish(null)
   cancel.onclick=abort
   dialog.oncancel=event=>{event.preventDefault();abort()}
-  form.onsubmit=event=>{event.preventDefault();const name=input.value.trim();if(name)finish(name)}
+  form.onsubmit=event=>{
+   event.preventDefault()
+   const name=input.value.trim()
+   const stem=format?name.replace(/\.(xlsx|csv)$/i,'').trim():name
+   if(stem)finish(format?stem+'.'+format.value:stem)
+  }
   doc.body.append(dialog)
   try{dialog.showModal();input.focus();input.select()}
   catch(error){dialog.remove();reject(error);return}
