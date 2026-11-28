@@ -1499,7 +1499,7 @@ for (const theme of ['light', 'dark']) test(`Word saves and downloads the author
 })
 
 
-test('Web Word protection keeps the supported modify password option usable',{timeout:90000},async t=>{
+test('Web Word sets a modify password independently of the open password',{timeout:90000},async t=>{
   const f=await fixture(t),{page}=f
   const {fileId,revision}=f.opened.file
   await page.goto(f.origin+'/native-docx/?fileId='+fileId)
@@ -1508,16 +1508,18 @@ test('Web Word protection keeps the supported modify password option usable',{ti
   await page.getByRole('button',{name:'Protect Document',exact:true}).click()
   const dialog=page.locator('.protect-dialog')
   await expect(dialog).toBeVisible()
-  await expect(dialog.getByText('Password to open this document')).toHaveCount(0)
-  await expect(dialog.getByText('Password to modify this document')).toBeVisible()
-  const fields=dialog.locator('input[type=password]')
-  await fields.nth(0).fill('Synthetic Web protection')
-  await fields.nth(1).fill('Synthetic Web protection')
+  const openPassword=dialog.locator('label.fld').filter({hasText:'Password to open this document'}).locator('input')
+  await expect(openPassword).toBeVisible()
+  await expect(openPassword).toHaveValue('')
+  const modifyPassword=dialog.locator('.fld-row').filter({hasText:'Password to modify this document'})
+  await modifyPassword.locator('label.fld').filter({hasText:'Password to modify this document'}).locator('input').fill('Synthetic Web protection')
+  await modifyPassword.locator('label.fld').filter({hasText:'Confirm password'}).locator('input').fill('Synthetic Web protection')
   await dialog.getByRole('button',{name:'OK',exact:true}).click()
   await expect(dialog).toHaveCount(0)
   await page.keyboard.press('Control+s')
   const head=async()=>(await f.files.openFile(f.alice.token,fileId)).file.revision
   await expect.poll(head,{timeout:30000}).not.toBe(revision)
+  assert.equal((await f.files.openFile(f.alice.token,fileId)).documentPasswordProtected,undefined)
   const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,fileId,await head()))
   assert.match(await saved.file('word/settings.xml').async('string'),/<w:writeProtection\b/)
 })

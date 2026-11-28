@@ -119,6 +119,8 @@ Chromium 使用隔离 Node 执行路径打开同一工作表中的四类单元�
 
 同一 DOCX 构建的 F14 修改密码浏览器用例通过。错误密码提示后可只读打开，键入被阻止，下载仍为原始字节且修订不变。输入正确密码后可编辑并保存新修订，写保护字段及历史原件保持不变。重开仍提示修改密码，只读查看时可读回授权修改。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
 
+基于 `99fc6d7e` 构建的 Word Chromium 定向复验通过打开密码设置、轮换、移除以及修改密码解锁。两个密码选项同时显示时，只填写修改密码即可保存带 `w:writeProtection` 的新修订，文件仍可直接按普通 DOCX 解包。加密导入后一次性打开回执也通过了独立 PostgreSQL 集成复验。[Word 浏览器用例](../../../apps/web/test/native-docs/roundtrip.test.mjs) [导入回执集成用例](../../../apps/web/test/local-integration/files-protected-workbook.test.mjs)
+
 F12 使用 `d8392ce2` 的构建产物通过 Chromium 定向复验。断网时实际上传请求失败，当前页草稿保持未保存，服务端修订不变。恢复联网后手动保存成功，历史原件字节一致。下载响应发送头部后取消，重试取得同一修订的完整字节且没有重复提交。刷新后读回已保存正文。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
 
 该样本 `DyOffice-Word-样式批注-d90ea092.docx` 的 SHA-256 为 `e224c6359f2f522bf3b5f1e1e7637bec4a4d65149015830653813e94eb2fb649`。LibreOffice Writer 24.2.7.2 在隔离网络命名空间打开并另存为 DOCX。另存成品保留 `Heading1`、标题、批注文本和范围起止及引用。Web 下载原件哈希保持一致。
@@ -191,9 +193,11 @@ PPTX 文件菜单已支持 PNG/JPG 导出。Web 使用同一套 GenOffice 画布
 
 固定候选 `d90ea092` 的 F15 PPTX 两项用例通过。浅色和深色 UI 导出的同格式可见页图片逐字节一致，隐藏页均被排除，导出没有生成文件修订。在两种主题下插入同一填充色的矩形，经原生链路保存并下载。下载成品的 OOXML 均包含真实矩形和色值 `A14173`，未编辑幻灯片、文稿主题及历史原件的字节保持一致。重开后两个矩形都可继续修改填充色。[PPTX 保存与图片导出回归](../../../apps/web/test/native-slides/image-export.test.mjs)
 
-PPTX 的 F14 修改密码保护通过原生会话复验。对照候选 `d8392ce2` 会保留 `p:modifyVerifier` 字段并提交修改后的正文。修复后识别到验证器的演示文稿可渲染和浏览，原生编辑及保存请求返回 403，原件与修订保持一致。原生会话及保存专项 32 项全部通过。Chromium 三项通过，覆盖只读提示、保存按钮禁用、原件下载，以及普通 PPTX 图片导出和原生对象编辑保存。Web 通过修改密码解锁仍待适配。[Microsoft PresentationML 修改保护说明](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.modificationverifier?view=openxml-3.0.1) [PPTX 原生保存与下载用例](../../../apps/web/test/native-slides/image-export.test.mjs)
+PPTX 的 F14 修改密码保护通过原生会话复验。对照候选 `d8392ce2` 会保留 `p:modifyVerifier` 字段并提交修改后的正文。修复后识别到验证器的演示文稿可渲染和浏览，原生编辑及保存请求返回 403，原件与修订保持一致。原生会话及保存专项 32 项全部通过。Chromium 三项通过，覆盖只读提示、保存按钮禁用、原件下载，以及普通 PPTX 图片导出和原生对象编辑保存。该候选的 Web 界面尚未接入修改密码解锁。[Microsoft PresentationML 修改保护说明](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.modificationverifier?view=openxml-3.0.1) [PPTX 原生保存与下载用例](../../../apps/web/test/native-slides/image-export.test.mjs)
 
 在 Node `24.22.3` 上复跑制品、IPC 协议和启动边界，共 43 项通过。使用实际构建的 PPTX 子进程打开带修改密码的合成样本，严格校验后的大纲仅包含 `writeProtected: true`，编辑和导出均返回 `PPTX_WRITE_PROTECTED`。旧格式大纲仍能通过校验。制品清单保留 `runtimeApproved: false`。[PPTX 制品 IPC 用例](../../../apps/web/test/runtime-artifacts/pptx-candidate-ipc.test.mjs) [IPC 协议用例](../../../apps/web/test/sandbox/document-contract.test.mjs)
+
+`99fc6d7e` 的 Chromium 定向复验通过 PPTX 修改密码流程。解锁前只能下载原件，下载字节和原修订未变。错误密码保持只读，正确密码允许修改备注并保存新修订。新修订保留原修改密码验证器，刷新后再次显示只读状态，备注可从原生编辑器读回。独立验证器测试也通过 ISO、PowerPoint 旧格式及不支持参数的拒绝用例。[PPTX 浏览器复验](../../../apps/web/test/native-slides/image-export.test.mjs) [修改密码验证器用例](../../../apps/web/test/native-slides/modify-password.test.mjs)
 
 合入上游 `6e92710c` 后，PPTX 功能区可以选择 TIFF。Web 原生会话复用 GenOffice 解码器生成 PNG 预览，限制解码为 16,777,216 像素、单张 PNG 输出为 8 MiB。Chromium 通过功能区插入 TIFF，核对预览尺寸和像素、下载包中的 TIFF 原始字节和重开结果。同次 Chromium 复跑通过 TIFF 原生往返和 PNG/JPG 导出两项。PPTX 原生会话、解码和识别共 42 项，独立 PPTX CI 夹具本地运行 56 项，Web 桥接及测试子进程共 66 项全部通过。完整 SaaS 构建、服务端及 Web PPTX 类型检查也通过。
 
