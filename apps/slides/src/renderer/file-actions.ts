@@ -321,7 +321,8 @@ async function collectPdfLinks(ctx: ActionCtx): Promise<ExportPdfLink[][]> {
   }
 }
 
-export type SlidePdfDownload = (baseName: string, pages: string[], widthPx: number, heightPx: number, links: ExportPdfLink[][]) => Promise<string>
+export type SlidePdfPages = { pages: string[]; widthPx: number; heightPx: number; links: ExportPdfLink[][] }
+export type BrowserSlidePdfExport = (baseName: string, render: () => Promise<SlidePdfPages>) => Promise<string | null>
 
 /**
  * Export as PDF: each page (skipping hidden ones) rendered to vector SVG (text
@@ -331,22 +332,24 @@ export type SlidePdfDownload = (baseName: string, pages: string[], widthPx: numb
  * `outPath` skips the save dialog — the headless CLI entry already knows where
  * the file goes. Resolves true only when a PDF was written.
  */
-export async function exportPdf(ctx: ActionCtx, outPath?: string, download?: SlidePdfDownload): Promise<boolean> {
+export async function exportPdf(ctx: ActionCtx, outPath?: string, browserExport?: BrowserSlidePdfExport): Promise<boolean> {
   const visible = ctx.slides.filter((s) => !s.hidden)
   if (visible.length === 0) {
     ctx.setStatus(t('appExportNoSlides'))
     return false
   }
   try {
-    if (download) {
+    if (browserExport) {
       if (visible.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
         throw new Error('Slide dimensions exceed the PDF export limit')
       }
-      ctx.setStatus(t('appExportPdfProgress'))
-      const pages = await renderSlidesToImageBase64(visible,ctx.images,{format:'png',maxOutputChars:64 * 1024 * 1024})
-      const path = await download(exportBaseName(ctx),pages,visible[0].widthPx,visible[0].heightPx,await collectPdfLinks(ctx))
-      ctx.setStatus(t('appExportPdfDone',{path}))
-      return true
+      const path = await browserExport(exportBaseName(ctx),async () => {
+        ctx.setStatus(t('appExportPdfProgress'))
+        const pages = await renderSlidesToImageBase64(visible,ctx.images,{format:'png',maxOutputChars:64 * 1024 * 1024})
+        return {pages,widthPx:visible[0].widthPx,heightPx:visible[0].heightPx,links:await collectPdfLinks(ctx)}
+      })
+      ctx.setStatus(path ? t('appExportPdfDone',{path}) : '')
+      return Boolean(path)
     }
     const target = outPath ?? (await window.slidesApi.pickExportPdfPath(`${exportBaseName(ctx)}.pdf`))
     if (!target) return false

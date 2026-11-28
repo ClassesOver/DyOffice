@@ -6,10 +6,10 @@ import type {WorkspaceFileList,WorkspaceFolderList} from '../../../../packages/w
 import {folderChoices} from '../workspace-folder-options'
 import './web-ai-naming.css'
 
-export type WorkspaceCopyDestination = { name: string; folderId?: string; downloadFormat?: 'html' | 'md' }
+export type WorkspaceCopyDestination = { name: string; folderId?: string; downloadFormat?: 'html' | 'md'; download?: true }
 
-export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports,batchPdf}:{
- locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean;batchPdf?:boolean
+export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,fileId,document:doc=window.document,csvNotice,documentExports,batchPdf,offerPdfDownload}:{
+ locale:'zh'|'en';signal:AbortSignal;request:SettingsRequest;fileId:string;document?:Document;csvNotice?:string;documentExports?:boolean;batchPdf?:boolean;offerPdfDownload?:boolean
 }):Promise<WorkspaceCopyDestination|null>{
  if(signal.aborted)return Promise.resolve(null)
  const en=locale==='en',dialog=doc.createElement('dialog'),form=doc.createElement('form')
@@ -90,6 +90,16 @@ export function confirmWorkspaceCopy(proposed:string,{locale,signal,request,file
   const abort=()=>finish(null)
   cancel.onclick=abort
   dialog.oncancel=event=>{event.preventDefault();abort()}
+  if(offerPdfDownload){
+   const download=doc.createElement('button')
+   download.type='button';download.textContent=en?'Download PDF':'下载 PDF'
+   download.onclick=()=>{
+    const name=input.value.trim()
+    if(name)finish({name,download:true})
+    else input.reportValidity()
+   }
+   actions.insertBefore(download,cancel)
+  }
   form.onsubmit=event=>{
    event.preventDefault()
    if(save.disabled)return

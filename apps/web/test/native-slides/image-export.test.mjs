@@ -600,7 +600,7 @@ test('PPTX downloads a PDF and pastes system clipboard text in the Web editor',{
   const {PDFDict,PDFDocument,PDFHexString,PDFName}=await import('pdf-lib')
   const pdf=await PDFDocument.load(await readFile(await file.path()))
   assert.equal(pdf.getPageCount(),1)
-  assert.equal(pdf.getPage(0).getWidth()/pdf.getPage(0).getHeight(),16/9)
+  assert.deepEqual(pdf.getPage(0).getSize(),{width:13.333*72,height:7.5*72})
   const links=pdf.getPage(0).node.Annots()
   assert.equal(links?.size(),1)
   const action=links.lookup(0,PDFDict).lookup(PDFName.of('A'),PDFDict)

@@ -385,7 +385,7 @@ export interface SlidesAppHost {
   openWorkspaceFile?: () => boolean
   saveDownload?: React.ReactNode
   downloadImages?: fileActions.SlideImageDownload
-  downloadPdf?: fileActions.SlidePdfDownload
+  browserPdfExport?: fileActions.BrowserSlidePdfExport
   namedCopy?: fileActions.SlidesNamedCopy
   saveAsCopy?: fileActions.SlidesNamedCopy['save']
   canSaveAsCopy?: boolean
@@ -1390,7 +1390,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const exportPdf = useCallback(async () => {
     if (exportingPdf.current) return
     exportingPdf.current = true
-    try { await fileActions.exportPdf(ctxRef.current,undefined,hostRef.current?.downloadPdf) }
+    try { await fileActions.exportPdf(ctxRef.current,undefined,hostRef.current?.browserPdfExport) }
     finally { exportingPdf.current = false }
   }, [])
   const [videoDlgOpen, setVideoDlgOpen] = useState(false)

@@ -13,6 +13,7 @@ test('PPTX PDF exports canonical external URIs and retains internal slide links'
   const bytes = await buildSlidesPdf([png,png],160,90,[links,[]],new AbortController().signal)
   const document = await PDFDocument.load(bytes)
   const [first,second] = document.getPages()
+  assert.deepEqual(first.getSize(),{width:13.333*72,height:7.5*72})
   const annotations = first.node.Annots()
   const uri = index => annotations.lookup(index,PDFDict)
     .lookup(PDFName.of('A'),PDFDict)
@@ -24,4 +25,13 @@ test('PPTX PDF exports canonical external URIs and retains internal slide links'
   const destination = annotations.lookup(2,PDFDict).lookup(PDFName.of('Dest'),PDFArray)
   assert.equal(destination.get(0),second.ref)
   assert.equal(destination.get(1).toString(),'/Fit')
+})
+
+test('PPTX PDF uses the desktop paper size for portrait and standard slides',async()=>{
+  const png=PNG.sync.write(new PNG({width:1,height:1})).toString('base64')
+  for(const [widthPx,heightPx,widthIn] of [[600,800,5.625],[800,600,10]]){
+    const bytes=await buildSlidesPdf([png],widthPx,heightPx,[],new AbortController().signal)
+    const [page]=(await PDFDocument.load(bytes)).getPages()
+    assert.deepEqual(page.getSize(),{width:widthIn*72,height:7.5*72})
+  }
 })

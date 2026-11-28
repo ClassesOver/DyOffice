@@ -1,5 +1,6 @@
 import {PDFDocument, PDFHexString} from 'pdf-lib'
 import type {ExportPdfLink} from '../../../slides/src/shared/ipc'
+import {printPageSizeIn} from '../../../slides/src/shared/print-html'
 import {DECK_LINK_PROTOCOLS} from '../../../slides/src/shared/run-link'
 import {browserFileName, decodeBrowserBase64, downloadBrowserFile} from './browser-download'
 
@@ -16,7 +17,8 @@ export async function buildSlidesPdf(
   pages: string[], widthPx: number, heightPx: number, links: ExportPdfLink[][], signal: AbortSignal,
 ): Promise<Uint8Array<ArrayBuffer>> {
   const pdf = await PDFDocument.create()
-  const width = widthPx * 0.75, height = heightPx * 0.75
+  const paper = printPageSizeIn('full', undefined, heightPx > 0 ? widthPx / heightPx : NaN)
+  const width = paper.width * 72, height = paper.height * 72
   const output = pages.map(() => pdf.addPage([width,height]))
   for (const [index,page] of output.entries()) {
     signal.throwIfAborted()
@@ -41,12 +43,15 @@ export async function buildSlidesPdf(
   return Uint8Array.from(await pdf.save())
 }
 
-export async function downloadSlidesPdf(
-  baseName: string, pages: string[], widthPx: number, heightPx: number, links: ExportPdfLink[][], signal: AbortSignal,
-): Promise<string> {
-  const bytes = await buildSlidesPdf(pages,widthPx,heightPx,links,signal)
-  signal.throwIfAborted()
-  const filename = browserFileName(baseName,'slides')+'.pdf'
+export function slidesPdfFileName(value:string): string {
+  const stem=browserFileName(value.replace(/\.pdf$/i,''),'slides')
+  const characters=Array.from(stem.replace(/[\p{Cs}\u202a-\u202e\u2066-\u2069]/gu,'_'))
+  const encoder=new TextEncoder()
+  while(encoder.encode(characters.join('')+'.pdf').length>255)characters.pop()
+  return characters.join('')+'.pdf'
+}
+
+export function downloadSlidesPdf(filename:string,bytes:Uint8Array<ArrayBuffer>): string {
   downloadBrowserFile(new Blob([bytes],{type:'application/pdf'}),filename)
   return filename
 }

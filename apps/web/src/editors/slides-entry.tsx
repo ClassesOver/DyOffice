@@ -18,6 +18,8 @@ import {messages} from './messages.ts'
 import {mountEditorRealtime} from './editor-realtime.ts'
 import {editorAssistantNotice,loadEditorAssistant} from './editor-assistant-status'
 import {confirmWorkspaceCopy,suggestWebFileName} from './web-ai-naming'
+import {createPdfExtraction,MAX_WORKSPACE_COPY_BYTES} from './pdf-extraction'
+import type {RevisionRef} from '../../../../packages/web-contracts/src/api'
 import {ASSISTANT_FORMAT_TOOLS} from '../../../../packages/web-contracts/src/assistant.ts'
 import {App, type SlidesAppHost, type SlidesEditorHandle} from '../../../slides/src/renderer/App'
 import {AudienceView} from '../../../slides/src/renderer/components/AudienceView'
@@ -207,9 +209,72 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     !downloading && !takingOver && !confirming && !bridge.isWriteProtected() && !bridge.needsConfirmation() &&
     host.getState(fileId).status === 'idle' && !!host.getState(fileId).lease
   const request=copyAuthority?.request,proof=copyAuthority?.proof
+  const openPdfCopy=(()=>{
+    try{
+      return stage.parent===stage?undefined:(stage.parent as Window&{
+        dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
+      }).dyofficeOpenPdfCopy
+    }catch{return undefined}
+  })()
+  const pdfCopies=request&&proof&&openPdfCopy?createPdfExtraction({
+    fileId,name:host.getState(fileId).name,request,getRevision:()=>host.getState(fileId).revision.revision,
+    onCreated:(receipt,signal)=>openPdfCopy(receipt,proof,signal),
+  }):undefined
+  let exportingPdf=false
+  const exportPdf:NonNullable<SlidesAppHost['browserPdfExport']>=async(baseName,render)=>{
+    const signal=copyLifetime.signal
+    if(disposed||closing||copying||exportingPdf)return null
+    if(pdfCopies?.hasPending())throw Error(chinese?'请先确认待保存的 PDF。':'Confirm the pending PDF save first.')
+    exportingPdf=true;changed()
+    try{
+      const {buildSlidesPdf,downloadSlidesPdf,slidesPdfFileName}=await import('./slides-pdf-download')
+      const suggested=slidesPdfFileName(baseName)
+      const source=host.getState(fileId)
+      const active=()=>{
+        if(signal.aborted||!canCopy())return false
+        const current=host.getState(fileId)
+        return current.revision.revision===source.revision.revision&&current.lease?.leaseEpoch===source.lease?.leaseEpoch
+      }
+      const expired=()=>Error(chinese?'演示文稿会话已变更，请重试。':'The presentation session changed. Try exporting again.')
+      if(source.status==='unauthorized')throw expired()
+      const publisher=pdfCopies&&request&&active()?pdfCopies:undefined
+      const destination=publisher&&request
+        ? await confirmWorkspaceCopy(suggested,{locale,signal,request,fileId,document:stage.document,offerPdfDownload:true})
+        : undefined
+      if(publisher&&!destination)return null
+      if(publisher&&(!active()||!await copyAuthority?.verify()))throw expired()
+      const {pages,widthPx,heightPx,links}=await render()
+      const bytes=await buildSlidesPdf(pages,widthPx,heightPx,links,signal)
+      signal.throwIfAborted()
+      if(host.getState(fileId).status==='unauthorized'||(publisher&&!active()))throw expired()
+      const filename=slidesPdfFileName(destination?.name??suggested)
+      if(!publisher||!destination||destination.download)return downloadSlidesPdf(filename,bytes)
+      if(bytes.byteLength>MAX_WORKSPACE_COPY_BYTES){
+        const message=chinese?'PDF 超过工作区 32 MiB 的文件上限。要改为下载吗？':'The PDF exceeds the 32 MiB workspace file limit. Download it instead?'
+        return stage.confirm(message)?downloadSlidesPdf(filename,bytes):null
+      }
+      if(!await copyAuthority?.verify())throw expired()
+      if(!await publisher.publish(bytes,{name:filename,folderId:destination.folderId},active,signal))throw Error(chinese?'无法保存 PDF。':'Could not save the PDF.')
+      return filename
+    }catch(error){
+      if(pdfCopies?.hasPending())return null
+      throw error
+    }finally{exportingPdf=false;if(!disposed)changed()}
+  }
+  async function confirmPdfExport(){
+    if(!pdfCopies?.hasPending()||exportingPdf||disposed||closing)return
+    exportingPdf=true;changed()
+    try{
+      if(!await copyAuthority?.verify()||!await pdfCopies.confirm(copyLifetime.signal))throw Error('PDF save confirmation failed')
+      copyNotice=chinese?'已确认 PDF 副本。':'PDF copy confirmed.'
+    }catch{
+      if(!pdfCopies.hasPending()&&!copyLifetime.signal.aborted)actionError=chinese?'PDF 保存请求已过期，请重新导出。':'The PDF save expired. Export it again.'
+    }
+    finally{exportingPdf=false;if(!disposed)changed()}
+  }
   async function saveAsCopy(stem:string) {
     const signal=copyLifetime.signal
-    if(!request||!proof||copying||signal.aborted||!canCopy())return
+    if(!request||!proof||copying||exportingPdf||signal.aborted||!canCopy())return
     copying=true;copyNotice='';actionError='';changed()
     let upload:string|undefined,finishStarted=false
     try{
@@ -300,10 +365,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       open:()=>!disposed&&!closing&&host.getState(fileId).status!=='unauthorized'&&audience.open(),
       end:audience.end,
     }
-    hostProps.downloadPdf = async (baseName,pages,width,height,links) => {
-      const {downloadSlidesPdf} = await import('./slides-pdf-download')
-      return downloadSlidesPdf(baseName,pages,width,height,links,copyLifetime.signal)
-    }
+    hostProps.browserPdfExport=exportPdf
     hostProps.readBrowserPaste = bridge.readBrowserPaste
     hostProps.notesTextLimit = WEB_NOTES_TEXT_LIMIT
     hostProps.mediaFileSizeLimit = WEB_SLIDE_MEDIA_MAX_BYTES
@@ -342,6 +404,11 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(assistantNotice ? [{id:'assistant',level:'warning' as const,title:locale==='zh'?'AI 助手':'AI Assistant',message:assistantNotice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
+        ...(pdfCopies?.hasPending() ? [{
+          id:'pdf-copy',level:'warning' as const,title:chinese?'确认 PDF 保存结果':'PDF save unconfirmed',
+          message:chinese?'请确认原保存请求，以打开同一份 PDF。':'Confirm the original save to open the same PDF.',
+          actions:<button type="button" disabled={exportingPdf} onClick={()=>{void confirmPdfExport()}}>{chinese?'确认 PDF 保存':'Confirm PDF save'}</button>,
+        }] : []),
       ]} />
       {audienceWindow&&createPortal(<>
         <AudienceView target={audienceWindow}/>
@@ -370,7 +437,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     Object.defineProperty(stage,'desktop',{value:desktop,configurable:true,writable:true})
     installedDesktop=desktop
   }).catch(()=>{}).finally(()=>{assistantLoadFinished=true;if(!disposed){appearance.updatePanelPrefs({showAiSidebar:sharedAssistant?.available===true});changed()}})
-  const closeState=()=>({dirty:dirty()||bridge.isDirty(),blocked:copying||downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})
+  const closeState=()=>({dirty:dirty()||bridge.isDirty(),blocked:copying||exportingPdf||!!pdfCopies?.hasPending()||downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})
   registerDisplayedRevision(()=>{
     const state=closeState(),current=host.getState(fileId)
     const revision=current.revision.revision
@@ -404,7 +471,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     sharedAssistant?.dispose();realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()
   }
   const lifecycle=createEditorCloseLifecycle({state:closeState,waitForSave:()=>editor?.waitForSave()??bridge.waitForSave(),save:()=>editor?.saveAndWait()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;container.inert=value;if(!value)changed()},confirm:()=>stage.confirm('演示文稿有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>stage.alert('保存仍在进行或结果待确认，请先在演示文稿中核对后再关闭。')})
-  return {save:()=>editor?.saveAndWait()??Promise.resolve(false),canClose:lifecycle.canClose,canSleep:()=>!screenRecordingActive&&!audience.current()&&!bridge.videoExportActive(),dispose:lifecycle.dispose,unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()}}
+  return {save:()=>editor?.saveAndWait()??Promise.resolve(false),canClose:lifecycle.canClose,canSleep:()=>!screenRecordingActive&&!audience.current()&&!bridge.videoExportActive()&&!exportingPdf&&!pdfCopies?.hasPending(),dispose:lifecycle.dispose,unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()}}
 }
 async function bootstrap() {
   const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''

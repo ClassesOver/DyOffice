@@ -772,6 +772,97 @@ test('workspace converts a PDF into named editable Office copies in the selected
  assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),original)
 })
 
+test('workspace PowerPoint exports a named PDF to a folder and reopens it',{skip:!built,timeout:120000},async t=>{
+ const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)+17
+ const origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ const token=f.alice.token,workspace=createWorkspaceService(f.transactions)
+ await f.preferences.update(token,{language:'en',autoSave:false,showAssistant:false})
+ const sourceFolder=await workspace.createFolder(token,{name:'Presentations',parentId:null})
+ const folder=await workspace.createFolder(token,{name:'Published PDF',parentId:null})
+ const deck=await JSZip.loadAsync(await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url)))
+ const hidden='ppt/slides/slide2.xml'
+ deck.file(hidden,(await deck.file(hidden).async('string')).replace(/<p:sld(?=\s)/,'<p:sld show="0"'))
+ const original=await deck.generateAsync({type:'nodebuffer'})
+ const {file}=await importFile(f,token,original,'Board review.pptx')
+ await workspace.moveFile(token,file.fileId,{folderId:sourceFolder.id})
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:officeBrowserAsset('local-shell'),
+  nativeSlidesDirectory:officeBrowserAsset('slides'),nativePdfDirectory:officeBrowserAsset('pdf'),
+  slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})},
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage({viewport:{width:1440,height:1000},acceptDownloads:true})
+ await stubHomeHero(page)
+ const csrf=await(await page.request.get(origin+'/api/v1/auth/csrf')).json()
+ assert.equal((await page.request.post(origin+'/api/v1/auth/login',{
+  headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password},
+ })).status(),200)
+ await page.goto(origin+'/#/file/'+file.fileId)
+ const frame=id=>page.frameLocator(`iframe[data-document-id="${id}"]`)
+ const source=frame(file.fileId)
+ await expect(source.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ const notes=source.locator('.notes-pane textarea')
+ await notes.fill('Unsaved review note')
+ const exportPdf=async()=>{
+  await source.locator('.ribbon-tab-file').click()
+  await source.getByRole('button',{name:'Export as PDF…',exact:true}).click()
+ }
+ const destination=source.getByRole('dialog',{name:'Save a copy to your workspace'})
+ const name=destination.getByRole('textbox',{name:'File name'})
+ const location=destination.getByRole('combobox',{name:'Folder',exact:true})
+ await exportPdf()
+ await expect(name).toHaveValue('Board review.pdf',{timeout:6000})
+ await expect(location).toHaveValue(sourceFolder.id)
+ await destination.getByRole('button',{name:'Cancel',exact:true}).click()
+ assert.equal((await f.files.listFiles(token)).files.length,1)
+ await exportPdf()
+ await name.fill('Local review')
+ const [download]=await Promise.all([
+  page.waitForEvent('download'),
+  destination.getByRole('button',{name:'Download PDF',exact:true}).click(),
+ ])
+ assert.equal(download.suggestedFilename(),'Local review.pdf')
+ const local=await PDFDocument.load(await readFile(await download.path()))
+ assert.equal(local.getPageCount(),1)
+ assert.deepEqual(local.getPage(0).getSize(),{width:13.333*72,height:7.5*72})
+ assert.equal((await f.files.listFiles(token)).files.length,1)
+ await expect(source.locator('.status-msg')).toContainText('Local review.pdf')
+
+ let committed
+ const finishes=[]
+ await page.route('**/api/v1/uploads/*/finish',async route=>{
+  finishes.push(route.request().url())
+  if(committed)return route.continue()
+  const response=await route.fetch()
+  assert.equal(response.status(),200)
+  committed=(await response.json()).file
+  await route.abort()
+ })
+ await exportPdf()
+ await name.fill('Board proof')
+ await location.selectOption(folder.id)
+ await destination.getByRole('button',{name:'Save copy',exact:true}).click()
+ const confirm=source.getByRole('button',{name:'Confirm PDF save',exact:true})
+ await expect(confirm).toBeVisible({timeout:25000})
+ await confirm.click()
+ await expect(page).toHaveURL(origin+'/#/file/'+committed.fileId)
+ await expect(frame(committed.fileId).locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ assert.deepEqual(finishes,[finishes[0],finishes[0]])
+ const files=(await workspace.listFiles(token,{folderId:folder.id})).files
+ assert.deepEqual(files.map(item=>[item.id,item.name]),[[committed.fileId,'Board proof.pdf']])
+ const output=await PDFDocument.load(await f.files.readFile(token,committed.fileId,committed.revision))
+ assert.equal(output.getPageCount(),1)
+ assert.deepEqual(output.getPage(0).getSize(),local.getPage(0).getSize())
+ await page.getByRole('tab',{name:'Board review.pptx',exact:true}).click()
+ await expect(notes).toHaveValue('Unsaved review note')
+ await expect(source.locator('button.qa-btn[aria-label^="Save"]')).toBeEnabled()
+ assert.equal((await f.files.openFile(token,file.fileId)).file.revision,file.revision)
+ assert.deepEqual(await f.files.readFile(token,file.fileId,file.revision),original)
+})
+
 test('workspace file menus, shortcuts and tab recovery work across four native editors',{skip:!built,timeout:210000},async t=>{
  const port=Number(process.env.DYOFFICE_TEST_WORKSPACE_PRINT_PORT??4479)
  const origin='http://localhost:'+port

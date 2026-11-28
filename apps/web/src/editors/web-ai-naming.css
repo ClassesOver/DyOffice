@@ -12,5 +12,5 @@
   min-width: 0; padding: 7px 10px; border: 1px solid var(--border-strong);
   border-radius: 6px; background: var(--surface); color: inherit; font: inherit;
 }
-.web-ai-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.web-ai-naming-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .web-ai-naming-actions button[type='submit'] { background: var(--accent, #2563eb); color: white; border-color: transparent; }
