@@ -4,6 +4,7 @@ import { selectPageForm } from './copy-selected-page-form'
 import { readPageLabels, writePageLabels } from './page-labels'
 import { assertNoPdfSignatures } from './pdf-signature-guard'
 import { detachPdfStampManagement } from './managed-page-stamps'
+import { remapStaticFormFills, staticFormFillsFromCatalog, writeStaticFormFills } from './static-form-fills'
 
 function validateMergeInput(doc: PDFDocument): void {
   assertNoPdfSignatures(doc)
@@ -27,6 +28,7 @@ export async function mergePdfBytes(
   validateMergeInput(destination)
   selectPageForm(destination, destination.getPages(), [], true)
   const labels = readPageLabels(destination)
+  const fills = staticFormFillsFromCatalog(destination)
   let appended = 0
   for await (const bytes of others) {
     check()
@@ -38,13 +40,17 @@ export async function mergePdfBytes(
     check()
     detachPdfStampManagement(source)
     const pages = await copyImportedPages(destination, source, undefined, { copyForm: 'all', copyAttachments: true })
+    for (const fill of remapStaticFormFills(source, source.getPageIndices(), initialPages + appended)) fills.push(fill)
     if (!appended && pages.length) detachPdfStampManagement(destination)
     for (const page of pages) destination.addPage(page)
     for (const label of readPageLabels(source)) labels.push(label)
     appended += pages.length
   }
   check()
-  if (appended) writePageLabels(destination, labels)
+  if (appended) {
+    writePageLabels(destination, labels)
+    writeStaticFormFills(destination, fills)
+  }
   const merged = await destination.save({ useObjectStreams: false, updateFieldAppearances: false })
   check()
   return { merged, appended }

@@ -29,7 +29,7 @@ import {
 import { applyAttachments } from './pdf-attachments'
 import { copyImportedPages } from '../shared/copy-imported-pages'
 import { readPageLabels, writePageLabels } from '../shared/page-labels'
-import { STATIC_FORM_FILLS_KEY, staticFormFillsFromCatalog } from '../shared/static-form-fills'
+import { remapStaticFormFills, staticFormFillsFromCatalog, writeStaticFormFills } from '../shared/static-form-fills'
 import { retargetPageDestinations } from './retarget-page-destinations'
 import type {
   BlankPageInput,
@@ -1079,6 +1079,7 @@ export async function extractPagesBytes(bytes: Uint8Array, pages: number[]): Pro
   for (const p of copied) out.addPage(p)
   const labels = readPageLabels(src)
   writePageLabels(out, valid.map(index => labels[index]))
+  writeStaticFormFills(out, remapStaticFormFills(src, valid))
   return out.save({ useObjectStreams: false, updateFieldAppearances: false })
 }
 
@@ -1091,8 +1092,14 @@ export async function insertPdfBytes(
 ): Promise<{ merged: Uint8Array; count: number }> {
   const dst = await PDFDocument.load(bytes, { updateMetadata: false })
   const src = await PDFDocument.load(otherBytes, { updateMetadata: false })
-  const copied = await copyImportedPages(dst, src, undefined, { copyForm: 'all' })
+  const sourceIndices = src.getPageIndices()
+  const copied = await copyImportedPages(dst, src, sourceIndices, { copyForm: 'all' })
   let at = Math.min(Math.max(afterPageIndex + 1, 0), dst.getPageCount())
+  const order = dst.getPageIndices()
+  writeStaticFormFills(dst, [
+    ...remapStaticFormFills(dst, [...order.slice(0, at), ...sourceIndices.map(() => null), ...order.slice(at)]),
+    ...remapStaticFormFills(src, sourceIndices, at),
+  ])
   const labels = readPageLabels(dst)
   const mergedLabels = labels.slice(0, at).concat(readPageLabels(src), labels.slice(at))
   if (at < dst.getPageCount()) retargetPageDestinations(dst, dst.getPages(), [])
@@ -1109,6 +1116,9 @@ export async function insertBlankPageBytes(
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false })
   const at = Math.min(Math.max(afterPageIndex + 1, 0), doc.getPageCount())
+  const order: (number | null)[] = doc.getPageIndices()
+  order.splice(at, 0, null)
+  writeStaticFormFills(doc, remapStaticFormFills(doc, order))
   const labels = readPageLabels(doc)
   labels.splice(at, 0, undefined)
   const ref = doc.getPage(Math.min(Math.max(afterPageIndex, 0), doc.getPageCount() - 1))
@@ -1130,14 +1140,11 @@ export async function splitPdfBytes(bytes: Uint8Array, chunkSize: number): Promi
   for (let start = 0; start < total; start += size) {
     const part = await PDFDocument.create()
     const count = Math.min(size, total - start)
-    const copied = await copyImportedPages(
-      part,
-      src,
-      Array.from({ length: count }, (_, i) => start + i),
-      { copyForm: 'subset' },
-    )
+    const indices = Array.from({ length: count }, (_, i) => start + i)
+    const copied = await copyImportedPages(part, src, indices, { copyForm: 'subset' })
     for (const p of copied) part.addPage(p)
     writePageLabels(part, labels.slice(start, start + count))
+    writeStaticFormFills(part, remapStaticFormFills(src, indices))
     out.push(await part.save({ useObjectStreams: false, updateFieldAppearances: false }))
   }
   return out
@@ -1291,10 +1298,16 @@ export async function replacePagesBytes(
   const at = valid[0]!
   const originalPages = dst.getPages()
   const replaced = new Set(valid)
+  const order = dst.getPageIndices().filter(index => !replaced.has(index))
+  const sourceIndices = src.getPageIndices()
+  writeStaticFormFills(dst, [
+    ...remapStaticFormFills(dst, [...order.slice(0, at), ...sourceIndices.map(() => null), ...order.slice(at)]),
+    ...remapStaticFormFills(src, sourceIndices, at),
+  ])
   const labels = readPageLabels(dst).filter((_, index) => !replaced.has(index))
   const mergedLabels = labels.slice(0, at).concat(readPageLabels(src), labels.slice(at))
   for (const p of [...valid].reverse()) dst.removePage(p)
-  const copied = await copyImportedPages(dst, src, undefined, { copyForm: 'all' })
+  const copied = await copyImportedPages(dst, src, sourceIndices, { copyForm: 'all' })
   let i = Math.min(at, dst.getPageCount())
   for (const p of copied) dst.insertPage(i++, p)
   retargetPageDestinations(dst, originalPages, valid, copied)
@@ -1778,14 +1791,7 @@ export async function applySaveRequest(
     for (const page of pageOrder) pdfDoc.addPage(page)
   }
   const staticFormFills = resultingStaticFormFills(request, pages.length, pdfDoc)
-  if (staticFormFills !== undefined) {
-    if (staticFormFills.length === 0) pdfDoc.catalog.delete(STATIC_FORM_FILLS_KEY)
-    else
-      pdfDoc.catalog.set(
-        STATIC_FORM_FILLS_KEY,
-        PDFHexString.fromText(JSON.stringify(staticFormFills)),
-      )
-  }
+  if (staticFormFills !== undefined) writeStaticFormFills(pdfDoc, staticFormFills)
   if (request.attachments) applyAttachments(pdfDoc, request.attachments)
   if (forms.updateFieldAppearances) await forms.updateFieldAppearances(pdfDoc)
   else refreshFieldAppearances(pdfDoc)

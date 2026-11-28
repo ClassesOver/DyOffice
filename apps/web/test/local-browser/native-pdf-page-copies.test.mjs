@@ -4,7 +4,8 @@ import {execFileSync} from 'node:child_process'
 import {createServer} from 'node:http'
 import {Readable} from 'node:stream'
 import {fileURLToPath} from 'node:url'
-import {PDFDocument} from 'pdf-lib'
+import {PDFDocument,PDFHexString,PDFName} from 'pdf-lib'
+import {PNG} from 'pngjs'
 import {expect} from '@playwright/test'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
@@ -15,6 +16,14 @@ import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
 const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
+const fillKey=PDFName.of('GenOfficeStaticFormFills')
+async function addStaticFills(doc,fills){
+ const png=new PNG({width:3,height:3});png.data.fill(255)
+ const picture=await doc.embedPng(PNG.sync.write(png))
+ for(const {pageIndex,rect:[x,y,x2,y2]} of fills)doc.getPage(pageIndex).drawImage(picture,{x,y,width:x2-x,height:y2-y})
+ doc.catalog.set(fillKey,PDFHexString.fromText(JSON.stringify(fills)))
+}
+const staticFills=doc=>JSON.parse(doc.catalog.lookup(fillKey)?.decodeText()??'[]')
 test('native PDF ribbon extracts and reopens a fillable form copy',{skip:!nativePdfDirectory,timeout:90000},async t=>{
  let app
  const server=createServer((req,res)=>app.routing(req,res))
@@ -31,6 +40,8 @@ test('native PDF ribbon extracts and reopens a fillable form copy',{skip:!native
  delivery.addOptionToPage('Pickup',first,{x:30,y:140,width:20,height:20})
  delivery.addOptionToPage('Courier',second,{x:30,y:140,width:20,height:20})
  delivery.select('Pickup')
+ const entry={id:'second-text',kind:'text',pageIndex:1,rect:[45,75,145,99],text:'Second page entry',fontSize:14,color:'#111111',align:'left'}
+ await addStaticFills(doc,[{...entry,id:'first-text',pageIndex:0,text:'Omitted page entry'},entry])
  const original=Buffer.from(await doc.save()),{file}=await importFile(f,f.alice.token,original,'fillable.pdf')
  app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory,
@@ -66,13 +77,24 @@ test('native PDF ribbon extracts and reopens a fillable form copy',{skip:!native
  const copiedRevision=await head(copyId)
  await field.fill('Grace Hopper')
  await option.check()
+ await copy.getByRole('button',{name:'填写表单',exact:true}).click()
+ await copy.locator('.pdf-page[data-page="0"] .pdf-imgedit-hit').click({timeout:10000})
+ await copy.locator('.pdf-del-popup').getByRole('button',{name:'编辑文字',exact:true}).click()
+ const fillText=copy.getByPlaceholder('输入要放置的文字',{exact:true})
+ await expect(fillText).toHaveValue('Second page entry')
+ await fillText.fill('Edited in the extracted copy')
+ await copy.locator('.pdf-modal').getByRole('button',{name:'确定',exact:true}).click()
  await expect(copy.locator('.dyoffice-pdf-persistence-state')).toHaveAttribute('data-dirty','true')
- await page.keyboard.press('Control+s')
+ const saveResponse=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/files/${copyId}/pdf/apply-ops/uploads`,{timeout:15000})
+ await copy.getByRole('button',{name:'保存',exact:true}).click()
+ const staged=await saveResponse
+ assert.ok(staged.ok(),await staged.text())
  await expect.poll(()=>head(copyId),{timeout:18000}).not.toBe(copiedRevision)
  const saved=await PDFDocument.load(await f.files.readFile(f.alice.token,copyId,await head(copyId)))
  assert.equal(saved.getPageCount(),1)
  assert.deepEqual(saved.getForm().getFields().map(value=>value.getName()),['customer','delivery'])
  assert.equal(saved.getForm().getTextField('customer').getText(),'Grace Hopper')
+ assert.deepEqual(staticFills(saved),[{...entry,pageIndex:0,text:'Edited in the extracted copy'}])
  const savedDelivery=saved.getForm().getRadioGroup('delivery')
  assert.deepEqual(savedDelivery.getOptions(),['Courier'])
  assert.equal(savedDelivery.getSelected(),'Courier')
@@ -326,6 +348,8 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  })
  const originalDoc=await PDFDocument.create()
  for(const width of [400,500,600])originalDoc.addPage([width,300]).drawText('Source '+width,{x:30,y:250})
+ const retained={id:'fixture-static-text',kind:'text',pageIndex:2,rect:[50,70,140,97],text:'Retained entry'}
+ await addStaticFills(originalDoc,[{...retained,id:'old-static-text',pageIndex:1,text:'Old entry'},retained])
  const original=Buffer.from(await originalDoc.save()),{file}=await importFile(f,f.alice.token,original,'replace-source.pdf')
  const app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
@@ -375,6 +399,7 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  const replacement=await PDFDocument.create()
  replacement.addPage([710,300]).drawText('Replacement marker',{x:25,y:260})
+ await addStaticFills(replacement,[{...retained,pageIndex:0,text:'New entry'}])
  await dialog.getByLabel('选择来源 PDF',{exact:true}).setInputFiles({name:'replacement.pdf',mimeType:'application/pdf',buffer:Buffer.from(await replacement.save())})
  const stage=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/files/'+file.fileId+'/pdf/replace-pages/uploads')
  await confirm.click()
@@ -384,7 +409,12 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  const {file:replaced}=await f.files.openFile(f.alice.token,file.fileId)
  assert.notEqual(replaced.revision,file.revision)
  const bytes=await f.files.readFile(f.alice.token,file.fileId,replaced.revision)
- assert.deepEqual((await PDFDocument.load(bytes)).getPages().map(value=>value.getWidth()),[400,710,600])
+ const replacedDoc=await PDFDocument.load(bytes)
+ assert.deepEqual(replacedDoc.getPages().map(value=>value.getWidth()),[400,710,600])
+ const [oldFill,newFill]=staticFills(replacedDoc)
+ assert.deepEqual(oldFill,retained)
+ assert.notEqual(newFill.id,retained.id)
+ assert.deepEqual(newFill,{...retained,id:newFill.id,pageIndex:1,text:'New entry'})
  const texts=execFileSync('pdftotext',['-','-'],{input:bytes,encoding:'utf8'}).split('\f').map(text=>text.trim()).filter(Boolean)
  assert.deepEqual(texts,['Source 400','Replacement marker','Source 600'])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
@@ -399,6 +429,7 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
   const saved=(await f.files.openFile(f.alice.token,copy.id)).file
   const document=await PDFDocument.load(await f.files.readFile(f.alice.token,copy.id,saved.revision))
   assert.deepEqual(document.getPages().map(value=>value.getWidth()),widths)
+  assert.deepEqual(staticFills(document),part===1?[newFill]:[{...retained,pageIndex:0}])
  }
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,replaced.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,replaced.revision),bytes)
